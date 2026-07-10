@@ -369,7 +369,7 @@ const changeWindsAndRounds = () => {
 }
 
 /**점수 변동 효과*/
-const changeScores = (onComplete?: () => void) => {
+const changeScores = (targetRiichi: number, onComplete?: () => void) => {
   animateRank.value = true;
   let currentScore=players.map(x => x.displayScore); // 현재 점수 저장
   let arrCut: number[][]=[[],[],[],[]];
@@ -396,13 +396,23 @@ const changeScores = (onComplete?: () => void) => {
   for (let i=0;i<players.length;i++){
     for (let j=0;j<50;j++) // 변경될 점수 사이를 50등분해서 저장
       arrCut[i].push(currentScore[i]+(players[i].deltaScore/50)*(j+1));
-    players[i].effectScore=players[i].deltaScore; // 이펙트 켜기
+    players[i].effectScore=NaN; // 변동 수치 완전히 안 보이고 즉시 숨김 처리!
     players[i].rank=oldRanks[i]; // 등수 연출 시작 시점에는 이전 등수 노출
   }
+
+  let startRiichi = panelInfo.riichi;
+
+  // 지연 시간 없이 즉각적인 점수 롤링 시작!
   let timecnt=0;
   let effect=setInterval(() => { // 시간에 따라 반복
     for (let i=0;i<players.length;i++)
       players[i].displayScore=arrCut[i][timecnt]; // 이펙트 점수 변경
+
+    // 리치봉 개수 역동적 감소 연출 (매우 빠르게: 첫 10단계, 약 200ms 만에 0으로 수렴)
+    if (startRiichi > targetRiichi) {
+      panelInfo.riichi = Math.max(targetRiichi, Math.ceil(startRiichi - (startRiichi - targetRiichi) * (timecnt + 1) / 10));
+    }
+
     timecnt++;
     if (timecnt>=50){
       clearInterval(effect);
@@ -415,7 +425,6 @@ const changeScores = (onComplete?: () => void) => {
 
       // 1. 모든 이전 등수를 동시에 페이드아웃 및 슬라이드 아웃시킴 (-1로 설정하여 상시 표시 상태여도 강제 퇴장)
       for (let i=0;i<players.length;i++){
-        players[i].effectScore=NaN; // 이펙트 끄기
         players[i].rank=-1; // 등수 감추기 (동시에 Slide Out & Fade Out 트리거)
       }
       
@@ -436,10 +445,10 @@ const changeScores = (onComplete?: () => void) => {
         }, 1850);
       }, 150);
 
-      // 3. 모든 등수의 페이드인/슬라이드가 완료되고 1등의 팝업 줌아웃까지 마무리된 시점(150ms 대기 + 1등 연출 600ms + 팝업완료 650ms = 1400ms)에 바람 변경
-      setTimeout(() => {
-        if (onComplete) onComplete();
-      }, 1400);
+        // 3. 모든 등수의 페이드인/슬라이드가 완료되고 1등의 팝업 줌아웃까지 마무리된 시점(150ms 대기 + 1등 연출 600ms + 팝업완료 650ms = 1400ms)에 바람 변경
+        setTimeout(() => {
+          if (onComplete) onComplete();
+        }, 1400);
     }
   }, 20); // 0.02초 * 50번 = 1초동안 실행
 }
@@ -874,6 +883,27 @@ const saveRound = () => {
   let isChinWin = players[chinIdx].isWin;
   let isChinTenpai = players[chinIdx].isTenpai;
 
+  // 1.5. 친의 연장(Renchan) 여부 미리 계산
+  let isRenchan = false;
+  if (status === 'tsumo' || status === 'ron') {
+    if (isChinWin) {
+      isRenchan = true;
+    }
+  } else if (status === 'normal_draw') {
+    if (isChinTenpai) {
+      isRenchan = true;
+    }
+  } else if (status === 'special_draw') {
+    isRenchan = true;
+  }
+
+  // 1.6. 리치봉 타겟 값 계산 (수거 여부에 따른 동적 카운트다운용)
+  let targetRiichi = panelInfo.riichi;
+
+  if (status === 'tsumo' || status === 'ron') {
+    targetRiichi = 0;
+  }
+
   if (status==='cheat'){ // 촌보의 경우 리치봉 반환
     for (let i=0;i<players.length;i++){
       if (players[i].isRiichi===true){
@@ -896,7 +926,7 @@ const saveRound = () => {
   records.lose.push(players.map(x => x.isLose)); // 방총 기록에 추가
 
   // 점수 변동 이펙트 애니메이션 실행 (완료 후 연장/서입/게임 종료 분기 수행)
-  changeScores(() => {
+  changeScores(targetRiichi, () => {
     // 1) 들통(tobi) 여부 검증
     let hasTobi = option.tobi && players.some(p => p.displayScore < 0);
     if (hasTobi) {
@@ -906,20 +936,6 @@ const saveRound = () => {
 
     let curWind = panelInfo.wind;
     let curRound = panelInfo.round;
-
-    // 2) 친의 연장(Renchan) 여부 계산
-    let isRenchan = false;
-    if (status === 'tsumo' || status === 'ron') {
-      if (isChinWin) {
-        isRenchan = true;
-      }
-    } else if (status === 'normal_draw') {
-      if (isChinTenpai) {
-        isRenchan = true;
-      }
-    } else if (status === 'special_draw') {
-      isRenchan = true;
-    }
 
     // 3) 남4국 / 서풍전 연장 및 종료 조건 분기
     if (curWind === '南' && curRound === 4) {

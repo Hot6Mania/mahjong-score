@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Player } from "@/types/types.d"
+import { ref } from "vue"
 
 /**props 정의*/
 interface Props {
@@ -12,6 +13,13 @@ type Emits = {
   (e: 'save-round'): void,
 }
 const emit = defineEmits<Emits>()
+
+const isOKClicked = ref(false)
+
+const handleOK = () => {
+  isOKClicked.value = true
+  emit('save-round')
+}
 
 /**data 정의*/
 const class_score_diff = ['down_score_diff', 'right_score_diff', 'up_score_diff', 'left_score_diff']
@@ -29,7 +37,7 @@ const getSignColor = (sign: number) => {
 
 <template>
 <!-- 점수 확인창 -->
-<div class="container_show_score_diff">
+<div v-if="!isOKClicked" class="container_show_score_diff">
   <div v-for="(_, i) in class_score_diff"
     :key="i"
     :class="class_score_diff[i]"
@@ -37,7 +45,7 @@ const getSignColor = (sign: number) => {
   >
     <span v-show="players[i].deltaScore>0">+</span>{{ players[i].deltaScore }}
   </div>
-  <div class="ok" @click.stop="emit('save-round')">
+  <div class="ok" @click.stop="handleOK">
     OK
   </div>
 </div>
