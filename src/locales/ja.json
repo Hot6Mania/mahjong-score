@@ -1,0 +1,73 @@
+{
+    "pageTitle" : "麻雀スコア計算機",
+    "panel" : {
+        "win" : "和了",
+        "draw" : "流局",
+        "cheat" : "錯和"
+    },
+    "comments" : {
+        "checkPlayerWin" : "和了者を選択してください。",
+        "checkPlayerLose" : "放銃者を選択してください。",
+        "chooseScore" : "{name}の点数を入力してください。",
+        "checkPlayerFao" : "包則者を選択してください。",
+        "chooseScoreFao" : "包則の点数を入力してください。",
+        "checkPlayerTenpai" : "テンパイ者を選択してください。",
+        "checkPlayerCheat" : "錯和者を選択してください。",
+        "rollbackRecord" : "{time}に戻しますか？",
+        "copyRecord" : "対局記録をコピーしました。",
+        "copyRoomCode" : "ルームコードをコピーしました。"
+    },
+    "score" : {
+        "fan" : "飜",
+        "bu" : "符",
+        "yakuman" : "役満",
+        "multipleYakuman" : "{num}倍役満",
+        "fao" : "包則"
+    },
+    "drawKind" : {
+        "normalDraw" : "通常流局",
+        "specialDraw" : "途中流局"
+    },
+    "menu" : {
+        "resultSheet" : "結果",
+        "record" : "記録",
+        "option" : "設定",
+        "sync" : "同期"
+    },
+    "resultSheet" : {
+        "wind" : "風",
+        "name" : "名前",
+        "score" : "点数",
+        "riichi" : "立直",
+        "win" : "和了",
+        "lose" : "放銃"
+    },
+    "record" : {
+        "copy" : "コピー"
+    },
+    "option" : {
+        "east" : "ひがし",
+        "south" : "みなみ",
+        "west" : "にし",
+        "north" : "きた",
+        "name" : "名前 {idx}",
+        "startingScore" : "開始点",
+        "returnScore" : "返り点",
+        "roundMangan" : "切り上げ満貫",
+        "tobi" : "飛び",
+        "rankUma" : "ウマ",
+        "rank" : "{idx}位",
+        "cheatScore" : "錯和点",
+        "mangan" : "満貫",
+        "riichiPayout" : "立直棒処理",
+        "firstPlace" : "1位"
+    },
+    "sync" : {
+        "online" : "オンライン",
+        "offline" : "オフライン",
+        "create" : "作成",
+        "join" : "参加",
+        "copy" : "コピー",
+        "roomCode" : "ルームコード"
+    }
+}

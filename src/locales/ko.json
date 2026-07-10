@@ -1,0 +1,73 @@
+{
+    "pageTitle" : "마작 점수 계산기",
+    "panel" : {
+        "win" : "화료",
+        "draw" : "유국",
+        "cheat" : "촌보"
+    },
+    "comments" : {
+        "checkPlayerWin" : "화료한 사람을 선택해 주세요.",
+        "checkPlayerLose" : "방총당한 사람을 선택해 주세요.",
+        "chooseScore" : "{name}의 점수를 입력해주세요.",
+        "checkPlayerFao" : "책임지불할 사람을 선택해 주세요.",
+        "chooseScoreFao" : "책임지불할 점수를 입력해주세요.",
+        "checkPlayerTenpai" : "텐파이한 사람을 선택해 주세요.",
+        "checkPlayerCheat" : "촌보한 사람을 선택해 주세요.",
+        "rollbackRecord" : "{time}으로 되돌리시겠습니까?",
+        "copyRecord" : "대국 기록을 복사했습니다.",
+        "copyRoomCode" : "방 코드를 복사했습니다."
+    },
+    "score" : {
+        "fan" : "판",
+        "bu" : "부",
+        "yakuman" : "역만",
+        "multipleYakuman" : "{num}배역만",
+        "fao" : "책임지불"
+    },
+    "drawKind" : {
+        "normalDraw" : "일반유국",
+        "specialDraw" : "도중유국"
+    },
+    "menu" : {
+        "resultSheet" : "게임결과",
+        "record" : "점수기록",
+        "option" : "설정",
+        "sync" : "동기화"
+    },
+    "resultSheet" : {
+        "wind" : "바람",
+        "name" : "이름",
+        "score" : "점수",
+        "riichi" : "리치",
+        "win" : "화료",
+        "lose" : "방총"
+    },
+    "record" : {
+        "copy" : "복사"
+    },
+    "option" : {
+        "east" : "동",
+        "south" : "남",
+        "west" : "서",
+        "north" : "북",
+        "name" : "이름 {idx}",
+        "startingScore" : "시작점수",
+        "returnScore" : "반환점수",
+        "roundMangan" : "절상만관",
+        "tobi" : "들통(토비)",
+        "rankUma" : "순위우마",
+        "rank" : "{idx}위",
+        "cheatScore" : "촌보점수",
+        "mangan" : "만관",
+        "riichiPayout" : "공탁금처리",
+        "firstPlace" : "1위"
+    },
+    "sync" : {
+        "online" : "온라인",
+        "offline" : "오프라인",
+        "create" : "생성",
+        "join" : "참여",
+        "copy" : "복사",
+        "roomCode" : "방 코드"
+    }
+}
