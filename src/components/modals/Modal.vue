@@ -2,7 +2,7 @@
 import { ModalChooseDraw, ModalCheckPlayer, ModalScoreSelect, ModalScoreResult } from "@/components/modals/scoring";
 import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
-import { ModalRecordList, ModalRollback } from "@/components/modals/stats";
+import { ModalRecordList, ModalRollback, ModalTotalUma } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
@@ -26,7 +26,9 @@ interface Props {
   records: Records,
   option: Option,
   modalInfo: ModalInfo,
-  googleInfo: GoogleInfo
+  googleInfo: GoogleInfo,
+  todayGamesHistory: any[],
+  isGameSaved: boolean
 }
 const props = defineProps<Props>()
 
@@ -55,6 +57,7 @@ type Emits = {
   (e: 'start-new-game', skipConfirm?: boolean): void,
   (e: 'sync-local-to-google'): void,
   (e: 'start-new-day'): void,
+  (e: 'invalidate-game', index: number): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -71,8 +74,12 @@ const scoreSheetInfo = computed(() => {
     let point=0 // 점수기반
     let oka=(props.option.returnScore*4-props.option.startingScore*4)/1000; // 오카
     let uma=0; // 우마
-    let rank=props.players.filter(x => x.displayScore>myScore).length+1; // 순위
-    let cnt=props.players.filter(x => x.displayScore===myScore).length; // 동점자 수
+    let rank = props.players.filter((x, j) => {
+      if (x.displayScore > myScore) return true;
+      if (props.option.sekiOrder && x.displayScore === myScore && j < idx) return true;
+      return false;
+    }).length + 1; // 순위
+    let cnt = props.option.sekiOrder ? 1 : props.players.filter(x => x.displayScore === myScore).length; // 동점자 수
     for (let i=0;i<cnt;i++) // 동점자의 모든 우마 더하기
       uma+=Number(props.option.rankUma[rank+i-1]);
     if (rank===1){ // 1위라면 오카도 더하기
@@ -329,6 +336,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :seatTile
       :googleInfo
       :players
+      :todayGamesHistory="todayGamesHistory"
       @start-game-with-seats="(assignment) => emit('start-game-with-seats', assignment)"
       @add-new-member="(name) => emit('add-new-member', name)"
       @save-today-members="(names) => emit('save-today-members', names)"
@@ -374,13 +382,25 @@ const getSignColor = (sign: number, x: boolean) => {
         </div>
       </div>
       <button 
-        v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId"
-        @click.stop="emit('save-game-to-sheet')"
-        style="margin: 0 5px; padding: 8px; font-size: 16px; font-weight: bold; background-color: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
-        onmouseover="this.style.opacity='0.9'"
-        onmouseout="this.style.opacity='1.0'"
+        @click.stop="isGameSaved ? null : emit('save-game-to-sheet')"
+        :disabled="isGameSaved"
+        :style="{
+          margin: '0 5px',
+          padding: '8px',
+          fontSize: '16px',
+          fontWeight: 'bold',
+          backgroundColor: isGameSaved ? 'var(--border-color)' : '#4285f4',
+          color: isGameSaved ? 'var(--text-color)' : 'white',
+          border: 'none',
+          borderRadius: '4px',
+          cursor: isGameSaved ? 'default' : 'pointer',
+          opacity: isGameSaved ? '0.6' : '1.0',
+          transition: 'opacity 0.2s, background-color 0.2s'
+        }"
+        onmouseover="if(!this.disabled) this.style.opacity='0.9'"
+        onmouseout="if(!this.disabled) this.style.opacity='1.0'"
       >
-        구글 스프레드시트에 결과 기록하기
+        {{ isGameSaved ? '기록 완료됨' : (googleInfo.syncMode === 'google' ? '구글 스프레드시트에 결과 기록하기' : '결과 기록하기') }}
       </button>
       <button 
         @click.stop="emit('start-new-game', true)"
@@ -405,6 +425,15 @@ const getSignColor = (sign: number, x: boolean) => {
       :records
       @show-modal="(type, status?) => emit('show-modal', type, status)"
       @copy-record="emit('copy-record')"
+    />
+  </div>
+  <!-- 총 우마 & 성적 모아보기창 -->
+  <div v-else-if="modalInfo.type==='total_uma'" class="modal_content" @click.stop>
+    <ModalTotalUma
+      :todayMembers="googleInfo.todayMembers"
+      :players="players"
+      :history="todayGamesHistory"
+      @invalidate-game="(idx) => emit('invalidate-game', idx)"
     />
   </div>
   <!-- 점수 롤백창 -->

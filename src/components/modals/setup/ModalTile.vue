@@ -6,7 +6,8 @@ import { ref, computed, onMounted, watch } from "vue"
 interface Props {
   seatTile: SeatTile,
   googleInfo: GoogleInfo,
-  players?: Player[]
+  players?: Player[],
+  todayGamesHistory?: any[]
 }
 const props = defineProps<Props>()
 
@@ -104,9 +105,20 @@ const shuffleTiles = () => {
   randomizedTiles.value = tiles
 }
 
+const hasPlayedGame = (name: string) => {
+  if (!props.todayGamesHistory) return false
+  return props.todayGamesHistory.some((game: any) => 
+    game.results && game.results.some((r: any) => r.name === name)
+  )
+}
+
 const toggleTodayMember = (name: string) => {
   const index = tempTodayMembers.value.indexOf(name)
   if (index > -1) {
+    if (hasPlayedGame(name)) {
+      alert(`'${name}'님은 오늘 플레이한 기록이 있어 풀에서 제외할 수 없습니다. (우선 '총 우마' 페이지에서 해당 플레이어가 포함된 회전을 무효 처리해야 합니다.)`)
+      return
+    }
     tempTodayMembers.value.splice(index, 1)
   } else {
     tempTodayMembers.value.push(name)
@@ -136,6 +148,10 @@ const handleAddNewMember = () => {
 
 // 오프라인 로컬 멤버 제거 기능
 const removeLocalMember = (name: string) => {
+  if (hasPlayedGame(name)) {
+    alert(`'${name}'님은 오늘 플레이한 기록이 있어 전체 명단에서 삭제할 수 없습니다. (우선 '총 우마' 페이지에서 해당 플레이어가 포함된 회전을 무효 처리해야 합니다.)`)
+    return
+  }
   // 1. 로컬 전체 명단에서 삭제
   const idx = offlineMemberList.value.indexOf(name)
   if (idx > -1) {

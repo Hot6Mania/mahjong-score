@@ -32,7 +32,7 @@ const toggleTheme = () => {
 </script>
 
 <template>
-<!-- 메뉴 선택창 -->
+<!-- 메뉴 선택창 (3x3 그리드로 배치) -->
 <div class="container_choose_menu">
   <div @click.stop="emit('show-modal', 'result_sheet')">
     {{ t('menu.resultSheet') }}
@@ -43,8 +43,8 @@ const toggleTheme = () => {
   <div @click.stop="emit('show-modal', 'set_options')">
     {{ t('menu.option') }}
   </div>
-  <div @click.stop="emit('show-modal', 'sync')">
-    동기화 모드
+  <div @click.stop="emit('show-modal', 'total_uma')">
+    총 우마
   </div>
   <div @click.stop="toggleTheme()" class="theme_toggle">
     {{ t('menu.theme') }} {{ isDark ? '☾︎' : '☀︎' }}
@@ -52,14 +52,18 @@ const toggleTheme = () => {
   <div @click.stop="emit('start-new-game')" class="btn_new_game" style="color: var(--color-negative); font-weight: bold;">
     새 게임
   </div>
+  <!-- 3번째 row, 2번째 column에 동기화 설정 단독 배치 -->
+  <div class="btn_sync" @click.stop="emit('show-modal', 'sync')">
+    동기화 설정
+  </div>
 </div>
 </template>
 
 <style scoped>
-/* 메뉴 선택창 - 모바일 375SE 화면 최적화 (테두리 및 배경 제거) */
+/* 메뉴 선택창 - 모바일 375SE 화면 최적화 (3x3 그리드 구조) */
 .container_choose_menu{
   display: grid;
-  grid-template-rows: repeat(2, 50px);
+  grid-template-rows: repeat(3, 50px);
   grid-template-columns: repeat(3, 1fr);
   width: 290px;
   font-size: 18px;
@@ -84,6 +88,11 @@ const toggleTheme = () => {
 }
 .container_choose_menu > div:hover {
   opacity: 0.6;
+}
+.btn_sync {
+  grid-row: 3;
+  grid-column: 2;
+  font-weight: bold;
 }
 .theme_toggle {
   user-select: none;

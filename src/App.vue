@@ -2,7 +2,7 @@
 import Player from "@/components/Player.vue"
 import Panel from "@/components/Panel.vue"
 import Modal from "@/components/modals/Modal.vue"
-import { reactive, onMounted, watch, ref } from "vue"
+import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
@@ -118,6 +118,19 @@ const googleInfo = reactive<GoogleInfo>({ // 구글 연동 정보
 const localPoints = reactive<Record<string, number>>(
   JSON.parse(localStorage.getItem("today_members_points") || "{}")
 )
+
+// 오늘 개별 회전 기록 이력
+const todayGamesHistory = reactive<any[]>(
+  JSON.parse(localStorage.getItem("today_games_history") || "[]")
+)
+
+// 대국 종료 여부
+const isGameFinished = computed(() => {
+  return records.time.length > 0 && records.time[records.time.length - 1] === '결과';
+});
+
+// 현재 대국 결과 기록 여부
+const isGameSaved = ref(localStorage.getItem("is_game_saved") === "true");
 
 const animateRank = ref(false);
 const activeGapSeat = ref<string | null>(null);
@@ -243,6 +256,10 @@ const changeLocale = () => {
 
 /**리치 활성화/비활성화*/
 const toggleActiveRiichi = (seat: string) => {
+  // 이미 대국이 종료된 상태(결과 화면 표시 중 등)면 리치 지불 금지
+  if (records.time.length > 0 && records.time[records.time.length - 1] === '결과') {
+    return;
+  }
   let idx=players.findIndex(x => x['seat']===seat); // 위치 기준 인덱스 반환
   if (!isNaN(players[idx].effectScore)) // 점수변동 이펙트 도중이면 실행 x
     return;
@@ -515,6 +532,10 @@ const resetAll = () => {
   panelInfo.renchan=0; // 연장 설정
   players.forEach((x, idx) => {x.wind=allWinds[idx];}); // 개인 바람 설정
   panelInfo.riichi=0; // 리치봉 설정
+
+  // 기록 여부 초기화
+  isGameSaved.value = false;
+  localStorage.removeItem("is_game_saved");
 }
 
 /**모달 창 켜기*/
@@ -1170,6 +1191,12 @@ const startNewGame = (skipConfirm = false) => {
 
 // 현재 게임 결과 정산 데이터를 구글 스프레드시트 및 로컬 스토리지에 기록합니다.
 const saveGameToSheet = async () => {
+  // 이미 기록된 게임이면 추가 기록 차단
+  if (isGameSaved.value) {
+    alert("이미 기록된 대국입니다.");
+    return;
+  }
+
   // 구글 연동 모드일 때만 구글 세션 필수 체크
   if (googleInfo.syncMode === 'google' && (!googleInfo.spreadsheetId || !googleInfo.isLoggedIn)) {
     alert("구글 연동 모드입니다. 구글 로그인 및 스프레드시트 ID가 유효한지 확인해 주세요.");
@@ -1180,12 +1207,16 @@ const saveGameToSheet = async () => {
     const pointsDelta: Record<string, number> = {};
 
     // 1~4위 랭크 정산 데이터 추출
-    const scoreSheet = players.map((p) => {
+    const scoreSheet = players.map((p, idx) => {
       let myScore = p.displayScore;
       let oka = (option.returnScore * 4 - option.startingScore * 4) / 1000; // 오카
       let uma = 0; // 우마
-      let rank = players.filter(x => x.displayScore > myScore).length + 1; // 순위
-      let cnt = players.filter(x => x.displayScore === myScore).length; // 동점자 수
+      let rank = players.filter((x, j) => {
+        if (x.displayScore > myScore) return true;
+        if (option.sekiOrder && x.displayScore === myScore && j < idx) return true;
+        return false;
+      }).length + 1; // 순위
+      let cnt = option.sekiOrder ? 1 : players.filter(x => x.displayScore === myScore).length; // 동점자 수
       
       for (let i = 0; i < cnt; i++) {
         uma += Number(option.rankUma[rank + i - 1]);
@@ -1209,8 +1240,16 @@ const saveGameToSheet = async () => {
       };
     });
 
-    // 점수 순으로 정렬해서 1위부터 4위까지 나열
-    const sortedResult = [...scoreSheet].sort((a, b) => b.score - a.score);
+    // 점수 순으로 정렬해서 1위부터 4위까지 나열 (석순 옵션 적용)
+    const sortedResult = [...scoreSheet].sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (option.sekiOrder) {
+        const aIdx = players.findIndex(p => p.name === a.name);
+        const bIdx = players.findIndex(p => p.name === b.name);
+        return aIdx - bIdx;
+      }
+      return 0;
+    });
 
     // 구글 시트에 들어갈 행(Row) 생성
     const resultRow = [
@@ -1227,6 +1266,32 @@ const saveGameToSheet = async () => {
       localPoints[name] = parseFloat((prev + pointsDelta[name]).toFixed(1));
     });
     localStorage.setItem("today_members_points", JSON.stringify(localPoints));
+
+    // 오늘 개별 회전 기록 이력(today_games_history) 저장
+    const historyResults = scoreSheet.map(item => {
+      const pIndex = players.findIndex(x => x.name === item.name);
+      const myScore = players[pIndex].displayScore;
+      const rank = players.filter((x, j) => {
+        if (x.displayScore > myScore) return true;
+        if (option.sekiOrder && x.displayScore === myScore && j < pIndex) return true;
+        return false;
+      }).length + 1;
+      return {
+        name: item.name,
+        score: item.score, // 오카/공탁금 반영된 최종 스코어 보존
+        uma: parseFloat(item.point),
+        rank: rank
+      };
+    });
+    todayGamesHistory.push({
+      timestamp: new Date().toISOString(),
+      results: historyResults
+    });
+    localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
+
+    // 기록 성공 플래그 셋팅 및 복구 보장
+    isGameSaved.value = true;
+    localStorage.setItem("is_game_saved", "true");
 
     // 구글 연동 모드 시 구글 시트 전송 진행
     if (googleInfo.syncMode === 'google') {
@@ -1293,7 +1358,9 @@ const startNewDay = async () => {
   // 로컬 초기화
   localStorage.removeItem("today_members");
   localStorage.removeItem("today_members_points");
+  localStorage.removeItem("today_games_history");
   googleInfo.todayMembers = [];
+  todayGamesHistory.length = 0; // 반응형 배열 비우기
   Object.keys(localPoints).forEach(key => delete localPoints[key]);
 
   // 경기기록 스코어 리셋
@@ -1315,6 +1382,35 @@ const startNewDay = async () => {
   hideModal();
   showModal('choose_seat');
 };
+
+// 회차 대국 기록 무효 처리 (삭제 및 누적 점수 재계산)
+const invalidateGame = (index: number) => {
+  const confirmInvalidate = confirm(`${index + 1}회전 대국 기록을 무효(삭제) 처리하시겠습니까?`);
+  if (!confirmInvalidate) return;
+
+  if (index < 0 || index >= todayGamesHistory.length) return;
+
+  // 1. 반응형 배열 및 로컬스토리지에서 삭제
+  todayGamesHistory.splice(index, 1);
+  localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
+
+  // 2. localPoints 누적 점수 전체 재계산
+  Object.keys(localPoints).forEach(key => {
+    localPoints[key] = 0;
+  });
+
+  todayGamesHistory.forEach((game) => {
+    if (game.results) {
+      game.results.forEach((r: any) => {
+        const prev = localPoints[r.name] || 0;
+        localPoints[r.name] = parseFloat((prev + r.uma).toFixed(1));
+      });
+    }
+  });
+  localStorage.setItem("today_members_points", JSON.stringify(localPoints));
+
+  alert(`${index + 1}회전 대국 기록이 무효 처리되었습니다.`);
+};
 </script>
 
 <template>
@@ -1335,6 +1431,7 @@ const startNewDay = async () => {
     <Panel
       :panelInfo
       :isMenuOpen="isPanelMenuOpen"
+      :isGameFinished="isGameFinished"
       @show-modal="showModal"
       @roll-dice="rollDice"
       @toggle-menu="isPanelMenuOpen = !isPanelMenuOpen"
@@ -1353,6 +1450,8 @@ const startNewDay = async () => {
       :option
       :modalInfo
       :googleInfo
+      :todayGamesHistory="todayGamesHistory"
+      :isGameSaved="isGameSaved"
       @show-modal="showModal"
       @hide-modal="hideModal"
       @set-arrow-button="setArrowButton"
@@ -1375,6 +1474,7 @@ const startNewDay = async () => {
       @start-new-game="startNewGame"
       @sync-local-to-google="syncLocalDataToGoogle"
       @start-new-day="startNewDay"
+      @invalidate-game="invalidateGame"
     />
   </Transition>
 </div>

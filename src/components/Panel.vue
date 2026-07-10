@@ -9,7 +9,8 @@ const { t } = useI18n()
 /**props 정의*/
 interface Props {
   panelInfo: PanelInfo,
-  isMenuOpen: boolean
+  isMenuOpen: boolean,
+  isGameFinished?: boolean
 }
 defineProps<Props>()
 
@@ -31,7 +32,7 @@ const emit = defineEmits<Emits>()
 <div class="panel_container" id="Mid">
   <!-- 일반 모드 (현재 국, 리치봉 개수, 연장봉 개수) -->
   <Transition name="panel-fade" mode="out-in">
-    <div v-if="!isMenuOpen" class="normal_layout" @click.stop="emit('toggle-menu')">
+    <div v-if="!isMenuOpen" class="normal_layout" @click.stop="isGameFinished ? emit('show-modal', 'result_sheet') : emit('toggle-menu')">
       <!-- 봉 개수 컨테이너 (now의 좌측에 위치) -->
       <div class="sticks_container">
         <!-- 현재 총 리치봉 -->
