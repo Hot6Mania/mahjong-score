@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { SeatTile, GoogleInfo, Player } from "@/types/types.d"
 import { ref, computed, onMounted, watch } from "vue"
+import { secureShuffle } from "@/utils/random"
 
 /**props 정의*/
 interface Props {
@@ -86,23 +87,7 @@ watch(tempTodayMembers, (newPool) => {
 
 const shuffleTiles = () => {
   const tiles = ['東', '南', '西', '北']
-  
-  // 1. Fisher-Yates 셔플 5번 실행
-  for (let pass = 0; pass < 5; pass++) {
-    for (let i = tiles.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
-    }
-  }
-  
-  // 2. 무작위 인덱스 두 개 교환을 100번 더 실행하여 완벽한 혼합 보장
-  for (let k = 0; k < 100; k++) {
-    const i = Math.floor(Math.random() * 4);
-    const j = Math.floor(Math.random() * 4);
-    [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
-  }
-  
-  randomizedTiles.value = tiles
+  randomizedTiles.value = secureShuffle(tiles)
 }
 
 const hasPlayedGame = (name: string) => {

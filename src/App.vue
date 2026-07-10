@@ -8,6 +8,7 @@ import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
 import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, appendGameResult, addNewMemberToDb, fetchTodayMembers, saveTodayMembers, updateTodayMemberPoints } from "@/utils/googleSheets"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
+import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
 /**라우터 가져오기*/
 const router = useRouter()
@@ -190,10 +191,7 @@ onMounted(async () => {
 
   await router.isReady();
   changeLocale();
-  for (let i=3;i>0;i--){ // 자리 섞기
-    let j=Math.floor(Math.random()*(i+1));
-    [seatTile.value[i], seatTile.value[j]]=[seatTile.value[j], seatTile.value[i]];
-  }
+  seatTile.value = secureShuffle(seatTile.value);
   
   // 테마 설정 초기화
   const savedTheme = localStorage.getItem("theme");
@@ -1072,8 +1070,8 @@ const rollDice = () => {
   let timecnt=0;
   dice.wallDirection=[false, false, false, false]; // 패산 떼는 방향 초기화
   let roll=setInterval(() => { // 시간에 따라 반복
-    dice.value[0]=Math.floor(Math.random()*6)+1;
-    dice.value[1]=Math.floor(Math.random()*6)+1;
+    dice.value[0]=getSecureRandomInt(6)+1;
+    dice.value[1]=getSecureRandomInt(6)+1;
     timecnt++;
     if (timecnt>=10){
         clearInterval(roll);
