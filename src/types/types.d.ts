@@ -11,6 +11,8 @@ export interface Player { // 플레이어
   isWin: boolean, // 화료
   isLose: boolean, // 방총
   isTenpai: boolean, // 텐파이 유무
+  isNagashi: boolean, // 유국만관 유무
+  shortName: string, // 이름 축약어
 }
 
 export interface ScoringState { // 점수계산 요소

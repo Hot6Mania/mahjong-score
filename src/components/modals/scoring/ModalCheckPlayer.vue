@@ -9,14 +9,16 @@ const { t } = useI18n()
 interface Props {
   players: Player[],
   scoringState: ScoringState,
-  actionType: 'win' | 'lose' | 'cheat' | 'fao' | 'tenpai'
+  actionType: 'win' | 'lose' | 'cheat' | 'fao' | 'tenpai' | 'nagashi'
 }
 const props = defineProps<Props>()
 
 /**emits 정의*/
 type Emits = {
   (e: 'set-arrow-button', status: string, idx: number): void,
-  (e: 'check-invalid-status', status: string): void
+  (e: 'check-invalid-status', status: string): void,
+  (e: 'go-to-nagashi'): void,
+  (e: 'go-back-to-tenpai'): void
 }
 const emit = defineEmits<Emits>()
 
@@ -28,7 +30,8 @@ const guideMessages: Record<string, string> = {
   lose: 'comments.checkPlayerLose',
   cheat: 'comments.checkPlayerCheat',
   fao: 'comments.checkPlayerFao',
-  tenpai: 'comments.checkPlayerTenpai'
+  tenpai: 'comments.checkPlayerTenpai',
+  nagashi: 'comments.checkPlayerNagashi'
 }
 
 /**화살표 버튼 색상*/
@@ -43,6 +46,8 @@ const arrowButtonStyle = (status: string, idx: number) => {
     return {color: props.scoringState.whoWin!==idx && props.scoringState.whoLose!==idx ? (props.scoringState.whoFao===idx ? 'var(--color-negative)' : 'var(--text-color)') : 'var(--color-disabled)'}; // 선택시 빨간색, 불가능시 회색
   else if (status==='tenpai') // 텐파이 화살표 버튼
     return {color: (props.players[idx].isTenpai===true || props.players[idx].isRiichi===true) ? 'var(--color-negative)' : 'var(--text-color)'}; // 선택 또는 리치시 빨간색
+  else if (status==='nagashi') // 유국만관 화살표 버튼
+    return {color: props.players[idx].isNagashi===true ? 'var(--color-negative)' : 'var(--text-color)'}; // 선택시 빨간색
 }
 
 /**ok 버튼 색상*/
@@ -59,6 +64,8 @@ const okButtonStyle = (status: string) => {
     return {color: props.scoringState.whoFao===-1 ? 'var(--color-disabled)' : 'var(--text-color)'}; // 책임지불할 사람이 없음 (불가능한 경우)
   else if (status==='tenpai') // 텐파이 ok 버튼
     return {color: 'var(--text-color)'} // 언제나 가능
+  else if (status==='nagashi') // 유국만관 ok 버튼
+    return {color: props.players.filter(x => x.isNagashi===true).length > 0 ? 'var(--text-color)' : 'var(--color-disabled)'};
 }
 </script>
 
@@ -79,6 +86,12 @@ const okButtonStyle = (status: string) => {
   <div class="ok" :style="okButtonStyle(actionType)" @click.stop="emit('check-invalid-status', actionType)">
     OK
   </div>
+  <div v-if="actionType === 'tenpai'" class="nagashi" @click.stop="emit('go-to-nagashi')">
+    {{ t('panel.nagashi') }}
+  </div>
+  <div v-else-if="actionType === 'nagashi'" class="nagashi" @click.stop="emit('go-back-to-tenpai')">
+    뒤로
+  </div>
 </div>
 </template>
 
@@ -92,7 +105,7 @@ const okButtonStyle = (status: string) => {
     'guide_message guide_message guide_message'
     '. up_check .'
     'left_check ok right_check'
-    '. down_check .';
+    '. down_check nagashi';
   text-align: center;
   font-size: 70px;
   place-items: center;
@@ -116,5 +129,24 @@ const okButtonStyle = (status: string) => {
 .ok{
   grid-area: ok;
   font-size: 60px;
+}
+.nagashi{
+  grid-area: nagashi;
+  font-size: 20px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  padding: 8px 12px;
+  transition: color 0.3s ease, border-color 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: auto;
+  width: auto;
+  user-select: none;
+}
+.nagashi:hover{
+  color: var(--color-negative);
+  border-color: var(--color-negative);
 }
 </style>

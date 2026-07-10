@@ -281,6 +281,18 @@ const getSignColor = (sign: number, x: boolean) => {
       actionType="tenpai"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
+      @go-to-nagashi="emit('show-modal', 'check_player_nagashi')"
+    />
+  </div>
+  <!-- 유국만관 인원 선택창 -->
+  <div v-else-if="modalInfo.type==='check_player_nagashi'" class="modal_content" @click.stop>
+    <ModalCheckPlayer
+      :players
+      :scoringState
+      actionType="nagashi"
+      @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
+      @check-invalid-status="(status) => emit('check-invalid-status', status)"
+      @go-back-to-tenpai="emit('show-modal', 'check_player_tenpai')"
     />
   </div>
   <!-- 촌보 인원 선택창 -->
@@ -312,6 +324,7 @@ const getSignColor = (sign: number, x: boolean) => {
     <ModalTile
       :seatTile
       :googleInfo
+      :players
       @start-game-with-seats="(assignment) => emit('start-game-with-seats', assignment)"
       @add-new-member="(name) => emit('add-new-member', name)"
       @save-today-members="(names) => emit('save-today-members', names)"

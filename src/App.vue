@@ -7,7 +7,7 @@ import { useRouter } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
 import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, appendGameResult, addNewMemberToDb, fetchTodayMembers, saveTodayMembers, updateTodayMemberPoints } from "@/utils/googleSheets"
-import type { GoogleInfo } from "@/types/types.d"
+import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 
 /**라우터 가져오기*/
 const router = useRouter()
@@ -16,23 +16,38 @@ const router = useRouter()
 const { t, locale } = useI18n()
 
 /**data 정의*/
-const players = reactive([ // 플레이어
-  /* 위치, 이름, 자풍, 순위,
-  현재 점수, 이펙트용 점수, 점수 차이, 변하는 점수
-  리치, 화료, 방총, 텐파이 유무 */
+// 로컬 스토리지에 백업된 대국 데이터가 있는지 확인하고 복원
+const savedPlayers = localStorage.getItem("mahjong_players");
+let initialPlayers = [
   {seat: "Down",  name: "▼", wind: "東", rank: 0,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false, shortName: ""},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
   {seat: "Right", name: "▶", wind: "南", rank: 0,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false, shortName: ""},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
   {seat: "Up",    name: "▲", wind: "西", rank: 0,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false, shortName: ""},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
   {seat: "Left",  name: "◀", wind: "北", rank: 0,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false, shortName: ""}
-])
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""}
+];
+if (savedPlayers) {
+  try {
+    const parsed = JSON.parse(savedPlayers);
+    if (Array.isArray(parsed) && parsed.length === 4) {
+      initialPlayers = parsed.map(p => ({
+        ...p,
+        effectScore: (p.effectScore === null || p.effectScore === undefined) ? NaN : Number(p.effectScore),
+        gapScore: (p.gapScore === null || p.gapScore === undefined) ? NaN : Number(p.gapScore)
+      }));
+    }
+  } catch (e) {
+    console.error("Failed to parse saved players", e);
+  }
+}
+const players = reactive(initialPlayers);
+
 const scoringState = reactive({ // 점수계산 요소
   whoWin: -1, // 현재 점수 입력하는 플레이어
   whoLose: -1, // 현재 방총 플레이어
@@ -43,31 +58,39 @@ const scoringState = reactive({ // 점수계산 요소
   inputBu: 2, // 현재 점수 (부)
   inputFao: -1, // 현재 책임지불 점수 (판)
 })
-const panelInfo = reactive({ // 패널
+
+const savedPanelInfo = localStorage.getItem("mahjong_panelInfo");
+const panelInfo = reactive<PanelInfoType>(savedPanelInfo ? JSON.parse(savedPanelInfo) : {
   wind: "東", // 현재 장풍
   round: 1, // 현재 국
   riichi: 0, // 현재 누적 리치봉
   renchan: 0, // 현재 누적 연장봉
 })
+
 const dice = reactive({ // 주사위
   value: [1, 6], // 값
   wallDirection: [false, false, false, false], // 주사위 값에 따른 패산방향
 })
+
 const seatTile = reactive({ // 자리정하기 타일
   value: ["東", "南", "西", "北"], // 랜덤 타일값
   isOpened: [false, false, false, false], // 타일이 공개되었는지
 })
-const records = reactive({ // 기록
+
+const savedRecords = localStorage.getItem("mahjong_records");
+const records = reactive<RecordsType>(savedRecords ? JSON.parse(savedRecords) : {
   time: ["ㅤ"], // 시간
   score: [[25000],[25000],[25000],[25000]], // 점수
   riichi: [[false, false, false, false]], // 리치 횟수
   win: [[false, false, false, false]], // 화료 횟수
   lose: [[false, false, false, false]], // 방총 횟수
 })
-const option = reactive({ // 옵션
+
+const savedOption = localStorage.getItem("mahjong_option");
+const option = reactive<OptionType>(savedOption ? JSON.parse(savedOption) : {
   startingScore: 25000, // 시작 점수
   returnScore: 30000, // 반환 점수
-  rankUma: [30, 10, -10, -30], // 순위 우마
+  rankUma: [35, 5, -15, -25], // 순위 우마
   roundMangan: false, // 절상만관
   tobi: true, // 들통
   cheatScore: false, // 촌보 지불 점수
@@ -101,6 +124,23 @@ watch(() => players.map(p => p.name), (newNames) => {
   });
 }, { immediate: true, deep: true });
 
+// 대국 상태 로컬 스토리지 저장 감시자들
+watch(players, (newVal) => {
+  localStorage.setItem("mahjong_players", JSON.stringify(newVal));
+}, { deep: true });
+
+watch(panelInfo, (newVal) => {
+  localStorage.setItem("mahjong_panelInfo", JSON.stringify(newVal));
+}, { deep: true });
+
+watch(records, (newVal) => {
+  localStorage.setItem("mahjong_records", JSON.stringify(newVal));
+}, { deep: true });
+
+watch(option, (newVal) => {
+  localStorage.setItem("mahjong_option", JSON.stringify(newVal));
+}, { deep: true });
+
 /**시작시 언어 변경 및 자리선택 타일창 띄우기*/
 onMounted(async () => {
   await router.isReady();
@@ -129,7 +169,22 @@ onMounted(async () => {
     console.warn("Google API Client 로드 실패:", err);
   }
 
-  showModal('choose_seat');
+  // 로컬 스토리지에 유효한 진행 대국이 있는지 확인하여 있을 경우 자리뽑기 창을 띄우지 않음
+  let hasActiveGame = false;
+  const savedPlayersRaw = localStorage.getItem("mahjong_players");
+  if (savedPlayersRaw) {
+    try {
+      const parsed = JSON.parse(savedPlayersRaw);
+      const defaultNames = ['▼', '▶', '▲', '◀'];
+      hasActiveGame = Array.isArray(parsed) && parsed.length === 4 && parsed.some(p => !defaultNames.includes(p.name));
+    } catch (e) {
+      // 무시
+    }
+  }
+
+  if (!hasActiveGame) {
+    showModal('choose_seat');
+  }
 
   // iOS/Android 가로모드 주소창 숨김을 위한 꼼수 (스크롤 자동 트리거)
   const triggerHideAddressBar = () => {
@@ -345,7 +400,7 @@ const hideModal = () => {
     if (option.startingScore>option.returnScore) // 시작점수가 반환점수보다 큰 경우
       option.returnScore=option.startingScore;
     if (cntUma!==0) // 우마 합계가 0이 아니라면 초기화
-      option.rankUma=[30, 10, -10, -30];
+      option.rankUma=[35, 5, -15, -25];
   }
   Object.assign(modalInfo, { // 모달창 끄기
     isOpen: false,
@@ -367,6 +422,7 @@ const hideModal = () => {
     x.isWin=false;
     x.isLose=false;
     x.isTenpai=false;
+    x.isNagashi=false;
   });
 }
 
@@ -401,6 +457,15 @@ const setArrowButton = (status: string, idx: number) => {
   }
   else if (status==='tenpai') // 텐파이 버튼
     players[idx].isTenpai=!players[idx].isTenpai;
+  else if (status==='nagashi'){ // 유국만관 버튼
+    if (players[idx].isNagashi===true)
+      players[idx].isNagashi=false;
+    else {
+      let cntNagashi=players.filter(x => x.isNagashi===true).length;
+      if (cntNagashi < 2)
+        players[idx].isNagashi=true;
+    }
+  }
 }
 
 /**토글 버튼 동작 설정*/
@@ -489,6 +554,8 @@ const checkInvalidStatus = (status: string) => {
   }
   else if (status==='tenpai') // 유국일때
     calculateDraw();
+  else if (status==='nagashi') // 유국만관일때
+    calculateNagashi();
 }
 
 /**화료 점수계산*/
@@ -572,6 +639,53 @@ const calculateDraw = () => {
         players[i].deltaScore=-3000/(players.length-cntTenpai); 
     }
   }
+  showModal('show_score', 'normal_draw');
+}
+
+/**유국만관 점수계산*/
+const calculateNagashi = () => {
+  players.forEach((x) => {x.isTenpai||=x.isRiichi;}); // 리치자 텐파이로 변경
+
+  // 1. 변동점수 초기화
+  players.forEach((x) => {
+    x.deltaScore=0;
+  });
+
+  // 2. 동가부터 반시계 방향(동->남->서->북) 순으로 유국만관 달성자 정렬
+  const windOrder = ["東", "南", "西", "北"];
+  const nagashiPlayers: PlayerInterface[] = [];
+  windOrder.forEach(w => {
+    const p = players.find(x => x.wind === w);
+    if (p && p.isNagashi === true) {
+      nagashiPlayers.push(p as PlayerInterface);
+    }
+  });
+
+  // 3. 만관쯔모 차례대로 한 것으로 점수 합산
+  nagashiPlayers.forEach(winner => {
+    if (winner.wind === "東") {
+      // 오야 유국만관: 4000 All
+      players.forEach(p => {
+        if (p === winner) {
+          p.deltaScore += 12000;
+        } else {
+          p.deltaScore -= 4000;
+        }
+      });
+    } else {
+      // 자 유국만관: 오야(동가)한테 4000, 다른 자한테 2000
+      players.forEach(p => {
+        if (p === winner) {
+          p.deltaScore += 8000;
+        } else if (p.wind === "東") {
+          p.deltaScore -= 4000;
+        } else {
+          p.deltaScore -= 2000;
+        }
+      });
+    }
+  });
+
   showModal('show_score', 'normal_draw');
 }
 

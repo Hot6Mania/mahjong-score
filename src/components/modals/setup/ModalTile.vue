@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import type { SeatTile, GoogleInfo } from "@/types/types.d"
+import type { SeatTile, GoogleInfo, Player } from "@/types/types.d"
 import { ref, computed, onMounted, watch } from "vue"
 
 /**props 정의*/
 interface Props {
   seatTile: SeatTile,
-  googleInfo: GoogleInfo
+  googleInfo: GoogleInfo,
+  players?: Player[]
 }
 const props = defineProps<Props>()
 
@@ -54,6 +55,18 @@ onMounted(() => {
     }
     currentStep.value = 'select_match_4'
   }
+
+  // 이전 게임에 참여했던 4명의 이름으로 체크 초기화
+  if (props.players && props.players.length === 4) {
+    const prevNames = props.players.map(p => p.name);
+    const defaultNames = ['▼', '▶', '▲', '◀'];
+    const hasRealPlayers = prevNames.some(name => !defaultNames.includes(name));
+    if (hasRealPlayers) {
+      selected4Names.value = prevNames.filter(name => 
+        !defaultNames.includes(name) && tempTodayMembers.value.includes(name)
+      );
+    }
+  }
 })
 
 watch(() => props.googleInfo.todayMembers, (newVal) => {
@@ -67,12 +80,22 @@ watch(() => props.googleInfo.todayMembers, (newVal) => {
 
 const shuffleTiles = () => {
   const tiles = ['東', '南', '西', '北']
-  const array = new Uint32Array(4)
-  window.crypto.getRandomValues(array)
-  for (let i = 3; i > 0; i--) {
-    const j = array[i] % (i + 1);
+  
+  // 1. Fisher-Yates 셔플 5번 실행
+  for (let pass = 0; pass < 5; pass++) {
+    for (let i = tiles.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+    }
+  }
+  
+  // 2. 무작위 인덱스 두 개 교환을 100번 더 실행하여 완벽한 혼합 보장
+  for (let k = 0; k < 100; k++) {
+    const i = Math.floor(Math.random() * 4);
+    const j = Math.floor(Math.random() * 4);
     [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
   }
+  
   randomizedTiles.value = tiles
 }
 
