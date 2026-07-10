@@ -120,8 +120,10 @@ const stats = computed(() => {
         const isDraw = (status === 'normal_draw' || status === 'special_draw')
         const isTenpai = (rec.tenpai && rec.tenpai[r]) ? rec.tenpai[r][pIdx] : false
         
-        // 델타 점수 (각 국 점수 변화량은 score[pIdx][2*r - 1] 에 들어있음)
-        const delta = (rec.score && rec.score[pIdx] && rec.score[pIdx][2 * r - 1] !== undefined) ? rec.score[pIdx][2 * r - 1] : 0
+        // 델타 점수 (해당 국 시작 시점과 종료 시점의 차이)
+        const scoreAfter = (rec.score && rec.score[pIdx] && rec.score[pIdx][2 * r] !== undefined) ? rec.score[pIdx][2 * r] : 0
+        const scoreBefore = (rec.score && rec.score[pIdx] && rec.score[pIdx][2 * (r - 1)] !== undefined) ? rec.score[pIdx][2 * (r - 1)] : 0
+        const delta = scoreAfter - scoreBefore
 
         // 화료 및 방총
         if (isWin) {
