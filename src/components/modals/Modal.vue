@@ -64,8 +64,8 @@ const emit = defineEmits<Emits>()
 /**data 정의*/
 const arr_wind = ['東', '南', '西', '北']
 const arr_seat = ['option.east', 'option.south', 'option.west', 'option.north',]
-const arr_resultsheet = ['resultSheet.wind', 'resultSheet.name', 'resultSheet.score', 'resultSheet.riichi', 'resultSheet.win', 'resultSheet.lose']
-const class_resultsheet = ['wind', 'name', 'score', 'riichi', 'win', 'lose']
+const arr_resultsheet = ['resultSheet.wind', 'resultSheet.name', 'resultSheet.score', 'resultSheet.riichi', 'resultSheet.ron', 'resultSheet.tsumo', 'resultSheet.lose']
+const class_resultsheet = ['wind', 'name', 'score', 'riichi', 'ron', 'tsumo', 'lose']
 
 /**순위표 정보 계산*/
 const scoreSheetInfo = computed(() => {
@@ -89,12 +89,25 @@ const scoreSheetInfo = computed(() => {
     }
     uma/=cnt; // 동점자 수만큼 우마 나누기
     point=(myScore-props.option.returnScore)/1000+uma;
-    let cntRiichi=0, cntWin=0, cntLose=0;
+    let cntRiichi=0, cntRon=0, cntTsumo=0, cntLose=0;
     for (let i=0;i<props.records.riichi.length;i++){
       if (props.records.riichi[i][idx]===true)
         cntRiichi++;
-      if (props.records.win[i][idx]===true)
-        cntWin++;
+      if (props.records.win[i][idx]===true) {
+        const status = props.records.status?.[i];
+        if (status === 'tsumo') {
+          cntTsumo++;
+        } else if (status === 'ron') {
+          cntRon++;
+        } else {
+          const hasLosePlayer = props.records.lose[i]?.some(loseVal => loseVal === true);
+          if (hasLosePlayer) {
+            cntRon++;
+          } else {
+            cntTsumo++;
+          }
+        }
+      }
       if (props.records.lose[i][idx]===true)
         cntLose++;
     }
@@ -102,7 +115,8 @@ const scoreSheetInfo = computed(() => {
       score: myScore,
       point: point.toFixed(1),
       cntRiichi,
-      cntWin,
+      cntRon,
+      cntTsumo,
       cntLose
     };
   });
@@ -374,8 +388,11 @@ const getSignColor = (sign: number, x: boolean) => {
         <div style="grid-area: riichi_contents;">
           <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntRiichi }}</div>
         </div>
-        <div style="grid-area: win_contents;">
-          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntWin }}</div>
+        <div style="grid-area: ron_contents;">
+          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntRon }}</div>
+        </div>
+        <div style="grid-area: tsumo_contents;">
+          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntTsumo }}</div>
         </div>
         <div style="grid-area: lose_contents;">
           <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntLose }}</div>
@@ -714,10 +731,10 @@ const getSignColor = (sign: number, x: boolean) => {
 .container_resultsheet{
   display: grid;
   grid-template-rows: repeat(2, auto);
-  grid-template-columns: 60px minmax(100px, max-content) minmax(150px, max-content) repeat(3, 60px);
+  grid-template-columns: 60px minmax(100px, max-content) minmax(150px, max-content) repeat(4, 60px);
   grid-template-areas:
-  'wind name score riichi win lose'
-  'wind_contents name_contents score_contents riichi_contents win_contents lose_contents';
+  'wind name score riichi ron tsumo lose'
+  'wind_contents name_contents score_contents riichi_contents ron_contents tsumo_contents lose_contents';
   text-align: center;
   font-size: 20px;
   margin: 5px;

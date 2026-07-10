@@ -43,6 +43,8 @@
         "score" : "점수",
         "riichi" : "리치",
         "win" : "화료",
+        "ron" : "론",
+        "tsumo" : "쯔모",
         "lose" : "방총"
     },
     "record" : {
