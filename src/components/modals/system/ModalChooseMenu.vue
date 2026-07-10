@@ -47,7 +47,7 @@ const toggleTheme = () => {
     동기화 모드
   </div>
   <div @click.stop="toggleTheme()" class="theme_toggle">
-    {{ t('menu.theme') }} {{ isDark ? '🌙' : '☀️' }}
+    {{ t('menu.theme') }} {{ isDark ? '☾︎' : '☀︎' }}
   </div>
   <div @click.stop="emit('start-new-game')" class="btn_new_game" style="color: var(--color-negative); font-weight: bold;">
     새 게임

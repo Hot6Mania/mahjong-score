@@ -9,45 +9,68 @@ const { t } = useI18n()
 /**props 정의*/
 interface Props {
   panelInfo: PanelInfo,
+  isMenuOpen: boolean
 }
 defineProps<Props>()
 
 /**emits 정의*/
 type Emits = {
   (e: 'show-modal', modal: string): void,
-  (e: 'roll-dice'): void
+  (e: 'toggle-menu'): void,
+  (e: 'close-menu'): void
 }
 const emit = defineEmits<Emits>()
 </script>
 
 <template>
-<div class="container_mid" id="Mid">
-  <!-- 현재 라운드 -->
-  <div class="now" @click="emit('show-modal', 'roll_dice'), emit('roll-dice')">
-    {{ panelInfo.wind }} {{ panelInfo.round }} 局
-  </div>
-  <!-- 현재 총 리치봉 -->
-  <div class="riichi">
-    <Graphics kind="riichiStickMini"/>
-    <span>x {{ panelInfo.riichi }}</span>
-  </div>
-  <!-- 현재 연장봉 -->
-  <div class="renchan">
-    <Graphics kind="renchanStickMini"/>
-    <span>x {{ panelInfo.renchan }}</span>
-  </div>
-  <!-- 화료 버튼 -->
-  <div class="win" @click="emit('show-modal', 'check_player_win')">
-    {{ t('panel.win') }}
-  </div>
-  <!-- 유국 버튼 -->
-  <div class="draw" @click="emit('show-modal', 'choose_draw_kind')">
-    {{ t('panel.draw') }}
-  </div>
-  <!-- 촌보 버튼 -->
-  <div class="cheat" @click="emit('show-modal', 'check_player_cheat')">
-    {{ t('panel.cheat') }}
-  </div>
+<!-- 박스 바깥 어두워지는 백드롭 (클릭 시 닫기/취소) -->
+<Transition name="panel-fade">
+  <div v-if="isMenuOpen" class="menu_backdrop" @click="emit('close-menu')"></div>
+</Transition>
+
+<div class="panel_container" id="Mid">
+  <!-- 일반 모드 (현재 국, 리치봉 개수, 연장봉 개수) -->
+  <Transition name="panel-fade" mode="out-in">
+    <div v-if="!isMenuOpen" class="normal_layout" @click.stop="emit('toggle-menu')">
+      <!-- 봉 개수 컨테이너 (now의 좌측에 위치) -->
+      <div class="sticks_container">
+        <!-- 현재 총 리치봉 -->
+        <div class="riichi">
+          <Graphics kind="riichiStickMini"/>
+          <span>x {{ panelInfo.riichi }}</span>
+        </div>
+        <!-- 현재 연장봉 -->
+        <div class="renchan">
+          <Graphics kind="renchanStickMini"/>
+          <span>x {{ panelInfo.renchan }}</span>
+        </div>
+      </div>
+      <!-- 현재 라운드 -->
+      <div class="now">
+        {{ panelInfo.wind }} {{ panelInfo.round }} 局
+      </div>
+    </div>
+
+    <!-- 메뉴 팝업 모드 (화료, 유국, 촌보 버튼들 가로 배열, 완벽한 직사각형 불투명 박스) -->
+    <div v-else class="menu_layout" @click.stop>
+      <!-- 화료 버튼 -->
+      <button class="btn_action win" @click="emit('show-modal', 'check_player_win')">
+        {{ t('panel.win') }}
+      </button>
+      <!-- 구분선 -->
+      <div class="menu_separator"></div>
+      <!-- 유국 버튼 -->
+      <button class="btn_action draw" @click="emit('show-modal', 'choose_draw_kind')">
+        {{ t('panel.draw') }}
+      </button>
+      <!-- 구분선 -->
+      <div class="menu_separator"></div>
+      <!-- 촌보 버튼 -->
+      <button class="btn_action cheat" @click="emit('show-modal', 'check_player_cheat')">
+        {{ t('panel.cheat') }}
+      </button>
+    </div>
+  </Transition>
 </div>
 <!-- 옵션 버튼 -->
 <div id="Menu" @click="emit('show-modal', 'choose_menu_kind')">
@@ -56,11 +79,26 @@ const emit = defineEmits<Emits>()
 </template>
 
 <style scoped>
+/* 박스 바깥 어두워지는 백드롭 */
+.menu_backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.45); /* 박스 켜지면 바깥이 어두워짐 */
+  z-index: 4; /* Mid(z-index: 5) 바로 아래 */
+  pointer-events: auto;
+}
+
 /* 정보창 위치 */
 #Mid{
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  position: fixed;
+  z-index: 5;
+  pointer-events: none;
 }
 
 /* 메뉴창 위치 */
@@ -69,44 +107,156 @@ const emit = defineEmits<Emits>()
   transform: scale(0.75);
   top: 5px;
   left: 5px;
+  z-index: 10;
 }
 
-/* 정보창 */
-.container_mid{
-  display: grid;
-  grid-template-rows: 50px 50px 70px;
-  grid-template-columns: repeat(3, 130px);
-  grid-template-areas: 
-    'now now win'
-    'now now draw'
-    'riichi renchan cheat';
-  position: fixed;
-  text-align: center;
-  font-size: 40px;
-  place-items: center;
+/* 일반 모드 컴팩트 카드 레이아웃 (배경/보더 제거, 크기 고정, 크기 전반적 확대) */
+.normal_layout {
+  pointer-events: auto;
+  cursor: pointer;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  width: 280px;
+  height: 90px;
+  gap: 15px;
+  transition: transform 0.05s ease;
 }
-.now{
-  grid-area: now;
-  font-size: 70px;
+
+.normal_layout:hover {
+  transform: scale(1.02);
 }
-.riichi{
-  grid-area: riichi;
-  margin: 0 auto 0 auto;
-  transform: translate(20px,-10px);
+
+.normal_layout:active {
+  transform: scale(0.98);
 }
-.renchan{
-  grid-area: renchan;
-  margin: auto;
-  transform: translate(20px,-10px);
+
+/* sticks_container를 now의 좌측에 세로로 배치 */
+.sticks_container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+  width: 95px; /* 두자리 수까지 여유롭게 표현하도록 너비 확보 */
 }
-.cheat{
-  grid-area: cheat;
-  /* display: flex; */
+
+/* 미니 리치봉/연장봉의 하드코딩된 위치 치우침(translate) 강제 리셋, 기울기 각도 유지 및 세로 중앙 정렬 */
+:deep(.stick_mini) {
+  transform: rotate(-50deg) !important; /* 약간 기울어진 기존 각도 유지 */
+  display: inline-block !important; /* 기존처럼 지그재그(staggered) 배치 복원을 위해 inline-block 사용 */
+  vertical-align: middle;
+  width: 42px !important;
+  height: 9px !important;
+  border-radius: 2px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box;
+  white-space: nowrap !important;
 }
-.win{
-  grid-area: win;
+:deep(.riichi_circle_mini) {
+  width: 4px !important;
+  height: 4px !important;
+  margin: 1.5px auto !important;
 }
-.draw{
-  grid-area: draw;
+/* .renchan_circle_mini 오버라이드는 완전히 배제하여, Graphics.vue의 지그재그 마진이 복원되도록 처리 */
+
+.riichi, .renchan {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 24px; /* x N 폰트 크기 대폭 증대 */
+  color: var(--text-color);
+  line-height: 1;
+}
+
+.riichi span, .renchan span {
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.now {
+  font-size: 72px; /* 크기 72px로 대폭 키움 */
+  font-weight: 900;
+  line-height: 1;
+  color: var(--text-color);
+  white-space: nowrap;
+  letter-spacing: -2px;
+}
+
+/* 액션 메뉴 팝업 레이아웃 (불투명한 완벽한 직사각형 박스, 가로 배열, 판정 영역 대폭 확대) */
+.menu_layout {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 420px; /* 훨씬 큰 가로 너비 */
+  height: 115px; /* 훨씬 큰 세로 높이 */
+  background-color: var(--modal-bg-color); /* 불투명 완벽한 박스 */
+  border: 2px solid var(--border-color);
+  border-radius: 0px !important; /* 완벽한 직사각형 */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  padding: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.btn_action {
+  font-family: inherit;
+  font-size: 48px; /* 42px -> 48px 초대형 텍스트로 시각성 및 판정 영역 확대 */
+  font-weight: 900;
+  flex: 1;
+  height: 100%; /* 높이를 100% 채워서 위아래로 거대한 터치 영역 형성 */
+  border: none;
+  background: transparent;
+  color: var(--text-color);
+  cursor: pointer;
+  box-shadow: none;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.05s ease, background-color 0.2s, color 0.2s;
+}
+
+.btn_action:hover {
+  background-color: var(--bg-stripe-light);
+}
+
+.btn_action:active {
+  transform: scale(0.96);
+}
+
+/* 각 버튼별 개별 테마 컬러포인트 */
+.btn_action.win {
+  color: var(--color-negative); /* 화료: 빨간색 강조 */
+}
+
+.btn_action.draw {
+  color: var(--text-color);
+}
+
+.btn_action.cheat {
+  color: var(--color-disabled);
+}
+
+.menu_separator {
+  width: 2px;
+  height: 75px; /* 늘어난 높이에 맞춰 구분선 길이 상향 */
+  background-color: var(--border-color);
+  opacity: 0.15;
+}
+
+/* 극도로 빠른 페이드 아웃/인 애니메이션 (40ms) */
+.panel-fade-enter-active,
+.panel-fade-leave-active {
+  transition: opacity 0.04s ease, transform 0.04s ease;
+}
+.panel-fade-enter-from,
+.panel-fade-leave-to {
+  opacity: 0;
+  transform: scale(0.97);
 }
 </style>

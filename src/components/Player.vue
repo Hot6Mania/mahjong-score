@@ -129,19 +129,17 @@ const getSignColor = (sign: number, x: boolean) => {
     </div>
   </div>
   <div class="score">
-    <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)" style="display: inline-block;">
+    <!-- 이름 배지를 score 상단에 직접 배치하여 고정 -->
+    <div class="player_name_badge">
+      {{ player.name.length > 5 ? player.name.substring(0, 4) + '...' : player.name }}
+    </div>
+    <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)" style="display: inline-block; line-height: 0.95; cursor: pointer;">
       {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
-        <div class="player_name_badge">
-          {{ player.name.length > 5 ? player.name.substring(0, 4) + '...' : player.name }}
-        </div>
         <span v-show="displayScoreLow<10">0</span>{{ displayScoreLow }}
       </span>
     </div>
     <div v-else :style="getSignColor(player.gapScore, false)" style="display: inline-block;">
       <span v-show="gapScoreHigh>0">+</span>{{ gapScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
-        <div class="player_name_badge">
-          {{ player.name.length > 5 ? player.name.substring(0, 4) + '...' : player.name }}
-        </div>
         00
       </span>
     </div>
@@ -185,7 +183,7 @@ const getSignColor = (sign: number, x: boolean) => {
 .container_player{
   display: grid;
   grid-template-rows: repeat(2, auto);
-  grid-template-columns: repeat(4, auto);
+  grid-template-columns: repeat(4, auto); /* 원래 좌표계 위치를 위해 auto로 원상복구 */
   grid-template-areas: 
     '. stick stick .'
     'rank wind score change';
@@ -195,7 +193,8 @@ const getSignColor = (sign: number, x: boolean) => {
 }
 .stick{
   grid-area: stick;
-  transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) rotate(var(--riichi-angle, 0deg));
+  /* 리치봉 크기를 키우고 (scale 0.9) 좌측 쏠림 없이 다시 중앙 정렬로 복구 */
+  transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) rotate(var(--riichi-angle, 0deg)) scale(0.9);
   transform-origin: center center;
   --riichi-bounce-y: -8px;
 }
@@ -212,21 +211,21 @@ const getSignColor = (sign: number, x: boolean) => {
 
 @keyframes riichiThrow {
   0% {
-    transform: translate(var(--riichi-offset-x, 0px), -60px) scale(1.4) rotate(calc(var(--riichi-angle, 0deg) - 15deg));
+    transform: translate(var(--riichi-offset-x, 0px), -60px) scale(1.3) rotate(calc(var(--riichi-angle, 0deg) - 15deg));
     opacity: 0;
   }
   40% {
-    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(1.0) rotate(var(--riichi-angle, 0deg));
+    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(0.9) rotate(var(--riichi-angle, 0deg));
     opacity: 1;
   }
   65% {
-    transform: translate(var(--riichi-offset-x, 0px), calc(var(--riichi-offset-y, 0px) + var(--riichi-bounce-y, -8px))) scale(1.06) rotate(calc(var(--riichi-angle, 0deg) + 2deg));
+    transform: translate(var(--riichi-offset-x, 0px), calc(var(--riichi-offset-y, 0px) + var(--riichi-bounce-y, -8px))) scale(0.95) rotate(calc(var(--riichi-angle, 0deg) + 2deg));
   }
   85% {
-    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(0.98) rotate(calc(var(--riichi-angle, 0deg) - 1deg));
+    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(0.88) rotate(calc(var(--riichi-angle, 0deg) - 1deg));
   }
   100% {
-    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(1.0) rotate(var(--riichi-angle, 0deg));
+    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(0.9) rotate(var(--riichi-angle, 0deg));
   }
 }
 .wind{
@@ -239,6 +238,10 @@ const getSignColor = (sign: number, x: boolean) => {
   width: 200px;
   margin: auto;
   white-space: nowrap;
+  position: relative; /* 이름 배지가 항상 200px 중앙에 고정 배치되도록 기준 마련 */
+  text-align: right;
+  padding-right: 35px; /* 우측 기준선 고정 */
+  box-sizing: border-box;
 }
 .change{
   grid-area: change;
@@ -249,10 +252,9 @@ const getSignColor = (sign: number, x: boolean) => {
 }
 .player_name_badge {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 100%;
-  margin-bottom: 2px;
+  left: 156px; /* 우측으로 숫자 한 글자 폭(약 20px)만큼 더 이동하여 완전히 이격 */
+  bottom: 68px; /* 작은 숫자 바로 위 세로 높이 유지 */
+  margin-bottom: 0px;
   font-size: 13px;
   font-weight: bold;
   padding: 1px 4px;

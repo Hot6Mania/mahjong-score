@@ -121,6 +121,7 @@ const localPoints = reactive<Record<string, number>>(
 
 const animateRank = ref(false);
 const activeGapSeat = ref<string | null>(null);
+const isPanelMenuOpen = ref(false);
 
 // 이름이 바뀔 때마다 앞 글자 겹치지 않는 유니크 축약명을 설정하는 감시자
 watch(() => players.map(p => p.name), (newNames) => {
@@ -292,6 +293,7 @@ const clearGapScores = () => {
 /**바탕화면(빈 공간) 클릭 시 점수 차이 해제*/
 const onBackgroundClick = () => {
   clearGapScores();
+  isPanelMenuOpen.value = false;
 }
 
 /**점수 차이 활성화 (마우스/터치 다운)*/
@@ -508,6 +510,7 @@ const resetAll = () => {
 
 /**모달 창 켜기*/
 const showModal = (type: string, status?: string) => {
+  isPanelMenuOpen.value = false;
   Object.assign(modalInfo, {
     isOpen: true,
     type: type,
@@ -1309,8 +1312,11 @@ const startNewDay = async () => {
     <!-- 중앙 panel 컴포넌트 생성 -->
     <Panel
       :panelInfo
+      :isMenuOpen="isPanelMenuOpen"
       @show-modal="showModal"
       @roll-dice="rollDice"
+      @toggle-menu="isPanelMenuOpen = !isPanelMenuOpen"
+      @close-menu="isPanelMenuOpen = false"
     />
   </main>
   <!-- modal 컴포넌트 생성 (자연스러운 페이드인 효과를 위해 Transition 적용) -->
