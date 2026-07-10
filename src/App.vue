@@ -179,6 +179,15 @@ watch(option, (newVal) => {
 
 /**시작시 언어 변경 및 자리선택 타일창 띄우기*/
 onMounted(async () => {
+  // 버전 체크를 통한 모바일/데스크톱 브라우저 캐시 강제 갱신 (마이그레이션 적용)
+  const CURRENT_VERSION = "20260710_2335";
+  const savedVersion = localStorage.getItem("app_version");
+  if (savedVersion !== CURRENT_VERSION) {
+    localStorage.setItem("app_version", CURRENT_VERSION);
+    window.location.reload();
+    return;
+  }
+
   await router.isReady();
   changeLocale();
   for (let i=3;i>0;i--){ // 자리 섞기
