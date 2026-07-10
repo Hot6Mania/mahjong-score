@@ -460,11 +460,11 @@ const stats = computed(() => {
           <span class="stat_value">{{ stats.loseRiichiRate }}</span>
         </div>
         <div class="stat_row">
-          <span class="stat_label">화료 효율 (화료율 * 평균화료)</span>
+          <span class="stat_label">화료 효율</span>
           <span class="stat_value text_positive">+{{ stats.winEfficiency }}</span>
         </div>
         <div class="stat_row">
-          <span class="stat_label">방총 손실 (방총률 * 평균방총)</span>
+          <span class="stat_label">방총 손실</span>
           <span class="stat_value text_negative">-{{ stats.loseLoss }}</span>
         </div>
         <div class="stat_row">
