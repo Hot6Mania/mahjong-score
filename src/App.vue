@@ -244,26 +244,50 @@ const toggleActiveRiichi = (seat: string) => {
   }
 }
 
-/**점수 차이 활성화/비활성화*/
-const toggleShowGap = (seat: string, toggle: boolean) => {
+let gapTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**모든 플레이어의 점수 차이 및 순위 표시 초기화*/
+const clearGapScores = () => {
+  if (gapTimer) {
+    clearTimeout(gapTimer);
+    gapTimer = null;
+  }
+  for (let i=0;i<players.length;i++){
+    players[i].gapScore=NaN; // 점수 차 표시 끄기
+    players[i].rank=0; // 순위 표시 끄기
+  }
+}
+
+/**바탕화면(빈 공간) 클릭 시 점수 차이 해제*/
+const onBackgroundClick = () => {
+  clearGapScores();
+}
+
+/**점수 차이 활성화/비활성화 (2초간 유지 후 만료)*/
+const toggleShowGap = (seat: string) => {
   let idx=players.findIndex(x => x['seat']===seat); // 위치 기준 인덱스 반환
   if (!isNaN(players[idx].effectScore)) // 점수변동 이펙트 도중이면 실행 x
     return;
-  if (toggle===true){ // 활성화
-    for (let i=0;i<players.length;i++){
-      if (i!==idx) // 본인이 아니면 점수 차 표시 켜기
-        players[i].gapScore=players[idx].displayScore-players[i].displayScore;
-      else
-        players[i].gapScore=NaN;
-      players[i].rank=players.filter(x => x.displayScore>players[i].displayScore).length+1; // 순위 표시 켜기
-    }
+
+  // 1. 기존 타이머 제거
+  if (gapTimer) {
+    clearTimeout(gapTimer);
+    gapTimer = null;
   }
-  else{ // 비활성화
-    for (let i=0;i<players.length;i++){
-      players[i].gapScore=NaN; // 점수 차 표시 끄기
-      players[i].rank=0; // 순위 표시 끄기
-    }
+
+  // 2. 점수 차 및 순위 표시 켜기
+  for (let i=0;i<players.length;i++){
+    if (i!==idx) // 본인이 아니면 점수 차 표시 켜기
+      players[i].gapScore=players[idx].displayScore-players[i].displayScore;
+    else
+      players[i].gapScore=NaN;
+    players[i].rank=players.filter(x => x.displayScore>players[i].displayScore).length+1; // 순위 표시 켜기
   }
+
+  // 3. 1초 후 자동 꺼짐 타이머 설정
+  gapTimer = setTimeout(() => {
+    clearGapScores();
+  }, 1000);
 }
 
 /**바람 및 라운드 변경*/
@@ -1084,7 +1108,7 @@ const startNewDay = async () => {
 </script>
 
 <template>
-<div class="background" @dblclick.self="toggleFullScreen()">
+<div class="background" @dblclick.self="toggleFullScreen()" @click="onBackgroundClick">
   <!-- 각 방향별 player 컴포넌트 생성 -->
   <main role="main">
     <Player v-for="(_, i) in players"

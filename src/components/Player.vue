@@ -13,7 +13,7 @@ const props = defineProps<Props>()
 /**emits 정의*/
 type Emits = {
   (e: 'toggle-active-riichi', seat: string): void,
-  (e: 'toggle-show-gap', seat: string, toggle: boolean): void
+  (e: 'toggle-show-gap', seat: string): void
 }
 const emit = defineEmits<Emits>()
 
@@ -71,12 +71,7 @@ const getSignColor = (sign: number, x: boolean) => {
   <Graphics kind="riichiStick" class="stick" :style="riichiStickVisibility()"/>
   <!-- 현재 바람 -->
   <div class="wind" :style="windStyle()"
-    @mousedown="emit('toggle-show-gap', player.seat, true)"
-    @mouseup="emit('toggle-show-gap', player.seat, false)"
-    @mouseleave="emit('toggle-show-gap', player.seat, false)"
-    @touchstart="emit('toggle-show-gap', player.seat, true)"
-    @touchend="emit('toggle-show-gap', player.seat, false)"
-    @touchcancel="emit('toggle-show-gap', player.seat, false)"
+    @click.stop="emit('toggle-show-gap', player.seat)"
   >
     {{ player.wind }}
   </div>

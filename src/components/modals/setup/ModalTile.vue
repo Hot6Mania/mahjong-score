@@ -78,6 +78,11 @@ watch(() => props.googleInfo.todayMembers, (newVal) => {
   }
 }, { deep: true })
 
+// 오늘의 멤버 풀이 변경되면 이번 판 4인 선택을 초기화함
+watch(tempTodayMembers, () => {
+  selected4Names.value = []
+}, { deep: true })
+
 const shuffleTiles = () => {
   const tiles = ['東', '南', '西', '北']
   
@@ -181,8 +186,10 @@ const selectPlayer = (idx: number) => {
   activePlayerIndex.value = idx
 }
 
+const isAutoDrawing = ref(false)
+
 const flipTile = (tileIdx: number) => {
-  if (activePlayerIndex.value === null) return 
+  if (activePlayerIndex.value === null || isAutoDrawing.value) return 
   if (openedTiles.value[tileIdx]) return 
 
   const playerName = selected4Names.value[activePlayerIndex.value]
@@ -200,14 +207,43 @@ const isAssignmentComplete = computed(() => {
 })
 
 const drawAllAtOnce = () => {
+  if (isAutoDrawing.value) return
+  isAutoDrawing.value = true
+
+  // 1. 초기 셔플 및 상태 리셋
   shuffleTiles()
-  selected4Names.value.forEach((name, idx) => {
-    const wind = randomizedTiles.value[idx]
-    assignment.value[wind] = name
-    playerAssignedWind.value[name] = wind
-  })
-  openedTiles.value = [true, true, true, true]
+  assignment.value = {}
+  playerAssignedWind.value = {}
+  openedTiles.value = [false, false, false, false]
   activePlayerIndex.value = null
+
+  // 2. 0.5초 간격으로 4명 순차적 배정 시작
+  let step = 0
+  activePlayerIndex.value = 0 // 첫 주자 하이라이트
+
+  const nextStep = () => {
+    if (step < 4) {
+      setTimeout(() => {
+        const playerName = selected4Names.value[step]
+        const wind = randomizedTiles.value[step]
+
+        openedTiles.value[step] = true
+        assignment.value[wind] = playerName
+        playerAssignedWind.value[playerName] = wind
+
+        step++
+        if (step === 4) {
+          activePlayerIndex.value = null
+          isAutoDrawing.value = false
+        } else {
+          activePlayerIndex.value = step // 다음 주자 하이라이트
+          nextStep()
+        }
+      }, 500)
+    }
+  }
+
+  nextStep()
 }
 
 const startGame = () => {
@@ -215,14 +251,10 @@ const startGame = () => {
   emit('start-game-with-seats', assignment.value)
 }
 
-const tileStyle = (tileIdx: number) => {
-  const isOpened = openedTiles.value[tileIdx]
+const tileBackStyle = (tileIdx: number) => {
   const wind = randomizedTiles.value[tileIdx]
   return {
-    color: isOpened ? (wind === '東' ? 'var(--color-east)' : 'var(--text-color)') : 'var(--bg-stripe-dark)',
-    backgroundColor: isOpened ? 'var(--input-bg-color)' : 'var(--color-toggle-on)',
-    border: '1px solid var(--border-color)',
-    cursor: isOpened ? 'default' : 'pointer'
+    color: wind === '東' ? 'var(--color-east)' : 'var(--text-color)'
   }
 }
 </script>
@@ -334,7 +366,9 @@ const tileStyle = (tileIdx: number) => {
   <div v-else class="step_section">
     <div class="step_header">
       <span class="step_indicator">3 / 3 단계</span>
-      <h3 class="step_title">이름과 타일 번갈아 클릭</h3>
+      <h3 class="step_title">
+        {{ isAutoDrawing ? '자리 지정 중...' : (isAssignmentComplete ? '자리 지정 완료!' : '이름과 타일 번갈아 클릭') }}
+      </h3>
     </div>
     
     <div class="draw_container">
@@ -347,7 +381,7 @@ const tileStyle = (tileIdx: number) => {
             selected: activePlayerIndex === i,
             assigned: playerAssignedWind[name] !== undefined
           }"
-          @click="selectPlayer(i)"
+          @click="isAutoDrawing ? null : selectPlayer(i)"
         >
           <span class="player_name_text">{{ name }}</span>
           <span v-if="playerAssignedWind[name]" class="assigned_wind">
@@ -356,16 +390,20 @@ const tileStyle = (tileIdx: number) => {
         </div>
       </div>
 
-      <div class="tiles_grid" :class="{ disabled: activePlayerIndex === null }">
+      <div class="tiles_grid" :class="{ disabled: activePlayerIndex === null || isAutoDrawing }">
         <div 
           v-for="(_, i) in 4" 
           :key="i"
           class="draw_tile"
-          :style="tileStyle(i)"
+          :class="{ flipped: openedTiles[i] }"
           @click="flipTile(i)"
         >
-          <span v-if="openedTiles[i]" class="tile_wind">{{ randomizedTiles[i] }}</span>
-          <span v-else class="tile_back">🀫</span>
+          <div class="draw_tile_inner">
+            <div class="draw_tile_front">🀫</div>
+            <div class="draw_tile_back" :style="tileBackStyle(i)">
+              {{ randomizedTiles[i] }}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -374,12 +412,13 @@ const tileStyle = (tileIdx: number) => {
     <button 
       v-if="!isAssignmentComplete" 
       class="btn_draw_all" 
+      :disabled="isAutoDrawing"
       @click="drawAllAtOnce"
     >
       한번에
     </button>
 
-    <div class="button_group_row">
+    <div class="button_group_row" :class="{ disabled: isAutoDrawing }">
       <button class="btn_back" @click="currentStep = 'select_match_4'">
         ⇠ 멘쯔 변경
       </button>
@@ -598,6 +637,10 @@ const tileStyle = (tileIdx: number) => {
   display: flex;
   gap: 8px;
 }
+.button_group_row.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
 .btn_back {
   flex: 1;
   padding: 8px;
@@ -650,11 +693,12 @@ const tileStyle = (tileIdx: number) => {
   cursor: pointer;
   font-size: 14px;
   font-weight: bold;
+  transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s;
 }
 .draw_player_item.selected {
   border-color: var(--color-toggle-on);
   background-color: var(--input-bg-color);
-  box-shadow: 0 0 3px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 4px var(--color-toggle-on);
 }
 .draw_player_item.assigned {
   opacity: 0.4;
@@ -682,17 +726,49 @@ const tileStyle = (tileIdx: number) => {
   pointer-events: none;
 }
 .draw_tile {
+  perspective: 1000px;
+  cursor: pointer;
+  height: 80px;
+  width: 62px;
+}
+.draw_tile_inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  text-align: center;
+  transition: transform 0.4s ease;
+  transform-style: preserve-3d;
+  box-shadow: 1px 1px 3px rgba(0,0,0,0.15);
+  border-radius: 6px;
+}
+.draw_tile.flipped .draw_tile_inner {
+  transform: rotateY(180deg);
+}
+.draw_tile_front,
+.draw_tile_back {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
+  border: 1px solid var(--border-color);
+  box-sizing: border-box;
+}
+.draw_tile_front {
+  background-color: var(--color-toggle-on);
+  color: #fff;
+  font-size: 40px;
+  user-select: none;
+}
+.draw_tile_back {
+  background-color: var(--input-bg-color);
+  transform: rotateY(180deg);
   font-size: 30px;
   font-weight: bold;
-  box-shadow: 1px 1px 3px rgba(0,0,0,0.15);
-}
-.tile_back {
-  font-size: 40px;
-  color: #fff;
 }
 .btn_draw_all {
   width: 100%;
@@ -708,7 +784,11 @@ const tileStyle = (tileIdx: number) => {
   margin-bottom: 8px;
   transition: opacity 0.2s;
 }
-.btn_draw_all:hover {
+.btn_draw_all:hover:not(:disabled) {
   opacity: 0.9;
+}
+.btn_draw_all:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>
