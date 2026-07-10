@@ -252,12 +252,22 @@ const toggleActiveRiichi = (seat: string) => {
       players[idx].displayScore-=1000;
       players[idx].isRiichi=true;
       panelInfo.riichi++;
+      
+      // 랜덤한 각도 및 위치 오프셋 추가 (물리 효과용)
+      (players[idx] as any).riichiAngle = Number((Math.random() * 12 - 6).toFixed(2));
+      (players[idx] as any).riichiOffsetX = Number((Math.random() * 16 - 8).toFixed(2));
+      (players[idx] as any).riichiOffsetY = Number((Math.random() * 12 - 6).toFixed(2));
     }
   }
   else{ // 리치 비활성화
     players[idx].displayScore+=1000;
     players[idx].isRiichi=false;
     panelInfo.riichi--;
+    
+    // 초기화
+    (players[idx] as any).riichiAngle = 0;
+    (players[idx] as any).riichiOffsetX = 0;
+    (players[idx] as any).riichiOffsetY = 0;
   }
 }
 

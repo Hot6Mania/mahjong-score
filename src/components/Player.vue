@@ -76,10 +76,21 @@ const displayScoreStyle = () => {
   return {color: props.player.displayScore<1000 && props.option.tobi===true ? 'var(--color-disabled)' : 'var(--text-color)'}
 }
 
-/**리치봉 표시*/
-const riichiStickVisibility = () => {
-  return {visibility: props.player.isRiichi===true ? 'visible' : 'hidden'}
-}
+/**리치봉 스타일 계산 (랜덤 비틀기 및 낙하 물리 효과용 CSS 변수 주입)*/
+const riichiStickStyle = computed(() => {
+  if (props.player.isRiichi !== true) {
+    return { visibility: 'hidden' };
+  }
+  const angle = (props.player as any).riichiAngle || 0;
+  const offsetX = (props.player as any).riichiOffsetX || 0;
+  const offsetY = (props.player as any).riichiOffsetY || 0;
+  return {
+    visibility: 'visible',
+    '--riichi-angle': `${angle}deg`,
+    '--riichi-offset-x': `${offsetX}px`,
+    '--riichi-offset-y': `${offsetY}px`
+  };
+})
 
 /**점수 부호에 따른 색상*/
 const getSignColor = (sign: number, x: boolean) => {
@@ -97,7 +108,7 @@ const getSignColor = (sign: number, x: boolean) => {
 <template>
 <div class="container_player" :id=player.seat>
   <!-- 리치봉 -->
-  <Graphics kind="riichiStick" class="stick" :style="riichiStickVisibility()"/>
+  <Graphics kind="riichiStick" class="stick" :class="{ 'riichi-active': player.isRiichi }" :style="riichiStickStyle"/>
   <!-- 현재 바람 -->
   <div class="wind" :style="windStyle()"
     @mousedown.stop="emit('start-show-gap', player.seat)"
@@ -185,6 +196,39 @@ const getSignColor = (sign: number, x: boolean) => {
 }
 .stick{
   grid-area: stick;
+  transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) rotate(var(--riichi-angle, 0deg));
+  transform-origin: center center;
+  --riichi-bounce-y: -8px;
+}
+@media (max-height: 600px) {
+  .stick {
+    /* 세로가 좁은 화면에서는 글자를 가리지 않도록 상하 오프셋을 30% 수준으로 크게 감쇄하고, 위아래 튀어오르는 높이도 감축 */
+    --riichi-offset-y: calc(var(--riichi-offset-y, 0px) * 0.3) !important;
+    --riichi-bounce-y: -3px !important;
+  }
+}
+.stick.riichi-active {
+  animation: riichiThrow 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+@keyframes riichiThrow {
+  0% {
+    transform: translate(var(--riichi-offset-x, 0px), -60px) scale(1.4) rotate(calc(var(--riichi-angle, 0deg) - 15deg));
+    opacity: 0;
+  }
+  40% {
+    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(1.0) rotate(var(--riichi-angle, 0deg));
+    opacity: 1;
+  }
+  65% {
+    transform: translate(var(--riichi-offset-x, 0px), calc(var(--riichi-offset-y, 0px) + var(--riichi-bounce-y, -8px))) scale(1.06) rotate(calc(var(--riichi-angle, 0deg) + 2deg));
+  }
+  85% {
+    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(0.98) rotate(calc(var(--riichi-angle, 0deg) - 1deg));
+  }
+  100% {
+    transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) scale(1.0) rotate(var(--riichi-angle, 0deg));
+  }
 }
 .wind{
   grid-area: wind;
