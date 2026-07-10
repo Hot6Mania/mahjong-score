@@ -187,6 +187,8 @@ const toggleButtonStyle = (status: string) => {
     return {color: props.option.cheatScore===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='endriichi') // 공탁처리 옵션
     return {color: props.option.riichiPayout===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
+  else if (status==='alwaysshowrank') // 등수 상시 표시 옵션
+    return {color: props.option.alwaysShowRank===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='isonline') // 싱크 온/오프라인
     return {color: props.googleInfo.isLoggedIn===true ? 'var(--color-online)' : 'var(--color-offline)'};
 }
@@ -480,6 +482,13 @@ const getSignColor = (sign: number, x: boolean) => {
             <span v-show="option.riichiPayout===false">X</span>
           </span>
         </div>
+        <div style="grid-area: option7;" @click.stop="emit('set-toggle-button', 'alwaysshowrank')">
+          {{ t('option.alwaysShowRank') }}<br>
+          <span :style="toggleButtonStyle('alwaysshowrank')">
+            <span v-show="option.alwaysShowRank===true">O</span>
+            <span v-show="option.alwaysShowRank===false">X</span>
+          </span>
+        </div>
       </div>
       <button 
         @click.stop="emit('start-new-day')"
@@ -604,19 +613,46 @@ const getSignColor = (sign: number, x: boolean) => {
   margin: 20px;
 }
 
-/* 옵션 선택창 */
 .container_option{
   display: grid;
-  grid-template-rows: repeat(3, 60px);
+  grid-template-rows: repeat(4, 60px);
   grid-template-columns: repeat(4, 120px);
   grid-template-areas:
   'input_name0 input_name1 input_name2 input_name3'
   'option0 option1 option2 option3'
-  'option4 option4 option5 option6';
+  'option4 option4 option5 option6'
+  'option7 option7 . .';
   text-align: center;
   font-size: 20px;
   gap: 10px;
   margin: 5px;
+  
+  max-height: 200px;
+  overflow-y: scroll !important;
+  padding-right: 8px;
+  box-sizing: border-box;
+}
+
+/* 설정 창 스크롤바 스타일 */
+.container_option::-webkit-scrollbar {
+  width: 8px;
+  display: block !important;
+}
+.container_option::-webkit-scrollbar-track {
+  background: var(--bg-stripe-dark);
+  border-radius: 4px;
+}
+.container_option::-webkit-scrollbar-thumb {
+  background: #888888;
+  border: 2px solid var(--bg-stripe-dark);
+  border-radius: 4px;
+}
+.container_option::-webkit-scrollbar-thumb:hover {
+  background: var(--color-toggle-on);
+}
+.container_option {
+  scrollbar-width: thin;
+  scrollbar-color: #888888 var(--bg-stripe-dark);
 }
 
 /* 게임 결과창(표)*/

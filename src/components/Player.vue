@@ -10,10 +10,10 @@ interface Props {
 }
 const props = defineProps<Props>()
 
-/**emits 정의*/
 type Emits = {
   (e: 'toggle-active-riichi', seat: string): void,
-  (e: 'toggle-show-gap', seat: string): void
+  (e: 'start-show-gap', seat: string): void,
+  (e: 'end-show-gap', seat: string): void
 }
 const emit = defineEmits<Emits>()
 
@@ -32,9 +32,15 @@ const gapScoreHigh = computed(() => {
   return Math.floor(props.player.gapScore/100);
 })
 
-/**순위별 접미사*/
-const displayRank = computed(() => {
-  return props.player.rank+['st', 'nd', 'rd', 'th'][props.player.rank-1];
+
+
+/**등수별 색상 계산*/
+const rankColor = computed(() => {
+  const r = props.player.rank !== 0 ? props.player.rank : props.player.realRank;
+  if (r === 1) return '#28A745';
+  if (r === 2) return '#17A2B8';
+  if (r === 4) return '#DC3545';
+  return 'var(--text-color)';
 })
 
 /**자풍이 東이라면 붉은색 표시*/
@@ -71,13 +77,22 @@ const getSignColor = (sign: number, x: boolean) => {
   <Graphics kind="riichiStick" class="stick" :style="riichiStickVisibility()"/>
   <!-- 현재 바람 -->
   <div class="wind" :style="windStyle()"
-    @click.stop="emit('toggle-show-gap', player.seat)"
+    @mousedown.stop="emit('start-show-gap', player.seat)"
+    @mouseup.stop="emit('end-show-gap', player.seat)"
+    @mouseleave.stop="emit('end-show-gap', player.seat)"
+    @touchstart.stop.prevent="emit('start-show-gap', player.seat)"
+    @touchend.stop="emit('end-show-gap', player.seat)"
+    @touchcancel.stop="emit('end-show-gap', player.seat)"
   >
     {{ player.wind }}
+    <!-- 대형 등수 표시 (자리 표시의 왼쪽에 정렬) -->
+    <div v-show="player.rank !== 0 || option.alwaysShowRank" class="large_rank_overlay" :style="{ color: rankColor }">
+      {{ player.rank !== 0 ? player.rank : player.realRank }}
+    </div>
   </div>
   <!-- 현재 점수 -->
   <div class="score">
-    <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)">
+    <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)" style="display: inline-block;">
       {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
         <div class="player_name_badge">
           {{ (player as any).shortName || player.name }}
@@ -85,7 +100,7 @@ const getSignColor = (sign: number, x: boolean) => {
         <span v-show="displayScoreLow<10">0</span>{{ displayScoreLow }}
       </span>
     </div>
-    <div v-else :style="getSignColor(player.gapScore, false)">
+    <div v-else :style="getSignColor(player.gapScore, false)" style="display: inline-block;">
       <span v-show="gapScoreHigh>0">+</span>{{ gapScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
         <div class="player_name_badge">
           {{ (player as any).shortName || player.name }}
@@ -93,10 +108,6 @@ const getSignColor = (sign: number, x: boolean) => {
         00
       </span>
     </div>
-  </div>
-  <!-- 순위 표시 -->
-  <div v-show="player.rank!==0" class="rank" :style="{color: player.rank===1 ? 'var(--color-rank-first)' : 'var(--text-color)'}">
-    {{ displayRank }}
   </div>
   <!-- 변경되는 점수 -->
   <div v-show="!isNaN(player.effectScore)" class="change" :style="getSignColor(player.effectScore, true)">
@@ -151,19 +162,13 @@ const getSignColor = (sign: number, x: boolean) => {
 .wind{
   grid-area: wind;
   margin: auto;
+  position: relative;
 }
 .score{
   grid-area: score;
   width: 200px;
   margin: auto;
   white-space: nowrap;
-}
-.rank{
-  grid-area: rank;
-  width: 0px;
-  font-size: 25px;
-  font-weight: bold;
-  transform: rotate(-90deg) translate(-10px, 30px);
 }
 .change{
   grid-area: change;
@@ -190,5 +195,16 @@ const getSignColor = (sign: number, x: boolean) => {
   z-index: 2;
   transition: background-color 0.3s, color 0.3s, border-color 0.3s;
   line-height: normal;
+}
+.large_rank_overlay {
+  position: absolute;
+  left: -35px; /* 자리 표시의 왼쪽에 띄움 */
+  top: 6px;    /* 상단 글씨선에 맞춰 정교하게 위측 정렬 */
+  font-size: 50px;
+  font-weight: 900;
+  user-select: none;
+  font-family: inherit;
+  line-height: 1;
+  z-index: 10;
 }
 </style>

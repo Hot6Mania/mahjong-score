@@ -3,6 +3,7 @@ export interface Player { // 플레이어
   name: string, // 이름
   wind: string, // 자풍
   rank: number, // 순위
+  realRank: number, // 실시간 순위
   displayScore: number, // 현재 점수
   effectScore: number, // 이펙트용 점수
   gapScore: number, // 점수 차이
@@ -58,6 +59,7 @@ export interface Option { // 옵션
   tobi: boolean, // 들통
   cheatScore: boolean, // 촌보 지불 점수
   riichiPayout: boolean, // 남은 공탁금 처리
+  alwaysShowRank: boolean, // 등수 상시 표시
 }
 
 export interface ModalInfo { // 모달창

@@ -19,16 +19,16 @@ const { t, locale } = useI18n()
 // 로컬 스토리지에 백업된 대국 데이터가 있는지 확인하고 복원
 const savedPlayers = localStorage.getItem("mahjong_players");
 let initialPlayers = [
-  {seat: "Down",  name: "▼", wind: "東", rank: 0,
+  {seat: "Down",  name: "▼", wind: "東", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
     isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
-  {seat: "Right", name: "▶", wind: "南", rank: 0,
+  {seat: "Right", name: "▶", wind: "南", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
     isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
-  {seat: "Up",    name: "▲", wind: "西", rank: 0,
+  {seat: "Up",    name: "▲", wind: "西", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
     isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
-  {seat: "Left",  name: "◀", wind: "北", rank: 0,
+  {seat: "Left",  name: "◀", wind: "北", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
     isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""}
 ];
@@ -86,8 +86,7 @@ const records = reactive<RecordsType>(savedRecords ? JSON.parse(savedRecords) : 
   lose: [[false, false, false, false]], // 방총 횟수
 })
 
-const savedOption = localStorage.getItem("mahjong_option");
-const option = reactive<OptionType>(savedOption ? JSON.parse(savedOption) : {
+const defaultOption: OptionType = {
   startingScore: 25000, // 시작 점수
   returnScore: 30000, // 반환 점수
   rankUma: [35, 5, -15, -25], // 순위 우마
@@ -95,7 +94,10 @@ const option = reactive<OptionType>(savedOption ? JSON.parse(savedOption) : {
   tobi: true, // 들통
   cheatScore: false, // 촌보 지불 점수
   riichiPayout: true, // 남은 공탁금 처리
-})
+  alwaysShowRank: false, // 등수 상시 표시
+};
+const savedOption = localStorage.getItem("mahjong_option");
+const option = reactive<OptionType>(savedOption ? { ...defaultOption, ...JSON.parse(savedOption) } : defaultOption);
 const modalInfo = reactive({ // 모달창
   isOpen: false, // on/off
   type: "", // 종류
@@ -123,6 +125,13 @@ watch(() => players.map(p => p.name), (newNames) => {
     p.shortName = shorts[idx];
   });
 }, { immediate: true, deep: true });
+
+watch(() => players.map(p => p.displayScore), () => {
+  players.forEach(p => {
+    p.realRank = players.filter(x => x.displayScore > p.displayScore).length + 1;
+  });
+}, { immediate: true, deep: true });
+
 
 // 대국 상태 로컬 스토리지 저장 감시자들
 watch(players, (newVal) => {
@@ -245,6 +254,8 @@ const toggleActiveRiichi = (seat: string) => {
 }
 
 let gapTimer: ReturnType<typeof setTimeout> | null = null;
+let gapPressStartTime = 0;
+let isHoldingGap = false;
 
 /**모든 플레이어의 점수 차이 및 순위 표시 초기화*/
 const clearGapScores = () => {
@@ -252,6 +263,7 @@ const clearGapScores = () => {
     clearTimeout(gapTimer);
     gapTimer = null;
   }
+  isHoldingGap = false;
   for (let i=0;i<players.length;i++){
     players[i].gapScore=NaN; // 점수 차 표시 끄기
     players[i].rank=0; // 순위 표시 끄기
@@ -263,17 +275,19 @@ const onBackgroundClick = () => {
   clearGapScores();
 }
 
-/**점수 차이 활성화/비활성화 (2초간 유지 후 만료)*/
-const toggleShowGap = (seat: string) => {
+/**점수 차이 활성화 (마우스/터치 다운)*/
+const startShowGap = (seat: string) => {
   let idx=players.findIndex(x => x['seat']===seat); // 위치 기준 인덱스 반환
   if (!isNaN(players[idx].effectScore)) // 점수변동 이펙트 도중이면 실행 x
     return;
 
-  // 1. 기존 타이머 제거
+  // 1. 기존 타이머 제거 및 홀드 상태 설정
   if (gapTimer) {
     clearTimeout(gapTimer);
     gapTimer = null;
   }
+  isHoldingGap = true;
+  gapPressStartTime = Date.now();
 
   // 2. 점수 차 및 순위 표시 켜기
   for (let i=0;i<players.length;i++){
@@ -286,8 +300,21 @@ const toggleShowGap = (seat: string) => {
 
   // 3. 1초 후 자동 꺼짐 타이머 설정
   gapTimer = setTimeout(() => {
-    clearGapScores();
+    // 1초가 도래했을 때 사용자가 더 이상 꾹 누르고 있지 않은 경우만 초기화
+    if (!isHoldingGap) {
+      clearGapScores();
+    }
   }, 1000);
+}
+
+/**점수 차이 비활성화 시도 (마우스/터치 업)*/
+const endShowGap = (_seat: string) => {
+  isHoldingGap = false;
+  const elapsed = Date.now() - gapPressStartTime;
+  // 1초 이상 누르고 있던 경우 뗄 때 바로 초기화
+  if (elapsed >= 1000) {
+    clearGapScores();
+  }
 }
 
 /**바람 및 라운드 변경*/
@@ -504,6 +531,8 @@ const setToggleButton = (status: string) => {
     option.cheatScore=!option.cheatScore;
   else if (status==='endriichi') // 공탁처리 토글
     option.riichiPayout=!option.riichiPayout;
+  else if (status==='alwaysshowrank') // 등수 상시 표시 토글
+    option.alwaysShowRank=!option.alwaysShowRank;
 }
 
 /**판/부 버튼 동작 설정*/
@@ -1116,7 +1145,8 @@ const startNewDay = async () => {
       :player="players[i]"
       :option
       @toggle-active-riichi="toggleActiveRiichi"
-      @toggle-show-gap="toggleShowGap"
+      @start-show-gap="startShowGap"
+      @end-show-gap="endShowGap"
     />
     <!-- 중앙 panel 컴포넌트 생성 -->
     <Panel
