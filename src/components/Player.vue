@@ -138,15 +138,15 @@ const getSignColor = (sign: number, x: boolean) => {
         <span v-show="displayScoreLow<10">0</span>{{ displayScoreLow }}
       </span>
     </div>
-    <div v-else :style="getSignColor(player.gapScore, false)" style="display: inline-block;">
-      <span v-show="gapScoreHigh>0">+</span>{{ gapScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
+    <div v-else :style="getSignColor(player.gapScore, false)" style="display: inline-block; line-height: 0.95;">
+      <span class="score_sign" v-show="gapScoreHigh !== 0">{{ gapScoreHigh > 0 ? '+' : '-' }}</span>{{ Math.abs(gapScoreHigh) }}<span style="font-size: 50px; position: relative; display: inline-block; vertical-align: baseline;">
         00
       </span>
     </div>
   </div>
   <!-- 변경되는 점수 -->
   <div v-show="!isNaN(player.effectScore)" class="change" :style="getSignColor(player.effectScore, true)">
-    <span v-show="player.effectScore>0">+</span>{{ player.effectScore }}
+    <span class="change_sign" v-show="player.effectScore !== 0">{{ player.effectScore > 0 ? '+' : '-' }}</span>{{ Math.abs(player.effectScore) }}
   </div>
 </div>
 </template>
@@ -337,5 +337,25 @@ const getSignColor = (sign: number, x: boolean) => {
     transform: translateX(0) scale(1.0);
     opacity: 1;
   }
+}
+
+/* +와 - 부호의 동일한 폰트 스케일 및 세로 중앙 정렬 지정 */
+.score_sign {
+  font-family: Consolas, monospace !important;
+  font-size: 42px; /* 가독성을 해치지 않으면서 아담하게 축소 */
+  vertical-align: middle; /* 세로 기준점 정렬 */
+  display: inline-block;
+  line-height: 1;
+  transform: translateY(-0.16em); /* baseline 기준 숫자의 상하 중앙선으로 정확히 끌어올림 */
+  margin-right: 0px; /* 밀착도 조율 */
+}
+.change_sign {
+  font-family: Consolas, monospace !important;
+  font-size: 20px; /* change text(30px) 크기에 맞춘 아담한 크기 */
+  vertical-align: middle;
+  display: inline-block;
+  line-height: 1;
+  transform: translateY(-0.14em); /* 상하 중앙 조율 */
+  margin-right: 0px;
 }
 </style>

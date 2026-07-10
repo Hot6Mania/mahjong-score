@@ -63,7 +63,7 @@ const getSignColor = (sign: number, x: number) => {
         :class="(j%4<2) ? 'row-light' : 'row-dark'"
       >
         <template v-if="j%2===1">
-          <span v-show="records.score[i][j]>0">+</span>{{ records.score[i][j] }}
+          <span class="record_sign" v-show="records.score[i][j] !== 0">{{ records.score[i][j] > 0 ? '+' : '-' }}</span>{{ Math.abs(records.score[i][j]) }}
         </template>
         <template v-else>
           {{ records.score[i][j] }}
@@ -151,5 +151,15 @@ const getSignColor = (sign: number, x: number) => {
 }
 .when > div:hover {
   opacity: 0.8;
+}
+
+.record_sign {
+  font-family: Consolas, monospace !important;
+  font-size: 16px; /* 15px 폰트 크기에 걸맞게 16px로 키움 */
+  vertical-align: middle;
+  display: inline-block;
+  line-height: 1;
+  transform: translateY(-0.06em); /* Consolas 부호 세로축 정중앙 맞춤 오프셋 */
+  margin-right: -1px;
 }
 </style>
