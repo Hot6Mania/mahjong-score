@@ -66,6 +66,7 @@ const stats = computed(() => {
   let totalRanks = 0
   let tobiCount = 0
   let totalFinalScore = 0
+  let totalUma = 0
 
   let riichiCount = 0
   let riichiWinCount = 0
@@ -97,6 +98,7 @@ const stats = computed(() => {
       const resultEntry = game.results[pIdx]
       totalRanks += resultEntry.rank
       totalFinalScore += resultEntry.score
+      totalUma += resultEntry.uma || 0
       if (resultEntry.score < 0) {
         tobiCount++
       }
@@ -118,8 +120,8 @@ const stats = computed(() => {
         const isDraw = (status === 'normal_draw' || status === 'special_draw')
         const isTenpai = (rec.tenpai && rec.tenpai[r]) ? rec.tenpai[r][pIdx] : false
         
-        // 델타 점수 (각 국 점수 변화량은 score[pIdx][2*r] 에 들어있음)
-        const delta = (rec.score && rec.score[pIdx] && rec.score[pIdx][2 * r] !== undefined) ? rec.score[pIdx][2 * r] : 0
+        // 델타 점수 (각 국 점수 변화량은 score[pIdx][2*r - 1] 에 들어있음)
+        const delta = (rec.score && rec.score[pIdx] && rec.score[pIdx][2 * r - 1] !== undefined) ? rec.score[pIdx][2 * r - 1] : 0
 
         // 화료 및 방총
         if (isWin) {
@@ -217,7 +219,11 @@ const stats = computed(() => {
   const avgLoseScore = formatVal(Math.abs(totalLoseScore), loseCount)
   const avgRank = totalGames > 0 ? (totalRanks / totalGames).toFixed(2) + '위' : '-'
   const tobiRate = formatRate(tobiCount, totalGames)
-  const expectedScore = formatVal(totalFinalScore, totalGames)
+
+  const expectedScoreVal = totalGames > 0 ? totalUma / totalGames : 0
+  const expectedScore = totalGames > 0
+    ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(1)
+    : '-'
 
   // 리치 스탯 연산
   const riichiWinRate = formatRate(riichiWinCount, riichiCount)
