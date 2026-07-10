@@ -199,6 +199,17 @@ const isAssignmentComplete = computed(() => {
   return Object.keys(playerAssignedWind.value).length === 4
 })
 
+const drawAllAtOnce = () => {
+  shuffleTiles()
+  selected4Names.value.forEach((name, idx) => {
+    const wind = randomizedTiles.value[idx]
+    assignment.value[wind] = name
+    playerAssignedWind.value[name] = wind
+  })
+  openedTiles.value = [true, true, true, true]
+  activePlayerIndex.value = null
+}
+
 const startGame = () => {
   if (!isAssignmentComplete.value) return
   emit('start-game-with-seats', assignment.value)
@@ -222,7 +233,7 @@ const tileStyle = (tileIdx: number) => {
   <div v-if="currentStep === 'setup_today_pool'" class="step_section">
     <div class="step_header">
       <span class="step_indicator">1 / 3 단계</span>
-      <h3 class="step_title">오늘의 멤버 설정 (4인 이상)</h3>
+      <h3 class="step_title">오늘의 멤버 설정</h3>
     </div>
 
     <div v-if="!googleInfo.isLoggedIn" class="offline_banner">
@@ -241,27 +252,27 @@ const tileStyle = (tileIdx: number) => {
     </div>
 
     <!-- 통합 멤버 명단 체크박스 -->
-    <div class="member_checklist">
-      <div v-if="displayMemberList.length === 0" class="empty_checklist_msg" style="padding: 15px; text-align: center; color: var(--text-dimmed); font-size: 13px;">
+    <div class="member_grid">
+      <div v-if="displayMemberList.length === 0" class="empty_checklist_msg" style="grid-column: span 2; padding: 15px; text-align: center; color: var(--text-dimmed); font-size: 13px;">
         등록된 멤버가 없습니다.<br>새 이름을 입력하고 추가 버튼을 누르세요.
       </div>
       <div 
         v-else
         v-for="(name, i) in displayMemberList" 
         :key="i"
-        class="member_item"
+        class="grid_member_item"
         :class="{ active: tempTodayMembers.includes(name) }"
         @click="toggleTodayMember(name)"
         style="position: relative;"
       >
-        <span class="checkbox">{{ tempTodayMembers.includes(name) ? '✓' : '' }}</span>
-        <span class="name">{{ name }}</span>
+        <span v-show="tempTodayMembers.includes(name)" style="margin-right: 4px;">✓</span>
+        <span>{{ name }}</span>
         
         <!-- 로컬 오프라인 상태일 때 개별 삭제할 수 있는 버튼 -->
         <span 
           v-if="!googleInfo.isLoggedIn"
           @click.stop="removeLocalMember(name)" 
-          style="position: absolute; right: 10px; color: var(--color-negative); font-weight: bold; font-size: 15px; cursor: pointer; padding: 2px 6px; z-index: 3;"
+          class="btn_delete_member"
         >
           ✕
         </span>
@@ -288,16 +299,16 @@ const tileStyle = (tileIdx: number) => {
       <h3 class="step_title">이번 판 4명 선택</h3>
     </div>
 
-    <div class="member_checklist scrollable_picker">
+    <div class="member_grid scrollable_picker">
       <div 
         v-for="(name, i) in tempTodayMembers" 
         :key="i"
-        class="member_item"
+        class="grid_member_item"
         :class="{ active: selected4Names.includes(name) }"
         @click="toggleMatchPlayer(name)"
       >
-        <span class="checkbox">{{ selected4Names.includes(name) ? '✓' : '' }}</span>
-        <span class="name">{{ name }}</span>
+        <span v-show="selected4Names.includes(name)" style="margin-right: 4px;">✓</span>
+        <span>{{ name }}</span>
       </div>
     </div>
 
@@ -358,6 +369,15 @@ const tileStyle = (tileIdx: number) => {
         </div>
       </div>
     </div>
+    
+    <!-- 한번에 버튼 -->
+    <button 
+      v-if="!isAssignmentComplete" 
+      class="btn_draw_all" 
+      @click="drawAllAtOnce"
+    >
+      한번에
+    </button>
 
     <div class="button_group_row">
       <button class="btn_back" @click="currentStep = 'select_match_4'">
@@ -456,17 +476,96 @@ const tileStyle = (tileIdx: number) => {
   background-color: var(--bg-stripe-dark);
 }
 
-/* 스크롤바 강제 노출 스타일 */
-.member_checklist::-webkit-scrollbar {
-  width: 6px;
-  display: block;
+.member_grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  max-height: 150px;
+  overflow-y: scroll !important;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-stripe-dark);
 }
-.member_checklist::-webkit-scrollbar-track {
+
+/* 스크롤바 강제 노출 스타일 (그날의 멤버 설정, 그 판의 멘쯔 설정) */
+.member_checklist::-webkit-scrollbar,
+.member_grid::-webkit-scrollbar {
+  width: 10px;
+  display: block !important;
+}
+.member_checklist::-webkit-scrollbar-track,
+.member_grid::-webkit-scrollbar-track {
   background: var(--bg-stripe-dark);
+  border-radius: 5px;
 }
-.member_checklist::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
+.member_checklist::-webkit-scrollbar-thumb,
+.member_grid::-webkit-scrollbar-thumb {
+  background: #888888; /* 항상 잘 보이는 회색 */
+  border: 2px solid var(--bg-stripe-dark);
+  border-radius: 5px;
+}
+.member_checklist::-webkit-scrollbar-thumb:hover,
+.member_grid::-webkit-scrollbar-thumb:hover {
+  background: var(--color-toggle-on);
+}
+.member_checklist,
+.member_grid {
+  scrollbar-width: thin;
+  scrollbar-color: #888888 var(--bg-stripe-dark);
+}
+
+.grid_member_item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 6px;
+  background-color: var(--bg-stripe-light);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  text-align: center;
+  user-select: none;
+  min-height: 44px;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+  color: var(--text-color);
+}
+.grid_member_item.active {
+  background-color: var(--color-toggle-on);
+  border-color: var(--color-toggle-on);
+  color: #fff;
+}
+
+.btn_delete_member {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(255, 0, 0, 0.15);
+  color: var(--color-negative);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: bold;
+  transition: background-color 0.2s, color 0.2s;
+  z-index: 2;
+}
+.btn_delete_member:hover {
+  background-color: var(--color-negative);
+  color: white;
+}
+.grid_member_item.active .btn_delete_member {
+  color: white;
+  background-color: rgba(255, 255, 255, 0.25);
+}
+.grid_member_item.active .btn_delete_member:hover {
+  background-color: white;
+  color: var(--color-negative);
 }
 
 .member_item {
@@ -594,5 +693,22 @@ const tileStyle = (tileIdx: number) => {
 .tile_back {
   font-size: 40px;
   color: #fff;
+}
+.btn_draw_all {
+  width: 100%;
+  padding: 8px;
+  font-size: 14px;
+  font-weight: bold;
+  background-color: var(--color-negative);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-top: 4px;
+  margin-bottom: 8px;
+  transition: opacity 0.2s;
+}
+.btn_draw_all:hover {
+  opacity: 0.9;
 }
 </style>
