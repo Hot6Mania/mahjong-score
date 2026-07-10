@@ -357,7 +357,6 @@ const stats = computed(() => {
           <span class="stat_label">총합 국 수</span>
           <span class="stat_value">{{ stats.totalRounds }}국</span>
         </div>
-        <div class="stat_divider"></div>
         <div class="stat_row">
           <span class="stat_label">화료율</span>
           <span class="stat_value">{{ stats.winRate }}</span>
@@ -418,7 +417,6 @@ const stats = computed(() => {
           <span class="stat_label">리치 유국률</span>
           <span class="stat_value">{{ stats.riichiDrawRate }}</span>
         </div>
-        <div class="stat_divider"></div>
         <div class="stat_row">
           <span class="stat_label">리치 수지</span>
           <span class="stat_value" :class="{ text_positive: parseInt(stats.riichiSuji) > 0, text_negative: parseInt(stats.riichiSuji) < 0 }">
@@ -433,7 +431,6 @@ const stats = computed(() => {
           <span class="stat_label">리치 지출 평균</span>
           <span class="stat_value text_negative">{{ stats.riichiExpense !== '-' ? stats.riichiExpense + '점' : '-' }}</span>
         </div>
-        <div class="stat_divider"></div>
         <div class="stat_row">
           <span class="stat_label">선제율</span>
           <span class="stat_value">{{ stats.firstRiichiRate }}</span>
@@ -462,7 +459,6 @@ const stats = computed(() => {
           <span class="stat_label">방총 시 리치율</span>
           <span class="stat_value">{{ stats.loseRiichiRate }}</span>
         </div>
-        <div class="stat_divider"></div>
         <div class="stat_row">
           <span class="stat_label">화료 효율 (화료율 * 평균화료)</span>
           <span class="stat_value text_positive">+{{ stats.winEfficiency }}</span>
@@ -496,7 +492,7 @@ const stats = computed(() => {
 <style scoped>
 .container_stats_modal {
   width: 100%;
-  max-width: 320px;
+  max-width: 720px; /* 옆으로 펼쳐지도록 넓은 너비 설정 */
   display: flex;
   flex-direction: column;
   color: var(--text-color);
@@ -578,12 +574,13 @@ const stats = computed(() => {
   color: var(--color-toggle-on);
 }
 
-/* 스탯 목록 */
+/* 스탯 목록 - 스크롤 없이 넓게 렌더링 */
 .stats_content {
   width: 100%;
-  max-height: 52vh;
-  overflow-y: auto;
-  padding-right: 4px;
+  max-height: 60vh;
+  overflow-y: auto; /* 만약의 화면 잘림을 위한 최소한의 가이드 */
+  padding: 4px 2px;
+  box-sizing: border-box;
 }
 
 .no_data {
@@ -601,32 +598,50 @@ const stats = computed(() => {
   width: 100%;
 }
 
+/* 4열 그리드 레이아웃 설정 (Mui 컴포넌트 느낌의 촘촘한 배치) */
 .stats_group {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
+  width: 100%;
 }
 
+/* 개별 Mui 스타일의 깔끔한 박스형 스탯 표시 */
 .stat_row {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-  padding: 2px 0;
+  flex-direction: column;
+  align-items: flex-start; /* 좌측 정렬 */
+  justify-content: center;
+  background-color: var(--bg-modal); /* 살짝 더 어두운 모달 기본 배경 사용 */
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--color-toggle-on); /* 왼쪽 포인트 테두리 추가 */
+  border-radius: 4px;
+  padding: 6px 10px;
+  min-height: 48px;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .stat_label {
-  opacity: 0.85;
+  font-size: 11px;
+  opacity: 0.65;
+  margin-bottom: 2px;
+  font-weight: 500;
+  width: 100%;
+  white-space: nowrap; /* MuiTypography-noWrap 모방 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
 }
 
 .stat_value {
-  font-weight: bold;
-}
-
-.stat_divider {
-  height: 1px;
-  border-top: 1px dashed var(--border-color);
-  margin: 4px 0;
+  font-size: 14px;
+  font-weight: 700;
+  width: 100%;
+  white-space: nowrap; /* MuiTypography-noWrap 모방 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
 }
 
 /* 색상 유틸리티 */
@@ -640,5 +655,17 @@ const stats = computed(() => {
 
 .highlight {
   color: var(--color-toggle-on);
+}
+
+/* 모바일 등 좁은 가로 폭에서 2열 그리드로 유연하게 폴백 */
+@media (max-width: 580px) {
+  .stats_group {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 440px) {
+  .stats_group {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 </style>
