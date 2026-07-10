@@ -142,25 +142,45 @@ const emit = defineEmits<Emits>()
   width: 95px; /* 두자리 수까지 여유롭게 표현하도록 너비 확보 */
 }
 
-/* 미니 리치봉/연장봉의 하드코딩된 위치 치우침(translate) 강제 리셋, 기울기 각도 유지 및 세로 중앙 정렬 */
+/* 미니 리치봉/연장봉의 하드코딩된 위치 치우침(translate) 강제 리셋, 기울기 각도 유지 및 세로/가로 정밀 중앙 정렬 */
 :deep(.stick_mini) {
   transform: rotate(-50deg) !important; /* 약간 기울어진 기존 각도 유지 */
-  display: inline-block !important; /* 기존처럼 지그재그(staggered) 배치 복원을 위해 inline-block 사용 */
+  display: inline-flex !important; /* 가로 및 세로 중심 정렬을 위해 플렉스 컨테이너화 */
+  align-items: center !important; /* 수직 중앙 정렬로 빨간 점 쏠림 전격 예방 */
+  justify-content: center !important; /* 수평 중앙 정렬 */
   vertical-align: middle;
-  width: 42px !important;
+  width: 44px !important;
   height: 9px !important;
   border-radius: 2px !important;
   margin: 0 !important;
   padding: 0 !important;
   box-sizing: border-box;
-  white-space: nowrap !important;
+  gap: 0.5px !important; /* 점들 사이의 밀도 높은 밀착을 위해 간격 축소 */
 }
 :deep(.riichi_circle_mini) {
-  width: 4px !important;
-  height: 4px !important;
-  margin: 1.5px auto !important;
+  width: 3.5px !important; /* 리치봉 중앙 빨간 점 크기 적절히 확보 */
+  height: 3.5px !important;
+  border-radius: 50% !important;
+  margin: 0 !important; /* 마진 초기화로 center에 완벽 안착 */
+  background-color: var(--color-negative) !important;
+  transform: none !important;
 }
-/* .renchan_circle_mini 오버라이드는 완전히 배제하여, Graphics.vue의 지그재그 마진이 복원되도록 처리 */
+:deep(.renchan_circle_mini) {
+  display: inline-block !important;
+  width: 1.5px !important; /* 연장봉의 작은 원통 점 비율 축소 */
+  height: 1.5px !important;
+  border-radius: 50% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background-color: var(--text-color) !important;
+}
+/* 교대로 위아래로 나누어 번갈아가는 지그재그(staggered) 배치 효과 유지하면서 정중앙 정렬 유지 */
+:deep(.stick_mini > .renchan_circle_mini:nth-child(even)) {
+  transform: translateY(-1.5px) !important; /* 세로 중앙 정렬 기준 위로 1.5px 시프트 */
+}
+:deep(.stick_mini > .renchan_circle_mini:nth-child(odd)) {
+  transform: translateY(1.5px) !important; /* 세로 중앙 정렬 기준 아래로 1.5px 시프트 */
+}
 
 .riichi, .renchan {
   display: flex;

@@ -131,7 +131,7 @@ const getSignColor = (sign: number, x: boolean) => {
   <div class="score">
     <!-- 이름 배지를 score 상단에 직접 배치하여 고정 -->
     <div class="player_name_badge">
-      {{ player.name.length > 5 ? player.name.substring(0, 4) + '...' : player.name }}
+      {{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span>
     </div>
     <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)" style="display: inline-block; line-height: 0.95; cursor: pointer;">
       {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
@@ -252,12 +252,14 @@ const getSignColor = (sign: number, x: boolean) => {
 }
 .player_name_badge {
   position: absolute;
-  left: 156px; /* 우측으로 숫자 한 글자 폭(약 20px)만큼 더 이동하여 완전히 이격 */
-  bottom: 68px; /* 작은 숫자 바로 위 세로 높이 유지 */
+  left: 158px !important; /* 우측으로 숫자 점수표시 숫자 한 칸만큼(약 12px~14px) 더 이동 */
+  right: auto !important; /* 항상 좌측 기준선으로 정렬하기 위해 우측 자동 설정 */
+  transform: none !important; /* 겹침을 방지하는 정적 좌표 고정 */
+  bottom: 66px; /* 조금 더 상단으로 이동 (58px -> 66px) */
   margin-bottom: 0px;
-  font-size: 13px;
+  font-size: 11px; /* 닉네임 박스 폰트 크기 슬림하게 조정 */
   font-weight: bold;
-  padding: 1px 4px;
+  padding: 1px 3px; /* 닉네임 박스 패딩 슬림하게 조정 */
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background-color: var(--modal-bg-color);

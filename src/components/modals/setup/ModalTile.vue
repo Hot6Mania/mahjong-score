@@ -269,7 +269,7 @@ const tileBackStyle = (tileIdx: number) => {
     </div>
 
     <div v-if="!googleInfo.isLoggedIn" class="offline_banner">
-      ⚠️ 로컬 모드 (이름을 직접 등록하세요)
+      로컬 모드 (멤버 직접 등록)
     </div>
 
     <div class="add_member_bar">
@@ -298,7 +298,7 @@ const tileBackStyle = (tileIdx: number) => {
         style="position: relative;"
       >
         <span v-show="tempTodayMembers.includes(name)" style="margin-right: 4px;">✓</span>
-        <span>{{ name.length > 5 ? name.substring(0, 4) + '...' : name }}</span>
+        <span>{{ name.length > 5 ? name.substring(0, 4) : name }}<span v-if="name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
         
         <!-- 로컬 오프라인 상태일 때 개별 삭제할 수 있는 버튼 -->
         <span 
@@ -340,7 +340,7 @@ const tileBackStyle = (tileIdx: number) => {
         @click="toggleMatchPlayer(name)"
       >
         <span v-show="selected4Names.includes(name)" style="margin-right: 4px;">✓</span>
-        <span>{{ name.length > 5 ? name.substring(0, 4) + '...' : name }}</span>
+        <span>{{ name.length > 5 ? name.substring(0, 4) : name }}<span v-if="name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
       </div>
     </div>
 
@@ -383,7 +383,7 @@ const tileBackStyle = (tileIdx: number) => {
           }"
           @click="isAutoDrawing ? null : selectPlayer(i)"
         >
-          <span class="player_name_text">{{ name.length > 5 ? name.substring(0, 4) + '...' : name }}</span>
+          <span class="player_name_text">{{ name.length > 5 ? name.substring(0, 4) : name }}<span v-if="name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
           <span v-if="playerAssignedWind[name]" class="assigned_wind">
             {{ playerAssignedWind[name] }}
           </span>

@@ -356,7 +356,7 @@ const getSignColor = (sign: number, x: boolean) => {
           <div v-for="(_, i) in arr_wind" :key="i">{{ arr_wind[i] }}</div>
         </div>
         <div style="grid-area: name_contents;">
-          <div v-for="(_, i) in players" :key="i">{{ players[i].name.length > 5 ? players[i].name.substring(0, 4) + '...' : players[i].name }}</div>
+          <div v-for="(_, i) in players" :key="i">{{ players[i].name.length > 5 ? players[i].name.substring(0, 4) : players[i].name }}<span v-if="players[i].name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></div>
         </div>
         <div style="grid-area: score_contents;">
           <div v-for="(_, i) in scoreSheetInfo" :key="i">

@@ -516,6 +516,12 @@ const showModal = (type: string, status?: string) => {
     type: type,
     status: status,
   });
+  if (type === 'result_sheet') {
+    if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+      records.time[records.time.length - 1] = '결과';
+      localStorage.setItem("mahjong_records", JSON.stringify(records));
+    }
+  }
 }
 
 /**모달 창 끄기*/
