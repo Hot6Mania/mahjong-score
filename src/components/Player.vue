@@ -86,8 +86,12 @@ const getSignColor = (sign: number, x: boolean) => {
   >
     {{ player.wind }}
     <!-- 대형 등수 표시 (자리 표시의 왼쪽에 정렬) -->
-    <div v-show="player.rank !== 0 || option.alwaysShowRank" class="large_rank_overlay" :style="{ color: rankColor }">
-      {{ player.rank !== 0 ? player.rank : player.realRank }}
+    <div class="large_rank_overlay">
+      <Transition name="rank-slide" mode="out-in">
+        <div v-if="(player.rank !== 0 && player.rank !== -1) || (option.alwaysShowRank && player.rank !== -1)" :key="player.rank > 0 ? player.rank : player.realRank" class="rank_number" :class="{ 'is-first': (player.rank > 0 ? player.rank : player.realRank) === 1 }" :style="{ color: rankColor }">
+          {{ player.rank > 0 ? player.rank : player.realRank }}
+        </div>
+      </Transition>
     </div>
   </div>
   <!-- 현재 점수 -->
@@ -200,11 +204,68 @@ const getSignColor = (sign: number, x: boolean) => {
   position: absolute;
   left: -35px; /* 자리 표시의 왼쪽에 띄움 */
   top: 6px;    /* 상단 글씨선에 맞춰 정교하게 위측 정렬 */
+  width: 30px;
+  height: 50px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  z-index: 10;
+  perspective: 1000px; /* 3D 플립 효과를 위한 공간 제공 */
+}
+.rank_number {
   font-size: 50px;
   font-weight: 900;
   user-select: none;
   font-family: inherit;
   line-height: 1;
-  z-index: 10;
+  transform-origin: center center;
+}
+
+/* 등수 슬라이드 & 페이드 애니메이션 */
+.rank-slide-leave-active {
+  /* 더 빠르게 퇴장 (0.25s -> 0.15s) */
+  transition: transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.15s ease-in;
+}
+.rank-slide-leave-to {
+  /* 미끄러지는 거리를 -45px로 늘려 퇴장 속도감 증폭 */
+  transform: translateX(-45px); 
+  opacity: 0;
+}
+
+.rank-slide-enter-active {
+  /* 가속도 있고 자연스러운 슬라이드 진입 (ease-out cubic-bezier) */
+  transition: transform 0.35s cubic-bezier(0.1, 0.9, 0.2, 1), opacity 0.35s ease-out;
+}
+.rank-slide-enter-from {
+  transform: translateX(-30px); /* 왼쪽에서 오른쪽으로 슬라이드 진입 */
+  opacity: 0;
+}
+
+/* 1등 전용 팝업 줌아웃 애니메이션 (동시에 들어와서 슬라이드하고 줌인/줌아웃) */
+.rank-slide-enter-active.is-first {
+  animation: firstPlacePop 0.65s forwards;
+  transition: none !important;
+}
+
+@keyframes firstPlacePop {
+  0% {
+    transform: translateX(-35px) scale(1.0);
+    opacity: 0;
+    animation-timing-function: ease-out; /* 정위치까지 부드럽게 진입 */
+  }
+  40% {
+    transform: translateX(0) scale(1.0);
+    opacity: 0.9;
+    animation-timing-function: cubic-bezier(0.25, 1, 0.5, 1); /* 정위치 도달 후 팝업(확대) */
+  }
+  70% {
+    transform: translateX(0) scale(1.8);
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.895, 0.03, 0.685, 0.22); /* 쾅! 강력하게 꽂힘 */
+  }
+  100% {
+    transform: translateX(0) scale(1.0);
+    opacity: 1;
+  }
 }
 </style>

@@ -60,6 +60,7 @@ export interface Option { // 옵션
   cheatScore: boolean, // 촌보 지불 점수
   riichiPayout: boolean, // 남은 공탁금 처리
   alwaysShowRank: boolean, // 등수 상시 표시
+  sekiOrder: boolean, // 동점 석순 기준 등수 정하기
 }
 
 export interface ModalInfo { // 모달창

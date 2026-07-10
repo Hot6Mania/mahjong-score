@@ -58,6 +58,7 @@
         "returnScore" : "반환점수",
         "roundMangan" : "절상만관",
         "alwaysShowRank" : "등수 상시 표시",
+        "sekiOrder" : "동점 석순 기준",
         "tobi" : "들통(토비)",
         "rankUma" : "순위우마",
         "rank" : "{idx}위",

@@ -189,6 +189,8 @@ const toggleButtonStyle = (status: string) => {
     return {color: props.option.riichiPayout===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='alwaysshowrank') // 등수 상시 표시 옵션
     return {color: props.option.alwaysShowRank===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
+  else if (status==='sekiorder') // 동점 석순 옵션
+    return {color: props.option.sekiOrder===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='isonline') // 싱크 온/오프라인
     return {color: props.googleInfo.isLoggedIn===true ? 'var(--color-online)' : 'var(--color-offline)'};
 }
@@ -489,6 +491,13 @@ const getSignColor = (sign: number, x: boolean) => {
             <span v-show="option.alwaysShowRank===false">X</span>
           </span>
         </div>
+        <div style="grid-area: option8;" @click.stop="emit('set-toggle-button', 'sekiorder')">
+          {{ t('option.sekiOrder') }}<br>
+          <span :style="toggleButtonStyle('sekiorder')">
+            <span v-show="option.sekiOrder===true">O</span>
+            <span v-show="option.sekiOrder===false">X</span>
+          </span>
+        </div>
       </div>
       <button 
         @click.stop="emit('start-new-day')"
@@ -621,7 +630,7 @@ const getSignColor = (sign: number, x: boolean) => {
   'input_name0 input_name1 input_name2 input_name3'
   'option0 option1 option2 option3'
   'option4 option4 option5 option6'
-  'option7 option7 . .';
+  'option7 option7 option8 option8';
   text-align: center;
   font-size: 20px;
   gap: 10px;

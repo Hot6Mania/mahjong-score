@@ -95,6 +95,7 @@ const defaultOption: OptionType = {
   cheatScore: false, // 촌보 지불 점수
   riichiPayout: true, // 남은 공탁금 처리
   alwaysShowRank: false, // 등수 상시 표시
+  sekiOrder: false, // 동점 석순 기준
 };
 const savedOption = localStorage.getItem("mahjong_option");
 const option = reactive<OptionType>(savedOption ? { ...defaultOption, ...JSON.parse(savedOption) } : defaultOption);
@@ -126,9 +127,13 @@ watch(() => players.map(p => p.name), (newNames) => {
   });
 }, { immediate: true, deep: true });
 
-watch(() => players.map(p => p.displayScore), () => {
-  players.forEach(p => {
-    p.realRank = players.filter(x => x.displayScore > p.displayScore).length + 1;
+watch([() => players.map(p => p.displayScore), () => option.sekiOrder], () => {
+  players.forEach((p, i) => {
+    if (option.sekiOrder) {
+      p.realRank = players.filter((x, idx) => x.displayScore > p.displayScore || (x.displayScore === p.displayScore && idx < i)).length + 1;
+    } else {
+      p.realRank = players.filter(x => x.displayScore > p.displayScore).length + 1;
+    }
   });
 }, { immediate: true, deep: true });
 
@@ -334,13 +339,34 @@ const changeWindsAndRounds = () => {
 }
 
 /**점수 변동 효과*/
-const changeScores = () => {
+const changeScores = (onComplete?: () => void) => {
   let currentScore=players.map(x => x.displayScore); // 현재 점수 저장
   let arrCut: number[][]=[[],[],[],[]];
+  
+  // 1. 이전 점수 기준 순위 계산 (동점 석순 옵션 반영)
+  let oldRanks = players.map((_, i) => {
+    if (option.sekiOrder) {
+      return players.filter((x, idx) => x.displayScore > players[i].displayScore || (x.displayScore === players[i].displayScore && idx < i)).length + 1;
+    } else {
+      return players.filter(s => s.displayScore > players[i].displayScore).length + 1;
+    }
+  });
+
+  // 2. 최종 점수를 기준으로 순위 미리 계산 (동점 석순 옵션 반영)
+  let finalScores = players.map(x => x.displayScore + x.deltaScore);
+  let finalRanks = players.map((_, i) => {
+    if (option.sekiOrder) {
+      return finalScores.filter((s, idx) => s > finalScores[i] || (s === finalScores[i] && idx < i)).length + 1;
+    } else {
+      return finalScores.filter(s => s > finalScores[i]).length + 1;
+    }
+  });
+
   for (let i=0;i<players.length;i++){
     for (let j=0;j<50;j++) // 변경될 점수 사이를 50등분해서 저장
       arrCut[i].push(currentScore[i]+(players[i].deltaScore/50)*(j+1));
     players[i].effectScore=players[i].deltaScore; // 이펙트 켜기
+    players[i].rank=oldRanks[i]; // 등수 연출 시작 시점에는 이전 등수 노출
   }
   let timecnt=0;
   let effect=setInterval(() => { // 시간에 따라 반복
@@ -350,11 +376,32 @@ const changeScores = () => {
     if (timecnt>=50){
       clearInterval(effect);
       timecnt=0;
+      
+      // 1. 모든 이전 등수를 동시에 페이드아웃 및 슬라이드 아웃시킴 (-1로 설정하여 상시 표시 상태여도 강제 퇴장)
       for (let i=0;i<players.length;i++){
         players[i].effectScore=NaN; // 이펙트 끄기
-        players[i].rank=players.filter(x => x.displayScore>players[i].displayScore).length+1; // 순위 표시 켜기
-        setTimeout(() => {players[i].rank=0;}, 1000); // 1초 후 순위 표시 끄기
+        players[i].rank=-1; // 등수 감추기 (동시에 Slide Out & Fade Out 트리거)
       }
+      
+      // 2. 기존 등수가 완전히 사라진 후(150ms 대기 - 더 빠른 트랜지션 적용), 4등부터 1등까지 차례대로 슬라이드 인
+      setTimeout(() => {
+        for (let i=0;i<players.length;i++){
+          let delay = (4 - finalRanks[i]) * 200;
+          setTimeout(() => {
+            players[i].rank=finalRanks[i]; // 순차적으로 새로운 등수 켜기 (Slide In 트리거)
+            
+            // 등수 노출 완료 후 1.25초 동안 지속한 뒤 끄기
+            setTimeout(() => {
+              players[i].rank=0;
+            }, 1250);
+          }, delay);
+        }
+      }, 150);
+
+      // 3. 모든 등수의 페이드인/슬라이드가 완료되고 1등의 팝업 줌아웃까지 마무리된 시점(150ms 대기 + 1등 연출 600ms + 팝업완료 650ms = 1400ms)에 바람 변경
+      setTimeout(() => {
+        if (onComplete) onComplete();
+      }, 1400);
     }
   }, 20); // 0.02초 * 50번 = 1초동안 실행
 }
@@ -533,6 +580,8 @@ const setToggleButton = (status: string) => {
     option.riichiPayout=!option.riichiPayout;
   else if (status==='alwaysshowrank') // 등수 상시 표시 토글
     option.alwaysShowRank=!option.alwaysShowRank;
+  else if (status==='sekiorder') // 동점 석순 토글
+    option.sekiOrder=!option.sekiOrder;
 }
 
 /**판/부 버튼 동작 설정*/
@@ -773,7 +822,14 @@ const calculateCheat = () => {
 
 /**국 결과값 처리*/
 const saveRound = () => {
-  if (modalInfo.status==='cheat'){ // 촌보의 경우 리치봉 반환
+  // 1. 필요한 상태들을 동기적으로 먼저 안전하게 캡처 (hideModal이 동기적으로 상태를 초기화하기 때문)
+  let status = modalInfo.status;
+  
+  let chinIdx = players.findIndex(x => x['wind']==='東');
+  let isChinWin = players[chinIdx].isWin;
+  let isChinTenpai = players[chinIdx].isTenpai;
+
+  if (status==='cheat'){ // 촌보의 경우 리치봉 반환
     for (let i=0;i<players.length;i++){
       if (players[i].isRiichi===true){
         players[i].displayScore+=1000;
@@ -782,7 +838,8 @@ const saveRound = () => {
       }
     }
   }
-  changeScores(); // 점수 배분및 기록
+
+  // 점수 기록창에 기록 남기기 (동기적 기록)
   for (let i=0;i<players.length;i++){ // 점수 기록창에 점수 기록
     records.score[i].push(players[i].deltaScore);
     records.score[i].push(players[i].displayScore+players[i].deltaScore);
@@ -792,25 +849,89 @@ const saveRound = () => {
   records.riichi.push(players.map(x => x.isRiichi)); // 리치 기록에 추가
   records.win.push(players.map(x => x.isWin)); // 화료 기록에 추가
   records.lose.push(players.map(x => x.isLose)); // 방총 기록에 추가
-  players.forEach((x) => {x.isRiichi=false;}); // 리치봉 수거
-  let chin=players[players.findIndex(x => x['wind']==='東')]; // 친이 누구인지 저장
-  if (modalInfo.status==='tsumo' || modalInfo.status==='ron'){ // 화료로 끝났다면
-    if (chin.isWin===false){ // 친이 화료를 못했다면
-      changeWindsAndRounds(); // 바람 및 라운드 변경
-      panelInfo.renchan=0; // 연장봉 초기화
+
+  // 점수 변동 이펙트 애니메이션 실행 (완료 후 연장/서입/게임 종료 분기 수행)
+  changeScores(() => {
+    // 1) 들통(tobi) 여부 검증
+    let hasTobi = option.tobi && players.some(p => p.displayScore < 0);
+    if (hasTobi) {
+      showModal('result_sheet');
+      return;
     }
-    else // 연장에 성공했다면
-      panelInfo.renchan++; // 연장봉 추가
-    panelInfo.riichi=0; // 리치봉 초기화
-  }
-  else if (modalInfo.status==='normal_draw'){ // 일반유국이라면
-    if (chin.isTenpai===false) // 친이 노텐이라면
-      changeWindsAndRounds(); // 바람 및 라운드 변경
-    panelInfo.renchan++; // 연장봉 추가
-  }
-  else if (modalInfo.status==='special_draw'){ // 특수유국이라면
-    panelInfo.renchan++; // 연장봉 추가
-  }
+
+    let curWind = panelInfo.wind;
+    let curRound = panelInfo.round;
+
+    // 2) 친의 연장(Renchan) 여부 계산
+    let isRenchan = false;
+    if (status === 'tsumo' || status === 'ron') {
+      if (isChinWin) {
+        isRenchan = true;
+      }
+    } else if (status === 'normal_draw') {
+      if (isChinTenpai) {
+        isRenchan = true;
+      }
+    } else if (status === 'special_draw') {
+      isRenchan = true;
+    }
+
+    // 3) 남4국 / 서풍전 연장 및 종료 조건 분기
+    if (curWind === '南' && curRound === 4) {
+      if (isRenchan) {
+        // 친 연장 시에는 남4국 유지 및 연장봉 추가
+        panelInfo.renchan++;
+        if (status === 'tsumo' || status === 'ron') {
+          panelInfo.riichi = 0;
+        }
+      } else {
+        // 친 연장 실패 시: 반환점수를 넘은 사람이 있는지 검증
+        let hasPlayerAboveReturn = players.some(p => p.displayScore >= option.returnScore);
+        if (hasPlayerAboveReturn) {
+          // 반환점수를 넘은 사람이 있으면 서입 없이 게임 종료
+          showModal('result_sheet');
+        } else {
+          // 반환점수를 넘은 사람이 없으면 서입 (서1국 진입)
+          changeWindsAndRounds();
+          panelInfo.renchan = 0;
+          panelInfo.riichi = 0;
+        }
+      }
+    } else if (curWind === '西') {
+      if (isRenchan) {
+        // 서풍전 친 연장 시 서입 국 유지 및 연장봉 추가
+        panelInfo.renchan++;
+        if (status === 'tsumo' || status === 'ron') {
+          panelInfo.riichi = 0;
+        }
+      } else {
+        // 친 연장 실패 시: 반환점수를 넘은 사람이 있는지 검증
+        let hasPlayerAboveReturn = players.some(p => p.displayScore >= option.returnScore);
+        if (hasPlayerAboveReturn || curRound === 4) {
+          // 반환점수를 넘은 사람이 있거나 서4국이 끝나면 게임 종료
+          showModal('result_sheet');
+        } else {
+          // 다음 서국으로 진행
+          changeWindsAndRounds();
+          panelInfo.renchan = 0;
+          panelInfo.riichi = 0;
+        }
+      }
+    } else {
+      // 일반적인 국 (동풍전 및 남1~남3국)
+      if (isRenchan) {
+        panelInfo.renchan++;
+      } else {
+        changeWindsAndRounds();
+        panelInfo.renchan = 0;
+      }
+      if (status === 'tsumo' || status === 'ron') {
+        panelInfo.riichi = 0;
+      }
+    }
+  });
+
+  players.forEach((x) => {x.isRiichi=false;}); // 리치봉 수거
   hideModal(); // 모달 창 끄기
 }
 
