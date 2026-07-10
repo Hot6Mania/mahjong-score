@@ -64,12 +64,19 @@ export interface ModalInfo { // 모달창
   status: string, // 라운드 형태 - 론 쯔모 일반유국 특수유국
 }
 
-export interface SyncInfo { // 점수연동
-  SUPABASE_URL: string, // supabase url
-  SUPABASE_KEY: string, // supabase key
-  myId: string, // 개인 ID
-  roomId: string // 방 ID
-  isConnected: boolean // 연결 상태
-  isReceiving: boolean // 수신 중 플래그 (무한루프 방지)
-  isHost: boolean // 방장 여부
+export interface GoogleInfo { // 구글 연동 정보
+  clientId: string, // 구글 클라이언트 ID
+  spreadsheetId: string, // 구글 스프레드시트 ID
+  isLoggedIn: boolean, // 로그인 여부
+  syncMode: 'local' | 'google', // 연동 모드: 'local' 또는 'google'
+  memberList: string[], // 멤버 전체 목록
+  todayMembers: string[], // 오늘 대국에 참여하는 멤버 풀
+  selectedMembers: string[] // 이번 게임에 선택된 4명
+}
+
+declare global {
+  interface Window {
+    gapi: any;
+    google: any;
+  }
 }

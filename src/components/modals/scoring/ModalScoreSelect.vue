@@ -30,22 +30,22 @@ const bu = [20, 25, 30, 40, 50, 60, 70, 80, 90, 100, 110]
 /**부/판 버튼 색상*/
 const fanBuButtonStyle = (status: string, idx: number) => {
   if (status==='fan') // 판 체크
-    return {color: idx===props.scoringState.inputFan ? 'red' : ''};
+    return {color: idx===props.scoringState.inputFan ? 'var(--color-negative)' : 'var(--text-color)'};
   else if (status==='bu'){ // 부 체크
     if (props.modalInfo.status==='ron' && idx===0) // 론일때 20부 이하시 회색
-      return {color: 'gray'};
+      return {color: 'var(--color-disabled)'};
     else if (props.scoringState.inputFan===0 && idx<=1) // 1판 25부 이하시 회색
-      return {color: 'gray'};
+      return {color: 'var(--color-disabled)'};
     else if (props.scoringState.inputFan>=4) // 만관 이상일때 부수 회색
-      return {color: 'gray'};
+      return {color: 'var(--color-disabled)'};
     else
-      return {color: idx===props.scoringState.inputBu ? 'red' : ''}; // 선택시 빨간색
+      return {color: idx===props.scoringState.inputBu ? 'var(--color-negative)' : 'var(--text-color)'}; // 선택시 빨간색
   }
   else if (status==='inputfao'){ // 책임지불 점수창
     if (props.scoringState.inputFan-9<idx) // 입력 판수보다 크면 불가능
-      return {color: 'gray'};
+      return {color: 'var(--color-disabled)'};
     else
-      return {color: idx===props.scoringState.inputFao ? 'red' : ''}; // 선택시 빨간색
+      return {color: idx===props.scoringState.inputFao ? 'var(--color-negative)' : 'var(--text-color)'}; // 선택시 빨간색
   }
 }
 
@@ -57,7 +57,7 @@ const yakumanVisibility = (idx: number) => {
 /**토글 버튼 색상*/
 const toggleButtonStyle = (status: string) => {
   if (status==='isfao') // 점수창 책임지불 OX
-    return {color: props.scoringState.isFao===true ? 'mediumblue' : 'red'};
+    return {color: props.scoringState.isFao===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
 }
 
 /**책임지불이 켜져있는지 확인*/

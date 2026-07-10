@@ -59,9 +59,10 @@ defineProps<Props>()
 /* 리치봉 */
 .stick{
   visibility: hidden;
-  border: 2px solid black;
+  border: 2px solid var(--text-color);
   border-radius: 5px;
   transform: translate(0, 20px);
+  background-color: var(--bg-color);
 }
 .riichi_circle{
   background-color: red;
@@ -76,9 +77,10 @@ defineProps<Props>()
   width: 50px;
   height: 10px;
   font-size: 0px;
-  border: 1px solid black;
+  border: 1px solid var(--text-color);
   border-radius: 3px;
   transform: rotate(-50deg) translate(-52px,-10px);
+  background-color: var(--bg-color);
 }
 .riichi_circle_mini{
   background-color: red;
@@ -89,7 +91,7 @@ defineProps<Props>()
 }
 .renchan_circle_mini{
   display: inline-block;
-  background-color: black;
+  background-color: var(--text-color);
   width: 3px;
   height: 3px;
   border-radius: 50%;
@@ -114,12 +116,12 @@ defineProps<Props>()
   ;
   vertical-align: middle;
   text-align: center;
-  border: 3px solid black;
+  border: 3px solid var(--text-color);
   border-radius: 5px;
   margin: auto;
 }
 .dice_circle{
-  background-color: black;
+  background-color: var(--text-color);
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -127,7 +129,7 @@ defineProps<Props>()
 
 /* 타일 */
 .tile{
-  border: 3px solid black;
+  border: 3px solid var(--text-color);
   border-radius: 5px;
 }
 

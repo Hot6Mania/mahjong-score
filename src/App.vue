@@ -2,13 +2,14 @@
 import Player from "@/components/Player.vue"
 import Panel from "@/components/Panel.vue"
 import Modal from "@/components/modals/Modal.vue"
-import { reactive, onMounted, watch, nextTick } from "vue"
-import { useRoute, useRouter } from "vue-router"
+import { reactive, onMounted, watch } from "vue"
+import { useRouter } from "vue-router"
 import { useI18n } from "vue-i18n"
-import { createClient } from "@supabase/supabase-js"
+import { getShortNames } from "@/utils/nameAbbreviation"
+import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, appendGameResult, addNewMemberToDb, fetchTodayMembers, saveTodayMembers, updateTodayMemberPoints } from "@/utils/googleSheets"
+import type { GoogleInfo } from "@/types/types.d"
 
 /**라우터 가져오기*/
-const route = useRoute()
 const router = useRouter()
 
 /**i18n 속성 가져오기*/
@@ -21,16 +22,16 @@ const players = reactive([ // 플레이어
   리치, 화료, 방총, 텐파이 유무 */
   {seat: "Down",  name: "▼", wind: "東", rank: 0,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false,},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, shortName: ""},
   {seat: "Right", name: "▶", wind: "南", rank: 0,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false,},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, shortName: ""},
   {seat: "Up",    name: "▲", wind: "西", rank: 0,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false,},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, shortName: ""},
   {seat: "Left",  name: "◀", wind: "北", rank: 0,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false,}
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, shortName: ""}
 ])
 const scoringState = reactive({ // 점수계산 요소
   whoWin: -1, // 현재 점수 입력하는 플레이어
@@ -77,33 +78,72 @@ const modalInfo = reactive({ // 모달창
   type: "", // 종류
   status: "", // 라운드 형태 - 론 쯔모 일반유국 특수유국
 })
-const syncInfo = reactive({ // 점수연동
-  SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL, // supabase url
-  SUPABASE_KEY: import.meta.env.VITE_SUPABASE_KEY, // supabase key
-  myId: "user_"+Math.random().toString(36).substring(2,8), // 개인 ID
-  roomId: "", // 방 ID
-  isConnected: false, // 연결 상태
-  isReceiving: false, // 수신 중 플래그 (무한루프 방지)
-  isHost: false // 방장 여부
+const googleInfo = reactive<GoogleInfo>({ // 구글 연동 정보
+  clientId: localStorage.getItem("google_client_id") || "", // 구글 클라이언트 ID
+  spreadsheetId: localStorage.getItem("google_spreadsheet_id") || "", // 구글 스프레드시트 ID
+  isLoggedIn: false, // 로그인 여부
+  syncMode: (localStorage.getItem("sync_mode") as 'local' | 'google') || 'local', // 연동 모드 (기본값 로컬)
+  memberList: [], // 멤버 전체 목록
+  todayMembers: JSON.parse(localStorage.getItem("today_members") || "[]"), // 오늘 참가할 멤버 풀 (쿠키/스토리지 보존)
+  selectedMembers: [] // 선택된 멤버 4명
 })
+
+// 로컬 모드용 오늘 누적 포인트 맵
+const localPoints = reactive<Record<string, number>>(
+  JSON.parse(localStorage.getItem("today_members_points") || "{}")
+)
+
+// 이름이 바뀔 때마다 앞 글자 겹치지 않는 유니크 축약명을 설정하는 감시자
+watch(() => players.map(p => p.name), (newNames) => {
+  const shorts = getShortNames(newNames);
+  players.forEach((p, idx) => {
+    p.shortName = shorts[idx];
+  });
+}, { immediate: true, deep: true });
 
 /**시작시 언어 변경 및 자리선택 타일창 띄우기*/
 onMounted(async () => {
   await router.isReady();
-  const urlLocale=route.params.locale as string;
-  changeLocale(urlLocale);
+  changeLocale();
   for (let i=3;i>0;i--){ // 자리 섞기
     let j=Math.floor(Math.random()*(i+1));
     [seatTile.value[i], seatTile.value[j]]=[seatTile.value[j], seatTile.value[i]];
   }
+  
+  // 테마 설정 초기화
+  const savedTheme = localStorage.getItem("theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  if (savedTheme === "dark" || (!savedTheme && prefersDark)) {
+    document.documentElement.classList.add("dark");
+  } else {
+    document.documentElement.classList.remove("dark");
+  }
+
+  // 구글 API 및 GIS 초기화
+  try {
+    await initGapi();
+    if (googleInfo.clientId) {
+      initGis(googleInfo.clientId, onGoogleTokenReceived);
+    }
+  } catch (err) {
+    console.warn("Google API Client 로드 실패:", err);
+  }
+
   showModal('choose_seat');
+
+  // iOS/Android 가로모드 주소창 숨김을 위한 꼼수 (스크롤 자동 트리거)
+  const triggerHideAddressBar = () => {
+    setTimeout(() => {
+      window.scrollTo(0, 1);
+    }, 200);
+  };
+  triggerHideAddressBar();
+  window.addEventListener('touchstart', triggerHideAddressBar, { once: true });
+  window.addEventListener('click', triggerHideAddressBar, { once: true });
+  window.addEventListener('resize', triggerHideAddressBar);
 })
 
-/**주소 변경시 해당 언어로 변경*/
-watch(() => route.params.locale, (newLocale) => {
-  if (typeof newLocale==='string' && locale.value!==newLocale)
-    changeLocale(newLocale);
-})
+
 
 /**전체화면 활성화/비활성화*/
 const toggleFullScreen = () => {
@@ -119,11 +159,12 @@ const toggleFullScreen = () => {
 }
 
 /**언어 변경*/
-const changeLocale = (language: string) => {
-  router.push({params: {locale: language}}); // 라우팅 경로 설정
-  locale.value=language; // 언어 변경
+const changeLocale = () => {
+  const targetLanguage = 'ko'; // 한국어로 고정
+  router.push({params: {locale: targetLanguage}}); // 라우팅 경로 설정
+  locale.value=targetLanguage; // 언어 변경
   document.title=t('pageTitle') // 페이지 이름 설정
-  document.documentElement.setAttribute('lang', language); // lang 속성 변경
+  document.documentElement.setAttribute('lang', targetLanguage); // lang 속성 변경
   localStorage.setItem("language", locale.value); // 로컬 스토리지에 저장
 }
 
@@ -403,10 +444,7 @@ const setFanBuButton = (status: string, idx: number) => {
   }
 }
 
-/**자리타일 동작 설정*/
-const setSeatTile = (idx: number) => {
-  seatTile.isOpened[idx]=true;
-}
+
 
 /**화료 및 방총 불가능한 경우 반환*/
 const checkInvalidStatus = (status: string) => {
@@ -675,137 +713,259 @@ const rollbackRecord = (idx: number) => {
   hideModal(); // 모달 창 끄기
 }
 
-const syncData = reactive({ 
-  players, 
-  panelInfo, 
-  records, 
-  option, 
-});
+// 구글 토큰 수령 시 콜백
+const onGoogleTokenReceived = async (_token: string) => {
+  googleInfo.isLoggedIn = true;
+  await loadMemberList();
+  await loadTodayMembers();
+};
 
-// 1. Supabase 클라이언트 초기화
-const supabase = createClient(syncInfo.SUPABASE_URL, syncInfo.SUPABASE_KEY)
+// 멤버 목록 로드
+const loadMemberList = async () => {
+  if (!googleInfo.spreadsheetId) return;
+  try {
+    const list = await fetchMemberList(googleInfo.spreadsheetId);
+    googleInfo.memberList = list;
+  } catch (err) {
+    console.error("멤버 목록 로드 실패:", err);
+  }
+};
 
-// 2. 상태 변수 정의
-let roomChannel: any = null      // Supabase 채널 객체
+// 오늘의 대국 참여 멤버 로드
+const loadTodayMembers = async () => {
+  if (!googleInfo.spreadsheetId) return;
+  try {
+    const pointsMap = await fetchTodayMembers(googleInfo.spreadsheetId);
+    googleInfo.todayMembers = Object.keys(pointsMap);
+  } catch (err) {
+    console.error("오늘의 멤버 로드 실패:", err);
+  }
+};
 
-/** * 멀티플레이 초기화 (방 만들기 / 접속하기 공용)
- * @param id - 접속할 방 ID. 없으면 새로 생성(방장)
- */
-const initMultiplayer = (id?: string) => {
-  // 1. 방 ID 설정 (없으면 6자리 숫자 랜덤 생성)
-  const targetId=id||Math.floor(Math.random()*1000000).toString().padStart(6,'0');
-  syncInfo.roomId=targetId;
+// 전체 명단에 신규 멤버 등록
+const addNewMember = async (name: string) => {
+  if (!googleInfo.spreadsheetId) return;
+  try {
+    await addNewMemberToDb(googleInfo.spreadsheetId, name);
+    await loadMemberList();
+  } catch (err) {
+    console.error("신규 멤버 등록 실패:", err);
+  }
+};
 
-  // 2. 기존 채널이 있다면 제거
-  if (roomChannel)
-    supabase.removeChannel(roomChannel);
+// 오늘의 멤버 풀 저장 및 구글 시트 동기화
+const saveTodayMembersPool = async (names: string[]) => {
+  googleInfo.todayMembers = [...names];
+  localStorage.setItem("today_members", JSON.stringify(names));
+  if (!googleInfo.spreadsheetId) return;
+  try {
+    await saveTodayMembers(googleInfo.spreadsheetId, names);
+  } catch (err) {
+    console.error("오늘의 멤버 풀 저장 실패:", err);
+  }
+};
 
-  // 3. 새 채널 생성 및 구독
-  roomChannel=supabase.channel(`room_${targetId}`,{config: {broadcast: {self: false } } }); // 내가 보낸건 내가 안받음
+// 구글 로그인 트리거
+const googleLogin = () => {
+  if (!googleInfo.clientId) {
+    alert("설정에서 Google Client ID를 먼저 입력해 주세요.");
+    return;
+  }
+  initGis(googleInfo.clientId, onGoogleTokenReceived);
+  loginGoogle();
+};
 
-  roomChannel
-    .on('presence', { event: 'sync' }, () => {
-      const state = roomChannel.presenceState();
+// 구글 로그아웃 트리거
+const googleLogout = () => {
+  logoutGoogle();
+  googleInfo.isLoggedIn = false;
+  googleInfo.memberList = [];
+  googleInfo.todayMembers = [];
+  localStorage.removeItem("today_members");
+};
+
+// 설정 값 로컬 스토리지에 동기화
+const saveGoogleSettings = () => {
+  localStorage.setItem("google_client_id", googleInfo.clientId);
+  localStorage.setItem("google_spreadsheet_id", googleInfo.spreadsheetId);
+  localStorage.setItem("sync_mode", googleInfo.syncMode);
+  if (googleInfo.clientId) {
+    try {
+      initGis(googleInfo.clientId, onGoogleTokenReceived);
+    } catch (e) {
+      console.warn("GIS 초기화 실패:", e);
+    }
+  }
+};
+
+// 자리 배정 결과를 바탕으로 players 자리를 결정하고 게임을 동1국으로 리셋합니다.
+const startGameWithSeats = (assignment: Record<string, string>) => {
+  // players의 자풍은 동(Down), 남(Right), 서(Up), 북(Left) 순서로 고정
+  players[0].name = assignment['東'] || '▼';
+  players[1].name = assignment['南'] || '▶';
+  players[2].name = assignment['西'] || '▲';
+  players[3].name = assignment['北'] || '◀';
+
+  // 게임 초기화
+  resetAll();
+  hideModal();
+};
+
+// 대국 완전 초기화 후 자리 설정 모달 켜기
+const startNewGame = () => {
+  const isConfirmed = confirm("현재 진행 중인 게임이 초기화됩니다. 새 게임을 시작하시겠습니까?");
+  if (isConfirmed) {
+    resetAll();
+    showModal('choose_seat');
+  }
+};
+
+// 현재 게임 결과 정산 데이터를 구글 스프레드시트 및 로컬 스토리지에 기록합니다.
+const saveGameToSheet = async () => {
+  // 구글 연동 모드일 때만 구글 세션 필수 체크
+  if (googleInfo.syncMode === 'google' && (!googleInfo.spreadsheetId || !googleInfo.isLoggedIn)) {
+    alert("구글 연동 모드입니다. 구글 로그인 및 스프레드시트 ID가 유효한지 확인해 주세요.");
+    return;
+  }
+
+  try {
+    const pointsDelta: Record<string, number> = {};
+
+    // 1~4위 랭크 정산 데이터 추출
+    const scoreSheet = players.map((p) => {
+      let myScore = p.displayScore;
+      let oka = (option.returnScore * 4 - option.startingScore * 4) / 1000; // 오카
+      let uma = 0; // 우마
+      let rank = players.filter(x => x.displayScore > myScore).length + 1; // 순위
+      let cnt = players.filter(x => x.displayScore === myScore).length; // 동점자 수
       
-      // 1. 접속자 목록을 '들어온 시간' 순으로 정렬
-      const presences = Object.values(state).flat() as any[];
-      presences.sort((a, b) => new Date(a.online_at).getTime() - new Date(b.online_at).getTime());
-
-      // 2. 가장 먼저 들어온 유저의 ID가 내 ID와 같다면 내가 방장!
-      if (presences.length > 0 && presences[0].user_id === syncInfo.myId) {
-        if (!syncInfo.isHost) {
-          console.log("당신이 새로운 방장이 되었습니다.");
-          syncInfo.isHost = true;
-          syncInfo.isConnected = true; // 방장이 되면 즉시 전송 권한 획득
-        }
-      } else {
-        syncInfo.isHost = false;
+      for (let i = 0; i < cnt; i++) {
+        uma += Number(option.rankUma[rank + i - 1]);
       }
-    })
-    .on('broadcast', { event: 'sync' }, ({ payload }: { payload: any }) => {
-      if (syncInfo.isReceiving) return;
-      syncInfo.isReceiving = true;
-
-      // JSON 변환 시 null로 바뀐 NaN 복구
-      const restoreNaN = (obj: any) => {
-        for (let key in obj) {
-          if (obj[key] === null) obj[key] = NaN;
-          else if (typeof obj[key] === 'object' && obj[key] !== null) restoreNaN(obj[key]);
+      if (rank === 1) {
+        uma += oka;
+        if (option.riichiPayout) {
+          myScore += Math.floor(((panelInfo.riichi * 1000) / cnt) / 100) * 100;
         }
-        return obj;
+      }
+      uma /= cnt;
+      let point = (myScore - option.returnScore) / 1000 + uma;
+
+      // 이번 판 획득 포인트를 기록
+      pointsDelta[p.name] = parseFloat(point.toFixed(1));
+
+      return {
+        name: p.name,
+        score: myScore,
+        point: point.toFixed(1)
       };
-
-      const data = restoreNaN(payload);
-
-      // 데이터 주입 (기존 reactive 객체들에 덮어쓰기)
-      data.players.forEach((newData: any) => {
-        const target = players.find(p => p.seat === newData.seat);
-        if (target) Object.assign(target, newData);
-      });
-      Object.assign(panelInfo, data.panelInfo);
-      Object.assign(option, data.option);
-      
-      // 기록 데이터 처리
-      if (data.records && data.records.score) {
-        data.records.score.forEach((s: any, i: number) => {
-          if (records.score[i]) records.score[i].splice(0, records.score[i].length, ...s);
-        });
-        records.time.splice(0, records.time.length, ...data.records.time);
-      }
-      // 데이터를 한 번이라도 받으면 이제부터 전송 가능
-      syncInfo.isConnected = true;
-
-      nextTick(() => { syncInfo.isReceiving = false; });
-    })
-    .on('broadcast', { event: 'request_sync' }, () => {
-      if (syncInfo.isHost) {
-        console.log("새 참여자의 요청으로 데이터를 전송합니다.");
-        sendGameData();
-      }
-    })
-    .subscribe(async (status: string) => {
-      if (status === 'SUBSCRIBED') {
-        // 3. 내 정보를 등록 (들어온 시간 포함)
-        await roomChannel.track({
-          user_id: syncInfo.myId,
-          online_at: new Date().toISOString(),
-        });
-
-        if (!id) {
-          syncInfo.isHost = true;
-          syncInfo.isConnected = true;
-        } else {
-          // 참여자라면 데이터 요청
-          roomChannel.send({ type: 'broadcast', event: 'request_sync', payload: {} });
-        }
-      }
     });
+
+    // 점수 순으로 정렬해서 1위부터 4위까지 나열
+    const sortedResult = [...scoreSheet].sort((a, b) => b.score - a.score);
+
+    // 구글 시트에 들어갈 행(Row) 생성
+    const resultRow = [
+      new Date().toLocaleString('ko-KR'),
+      sortedResult[0].name, sortedResult[0].score, sortedResult[0].point,
+      sortedResult[1].name, sortedResult[1].score, sortedResult[1].point,
+      sortedResult[2].name, sortedResult[2].score, sortedResult[2].point,
+      sortedResult[3].name, sortedResult[3].score, sortedResult[3].point,
+    ];
+
+    // 로컬 스토리지 누적 포인트 갱신
+    Object.keys(pointsDelta).forEach(name => {
+      const prev = localPoints[name] || 0;
+      localPoints[name] = parseFloat((prev + pointsDelta[name]).toFixed(1));
+    });
+    localStorage.setItem("today_members_points", JSON.stringify(localPoints));
+
+    // 구글 연동 모드 시 구글 시트 전송 진행
+    if (googleInfo.syncMode === 'google') {
+      // 1. 대국 로그 기록
+      await appendGameResult(googleInfo.spreadsheetId, resultRow);
+      // 2. 오늘의 멤버 누적 점수 합산 업데이트
+      await updateTodayMemberPoints(googleInfo.spreadsheetId, pointsDelta);
+      alert("대국 결과 및 누적 포인트가 구글 스프레드시트에 업데이트되었습니다!");
+    } else {
+      alert("게임 결과가 로컬 스코어판에 성공적으로 누적 기록되었습니다!");
+    }
+  } catch (err) {
+    console.error("결과 기록 실패:", err);
+    alert("결과 기록 중 오류가 발생했습니다.");
+  }
 };
 
-/** 데이터 전송 로직 */
-const sendGameData = () => {
-  if (!roomChannel || syncInfo.isReceiving || !syncInfo.isConnected) return;
-  const payload = JSON.parse(JSON.stringify(syncData));
-  roomChannel.send({
-    type: 'broadcast',
-    event: 'sync',
-    payload
-  });
+// 로컬에서 플레이하던 대기 멤버들의 누적 포인트를 구글 스프레드시트에 일괄 업로드
+const syncLocalDataToGoogle = async () => {
+  if (!googleInfo.spreadsheetId || !googleInfo.isLoggedIn) {
+    alert("구글 로그인 상태와 스프레드시트 ID가 유효한지 확인해 주세요.");
+    return;
+  }
+  try {
+    const activeNames = googleInfo.todayMembers;
+    if (activeNames.length === 0) {
+      alert("오늘 등록된 로컬 대국 멤버가 없습니다.");
+      return;
+    }
+
+    // 로컬 데이터를 오늘의멤버 구글 시트에 행 단위로 동기화
+    const rows: any[][] = [['이름', '누적포인트']];
+    activeNames.forEach(name => {
+      const point = localPoints[name] !== undefined ? localPoints[name] : 0;
+      rows.push([name, point]);
+    });
+    
+    // 시트 초기화 후 덮어쓰기
+    await window.gapi.client.sheets.spreadsheets.values.clear({
+      spreadsheetId: googleInfo.spreadsheetId,
+      range: '오늘의멤버!A:B',
+    });
+    
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: googleInfo.spreadsheetId,
+      range: `오늘의멤버!A1:B${rows.length}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: rows,
+      },
+    });
+    alert("로컬의 하루 누적 점수 현황이 구글 스프레드시트에 성공적으로 일괄 동기화되었습니다!");
+  } catch (err) {
+    console.error("일괄 동기화 실패:", err);
+    alert("동기화 중 오류가 발생했습니다. 구글 권한을 확인해 주세요.");
+  }
 };
 
-/** 데이터 변경 감시 */
-watch(() => [syncData], () => {
-  if (syncInfo.isReceiving || !syncInfo.isConnected)
-    return;
-  sendGameData();
-}, { deep: true });
+// 새로운 날 시작 (로컬 점수 및 명단 초기화)
+const startNewDay = async () => {
+  const isConfirmed = confirm("로컬에 기록된 오늘 하루의 점수 및 명단 세션이 완전히 초기화됩니다. 새로운 날을 시작하시겠습니까?");
+  if (!isConfirmed) return;
 
-/** ID 복사 함수 */
-const copyRoomId = () => {
-  if (!syncInfo.roomId)
-    return;
-  navigator.clipboard.writeText(syncInfo.roomId); // 클립보드로 복사
-  showModal(t('comments.copyRoomCode'));
+  // 로컬 초기화
+  localStorage.removeItem("today_members");
+  localStorage.removeItem("today_members_points");
+  googleInfo.todayMembers = [];
+  Object.keys(localPoints).forEach(key => delete localPoints[key]);
+
+  // 경기기록 스코어 리셋
+  resetAll();
+
+  // 구글 연동 중인 경우 시트 데이터 클리어
+  if (googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
+    try {
+      await window.gapi.client.sheets.spreadsheets.values.clear({
+        spreadsheetId: googleInfo.spreadsheetId,
+        range: '오늘의멤버!A2:B100', // 헤더 제외하고 오늘의 멤버 점수 기록 초기화
+      });
+    } catch (err) {
+      console.warn("구글 오늘의멤버 초기화 에러:", err);
+    }
+  }
+
+  alert("모든 기록이 초기화되었습니다. 새로운 날의 대국 멤버를 지정해주세요.");
+  hideModal();
+  showModal('choose_seat');
 };
 </script>
 
@@ -837,12 +997,12 @@ const copyRoomId = () => {
     :records
     :option
     :modalInfo
+    :googleInfo
     @show-modal="showModal"
     @hide-modal="hideModal"
     @set-arrow-button="setArrowButton"
     @set-toggle-button="setToggleButton"
     @set-fanbu-button="setFanBuButton"
-    @set-seat-tile="setSeatTile"
     @check-invalid-status="checkInvalidStatus"
     @calculate-win="calculateWin"
     @calculate-draw="calculateDraw"
@@ -850,10 +1010,16 @@ const copyRoomId = () => {
     @roll-dice="rollDice"
     @copy-record="copyRecord"
     @rollback-record="rollbackRecord"
-    @change-locale="changeLocale"
-    :syncInfo
-    @init-multiplayer="initMultiplayer"
-    @copy-room-id="copyRoomId"
+    @start-game-with-seats="startGameWithSeats"
+    @save-google-settings="saveGoogleSettings"
+    @google-login="googleLogin"
+    @google-logout="googleLogout"
+    @save-game-to-sheet="saveGameToSheet"
+    @add-new-member="addNewMember"
+    @save-today-members="saveTodayMembersPool"
+    @start-new-game="startNewGame"
+    @sync-local-to-google="syncLocalDataToGoogle"
+    @start-new-day="startNewDay"
   />
 </div>
 </template>

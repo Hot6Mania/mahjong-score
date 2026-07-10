@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import Graphics from "@/components/Graphics.vue"
 import { ModalChooseDraw, ModalCheckPlayer, ModalScoreSelect, ModalScoreResult } from "@/components/modals/scoring";
 import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
 import { ModalRecordList, ModalRollback } from "@/components/modals/stats";
-import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, SyncInfo } from "@/types/types.d"
+import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
 import { Line as LineChart } from "vue-chartjs"
@@ -16,7 +15,6 @@ const { t } = useI18n()
 /**차트 컴포넌트 등록*/
 ChartJS.register(Title, Tooltip, Legend, LineElement, CategoryScale, LinearScale, PointElement)
 ChartJS.defaults.font.family = "'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif" // 폰트 설정
-ChartJS.defaults.color = '#000000' // 기본 글자색 설정
 
 /**props 정의*/
 interface Props {
@@ -28,7 +26,7 @@ interface Props {
   records: Records,
   option: Option,
   modalInfo: ModalInfo,
-  syncInfo: SyncInfo
+  googleInfo: GoogleInfo
 }
 const props = defineProps<Props>()
 
@@ -47,9 +45,16 @@ type Emits = {
   (e: 'roll-dice'): void,
   (e: 'copy-record'): void,
   (e: 'rollback-record', time: number): void,
-  (e: 'change-locale', language: string): void,
-  (e: 'init-multiplayer', id?: string): void,
-  (e: 'copy-room-id'): void,
+  (e: 'start-game-with-seats', assignment: Record<string, string>): void,
+  (e: 'save-google-settings'): void,
+  (e: 'google-login'): void,
+  (e: 'google-logout'): void,
+  (e: 'save-game-to-sheet'): void,
+  (e: 'add-new-member', name: string): void,
+  (e: 'save-today-members', names: string[]): void,
+  (e: 'start-new-game'): void,
+  (e: 'sync-local-to-google'): void,
+  (e: 'start-new-day'): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -58,9 +63,6 @@ const arr_wind = ['東', '南', '西', '北']
 const arr_seat = ['option.east', 'option.south', 'option.west', 'option.north',]
 const arr_resultsheet = ['resultSheet.wind', 'resultSheet.name', 'resultSheet.score', 'resultSheet.riichi', 'resultSheet.win', 'resultSheet.lose']
 const class_resultsheet = ['wind', 'name', 'score', 'riichi', 'win', 'lose']
-
-import { ref } from 'vue';
-const targetRoomId = ref('');     // 입력창에 적힌 방 ID
 
 /**순위표 정보 계산*/
 const scoreSheetInfo = computed(() => {
@@ -101,6 +103,10 @@ const scoreSheetInfo = computed(() => {
 
 /**점수차트 정보 계산*/
 const scoreChartInfo = computed(() => {
+  const isDarkTheme = document.documentElement.classList.contains('dark');
+  const textColor = isDarkTheme ? '#e5e5e5' : '#1a1a1a';
+  const gridColor = isDarkTheme ? '#444444' : '#e8e8e8';
+
   let datasets=props.players.map((_, idx) => ({
     label: props.players[idx].name, // 이름 가져오기
     data: props.records.score[idx].filter((_, i) => i%2===0), // 점수기록 가져오기)
@@ -137,8 +143,20 @@ const scoreChartInfo = computed(() => {
       x: {
         ticks: {
           autoSkip: false, // 모든 라벨 표시
+          color: textColor,
+        },
+        grid: {
+          color: gridColor,
         }
       },
+      y: {
+        ticks: {
+          color: textColor,
+        },
+        grid: {
+          color: gridColor,
+        }
+      }
     },
     plugins: {
       legend: {
@@ -146,6 +164,7 @@ const scoreChartInfo = computed(() => {
         labels: {
           usePointStyle: true, // 범례 모양 변경
           pointStyle: 'rectRounded',
+          color: textColor,
         }
       },
     },
@@ -159,17 +178,17 @@ const scoreChartInfo = computed(() => {
 /**토글 버튼 색상*/
 const toggleButtonStyle = (status: string) => {
   if (status==='isfao') // 점수창 책임지불 OX
-    return {color: props.scoringState.isFao===true ? 'mediumblue' : 'red'};
+    return {color: props.scoringState.isFao===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='roundmangan') // 유국만관 옵션
-    return {color: props.option.roundMangan===true ? 'mediumblue' : 'red'};
+    return {color: props.option.roundMangan===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='tobi') // 토비 옵션
-    return {color: props.option.tobi===true ? 'mediumblue' : 'red'};
+    return {color: props.option.tobi===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='cheatscore') // 촌보점수 옵션
-    return {color: props.option.cheatScore===true ? 'mediumblue' : 'red'};
+    return {color: props.option.cheatScore===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='endriichi') // 공탁처리 옵션
-    return {color: props.option.riichiPayout===true ? 'mediumblue' : 'red'};
+    return {color: props.option.riichiPayout===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='isonline') // 싱크 온/오프라인
-    return {color: props.syncInfo.isConnected===true ? 'limegreen' : 'gray'};
+    return {color: props.googleInfo.isLoggedIn===true ? 'var(--color-online)' : 'var(--color-offline)'};
 }
 
 /**주사위 모달창 회전*/
@@ -180,11 +199,11 @@ const diceModalTransform = () => {
 /**점수 부호에 따른 색상*/
 const getSignColor = (sign: number, x: boolean) => {
   if (sign>0)
-    return {color: 'limegreen'};
+    return {color: 'var(--color-positive)'};
   else if (sign<0)
-    return {color: 'red'};
+    return {color: 'var(--color-negative)'};
   else if (x===true)
-    return {color: 'white'};
+    return {color: 'var(--text-color)'};
   else
     return {color: ''};
 }
@@ -292,46 +311,60 @@ const getSignColor = (sign: number, x: boolean) => {
   <div v-else-if="modalInfo.type==='choose_seat'" class="modal_content" @click.stop>
     <ModalTile
       :seatTile
-      @set-seat-tile="(idx) => emit('set-seat-tile', idx)"
+      :googleInfo
+      @start-game-with-seats="(assignment) => emit('start-game-with-seats', assignment)"
+      @add-new-member="(name) => emit('add-new-member', name)"
+      @save-today-members="(names) => emit('save-today-members', names)"
     />
   </div>
   <!-- 메뉴 선택창 -->
   <div v-else-if="modalInfo.type==='choose_menu_kind'" class="modal_content" @click.stop>
     <ModalChooseMenu
-      @show-modal="(type, status?) => emit('show-modal', type, status)"
-      @change-locale="(language) => emit('change-locale', language)"
+      @show-modal="(type, status) => emit('show-modal', type, status)"
+      @start-new-game="emit('start-new-game')"
     />
   </div>
   <!-- 게임 결과창(표) -->
   <div v-else-if="modalInfo.type==='result_sheet'" class="modal_content" @click.stop>
-    <div class="container_resultsheet" @click.stop="emit('show-modal', 'result_chart')">
-      <div v-for="(_, i) in class_resultsheet" 
-        :key="i"
-        :class="class_resultsheet[i]"
-        style="font-weight: bold;"
-      >
-        {{ t(arr_resultsheet[i]) }}
-      </div>
-      <div style="grid-area: wind_contents;">
-        <div v-for="(_, i) in arr_wind" :key="i">{{ arr_wind[i] }}</div>
-      </div>
-      <div style="grid-area: name_contents;">
-        <div v-for="(_, i) in players" :key="i">{{ players[i].name }}</div>
-      </div>
-      <div style="grid-area: score_contents;">
-        <div v-for="(_, i) in scoreSheetInfo" :key="i">
-        {{ scoreSheetInfo[i].score }}(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span>)
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
+      <div class="container_resultsheet" @click.stop="emit('show-modal', 'result_chart')">
+        <div v-for="(_, i) in class_resultsheet" 
+          :key="i"
+          :class="class_resultsheet[i]"
+          style="font-weight: bold;"
+        >
+          {{ t(arr_resultsheet[i]) }}
+        </div>
+        <div style="grid-area: wind_contents;">
+          <div v-for="(_, i) in arr_wind" :key="i">{{ arr_wind[i] }}</div>
+        </div>
+        <div style="grid-area: name_contents;">
+          <div v-for="(_, i) in players" :key="i">{{ players[i].name }}</div>
+        </div>
+        <div style="grid-area: score_contents;">
+          <div v-for="(_, i) in scoreSheetInfo" :key="i">
+          {{ scoreSheetInfo[i].score }}(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span>)
+          </div>
+        </div>
+        <div style="grid-area: riichi_contents;">
+          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntRiichi }}</div>
+        </div>
+        <div style="grid-area: win_contents;">
+          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntWin }}</div>
+        </div>
+        <div style="grid-area: lose_contents;">
+          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntLose }}</div>
         </div>
       </div>
-      <div style="grid-area: riichi_contents;">
-        <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntRiichi }}</div>
-      </div>
-      <div style="grid-area: win_contents;">
-        <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntWin }}</div>
-      </div>
-      <div style="grid-area: lose_contents;">
-        <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntLose }}</div>
-      </div>
+      <button 
+        v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId"
+        @click.stop="emit('save-game-to-sheet')"
+        style="width: calc(100% - 10px); padding: 8px; margin-bottom: 5px; font-size: 16px; font-weight: bold; background-color: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
+        onmouseover="this.style.opacity='0.9'"
+        onmouseout="this.style.opacity='1.0'"
+      >
+        구글 스프레드시트에 결과 기록하기
+      </button>
     </div>
   </div>
   <!-- 게임 결과창(차트) -->
@@ -359,122 +392,159 @@ const getSignColor = (sign: number, x: boolean) => {
   </div>
   <!-- 설정 창 -->
   <div v-else-if="modalInfo.type==='set_options'" class="modal_content" @click.stop>
-    <div class="container_option">
-      <div
-        v-for="(_, i) in arr_seat"
-        :key="i"
-        :style="`grid-area: input_name${i};`"
-      >
-        {{ arr_wind[i] }}({{ t(arr_seat[i]) }})<br>
-        <input
-          type="text"
-          maxlength="4"
-          v-model="players[i].name"
-          :placeholder="t('option.name', {idx:i+1})"
-          :name="`name${i+1}`"
-        >
-      </div>
-      <div style="grid-area: option0;">
-        {{ t('option.startingScore') }}<br>
-        <input 
-          type="number"
-          v-model="option.startingScore"
-          :placeholder="String(25000)"
-          :name="'startingScore'"
-        >
-      </div>
-      <div style="grid-area: option1;">
-        {{ t('option.returnScore') }}<br>
-        <input 
-          type="number"
-          v-model="option.returnScore"
-          :placeholder="String(30000)"
-          :name="'returnScore'"
-        >
-      </div>
-      <div style="grid-area: option2;" @click.stop="emit('set-toggle-button', 'roundmangan')">
-        {{ t('option.roundMangan') }}<br>
-        <span :style="toggleButtonStyle('roundmangan')">
-          <span v-show="option.roundMangan===true">O</span>
-          <span v-show="option.roundMangan===false">X</span>
-        </span>
-      </div>
-      <div style="grid-area: option3;" @click.stop="emit('set-toggle-button', 'tobi')">
-        {{ t('option.tobi') }}<br>
-        <span :style="toggleButtonStyle('tobi')">
-          <span v-show="option.tobi===true">O</span>
-          <span v-show="option.tobi===false">X</span>
-        </span>
-      </div>
-      <div style="grid-area: option4;">
-        {{ t('option.rankUma') }} (1-2-3-4)<br>
-        <input
-          v-for="(_, i) in option.rankUma"
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%;">
+      <div class="container_option">
+        <div
+          v-for="(_, i) in arr_seat"
           :key="i"
-          style="width: 51px;"
-          type="number"
-          v-model="option.rankUma[i]"
-          :placeholder="t('option.rank', {idx:i+1})"
-          :name="`uma${i+1}`"
-          :style="{ marginRight: i===option.rankUma.length-1 ? '0px' : '10px' }"
+          :style="`grid-area: input_name${i};`"
         >
-      </div>  
-      <div style="grid-area: option5;" @click.stop="emit('set-toggle-button', 'cheatscore')">
-        {{ t('option.cheatScore') }}<br>
-        <span :style="toggleButtonStyle('cheatscore')">
-          <span v-show="option.cheatScore===true">{{ t('option.mangan') }}</span>
-          <span v-show="option.cheatScore===false">3000 All</span>
-        </span>
+          {{ arr_wind[i] }}({{ t(arr_seat[i]) }})<br>
+          <input
+            type="text"
+            maxlength="4"
+            v-model="players[i].name"
+            :placeholder="t('option.name', {idx:i+1})"
+            :name="`name${i+1}`"
+          >
+        </div>
+        <div style="grid-area: option0;">
+          {{ t('option.startingScore') }}<br>
+          <input 
+            type="number"
+            v-model="option.startingScore"
+            :placeholder="String(25000)"
+            :name="'startingScore'"
+          >
+        </div>
+        <div style="grid-area: option1;">
+          {{ t('option.returnScore') }}<br>
+          <input 
+            type="number"
+            v-model="option.returnScore"
+            :placeholder="String(30000)"
+            :name="'returnScore'"
+          >
+        </div>
+        <div style="grid-area: option2;" @click.stop="emit('set-toggle-button', 'roundmangan')">
+          {{ t('option.roundMangan') }}<br>
+          <span :style="toggleButtonStyle('roundmangan')">
+            <span v-show="option.roundMangan===true">O</span>
+            <span v-show="option.roundMangan===false">X</span>
+          </span>
+        </div>
+        <div style="grid-area: option3;" @click.stop="emit('set-toggle-button', 'tobi')">
+          {{ t('option.tobi') }}<br>
+          <span :style="toggleButtonStyle('tobi')">
+            <span v-show="option.tobi===true">O</span>
+            <span v-show="option.tobi===false">X</span>
+          </span>
+        </div>
+        <div style="grid-area: option4;">
+          {{ t('option.rankUma') }} (1-2-3-4)<br>
+          <input
+            v-for="(_, i) in option.rankUma"
+            :key="i"
+            style="width: 51px;"
+            type="number"
+            v-model="option.rankUma[i]"
+            :placeholder="t('option.rank', {idx:i+1})"
+            :name="`uma${i+1}`"
+            :style="{ marginRight: i===option.rankUma.length-1 ? '0px' : '10px' }"
+          >
+        </div>  
+        <div style="grid-area: option5;" @click.stop="emit('set-toggle-button', 'cheatscore')">
+          {{ t('option.cheatScore') }}<br>
+          <span :style="toggleButtonStyle('cheatscore')">
+            <span v-show="option.cheatScore===true">{{ t('option.mangan') }}</span>
+            <span v-show="option.cheatScore===false">3000 All</span>
+          </span>
+        </div>
+        <div style="grid-area: option6;" @click.stop="emit('set-toggle-button', 'endriichi')">
+          {{ t('option.riichiPayout') }}<br>
+          <span :style="toggleButtonStyle('endriichi')">
+            <span v-show="option.riichiPayout===true">{{ t('option.firstPlace') }}</span>
+            <span v-show="option.riichiPayout===false">X</span>
+          </span>
+        </div>
       </div>
-      <div style="grid-area: option6;" @click.stop="emit('set-toggle-button', 'endriichi')">
-        {{ t('option.riichiPayout') }}<br>
-        <span :style="toggleButtonStyle('endriichi')">
-          <span v-show="option.riichiPayout===true">{{ t('option.firstPlace') }}</span>
-          <span v-show="option.riichiPayout===false">X</span>
-        </span>
-      </div>
+      <button 
+        @click.stop="emit('start-new-day')"
+        style="width: calc(100% - 10px); padding: 8px; margin-bottom: 5px; font-size: 15px; font-weight: bold; background-color: transparent; color: var(--color-negative); border: 2px solid var(--color-negative); border-radius: 4px; cursor: pointer; transition: background-color 0.2s, color 0.2s;"
+        onmouseover="this.style.backgroundColor='var(--color-negative)'; this.style.color='white';"
+        onmouseout="this.style.backgroundColor='transparent'; this.style.color='var(--color-negative)';"
+      >
+        새로운 날 시작 (이전 기록 초기화)
+      </button>
+      <button 
+        @click.stop="emit('start-new-game')"
+        style="width: calc(100% - 10px); padding: 8px; margin-bottom: 5px; font-size: 15px; font-weight: bold; background-color: var(--color-negative); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
+        onmouseover="this.style.opacity='0.9'"
+        onmouseout="this.style.opacity='1.0'"
+      >
+        새 게임 시작하기 (초기화)
+      </button>
     </div>
   </div>
   <!-- 동기화 창 -->
   <div v-else-if="modalInfo.type==='sync'" class="modal_content" @click.stop>
-    <div v-if="!syncInfo.isConnected" class="container_sync">
-      <div class="on_off" :style="toggleButtonStyle('isonline')">
-        <Graphics kind="dot" :status="syncInfo.isConnected"/>
-        {{ t('sync.offline') }}
+    <div class="container_google_sync">
+      <h3 style="font-size: 18px; margin-bottom: 10px;">대국 동기화 설정</h3>
+      
+      <!-- 연동 모드 선택기 -->
+      <div class="sync_mode_selector" style="display: flex; gap: 15px; justify-content: center; margin-bottom: 15px;">
+        <label style="font-size: 14px; font-weight: bold; cursor: pointer;">
+          <input type="radio" value="local" v-model="googleInfo.syncMode" @change="emit('save-google-settings')" /> 로컬 모드
+        </label>
+        <label style="font-size: 14px; font-weight: bold; cursor: pointer;">
+          <input type="radio" value="google" v-model="googleInfo.syncMode" @change="emit('save-google-settings')" /> 구글 연동
+        </label>
       </div>
-      <div style="grid-area: room_id;">
-        <input
-          type="text"
-          v-model="targetRoomId"
-          :placeholder="t('sync.roomCode')"
-          name="roomCode"
-        />
+
+      <div class="login_status">
+        <span class="status_indicator" :style="{ backgroundColor: googleInfo.isLoggedIn ? 'var(--color-online)' : 'var(--color-offline)' }"></span>
+        <span style="font-size: 15px;">{{ googleInfo.isLoggedIn ? '구글 로그인 완료' : '구글 오프라인' }}</span>
       </div>
-      <div class="sync_button">
-        <div v-if="!targetRoomId">
-          <div @click.stop="emit('init-multiplayer')">
-            {{ t('sync.create') }}
-          </div>
+      
+      <div class="sync_fields">
+        <div class="input_group">
+          <label>Google OAuth Client ID</label>
+          <input 
+            type="text" 
+            v-model="googleInfo.clientId" 
+            placeholder="Client ID 입력"
+            @change="emit('save-google-settings')"
+            style="width: 250px; font-size: 14px;"
+          />
         </div>
-        <div v-else>
-          <div @click.stop="emit('init-multiplayer', targetRoomId)">
-            {{ t('sync.join') }}
-          </div>
+        <div class="input_group">
+          <label>Spreadsheet ID</label>
+          <input 
+            type="text" 
+            v-model="googleInfo.spreadsheetId" 
+            placeholder="스프레드시트 ID 입력"
+            @change="emit('save-google-settings')"
+            style="width: 250px; font-size: 14px;"
+          />
         </div>
       </div>
-    </div>
-    <div v-else class="container_sync">
-      <div class="on_off" :style="toggleButtonStyle('isonline')">
-        <graphics kind="dot" :status="syncInfo.isConnected"/>
-        {{ t('sync.online') }}
-      </div>
-      <div style="grid-area: room_id;">
-        {{ t('sync.roomCode') }}: {{ syncInfo.roomId }}
-      </div>
-      <div class="sync_button">
-        <div @click.stop="emit('copy-room-id')">
-          {{ t('sync.copy') }}
-        </div>
+
+      <div class="action_buttons" style="margin-top: 15px; display: flex; flex-direction: column; gap: 8px;">
+        <button 
+          v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId" 
+          @click.stop="emit('sync-local-to-google')" 
+          style="width: 100%; padding: 8px; font-size: 14px; font-weight: bold; background-color: var(--color-toggle-on); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
+          onmouseover="this.style.opacity='0.9'"
+          onmouseout="this.style.opacity='1.0'"
+        >
+          로컬 점수 구글 시트에 일괄 동기화
+        </button>
+        <button v-if="!googleInfo.isLoggedIn" @click.stop="emit('google-login')" class="btn_g_login">
+          구글 로그인
+        </button>
+        <button v-else @click.stop="emit('google-logout')" class="btn_g_logout">
+          로그아웃
+        </button>
       </div>
     </div>
   </div>
@@ -495,10 +565,13 @@ const getSignColor = (sign: number, x: boolean) => {
   width: 100%;
   height: 100%;
   overflow: auto;
-  background-color: rgba(0,0,0,0.4);
+  background-color: var(--modal-overlay);
+  transition: background-color 0.3s ease;
 }
 .modal_content {
-  background-color: #ffffff;
+  background-color: var(--modal-bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
   position: fixed;
   text-align: center;
   white-space: nowrap;
@@ -509,6 +582,7 @@ const getSignColor = (sign: number, x: boolean) => {
   height: auto;
   padding: 5px;
   z-index: 10;
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
 /* 메시지 팝업창 */
@@ -545,8 +619,9 @@ const getSignColor = (sign: number, x: boolean) => {
   margin: 5px;
 }
 .container_resultsheet div{
-  border-top: 1px solid black;
-  border-bottom: 1px solid black;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  transition: border-color 0.3s ease;
 }
 
 /* 게임 결과창(차트)*/
@@ -556,32 +631,59 @@ const getSignColor = (sign: number, x: boolean) => {
   margin: 5px;
 }
 
-/* 점수 연동창 */
-.container_sync{
-  display: grid;
-  grid-template-rows: 50px 75px;
-  grid-template-columns: 170px 180px;
-  grid-template-areas:
-    'on_off sync_button'
-    'room_id room_id';
+/* 구글 연동창 */
+.container_google_sync {
+  padding: 10px;
+  width: 280px;
   text-align: center;
-  font-size: 30px;
-  margin: 10px;
-  place-items: center;
 }
-.on_off{
-  grid-area: on_off;
-  font-size: 25px;
+.login_status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 5px;
+  margin-bottom: 15px;
 }
-.sync_button{
-  grid-area: sync_button;
-  color: red;
+.status_indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
 }
-.container_sync input{
-  font-size: 30px;
-  width: 300px;
+.sync_fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.container_sync input::placeholder {
-  font-size: 25px;
+.input_group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.input_group label {
+  font-size: 12px;
+  color: var(--text-dimmed);
+}
+.btn_g_login, .btn_g_logout {
+  width: 100%;
+  padding: 8px;
+  font-size: 16px;
+  font-weight: bold;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #fff;
+  transition: opacity 0.2s;
+}
+.btn_g_login {
+  background-color: #4285f4;
+}
+.btn_g_logout {
+  background-color: var(--color-negative);
+}
+.btn_g_login:hover, .btn_g_logout:hover {
+  opacity: 0.9;
 }
 </style>

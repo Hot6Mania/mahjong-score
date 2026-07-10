@@ -26,13 +26,13 @@ const class_record = ['down_record', 'right_record', 'up_record', 'left_record']
 /**점수 부호에 따른 색상*/
 const getSignColor = (sign: number, x: number) => {
   if (sign>0)
-    return {color: 'limegreen'};
+    return {color: 'var(--color-positive)'};
   else if (sign<0)
-    return {color: 'red'};
+    return {color: 'var(--color-negative)'};
   else if (x%4<2)
-    return {color: 'whitesmoke'};
+    return {color: 'var(--bg-stripe-light)'};
   else
-    return {color: 'gainsboro'};
+    return {color: 'var(--bg-stripe-dark)'};
 }
 </script>
 
@@ -52,7 +52,7 @@ const getSignColor = (sign: number, x: number) => {
     <div class="when">
       <div v-for="(_, i) in records.time"
         :key="i"
-        :style="{backgroundColor: (i%4<2) ? 'whitesmoke' : 'gainsboro'}"
+        :style="{backgroundColor: (i%4<2) ? 'var(--bg-stripe-light)' : 'var(--bg-stripe-dark)'}"
         @click.stop="i%2===1 ? emit('show-modal', 'rollback_record', String(i)) : {}"
       >
         {{ records.time[i] }}
@@ -64,7 +64,7 @@ const getSignColor = (sign: number, x: number) => {
     >
       <div v-for="(_, j) in records.score[i]"
         :key="j"
-        :style="[j%2===1 ? getSignColor(records.score[i][j], j) : {}, {backgroundColor: (j%4<2) ? 'whitesmoke' : 'gainsboro'}]"
+        :style="[j%2===1 ? getSignColor(records.score[i][j], j) : {}, {backgroundColor: (j%4<2) ? 'var(--bg-stripe-light)' : 'var(--bg-stripe-dark)'}]"
       >
         <span v-show="j%2===1 && records.score[i][j]>0">+</span>{{ records.score[i][j] }}
       </div>
@@ -88,7 +88,7 @@ const getSignColor = (sign: number, x: number) => {
 }
 .copy{
   grid-area: copy;
-  color: red; 
+  color: var(--color-negative); 
   font-size: 20px;
 }
 .container_record_scroll{

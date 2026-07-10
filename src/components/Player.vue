@@ -39,12 +39,12 @@ const displayRank = computed(() => {
 
 /**자풍이 東이라면 붉은색 표시*/
 const windStyle = () => {
-  return {color: props.player.wind==='東' ? 'red' : ''}
+  return {color: props.player.wind==='東' ? 'var(--color-east)' : 'var(--text-color)'}
 }
 
 /**리치가 불가능하면 회색 표시*/
 const displayScoreStyle = () => {
-  return {color: props.player.displayScore<1000 && props.option.tobi===true ? 'gray' : ''}
+  return {color: props.player.displayScore<1000 && props.option.tobi===true ? 'var(--color-disabled)' : 'var(--text-color)'}
 }
 
 /**리치봉 표시*/
@@ -55,13 +55,13 @@ const riichiStickVisibility = () => {
 /**점수 부호에 따른 색상*/
 const getSignColor = (sign: number, x: boolean) => {
   if (sign>0)
-    return {color: 'limegreen'};
+    return {color: 'var(--color-positive)'};
   else if (sign<0)
-    return {color: 'red'};
+    return {color: 'var(--color-negative)'};
   else if (x===true)
-    return {color: 'white'};
+    return {color: 'var(--text-color)'};
   else
-    return {color: ''};
+    return {color: 'var(--text-color)'};
 }
 </script>
 
@@ -83,14 +83,24 @@ const getSignColor = (sign: number, x: boolean) => {
   <!-- 현재 점수 -->
   <div class="score">
     <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)">
-      {{ displayScoreHigh }}<span style="font-size: 50px;"><span v-show="displayScoreLow<10">0</span>{{ displayScoreLow }}</span>
+      {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
+        <div class="player_name_badge">
+          {{ (player as any).shortName || player.name }}
+        </div>
+        <span v-show="displayScoreLow<10">0</span>{{ displayScoreLow }}
+      </span>
     </div>
     <div v-else :style="getSignColor(player.gapScore, false)">
-      <span v-show="gapScoreHigh>0">+</span>{{ gapScoreHigh }}<span style="font-size: 50px;">00</span>
+      <span v-show="gapScoreHigh>0">+</span>{{ gapScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
+        <div class="player_name_badge">
+          {{ (player as any).shortName || player.name }}
+        </div>
+        00
+      </span>
     </div>
   </div>
   <!-- 순위 표시 -->
-  <div v-show="player.rank!==0" class="rank" :style="{color: player.rank===1 ? 'red' : ''}">
+  <div v-show="player.rank!==0" class="rank" :style="{color: player.rank===1 ? 'var(--color-rank-first)' : 'var(--text-color)'}">
     {{ displayRank }}
   </div>
   <!-- 변경되는 점수 -->
@@ -166,5 +176,24 @@ const getSignColor = (sign: number, x: boolean) => {
   font-size: 30px;
   text-align: left;
   transform: translate(-100px, -10px);
+}
+.player_name_badge {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 100%;
+  margin-bottom: 2px;
+  font-size: 13px;
+  font-weight: bold;
+  padding: 1px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--modal-bg-color);
+  color: var(--text-color);
+  white-space: nowrap;
+  box-shadow: 1px 1px 3px rgba(0,0,0,0.15);
+  z-index: 2;
+  transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+  line-height: normal;
 }
 </style>
