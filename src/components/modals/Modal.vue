@@ -52,7 +52,7 @@ type Emits = {
   (e: 'save-game-to-sheet'): void,
   (e: 'add-new-member', name: string): void,
   (e: 'save-today-members', names: string[]): void,
-  (e: 'start-new-game'): void,
+  (e: 'start-new-game', skipConfirm?: boolean): void,
   (e: 'sync-local-to-google'): void,
   (e: 'start-new-day'): void,
 }
@@ -356,7 +356,7 @@ const getSignColor = (sign: number, x: boolean) => {
           <div v-for="(_, i) in arr_wind" :key="i">{{ arr_wind[i] }}</div>
         </div>
         <div style="grid-area: name_contents;">
-          <div v-for="(_, i) in players" :key="i">{{ players[i].name }}</div>
+          <div v-for="(_, i) in players" :key="i">{{ players[i].name.length > 8 ? players[i].name.substring(0, 8) + '...' : players[i].name }}</div>
         </div>
         <div style="grid-area: score_contents;">
           <div v-for="(_, i) in scoreSheetInfo" :key="i">
@@ -381,6 +381,14 @@ const getSignColor = (sign: number, x: boolean) => {
         onmouseout="this.style.opacity='1.0'"
       >
         구글 스프레드시트에 결과 기록하기
+      </button>
+      <button 
+        @click.stop="emit('start-new-game', true)"
+        style="width: calc(100% - 10px); padding: 8px; margin-bottom: 5px; font-size: 16px; font-weight: bold; background-color: var(--color-toggle-on); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
+        onmouseover="this.style.opacity='0.9'"
+        onmouseout="this.style.opacity='1.0'"
+      >
+        새 게임 시작하기
       </button>
     </div>
   </div>
@@ -668,7 +676,7 @@ const getSignColor = (sign: number, x: boolean) => {
 .container_resultsheet{
   display: grid;
   grid-template-rows: repeat(2, auto);
-  grid-template-columns: 60px 100px 150px repeat(3, 60px);
+  grid-template-columns: 60px minmax(100px, max-content) minmax(150px, max-content) repeat(3, 60px);
   grid-template-areas:
   'wind name score riichi win lose'
   'wind_contents name_contents score_contents riichi_contents win_contents lose_contents';

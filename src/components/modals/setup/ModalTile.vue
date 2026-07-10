@@ -78,9 +78,9 @@ watch(() => props.googleInfo.todayMembers, (newVal) => {
   }
 }, { deep: true })
 
-// 오늘의 멤버 풀이 변경되면 이번 판 4인 선택을 초기화함
-watch(tempTodayMembers, () => {
-  selected4Names.value = []
+// 오늘의 멤버 풀이 변경되면 이번 판 4인 선택 중 풀에서 탈락한 멤버만 제거
+watch(tempTodayMembers, (newPool) => {
+  selected4Names.value = selected4Names.value.filter(name => newPool.includes(name))
 }, { deep: true })
 
 const shuffleTiles = () => {

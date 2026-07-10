@@ -2,7 +2,7 @@
 import Player from "@/components/Player.vue"
 import Panel from "@/components/Panel.vue"
 import Modal from "@/components/modals/Modal.vue"
-import { reactive, onMounted, watch } from "vue"
+import { reactive, onMounted, watch, ref } from "vue"
 import { useRouter } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
@@ -118,6 +118,9 @@ const googleInfo = reactive<GoogleInfo>({ // 구글 연동 정보
 const localPoints = reactive<Record<string, number>>(
   JSON.parse(localStorage.getItem("today_members_points") || "{}")
 )
+
+const animateRank = ref(false);
+const activeGapSeat = ref<string | null>(null);
 
 // 이름이 바뀔 때마다 앞 글자 겹치지 않는 유니크 축약명을 설정하는 감시자
 watch(() => players.map(p => p.name), (newNames) => {
@@ -264,6 +267,7 @@ let isHoldingGap = false;
 
 /**모든 플레이어의 점수 차이 및 순위 표시 초기화*/
 const clearGapScores = () => {
+  activeGapSeat.value = null;
   if (gapTimer) {
     clearTimeout(gapTimer);
     gapTimer = null;
@@ -286,26 +290,40 @@ const startShowGap = (seat: string) => {
   if (!isNaN(players[idx].effectScore)) // 점수변동 이펙트 도중이면 실행 x
     return;
 
-  // 1. 기존 타이머 제거 및 홀드 상태 설정
+  // 이미 켜져있는 상태에서 다시 짧게 클릭(mousedown)한 것이라면 토글 오프 처리
+  if (activeGapSeat.value === seat && !isHoldingGap) {
+    clearGapScores();
+    return;
+  }
+
   if (gapTimer) {
     clearTimeout(gapTimer);
     gapTimer = null;
   }
+  
+  activeGapSeat.value = seat;
   isHoldingGap = true;
   gapPressStartTime = Date.now();
 
-  // 2. 점수 차 및 순위 표시 켜기
   for (let i=0;i<players.length;i++){
     if (i!==idx) // 본인이 아니면 점수 차 표시 켜기
       players[i].gapScore=players[idx].displayScore-players[i].displayScore;
     else
       players[i].gapScore=NaN;
-    players[i].rank=players.filter(x => x.displayScore>players[i].displayScore).length+1; // 순위 표시 켜기
+    
+    // 순위 표시 켜기 (동점 시 석순 옵션 반영!)
+    players[i].rank=players.filter((x) => {
+      if (x.displayScore > players[i].displayScore) return true;
+      if (x.displayScore === players[i].displayScore && option.sekiOrder) {
+        return players.indexOf(x) < i;
+      }
+      return false;
+    }).length + 1;
   }
 
-  // 3. 1초 후 자동 꺼짐 타이머 설정
+  // 1초 후 자동 꺼짐 타이머 설정
   gapTimer = setTimeout(() => {
-    // 1초가 도래했을 때 사용자가 더 이상 꾹 누르고 있지 않은 경우만 초기화
+    // 1초가 도래했을 때 사용자가 더 이상 꾹 누르고 있지 않은 경우만 초기화 (단순 탭인 경우)
     if (!isHoldingGap) {
       clearGapScores();
     }
@@ -340,6 +358,7 @@ const changeWindsAndRounds = () => {
 
 /**점수 변동 효과*/
 const changeScores = (onComplete?: () => void) => {
+  animateRank.value = true;
   let currentScore=players.map(x => x.displayScore); // 현재 점수 저장
   let arrCut: number[][]=[[],[],[],[]];
   
@@ -377,6 +396,11 @@ const changeScores = (onComplete?: () => void) => {
       clearInterval(effect);
       timecnt=0;
       
+      // 연출 종료 2.2초 후에 애니메이션 해제 (모든 슬라이드아웃/슬라이드인/팝업 완료 후)
+      setTimeout(() => {
+        animateRank.value = false;
+      }, 2200);
+
       // 1. 모든 이전 등수를 동시에 페이드아웃 및 슬라이드 아웃시킴 (-1로 설정하여 상시 표시 상태여도 강제 퇴장)
       for (let i=0;i<players.length;i++){
         players[i].effectScore=NaN; // 이펙트 끄기
@@ -389,13 +413,15 @@ const changeScores = (onComplete?: () => void) => {
           let delay = (4 - finalRanks[i]) * 200;
           setTimeout(() => {
             players[i].rank=finalRanks[i]; // 순차적으로 새로운 등수 켜기 (Slide In 트리거)
-            
-            // 등수 노출 완료 후 1.25초 동안 지속한 뒤 끄기
-            setTimeout(() => {
-              players[i].rank=0;
-            }, 1250);
           }, delay);
         }
+        
+        // 모든 등수 출현이 끝난 후(최대 600ms) 일정 시간(1250ms) 동안 대기한 후 모든 등수를 동시에 끄기 (총 1850ms)
+        setTimeout(() => {
+          for (let i=0;i<players.length;i++){
+            players[i].rank=0;
+          }
+        }, 1850);
       }, 150);
 
       // 3. 모든 등수의 페이드인/슬라이드가 완료되고 1등의 팝업 줌아웃까지 마무리된 시점(150ms 대기 + 1등 연출 600ms + 팝업완료 650ms = 1400ms)에 바람 변경
@@ -1100,9 +1126,8 @@ const startGameWithSeats = (assignment: Record<string, string>) => {
 };
 
 // 대국 완전 초기화 후 자리 설정 모달 켜기
-const startNewGame = () => {
-  const isConfirmed = confirm("현재 진행 중인 게임이 초기화됩니다. 새 게임을 시작하시겠습니까?");
-  if (isConfirmed) {
+const startNewGame = (skipConfirm = false) => {
+  if (skipConfirm || confirm("현재 진행 중인 게임이 초기화됩니다. 새 게임을 시작하시겠습니까?")) {
     resetAll();
     showModal('choose_seat');
   }
@@ -1265,6 +1290,8 @@ const startNewDay = async () => {
       :key="i"
       :player="players[i]"
       :option
+      :modalInfo
+      :animateRank="animateRank"
       @toggle-active-riichi="toggleActiveRiichi"
       @start-show-gap="startShowGap"
       @end-show-gap="endShowGap"
@@ -1276,42 +1303,56 @@ const startNewDay = async () => {
       @roll-dice="rollDice"
     />
   </main>
-  <!-- modal 컴포넌트 생성 -->
-  <Modal v-if="modalInfo.isOpen"
-    :players
-    :scoringState
-    :panelInfo
-    :dice
-    :seatTile
-    :records
-    :option
-    :modalInfo
-    :googleInfo
-    @show-modal="showModal"
-    @hide-modal="hideModal"
-    @set-arrow-button="setArrowButton"
-    @set-toggle-button="setToggleButton"
-    @set-fanbu-button="setFanBuButton"
-    @check-invalid-status="checkInvalidStatus"
-    @calculate-win="calculateWin"
-    @calculate-draw="calculateDraw"
-    @save-round="saveRound"
-    @roll-dice="rollDice"
-    @copy-record="copyRecord"
-    @rollback-record="rollbackRecord"
-    @start-game-with-seats="startGameWithSeats"
-    @save-google-settings="saveGoogleSettings"
-    @google-login="googleLogin"
-    @google-logout="googleLogout"
-    @save-game-to-sheet="saveGameToSheet"
-    @add-new-member="addNewMember"
-    @save-today-members="saveTodayMembersPool"
-    @start-new-game="startNewGame"
-    @sync-local-to-google="syncLocalDataToGoogle"
-    @start-new-day="startNewDay"
-  />
+  <!-- modal 컴포넌트 생성 (자연스러운 페이드인 효과를 위해 Transition 적용) -->
+  <Transition name="modal-fade">
+    <Modal v-if="modalInfo.isOpen"
+      :players
+      :scoringState
+      :panelInfo
+      :dice
+      :seatTile
+      :records
+      :option
+      :modalInfo
+      :googleInfo
+      @show-modal="showModal"
+      @hide-modal="hideModal"
+      @set-arrow-button="setArrowButton"
+      @set-toggle-button="setToggleButton"
+      @set-fanbu-button="setFanBuButton"
+      @check-invalid-status="checkInvalidStatus"
+      @calculate-win="calculateWin"
+      @calculate-draw="calculateDraw"
+      @save-round="saveRound"
+      @roll-dice="rollDice"
+      @copy-record="copyRecord"
+      @rollback-record="rollbackRecord"
+      @start-game-with-seats="startGameWithSeats"
+      @save-google-settings="saveGoogleSettings"
+      @google-login="googleLogin"
+      @google-logout="googleLogout"
+      @save-game-to-sheet="saveGameToSheet"
+      @add-new-member="addNewMember"
+      @save-today-members="saveTodayMembersPool"
+      @start-new-game="startNewGame"
+      @sync-local-to-google="syncLocalDataToGoogle"
+      @start-new-day="startNewDay"
+    />
+  </Transition>
 </div>
 </template>
 
 <style>
+/* 모달 자연스러운 페이드인/아웃 */
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.modal-fade-leave-active {
+  pointer-events: none !important;
+}
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+}
 </style>

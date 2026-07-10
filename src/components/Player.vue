@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import Graphics from "@/components/Graphics.vue"
-import type { Player, Option } from "@/types/types.d"
+import type { Player, Option, ModalInfo } from "@/types/types.d"
 import { computed } from "vue"
 
 /**props 정의*/
 interface Props {
   player: Player,
   option: Option,
+  modalInfo: ModalInfo,
+  animateRank: boolean,
 }
 const props = defineProps<Props>()
 
@@ -32,11 +34,32 @@ const gapScoreHigh = computed(() => {
   return Math.floor(props.player.gapScore/100);
 })
 
+/**점수 입력/정산 단계 진행 여부*/
+const isScoringActive = computed(() => {
+  return props.modalInfo.isOpen && [
+    'check_player_win',
+    'check_player_lose',
+    'choose_score',
+    'check_player_fao',
+    'choose_score_fao',
+    'choose_draw_kind',
+    'check_player_tenpai',
+    'check_player_nagashi',
+    'check_player_cheat',
+    'show_score'
+  ].includes(props.modalInfo.type);
+})
 
+/**대형 등수 표시 조건*/
+const shouldShowRank = computed(() => {
+  if (props.player.rank === -1) return false;
+  if (props.player.rank !== 0) return true;
+  return props.option.alwaysShowRank || isScoringActive.value;
+})
 
 /**등수별 색상 계산*/
 const rankColor = computed(() => {
-  const r = props.player.rank !== 0 ? props.player.rank : props.player.realRank;
+  const r = props.player.rank > 0 ? props.player.rank : props.player.realRank;
   if (r === 1) return '#28A745';
   if (r === 2) return '#17A2B8';
   if (r === 4) return '#DC3545';
@@ -87,8 +110,8 @@ const getSignColor = (sign: number, x: boolean) => {
     {{ player.wind }}
     <!-- 대형 등수 표시 (자리 표시의 왼쪽에 정렬) -->
     <div class="large_rank_overlay">
-      <Transition name="rank-slide" mode="out-in">
-        <div v-if="(player.rank !== 0 && player.rank !== -1) || (option.alwaysShowRank && player.rank !== -1)" :key="player.rank > 0 ? player.rank : player.realRank" class="rank_number" :class="{ 'is-first': (player.rank > 0 ? player.rank : player.realRank) === 1 }" :style="{ color: rankColor }">
+      <Transition :name="animateRank ? 'rank-slide' : ''" mode="out-in">
+        <div v-if="shouldShowRank" :key="player.rank > 0 ? player.rank : player.realRank" class="rank_number" :class="{ 'is-first': (player.rank > 0 ? player.rank : player.realRank) === 1 }" :style="{ color: rankColor }">
           {{ player.rank > 0 ? player.rank : player.realRank }}
         </div>
       </Transition>
@@ -99,7 +122,7 @@ const getSignColor = (sign: number, x: boolean) => {
     <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)" style="display: inline-block;">
       {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
         <div class="player_name_badge">
-          {{ (player as any).shortName || player.name }}
+          {{ player.name.length > 8 ? player.name.substring(0, 8) + '...' : player.name }}
         </div>
         <span v-show="displayScoreLow<10">0</span>{{ displayScoreLow }}
       </span>
@@ -107,7 +130,7 @@ const getSignColor = (sign: number, x: boolean) => {
     <div v-else :style="getSignColor(player.gapScore, false)" style="display: inline-block;">
       <span v-show="gapScoreHigh>0">+</span>{{ gapScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
         <div class="player_name_badge">
-          {{ (player as any).shortName || player.name }}
+          {{ player.name.length > 8 ? player.name.substring(0, 8) + '...' : player.name }}
         </div>
         00
       </span>
