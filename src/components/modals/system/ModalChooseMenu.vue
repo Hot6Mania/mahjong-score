@@ -52,9 +52,12 @@ const toggleTheme = () => {
   <div @click.stop="emit('start-new-game')" class="btn_new_game" style="color: var(--color-negative); font-weight: bold;">
     새 게임
   </div>
-  <!-- 3번째 row, 2번째 column에 동기화 설정 단독 배치 -->
+  <!-- 3번째 row, 2번째 column에 동기화 설정, 3번째 column에 스탯 배치 -->
   <div class="btn_sync" @click.stop="emit('show-modal', 'sync')">
     동기화 설정
+  </div>
+  <div class="btn_stats" @click.stop="emit('show-modal', 'stats')">
+    스탯
   </div>
 </div>
 </template>
@@ -92,6 +95,11 @@ const toggleTheme = () => {
 .btn_sync {
   grid-row: 3;
   grid-column: 2;
+  font-weight: bold;
+}
+.btn_stats {
+  grid-row: 3;
+  grid-column: 3;
   font-weight: bold;
 }
 .theme_toggle {

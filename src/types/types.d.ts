@@ -49,6 +49,10 @@ export interface Records { // 기록
   riichi: boolean[][], // 리치 횟수
   win: boolean[][], // 화료 횟수
   lose: boolean[][], // 방총 횟수
+  tenpai?: boolean[][], // 텐파이 여부
+  status?: string[], // 국의 종료 상태 (tsumo, ron, normal_draw, special_draw, cheat)
+  riichiOrder?: number[][], // 각 국의 리치 선언자 순서 배열
+  dealer?: number[], // 각 국의 친(East) 플레이어 인덱스
 }
 
 export interface Option { // 옵션

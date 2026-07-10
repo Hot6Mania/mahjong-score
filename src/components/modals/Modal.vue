@@ -2,7 +2,7 @@
 import { ModalChooseDraw, ModalCheckPlayer, ModalScoreSelect, ModalScoreResult } from "@/components/modals/scoring";
 import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
-import { ModalRecordList, ModalRollback, ModalTotalUma } from "@/components/modals/stats";
+import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
@@ -434,6 +434,15 @@ const getSignColor = (sign: number, x: boolean) => {
       :players="players"
       :history="todayGamesHistory"
       @invalidate-game="(idx) => emit('invalidate-game', idx)"
+    />
+  </div>
+  <!-- 오늘의 스탯창 -->
+  <div v-else-if="modalInfo.type==='stats'" class="modal_content" @click.stop>
+    <ModalStats
+      :todayMembers="googleInfo.todayMembers"
+      :players="players"
+      :history="todayGamesHistory"
+      :option="option"
     />
   </div>
   <!-- 점수 롤백창 -->

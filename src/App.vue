@@ -78,18 +78,23 @@ const seatTile = reactive({ // 자리정하기 타일
 })
 
 const savedRecords = localStorage.getItem("mahjong_records");
-const records = reactive<RecordsType>(savedRecords ? JSON.parse(savedRecords) : {
-  time: ["ㅤ"], // 시간
-  score: [[25000],[25000],[25000],[25000]], // 점수
-  riichi: [[false, false, false, false]], // 리치 횟수
-  win: [[false, false, false, false]], // 화료 횟수
-  lose: [[false, false, false, false]], // 방총 횟수
+const loadedRecords = savedRecords ? JSON.parse(savedRecords) : {};
+const records = reactive<RecordsType>({
+  time: loadedRecords.time || ["ㅤ"], // 시간
+  score: loadedRecords.score || [[25000],[25000],[25000],[25000]], // 점수
+  riichi: loadedRecords.riichi || [[false, false, false, false]], // 리치 횟수
+  win: loadedRecords.win || [[false, false, false, false]], // 화료 횟수
+  lose: loadedRecords.lose || [[false, false, false, false]], // 방총 횟수
+  tenpai: loadedRecords.tenpai || [[false, false, false, false]], // 텐파이 여부
+  status: loadedRecords.status || ["initial"], // 국 상태
+  riichiOrder: loadedRecords.riichiOrder || [[]], // 리치 순서
+  dealer: loadedRecords.dealer || [0], // 오야/동가 플레이어 인덱스
 })
 
 const defaultOption: OptionType = {
   startingScore: 25000, // 시작 점수
   returnScore: 30000, // 반환 점수
-  rankUma: [35, 5, -15, -25], // 순위 우마
+  rankUma: [20, 10, -10, -20], // 순위 우마 기본값 변경
   roundMangan: false, // 절상만관
   tobi: true, // 들통
   cheatScore: false, // 촌보 지불 점수
@@ -254,6 +259,9 @@ const changeLocale = () => {
   localStorage.setItem("language", locale.value); // 로컬 스토리지에 저장
 }
 
+// 현재 국(Round)의 리치 선언자 순서 추적용
+const riichiOrder = ref<number[]>([]);
+
 /**리치 활성화/비활성화*/
 const toggleActiveRiichi = (seat: string) => {
   // 이미 대국이 종료된 상태(결과 화면 표시 중 등)면 리치 지불 금지
@@ -270,6 +278,7 @@ const toggleActiveRiichi = (seat: string) => {
       players[idx].displayScore-=1000;
       players[idx].isRiichi=true;
       panelInfo.riichi++;
+      riichiOrder.value.push(idx); // 리치 선언 순서 기록
       
       // 랜덤한 각도 및 위치 오프셋 추가 (물리 효과용)
       (players[idx] as any).riichiAngle = Number((Math.random() * 12 - 6).toFixed(2));
@@ -281,6 +290,12 @@ const toggleActiveRiichi = (seat: string) => {
     players[idx].displayScore+=1000;
     players[idx].isRiichi=false;
     panelInfo.riichi--;
+    
+    // 리치 선언 순서에서 삭제
+    const rIdx = riichiOrder.value.indexOf(idx);
+    if (rIdx > -1) {
+      riichiOrder.value.splice(rIdx, 1);
+    }
     
     // 초기화
     (players[idx] as any).riichiAngle = 0;
@@ -518,10 +533,15 @@ const resetAll = () => {
     for (let i=0;i<records.score.length;i++)
       records.score[i].pop();
   }
+  records.time[0] = 'ㅤ'; // 첫 번째 열의 종료 구분 문자 원상복구
   while (1<records.riichi.length){ // 리치, 화료, 방총기록 지우기
     records.riichi.pop();
     records.win.pop();
     records.lose.pop();
+    if (records.tenpai) records.tenpai.pop();
+    if (records.status) records.status.pop();
+    if (records.riichiOrder) records.riichiOrder.pop();
+    if (records.dealer) records.dealer.pop();
   }
   for (let i=0;i<records.score.length;i++)
     records.score[i][0]=option.startingScore;
@@ -532,6 +552,9 @@ const resetAll = () => {
   panelInfo.renchan=0; // 연장 설정
   players.forEach((x, idx) => {x.wind=allWinds[idx];}); // 개인 바람 설정
   panelInfo.riichi=0; // 리치봉 설정
+
+  // 리치 선언자 순서 초기화
+  riichiOrder.value = [];
 
   // 기록 여부 초기화
   isGameSaved.value = false;
@@ -546,12 +569,7 @@ const showModal = (type: string, status?: string) => {
     type: type,
     status: status,
   });
-  if (type === 'result_sheet') {
-    if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
-      records.time[records.time.length - 1] = '결과';
-      localStorage.setItem("mahjong_records", JSON.stringify(records));
-    }
-  }
+  // 대국 종료 라벨(결과) 세팅은 showModal이 아닌 실제 게임 종료 국 정산 조건문 내부에서 직접 진행하므로 제거합니다.
 }
 
 /**모달 창 끄기*/
@@ -573,7 +591,7 @@ const hideModal = () => {
     if (option.startingScore>option.returnScore) // 시작점수가 반환점수보다 큰 경우
       option.returnScore=option.startingScore;
     if (cntUma!==0) // 우마 합계가 0이 아니라면 초기화
-      option.rankUma=[35, 5, -15, -25];
+      option.rankUma=[20, 10, -10, -20];
   }
   Object.assign(modalInfo, { // 모달창 끄기
     isOpen: false,
@@ -946,11 +964,28 @@ const saveRound = () => {
   records.win.push(players.map(x => x.isWin)); // 화료 기록에 추가
   records.lose.push(players.map(x => x.isLose)); // 방총 기록에 추가
 
+  // 통계 전용 데이터 기록
+  if (!records.tenpai) records.tenpai = [[false, false, false, false]];
+  if (!records.status) records.status = ["initial"];
+  if (!records.riichiOrder) records.riichiOrder = [[]];
+  if (!records.dealer) records.dealer = [0];
+
+  records.tenpai.push(players.map(x => x.isTenpai));
+  records.status.push(status);
+  records.riichiOrder.push([...riichiOrder.value]);
+  records.dealer.push(chinIdx);
+
+  // 리치 선언 순서 초기화
+  riichiOrder.value = [];
+
   // 점수 변동 이펙트 애니메이션 실행 (완료 후 연장/서입/게임 종료 분기 수행)
   changeScores(targetRiichi, () => {
     // 1) 들통(tobi) 여부 검증
     let hasTobi = option.tobi && players.some(p => p.displayScore < 0);
     if (hasTobi) {
+      if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+        records.time[records.time.length - 1] = '결과';
+      }
       showModal('result_sheet');
       return;
     }
@@ -971,6 +1006,9 @@ const saveRound = () => {
         let hasPlayerAboveReturn = players.some(p => p.displayScore >= option.returnScore);
         if (hasPlayerAboveReturn) {
           // 반환점수를 넘은 사람이 있으면 서입 없이 게임 종료
+          if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+            records.time[records.time.length - 1] = '결과';
+          }
           showModal('result_sheet');
         } else {
           // 반환점수를 넘은 사람이 없으면 서입 (서1국 진입)
@@ -991,6 +1029,9 @@ const saveRound = () => {
         let hasPlayerAboveReturn = players.some(p => p.displayScore >= option.returnScore);
         if (hasPlayerAboveReturn || curRound === 4) {
           // 반환점수를 넘은 사람이 있거나 서4국이 끝나면 게임 종료
+          if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+            records.time[records.time.length - 1] = '결과';
+          }
           showModal('result_sheet');
         } else {
           // 다음 서국으로 진행
@@ -1285,7 +1326,8 @@ const saveGameToSheet = async () => {
     });
     todayGamesHistory.push({
       timestamp: new Date().toISOString(),
-      results: historyResults
+      results: historyResults,
+      records: JSON.parse(JSON.stringify(records))
     });
     localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
 
