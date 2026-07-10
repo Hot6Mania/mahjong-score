@@ -128,12 +128,11 @@ const getSignColor = (sign: number, x: boolean) => {
       </Transition>
     </div>
   </div>
-  <!-- 현재 점수 -->
   <div class="score">
     <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)" style="display: inline-block;">
       {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
         <div class="player_name_badge">
-          {{ player.name.length > 8 ? player.name.substring(0, 8) + '...' : player.name }}
+          {{ player.name.length > 5 ? player.name.substring(0, 4) + '...' : player.name }}
         </div>
         <span v-show="displayScoreLow<10">0</span>{{ displayScoreLow }}
       </span>
@@ -141,7 +140,7 @@ const getSignColor = (sign: number, x: boolean) => {
     <div v-else :style="getSignColor(player.gapScore, false)" style="display: inline-block;">
       <span v-show="gapScoreHigh>0">+</span>{{ gapScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
         <div class="player_name_badge">
-          {{ player.name.length > 8 ? player.name.substring(0, 8) + '...' : player.name }}
+          {{ player.name.length > 5 ? player.name.substring(0, 4) + '...' : player.name }}
         </div>
         00
       </span>

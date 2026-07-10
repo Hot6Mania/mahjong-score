@@ -78,13 +78,16 @@ const getSignColor = (sign: number, x: number) => {
 .container_record{
   display: grid;
   grid-template-rows: 35px 200px;
-  grid-template-columns: 120px repeat(4, 100px);
+  grid-template-columns: 120px repeat(4, minmax(100px, max-content));
   grid-template-areas: 
   'copy down_name right_name up_name left_name'
   'scroll scroll scroll scroll scroll';
   text-align: center;
   font-size: 25px;
   margin: 5px;
+}
+.container_record div {
+  white-space: nowrap;
 }
 .copy{
   grid-area: copy;
@@ -95,7 +98,7 @@ const getSignColor = (sign: number, x: number) => {
   grid-area: scroll;
   display: grid;
   grid-template-rows: auto;
-  grid-template-columns: 120px repeat(4, 100px);
+  grid-template-columns: 120px repeat(4, minmax(100px, max-content));
   grid-template-areas: 
   'when down_record right_record up_record left_record';
   text-align: center;

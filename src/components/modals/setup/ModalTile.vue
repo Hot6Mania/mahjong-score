@@ -278,7 +278,7 @@ const tileBackStyle = (tileIdx: number) => {
         v-model="newMemberName" 
         placeholder="새 멤버 등록" 
         @keyup.enter="handleAddNewMember"
-        maxlength="8"
+        maxlength="20"
       />
       <button @click="handleAddNewMember" class="btn_add">추가</button>
     </div>
@@ -298,7 +298,7 @@ const tileBackStyle = (tileIdx: number) => {
         style="position: relative;"
       >
         <span v-show="tempTodayMembers.includes(name)" style="margin-right: 4px;">✓</span>
-        <span>{{ name }}</span>
+        <span>{{ name.length > 5 ? name.substring(0, 4) + '...' : name }}</span>
         
         <!-- 로컬 오프라인 상태일 때 개별 삭제할 수 있는 버튼 -->
         <span 
@@ -340,7 +340,7 @@ const tileBackStyle = (tileIdx: number) => {
         @click="toggleMatchPlayer(name)"
       >
         <span v-show="selected4Names.includes(name)" style="margin-right: 4px;">✓</span>
-        <span>{{ name }}</span>
+        <span>{{ name.length > 5 ? name.substring(0, 4) + '...' : name }}</span>
       </div>
     </div>
 
@@ -383,7 +383,7 @@ const tileBackStyle = (tileIdx: number) => {
           }"
           @click="isAutoDrawing ? null : selectPlayer(i)"
         >
-          <span class="player_name_text">{{ name }}</span>
+          <span class="player_name_text">{{ name.length > 5 ? name.substring(0, 4) + '...' : name }}</span>
           <span v-if="playerAssignedWind[name]" class="assigned_wind">
             {{ playerAssignedWind[name] }}
           </span>

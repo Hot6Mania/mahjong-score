@@ -343,7 +343,7 @@ const getSignColor = (sign: number, x: boolean) => {
   </div>
   <!-- 게임 결과창(표) -->
   <div v-else-if="modalInfo.type==='result_sheet'" class="modal_content" @click.stop>
-    <div style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
+    <div style="display: flex; flex-direction: column; align-items: stretch; gap: 10px;">
       <div class="container_resultsheet" @click.stop="emit('show-modal', 'result_chart')">
         <div v-for="(_, i) in class_resultsheet" 
           :key="i"
@@ -356,7 +356,7 @@ const getSignColor = (sign: number, x: boolean) => {
           <div v-for="(_, i) in arr_wind" :key="i">{{ arr_wind[i] }}</div>
         </div>
         <div style="grid-area: name_contents;">
-          <div v-for="(_, i) in players" :key="i">{{ players[i].name.length > 8 ? players[i].name.substring(0, 8) + '...' : players[i].name }}</div>
+          <div v-for="(_, i) in players" :key="i">{{ players[i].name.length > 5 ? players[i].name.substring(0, 4) + '...' : players[i].name }}</div>
         </div>
         <div style="grid-area: score_contents;">
           <div v-for="(_, i) in scoreSheetInfo" :key="i">
@@ -376,7 +376,7 @@ const getSignColor = (sign: number, x: boolean) => {
       <button 
         v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId"
         @click.stop="emit('save-game-to-sheet')"
-        style="width: calc(100% - 10px); padding: 8px; margin-bottom: 5px; font-size: 16px; font-weight: bold; background-color: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
+        style="margin: 0 5px; padding: 8px; font-size: 16px; font-weight: bold; background-color: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
         onmouseover="this.style.opacity='0.9'"
         onmouseout="this.style.opacity='1.0'"
       >
@@ -384,7 +384,7 @@ const getSignColor = (sign: number, x: boolean) => {
       </button>
       <button 
         @click.stop="emit('start-new-game', true)"
-        style="width: calc(100% - 10px); padding: 8px; margin-bottom: 5px; font-size: 16px; font-weight: bold; background-color: var(--color-toggle-on); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
+        style="margin: 0 5px; padding: 8px; font-size: 16px; font-weight: bold; background-color: var(--color-toggle-on); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
         onmouseover="this.style.opacity='0.9'"
         onmouseout="this.style.opacity='1.0'"
       >
@@ -688,6 +688,7 @@ const getSignColor = (sign: number, x: boolean) => {
   border-top: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
   transition: border-color 0.3s ease;
+  white-space: nowrap;
 }
 
 /* 게임 결과창(차트)*/
