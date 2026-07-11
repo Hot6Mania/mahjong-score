@@ -628,7 +628,7 @@ const getSignColor = (sign: number, x: boolean) => {
           <label style="font-size: 14px; font-weight: bold; margin-bottom: 6px; display: block; text-align: center;">스프레드시트 주소 입력</label>
           
           <!-- 저장되어 있고 편집 상태가 아닐 때: 캐시 저장됨 표시 및 마스킹 -->
-          <div v-if="!isEditingSpreadsheetId" style="display: flex; align-items: center; gap: 8px; justify-content: center; width: 100%;">
+          <div v-if="!isEditingSpreadsheetId && googleInfo.spreadsheetId" style="display: flex; align-items: center; gap: 8px; justify-content: center; width: 100%;">
             <div style="flex: 1; min-width: 200px; max-width: 320px; background-color: var(--color-input-bg, #f3f3f3); padding: 8px 12px; border-radius: 4px; font-size: 13px; color: var(--color-text-muted, #666); border: 1px dashed var(--color-border, #ccc); font-family: sans-serif; display: flex; align-items: center; justify-content: center; gap: 6px;">
               <span>🔒 주소 저장됨</span>
             </div>
