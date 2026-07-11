@@ -278,13 +278,13 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
         },
       });
 
-      // A1:D1: 멤버 성적표 헤더 기입
+      // A1:E1: 멤버 성적표 헤더 기입
       await window.gapi.client.sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `'${rawTitle}'!A1:D1`,
+        range: `'${rawTitle}'!A1:E1`,
         valueInputOption: 'USER_ENTERED',
         resource: {
-          values: [['이름', '최종 우마', '평균 순위', '총 대국수']]
+          values: [['이름', '최종 우마', '평균 순위', '총 대국수', '누적 점수변동']]
         }
       });
 
@@ -302,18 +302,19 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
         }
       });
 
-      // B2:D20: 성적 연산 수식 대량 채우기 (상세 시트인 '${detailTitle}'의 데이터를 조회)
+      // B2:E20: 성적 연산 수식 대량 채우기 (상세 시트인 '${detailTitle}'의 데이터를 조회)
       const memberFormulas: any[][] = [];
       for (let r = 2; r <= 20; r++) {
         memberFormulas.push([
           `=IF(ISBLANK(A${r}), "", SUMIFS('${detailTitle}'!O:O, '${detailTitle}'!F:F, A${r}, '${detailTitle}'!D:D, 1))`,
           `=IF(ISBLANK(A${r}), "", IFERROR(AVERAGEIFS('${detailTitle}'!N:N, '${detailTitle}'!F:F, A${r}, '${detailTitle}'!D:D, 1), ""))`,
-          `=IF(ISBLANK(A${r}), "", COUNTIFS('${detailTitle}'!F:F, A${r}, '${detailTitle}'!D:D, 1))`
+          `=IF(ISBLANK(A${r}), "", COUNTIFS('${detailTitle}'!F:F, A${r}, '${detailTitle}'!D:D, 1))`,
+          `=IF(ISBLANK(A${r}), "", SUMIFS('${detailTitle}'!H:H, '${detailTitle}'!F:F, A${r}))`
         ]);
       }
       await window.gapi.client.sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `'${rawTitle}'!B2:D20`,
+        range: `'${rawTitle}'!B2:E20`,
         valueInputOption: 'USER_ENTERED',
         resource: {
           values: memberFormulas
@@ -840,30 +841,37 @@ export const fetchMemberStats = async (spreadsheetId: string): Promise<any[]> =>
     const values = response.result.values;
     if (values) {
       return values.map((row: any) => {
+        const cleanVal = (idx: number, isInt = false) => {
+          if (row[idx] === undefined || row[idx] === null) return 0;
+          const cleanStr = row[idx].toString().replace(/,/g, '');
+          const parsed = isInt ? parseInt(cleanStr) : parseFloat(cleanStr);
+          return isNaN(parsed) ? 0 : parsed;
+        };
+
         return {
           name: row[0] || '',
-          uma: parseFloat(row[1]) || 0,
-          rank: parseFloat(row[2]) || 0,
-          games: parseInt(row[3]) || 0,
-          rounds: parseInt(row[4]) || 0,
-          winRate: parseFloat(row[5]) || 0,
-          loseRate: parseFloat(row[6]) || 0,
-          riichiRate: parseFloat(row[7]) || 0,
-          tenpaiRate: parseFloat(row[8]) || 0,
-          avgWinScore: parseFloat(row[9]) || 0,
-          avgLoseScore: parseFloat(row[10]) || 0,
-          netScore: parseFloat(row[11]) || 0,
-          winEfficiency: parseFloat(row[12]) || 0,
-          loseLoss: parseFloat(row[13]) || 0,
-          netEfficiency: parseFloat(row[14]) || 0,
-          tsumoRate: parseFloat(row[15]) || 0,
-          drawRate: parseFloat(row[16]) || 0,
-          drawTenpaiRate: parseFloat(row[17]) || 0,
-          tobiRate: parseFloat(row[18]) || 0,
-          avgUma: parseFloat(row[19]) || 0,
-          riichiWinRate: parseFloat(row[20]) || 0,
-          riichiLoseRate: parseFloat(row[21]) || 0,
-          riichiDrawRate: parseFloat(row[22]) || 0
+          uma: cleanVal(1),
+          rank: cleanVal(2),
+          games: cleanVal(3, true),
+          rounds: cleanVal(4, true),
+          winRate: cleanVal(5),
+          loseRate: cleanVal(6),
+          riichiRate: cleanVal(7),
+          tenpaiRate: cleanVal(8),
+          avgWinScore: cleanVal(9),
+          avgLoseScore: cleanVal(10),
+          netScore: cleanVal(11),
+          winEfficiency: cleanVal(12),
+          loseLoss: cleanVal(13),
+          netEfficiency: cleanVal(14),
+          tsumoRate: cleanVal(15),
+          drawRate: cleanVal(16),
+          drawTenpaiRate: cleanVal(17),
+          tobiRate: cleanVal(18),
+          avgUma: cleanVal(19),
+          riichiWinRate: cleanVal(20),
+          riichiLoseRate: cleanVal(21),
+          riichiDrawRate: cleanVal(22)
         };
       });
     }

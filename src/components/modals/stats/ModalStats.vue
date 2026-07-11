@@ -102,27 +102,40 @@ const stats = computed(() => {
 
   if (scopeTab.value === 'all') {
     const item = props.googleMemberStats?.find(s => s.name === name);
-    if (!item) {
+    if (!item || !item.games || item.games === 0) {
       return emptyStats;
     }
     
-    const winRate = (item.winRate * 100).toFixed(1) + '%';
-    const loseRate = (item.loseRate * 100).toFixed(1) + '%';
-    const riichiRate = (item.riichiRate * 100).toFixed(1) + '%';
-    const tsumoRate = (item.tsumoRate * 100).toFixed(1) + '%';
-    const drawRate = (item.drawRate * 100).toFixed(1) + '%';
-    const drawTenpaiRate = (item.drawTenpaiRate * 100).toFixed(1) + '%';
-    const tobiRate = (item.tobiRate * 100).toFixed(1) + '%';
-    const riichiWinRate = (item.riichiWinRate * 100).toFixed(1) + '%';
-    const riichiLoseRate = (item.riichiLoseRate * 100).toFixed(1) + '%';
-    const riichiDrawRate = (item.riichiDrawRate * 100).toFixed(1) + '%';
+    const winRate = item.rounds > 0 ? (item.winRate * 100).toFixed(1) + '%' : '-';
+    const loseRate = item.rounds > 0 ? (item.loseRate * 100).toFixed(1) + '%' : '-';
+    const riichiRate = item.rounds > 0 ? (item.riichiRate * 100).toFixed(1) + '%' : '-';
+    const tsumoRate = (item.rounds > 0 && item.winRate > 0) ? (item.tsumoRate * 100).toFixed(1) + '%' : '-';
+    const drawRate = item.rounds > 0 ? (item.drawRate * 100).toFixed(1) + '%' : '-';
+    const drawTenpaiRate = (item.rounds > 0 && item.drawRate > 0) ? (item.drawTenpaiRate * 100).toFixed(1) + '%' : '-';
+    const tobiRate = item.games > 0 ? (item.tobiRate * 100).toFixed(1) + '%' : '-';
+    
+    const hasRiichi = item.riichiRate > 0 && item.rounds > 0;
+    const riichiWinRate = hasRiichi ? (item.riichiWinRate * 100).toFixed(1) + '%' : '-';
+    const riichiLoseRate = hasRiichi ? (item.riichiLoseRate * 100).toFixed(1) + '%' : '-';
+    const riichiDrawRate = hasRiichi ? (item.riichiDrawRate * 100).toFixed(1) + '%' : '-';
 
-    const avgRank = item.rank > 0 ? item.rank.toFixed(2) + '위' : '-';
+    const avgRank = item.games > 0 ? item.rank.toFixed(2) + '위' : '-';
     const expectedScoreVal = item.games > 0 ? (item.uma / item.games) : 0;
     const expectedScore = item.games > 0
       ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(2)
       : '-';
     
+    // 천의 자리 구분 쉼표가 있을 수 있으므로 방어 처리
+    const parseCleanScore = (val: any) => {
+      if (val === undefined || val === null) return 0;
+      const cleanStr = val.toString().replace(/,/g, '');
+      const num = parseFloat(cleanStr);
+      return isNaN(num) ? 0 : num;
+    };
+
+    const cleanWinScore = parseCleanScore(item.avgWinScore);
+    const cleanLoseScore = parseCleanScore(item.avgLoseScore);
+
     return {
       totalGames: item.games,
       totalRounds: item.rounds,
@@ -131,8 +144,8 @@ const stats = computed(() => {
       tsumoRate,
       drawRate,
       drawTenpaiRate,
-      avgWinScore: item.avgWinScore > 0 ? item.avgWinScore.toLocaleString() : '-',
-      avgLoseScore: item.avgLoseScore > 0 ? item.avgLoseScore.toLocaleString() : '-',
+      avgWinScore: cleanWinScore > 0 ? Math.round(cleanWinScore).toString() : '-',
+      avgLoseScore: cleanLoseScore > 0 ? Math.round(cleanLoseScore).toString() : '-',
       avgRank,
       tobiRate,
       expectedScore,
@@ -149,10 +162,10 @@ const stats = computed(() => {
       oyaKaburiRate: '-',
       oyaKaburiAvg: '-',
       loseRiichiRate: '-',
-      winEfficiency: item.winEfficiency,
-      loseLoss: item.loseLoss,
-      netWinEfficiency: item.netEfficiency,
-      roundSuji: 0
+      winEfficiency: Math.round(parseCleanScore(item.winEfficiency)),
+      loseLoss: Math.round(parseCleanScore(item.loseLoss)),
+      netWinEfficiency: Math.round(parseCleanScore(item.netEfficiency)),
+      roundSuji: item.rounds > 0 ? Math.round(parseCleanScore(item.netScore) / item.rounds) : '-'
     };
   }
 
@@ -673,8 +686,8 @@ const stats = computed(() => {
         </div>
         <div class="stat_row">
           <span class="stat_label">국수지</span>
-          <span class="stat_value" :class="{ text_positive: stats.roundSuji > 0, text_negative: stats.roundSuji < 0 }">
-            {{ stats.roundSuji > 0 ? '+' : '' }}{{ stats.roundSuji }}
+          <span class="stat_value" :class="{ text_positive: typeof stats.roundSuji === 'number' && stats.roundSuji > 0, text_negative: typeof stats.roundSuji === 'number' && stats.roundSuji < 0 }">
+            {{ typeof stats.roundSuji === 'number' && stats.roundSuji > 0 ? '+' : '' }}{{ stats.roundSuji }}
           </span>
         </div>
         <div class="stat_row">

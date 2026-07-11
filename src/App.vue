@@ -1965,11 +1965,11 @@ const loadExistingSession = async (cleanTitle: string) => {
     currentSessionSheetName.value = cleanTitle;
     localStorage.setItem("current_session_sheet_name", cleanTitle);
 
-    // 2. 오늘의 멤버 목록 & 누적 포인트 복원 (cleanTitle (raw) 시트의 A2:D20 긁어오기)
+    // 2. 오늘의 멤버 목록 & 누적 포인트 복원 (cleanTitle (raw) 시트의 A2:E20 긁어오기)
     syncProgress.value = 40;
     const rawRes = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: googleInfo.spreadsheetId,
-      range: `'${cleanTitle} (raw)'!A2:D20`
+      range: `'${cleanTitle} (raw)'!A2:E20`
     });
     
     const rawRows = rawRes.result.values || [];
@@ -2239,17 +2239,7 @@ const startNewDay = async () => {
   // 경기기록 스코어 리셋
   resetAll();
 
-  // 구글 연동 중인 경우 시트 데이터 클리어
-  if (googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
-    try {
-      await window.gapi.client.sheets.spreadsheets.values.clear({
-        spreadsheetId: googleInfo.spreadsheetId,
-        range: '오늘의멤버!A2:B100', // 헤더 제외하고 오늘의 멤버 점수 기록 초기화
-      });
-    } catch (err) {
-      console.warn("구글 오늘의멤버 초기화 에러:", err);
-    }
-  }
+
 
   alert("모든 기록이 초기화되었습니다. 새로운 날의 대국 멤버를 지정해주세요.");
   hideModal();
