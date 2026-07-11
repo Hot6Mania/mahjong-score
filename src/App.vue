@@ -1248,6 +1248,14 @@ const onGoogleTokenReceived = async (_token: string) => {
   if (isManualLogin.value) {
     isManualLogin.value = false;
     
+    // 스프레드시트 ID가 없으면, 데이터 로드를 생략하고 주소 입력 모달을 즉시 띄움 (모바일 제스처 체인 유지)
+    if (!googleInfo.spreadsheetId) {
+      triggerToast("로그인 완료! 스프레드시트 주소를 입력해 주세요.");
+      tempPromptSpreadsheetUrl.value = "";
+      isShowSpreadsheetIdPrompt.value = true;
+      return;
+    }
+    
     // 로딩 진행바 팝업 켜기
     isSaving.value = true;
     syncLoaderTitle.value = "구글 스프레드시트 데이터 불러오는 중...";
@@ -1414,19 +1422,11 @@ const saveTodayMembersPool = async (names: string[]) => {
   }
 };
 
-// 구글 로그인 트리거
+// 구글 로그인 트리거 (제스처 유실로 인한 모바일 팝업 차단 방지)
 const googleLogin = () => {
-  // 스프레드시트 ID가 비어 있다면 커스텀 입력 모달 팝업을 기동
-  if (!googleInfo.spreadsheetId) {
-    isManualLogin.value = true;
-    tempPromptSpreadsheetUrl.value = "";
-    isShowSpreadsheetIdPrompt.value = true;
-    return;
-  }
-
-  // 고정 클라이언트 ID 자동 바인딩 가드
+  // 고정 클라이언트 ID 자동 바인딩 가드 (1089115695270 클라이언트 ID로 통일)
   if (!googleInfo.clientId) {
-    googleInfo.clientId = "113337424108-9s6lki64f33k68o1j66q3a5v4t3rm00d.apps.googleusercontent.com";
+    googleInfo.clientId = "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com";
     localStorage.setItem("google_client_id", googleInfo.clientId);
   }
 
@@ -1436,7 +1436,7 @@ const googleLogin = () => {
 };
 
 // 커스텀 스프레드시트 주소 입력 팝업 확인 버튼 클릭 핸들러
-const handlePromptConfirm = () => {
+const handlePromptConfirm = async () => {
   const val = tempPromptSpreadsheetUrl.value.trim();
   if (!val) {
     triggerToast("스프레드시트 주소가 입력되지 않았습니다.", "error");
@@ -1458,13 +1458,43 @@ const handlePromptConfirm = () => {
     return;
   }
 
-  // 주소 입력 완료 후 로그인 연동 즉각 개시!
-  if (!googleInfo.clientId) {
-    googleInfo.clientId = "113337424108-9s6lki64f33k68o1j66q3a5v4t3rm00d.apps.googleusercontent.com";
-    localStorage.setItem("google_client_id", googleInfo.clientId);
+  // 로그인 완료 후 스프레드시트 주소를 늦게 입력한 경우 ➔ 연동 데이터(멤버/성적) 수집 및 회차 선택 팝업 오픈!
+  if (googleInfo.isLoggedIn) {
+    isSaving.value = true;
+    syncLoaderTitle.value = "구글 스프레드시트 데이터 불러오는 중...";
+    syncProgress.value = 20;
+    
+    try {
+      syncProgress.value = 50;
+      const isValid = await verifySpreadsheetStructures(googleInfo.spreadsheetId);
+      if (!isValid) {
+        googleInfo.memberList = [];
+        googleInfo.todayMembers = [];
+        isSaving.value = false;
+        return;
+      }
+      
+      syncProgress.value = 75;
+      await loadMemberList();
+      try {
+        const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+        googleMemberStats.value = stats;
+      } catch (statsErr) {
+        console.warn("통계 로드 실패:", statsErr);
+      }
+      
+      syncProgress.value = 100;
+      setTimeout(async () => {
+        isSaving.value = false;
+        await loadGoogleSessions();
+        isShowSessionChoosePopup.value = true;
+      }, 500);
+    } catch (err) {
+      console.error("로그인 후 스프레드시트 로드 중 에러:", err);
+      isSaving.value = false;
+      alert("스프레드시트 정보 로드 중 오류가 발생했습니다.");
+    }
   }
-  initGis(googleInfo.clientId, onGoogleTokenReceived);
-  loginGoogle();
 };
 
 // 커스텀 스프레드시트 주소 입력 팝업 취소 버튼 클릭 핸들러
