@@ -17,7 +17,7 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach((_to, _from, next) => {
   // Canonical 태그 동적 업데이트 (hot6mania 도메인 설정)
   const baseUrl = 'https://hot6mania.github.io/mahjong-score';
   const canonicalUrl = `${baseUrl}/`;
