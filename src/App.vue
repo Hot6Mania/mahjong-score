@@ -111,7 +111,7 @@ const modalInfo = reactive({ // 모달창
   status: "", // 라운드 형태 - 론 쯔모 일반유국 특수유국
 })
 const googleInfo = reactive<GoogleInfo>({ // 구글 연동 정보
-  clientId: localStorage.getItem("google_client_id") || "113337424108-9s6lki64f33k68o1j66q3a5v4t3rm00d.apps.googleusercontent.com", // 구글 클라이언트 ID
+  clientId: localStorage.getItem("google_client_id") || "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com", // 구글 클라이언트 ID
   spreadsheetId: localStorage.getItem("google_spreadsheet_id") || "", // 구글 스프레드시트 ID
   isLoggedIn: false, // 로그인 여부
   syncMode: (localStorage.getItem("sync_mode") as 'local' | 'google') || 'local', // 연동 모드 (기본값 로컬)
@@ -1424,9 +1424,9 @@ const saveTodayMembersPool = async (names: string[]) => {
 
 // 구글 로그인 트리거 (제스처 유실로 인한 모바일 팝업 차단 방지)
 const googleLogin = () => {
-  // 고정 클라이언트 ID 자동 바인딩 가드 (원래 정식 클라이언트 ID로 복원)
-  if (!googleInfo.clientId || googleInfo.clientId.startsWith("1089115695270")) {
-    googleInfo.clientId = "113337424108-9s6lki64f33k68o1j66q3a5v4t3rm00d.apps.googleusercontent.com";
+  // 고정 클라이언트 ID 자동 바인딩 가드 (실제 유효 클라이언트 ID로 복원)
+  if (!googleInfo.clientId || googleInfo.clientId.startsWith("113337424108")) {
+    googleInfo.clientId = "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com";
     localStorage.setItem("google_client_id", googleInfo.clientId);
   }
 
