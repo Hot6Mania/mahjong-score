@@ -1177,6 +1177,12 @@ const saveRound = () => {
 
   // 점수 변동 이펙트 애니메이션 실행 (완료 후 연장/서입/게임 종료 분기 수행)
   changeScores(targetRiichi, () => {
+    // 0) 촌보(Chombo) 무효국 처리: 없었던 판으로 간주하므로 국, 오야, 본장 고정 및 게임 종료 조건(들통 포함) 일체 적용 배제!
+    if (status === 'cheat') {
+      console.log("촌보 무효국 처리: 국, 본장, 오야 위치를 그대로 유지합니다.");
+      return;
+    }
+
     // 1) 들통(tobi) 여부 검증
     let hasTobi = option.tobi && players.some(p => p.displayScore < 0);
     if (hasTobi) {
