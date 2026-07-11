@@ -1489,7 +1489,7 @@ const deleteMember = async (name: string) => {
     console.warn("오프라인 멤버 삭제 실패:", e);
   }
 
-  if (googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
+  if (googleInfo.syncMode === 'google' && googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
     try {
       await deleteMemberFromDb(googleInfo.spreadsheetId, name);
       await loadMemberList();
@@ -1506,7 +1506,12 @@ const deleteMember = async (name: string) => {
 const saveTodayMembersPool = async (names: string[]) => {
   googleInfo.todayMembers = [...names];
   localStorage.setItem("today_members", JSON.stringify(names));
-  if (!googleInfo.spreadsheetId) return;
+
+  // 로컬 모드이거나 로그인 상태가 아니라면 구글 시트 싱크를 건너뜀
+  if (googleInfo.syncMode !== 'google' || !googleInfo.isLoggedIn || !googleInfo.spreadsheetId) {
+    return;
+  }
+
   try {
     const sessionSheetName = await getOrInitSessionSheetName();
     await createSessionSheetIfNotExist(googleInfo.spreadsheetId, sessionSheetName, names);
