@@ -76,6 +76,11 @@ const emit = defineEmits<Emits>()
 // 구글 스프레드시트 주소 편집 상태
 const isEditingSpreadsheetId = ref(false);
 
+const keepLoggedIn = ref(localStorage.getItem("keep_logged_in") === "true");
+const handleKeepLoggedInChange = () => {
+  localStorage.setItem("keep_logged_in", keepLoggedIn.value ? "true" : "false");
+};
+
 // 회차 정보 로딩 및 수집 상태
 const validGoogleSessions = ref<string[]>([]);
 const isLoadingSessions = ref(false);
@@ -810,6 +815,19 @@ const getSignColor = (sign: number, x: boolean) => {
           <span v-if="isSaving" class="spinner"></span>
           {{ isSaving ? `동기화 중 (${syncProgress || 0}%)...` : '로컬 성적 구글 시트에 일괄 동기화' }}
         </button>
+        <!-- 로그인 유지 체크박스 -->
+        <div v-if="!googleInfo.isLoggedIn" class="keep_login_wrapper">
+          <input 
+            type="checkbox" 
+            id="chk_keep_login" 
+            v-model="keepLoggedIn" 
+            @change="handleKeepLoggedInChange"
+            style="cursor: pointer; width: 15px; height: 15px; margin: 0;"
+          />
+          <label for="chk_keep_login" class="keep_login_label">
+            로그인 유지
+          </label>
+        </div>
         <button v-if="!googleInfo.isLoggedIn" @click.stop="emit('google-login')" class="btn_g_login">
           구글 로그인
         </button>
@@ -1018,5 +1036,25 @@ const getSignColor = (sign: number, x: boolean) => {
 .dark .saved-button {
   background-color: #374151 !important;
   color: #d1d5db !important;
+}
+
+/* 로그인 유지 체크박스 스타일 */
+.keep_login_wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 4px 0 10px 0;
+  cursor: pointer;
+}
+.keep_login_label {
+  font-size: 13px;
+  font-weight: bold;
+  cursor: pointer;
+  color: var(--text-color, #2c3e50);
+  user-select: none;
+}
+:global(.dark) .keep_login_label {
+  color: #ffffff !important;
 }
 </style>

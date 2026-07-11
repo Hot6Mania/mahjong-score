@@ -148,6 +148,42 @@ const handleConfirm = (result: boolean) => {
     confirmState.resolve = null;
   }
 }
+
+// 구글 로그인 세션 자동 복원 (Keep Logged In)
+const restoreGoogleSessionIfValid = async () => {
+  const keep = localStorage.getItem("keep_logged_in") === "true";
+  const token = localStorage.getItem("google_access_token");
+  const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
+
+  if (keep && token && Date.now() < expiresAt) {
+    try {
+      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+        window.gapi.client.setToken({ access_token: token });
+      }
+      
+      googleInfo.isLoggedIn = true;
+      const savedSyncMode = localStorage.getItem("sync_mode");
+      if (savedSyncMode === "google") {
+        googleInfo.syncMode = "google";
+      }
+
+      if (googleInfo.spreadsheetId) {
+        await loadMemberList();
+        try {
+          const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+          googleMemberStats.value = stats;
+        } catch (e) {
+          console.warn("세션 복원 중 통계 로드 실패:", e);
+        }
+      }
+      console.log("구글 로그인 상태가 로컬 캐시를 통해 성공적으로 유지/복원되었습니다.");
+    } catch (err) {
+      console.warn("구글 자동 로그인 세션 복원 실패:", err);
+      localStorage.removeItem("google_access_token");
+      localStorage.removeItem("google_token_expires_at");
+    }
+  }
+}
 // 차트 시각화 전용 데이터 소스 상태
 const chartPlayers = ref<any[]>([])
 const chartRecords = ref<any>({ score: [], time: [] })
@@ -348,6 +384,7 @@ onMounted(async () => {
       };
       initGisWithRetry();
     }
+    await restoreGoogleSessionIfValid();
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
   }
@@ -1296,6 +1333,12 @@ const onGoogleTokenReceived = async (_token: string) => {
   googleInfo.syncMode = "google";
   localStorage.setItem("sync_mode", "google");
 
+  if (localStorage.getItem("keep_logged_in") === "true") {
+    localStorage.setItem("google_access_token", _token);
+    const expiresAt = Date.now() + 3000 * 1000; // 50분 만료 설정
+    localStorage.setItem("google_token_expires_at", expiresAt.toString());
+  }
+
   if (isManualLogin.value) {
     isManualLogin.value = false;
     
@@ -1563,6 +1606,8 @@ const googleLogout = () => {
   googleInfo.memberList = [];
   googleInfo.todayMembers = [];
   localStorage.removeItem("today_members");
+  localStorage.removeItem("google_access_token");
+  localStorage.removeItem("google_token_expires_at");
   
   // 동기화 모드를 강제로 로컬 모드로 리셋
   googleInfo.syncMode = "local";
@@ -2045,7 +2090,7 @@ const handleHistoryGameClick = (index: number) => {
 // 구글 스프레드시트로부터 기존 회차 정보를 읽어와 로컬 상태(멤버 풀, 누적 점수, 대국 이력)를 역으로 완벽하게 복원합니다.
 const loadExistingSession = async (cleanTitle: string) => {
   if (!cleanTitle) return;
-  const isConfirmed = await showConfirm(`'${cleanTitle}' 회차의 기존 데이터를 불러와서 기록을 이어 나가시겠습니까?\n(로컬에 진행 중이던 오늘 데이터는 덮어씌워집니다.)`);
+  const isConfirmed = await showConfirm(`'${cleanTitle}' 회차의 기존 데이터를 불러와서 기록을 이어 나가시겠습니까?\n(로컬 데이터는 삭제됩니다.)`);
   if (!isConfirmed) return;
 
   isSaving.value = true;
@@ -2312,14 +2357,23 @@ const loadExistingSession = async (cleanTitle: string) => {
     localStorage.setItem("today_games_history", JSON.stringify(restoredHistory));
 
     // 4. 게임 상태 리셋 가드 (기존 찌꺼기 싹 날리고 깨끗하게 상태 싱크)
-    resetAll();
-    isGameSaved.value = true;
-    localStorage.setItem("is_game_saved", "true");
-    
-    // 로컬 스토리지 진행 게임 데이터 캐시들도 리셋 상태로 동기화 갱신
-    localStorage.setItem("mahjong_players", JSON.stringify(players));
-    localStorage.setItem("mahjong_records", JSON.stringify(records));
-    localStorage.setItem("mahjong_panelInfo", JSON.stringify(panelInfo));
+    // 단, 불러오는 세션이 현재 진행 중인 세션이고 대국이 진행 중인 상태였다면 resetAll을 건너뛰어 대국 상태 유지!
+    const isSameSession = (localStorage.getItem("current_session_sheet_name") === cleanTitle);
+    const wasPlayingGame = (records.time.length > 1 && !isGameSaved.value);
+
+    if (isSameSession && wasPlayingGame) {
+      console.log("동일한 회차 이어하기 감지: 진행 중이던 현재 대국 정보를 덮어쓰지 않고 유지합니다.");
+      // isGameSaved 상태와 로컬 진행 중이던 대국 정보를 유지
+    } else {
+      resetAll();
+      isGameSaved.value = true;
+      localStorage.setItem("is_game_saved", "true");
+      
+      // 로컬 스토리지 진행 게임 데이터 캐시들도 리셋 상태로 동기화 갱신
+      localStorage.setItem("mahjong_players", JSON.stringify(players));
+      localStorage.setItem("mahjong_records", JSON.stringify(records));
+      localStorage.setItem("mahjong_panelInfo", JSON.stringify(panelInfo));
+    }
 
     syncProgress.value = 100;
     triggerToast("기존 회차 데이터 복원이 완벽하게 처리되었습니다!");
@@ -2338,7 +2392,7 @@ const loadExistingSession = async (cleanTitle: string) => {
 
 // 새로운 날 시작 (로컬 성적 및 명단 초기화)
 const startNewDay = async () => {
-  const isConfirmed = await showConfirm("로컬에 기록된 오늘 하루의 점수 및 명단 세션이 완전히 초기화됩니다. 새로운 날을 시작하시겠습니까?");
+  const isConfirmed = await showConfirm("로컬에 기록된 오늘 하루의 점수 및 명단 세션이 완전히 초기화됩니다. 새로운 회차를 시작하시겠습니까?");
   if (!isConfirmed) return;
 
   // 로컬 초기화
@@ -2354,7 +2408,7 @@ const startNewDay = async () => {
 
 
 
-  alert("모든 기록이 초기화되었습니다. 새로운 날의 대국 멤버를 지정해주세요.");
+  alert("모든 기록이 초기화되었습니다. 새로운 회차의 대국 멤버를 지정해주세요.");
   hideModal();
   showModal('choose_seat');
 };
