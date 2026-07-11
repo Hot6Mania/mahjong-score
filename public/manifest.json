@@ -1,0 +1,27 @@
+{
+  "short_name": "마작점수",
+  "name": "리치마작 점수 기록기",
+  "icons": [
+    {
+      "src": "/mahjong-score/riichi-stick.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    },
+    {
+      "src": "/mahjong-score/images/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/mahjong-score/images/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/mahjong-score/index.html",
+  "background_color": "#fcfcfc",
+  "theme_color": "#4caf50",
+  "display": "standalone",
+  "orientation": "landscape"
+}
