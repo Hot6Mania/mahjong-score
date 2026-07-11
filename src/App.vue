@@ -1046,6 +1046,10 @@ const calculateCheat = () => {
 
 /**국 결과값 처리*/
 const saveRound = () => {
+  // 새 라운드 점수가 기록되기 시작하면 등록 완료 플래그를 완전히 해제하여 저장이 가능하도록 락 해제
+  isGameSaved.value = false;
+  localStorage.removeItem("is_game_saved");
+
   // 1. 필요한 상태들을 동기적으로 먼저 안전하게 캡처 (hideModal이 동기적으로 상태를 초기화하기 때문)
   let status = modalInfo.status;
   
@@ -1086,8 +1090,12 @@ const saveRound = () => {
 
   // 점수 기록창에 기록 남기기 (동기적 기록)
   for (let i=0;i<players.length;i++){ // 점수 기록창에 점수 기록
-    records.score[i].push(players[i].deltaScore);
-    records.score[i].push(players[i].displayScore+players[i].deltaScore);
+    const prevScore = records.score[i][records.score[i].length - 1]; // 이전 국 종료 점수
+    const currScore = players[i].displayScore + players[i].deltaScore; // 이번 국 종료 점수
+    const trueDelta = currScore - prevScore; // 리치봉 정산 등이 완벽히 끝난 진짜 실제 득실 변동량
+
+    records.score[i].push(trueDelta);
+    records.score[i].push(currScore);
   }
   records.time.push(panelInfo.wind+panelInfo.round+'局 '+panelInfo.renchan+'本場'); // 점수 기록창에 국+본장 기록
   records.time.push('ㅤ');
@@ -1554,7 +1562,6 @@ const saveGoogleSettings = () => {
   }
 };
 
-// 자리 배정 결과를 바탕으로 players 자리를 결정하고 게임을 동1국으로 리셋합니다.
 const startGameWithSeats = (assignment: Record<string, string>) => {
   // players의 자풍은 동(Down), 남(Right), 서(Up), 북(Left) 순서로 고정
   players[0].name = assignment['東'] || '▼';
@@ -1584,8 +1591,18 @@ const startNewGame = (skipConfirm = false) => {
 
 // 현재 게임 결과 정산 데이터를 구글 스프레드시트 및 로컬 스토리지에 기록합니다.
 const saveGameToSheet = async () => {
-  // 이미 기록된 게임이면 추가 기록 차단
-  if (isGameSaved.value) {
+  // 현재 판의 플레이어 명단 & 최종 점수 조합이 이미 대국 히스토리 리스트에 등록되어 있는지 대조 검사
+  const currentSetup = players.map(p => ({ name: p.name, score: p.displayScore }));
+  const isAlreadyInHistory = todayGamesHistory.some((g: any) => {
+    if (!g.results || g.results.length !== 4) return false;
+    return currentSetup.every(curr => {
+      const matchedResult = g.results.find((r: any) => r.name === curr.name);
+      return matchedResult && Number(matchedResult.score) === Number(curr.score);
+    });
+  });
+
+  // 이미 기록된 게임이며 히스토리 리스트에도 진짜 존재할 때만 추가 기록 차단
+  if (isGameSaved.value && isAlreadyInHistory) {
     alert("이미 기록된 대국입니다.");
     return;
   }
@@ -1769,14 +1786,53 @@ const syncLocalDataToGoogle = async () => {
         const roundStatus = records.status && records.status[r] ? records.status[r] : '';
         const dealerIdx = records.dealer && records.dealer[r] !== undefined ? records.dealer[r] : -1;
         
+        // 이 국에서의 리치 순서 리스트 수집
+        const riichiList: number[] = [];
+        if (records.riichiOrder && records.riichiOrder[r]) {
+          records.riichiOrder[r].forEach((val: any) => riichiList.push(Number(val)));
+        }
+        if (riichiList.length === 0 && records.riichi && records.riichi[r]) {
+          records.riichi[r].forEach((val: boolean, idx: number) => {
+            if (val) riichiList.push(idx);
+          });
+        }
+        
+        // 이 국에서의 순수 화료 타점(공탁 리치봉 제외) 계산
+        let pureWinScore = 0;
+        let hasWinner = false;
+        for (let w = 0; w < results.length; w++) {
+          const wName = results[w].name;
+          const wIdx = orderedNames.indexOf(wName);
+          if (wIdx !== -1 && records.win && records.win[r] && records.win[r][wIdx]) {
+            hasWinner = true;
+            break;
+          }
+        }
+        if (hasWinner) {
+          for (let w = 0; w < results.length; w++) {
+            const wName = results[w].name;
+            const wIdx = orderedNames.indexOf(wName);
+            if (wIdx !== -1 && records.win && records.win[r] && !records.win[r][wIdx]) {
+              const wPrev = (r === 1) ? option.startingScore : (records.score[wIdx][2 * (r - 1)] || 0);
+              const wCurr = records.score[wIdx][2 * r] || 0;
+              const wDelta = wCurr - wPrev;
+              if (wDelta < 0) {
+                pureWinScore += Math.abs(wDelta);
+              }
+            }
+          }
+        }
+        
         for (let p = 0; p < results.length; p++) {
           const playerName = results[p].name;
           const isDealer = (p === dealerIdx) ? 'TRUE' : 'FALSE';
           const pIdx = orderedNames.indexOf(playerName);
           if (pIdx === -1) continue;
           
-          const deltaScore = records.score[pIdx][2 * r - 1];
-          const finalScore = records.score[pIdx][2 * r];
+          const prevScore = (r === 1) ? option.startingScore : records.score[pIdx][2 * (r - 1)];
+          const currScore = records.score[pIdx][2 * r];
+          const deltaScore = currScore - prevScore;
+          const finalScore = (r === 1) ? (records.score[pIdx][records.score[pIdx].length - 1]) : currScore;
           const isRiichi = records.riichi[r][pIdx] ? 'TRUE' : 'FALSE';
           const isWin = records.win[r][pIdx] ? 'TRUE' : 'FALSE';
           const isLose = records.lose[r][pIdx] ? 'TRUE' : 'FALSE';
@@ -1785,6 +1841,21 @@ const syncLocalDataToGoogle = async () => {
           const historyItem = results.find((h: any) => h.name === playerName);
           const finalRank = historyItem ? historyItem.rank : 4;
           const finalUma = historyItem ? historyItem.uma : 0;
+          
+          // 선제, 추격, 피추격 여부 판정
+          const orderIdx = riichiList.indexOf(pIdx);
+          let isFirstRiichi = 'FALSE';
+          let isChaseRiichi = 'FALSE';
+          let isChasedRiichi = 'FALSE';
+          
+          if (orderIdx === 0) {
+            isFirstRiichi = 'TRUE';
+          } else if (orderIdx > 0) {
+            isChaseRiichi = 'TRUE';
+          }
+          if (orderIdx !== -1 && orderIdx < riichiList.length - 1) {
+            isChasedRiichi = 'TRUE';
+          }
           
           const rowData = [
             timestamp,
@@ -1802,7 +1873,11 @@ const syncLocalDataToGoogle = async () => {
             isTenpai,
             finalRank,
             finalUma,
-            sessionSheetName
+            sessionSheetName,
+            isFirstRiichi,
+            isChaseRiichi,
+            isChasedRiichi,
+            pureWinScore
           ];
           
           allRoundRows.push(rowData);
@@ -1997,11 +2072,11 @@ const loadExistingSession = async (cleanTitle: string) => {
       localStorage.setItem("today_members_points", JSON.stringify(restoredPoints));
     }
 
-    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:P500 긁어오기)
+    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:T500 긁어오기)
     syncProgress.value = 70;
     const dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: googleInfo.spreadsheetId,
-      range: `'${cleanTitle} (데이터)'!A2:P500`
+      range: `'${cleanTitle} (데이터)'!A2:T500`
     });
 
     const dataRows = dataRes.result.values || [];
@@ -2019,7 +2094,8 @@ const loadExistingSession = async (cleanTitle: string) => {
           isWin: boolean,
           isLose: boolean,
           isTenpai: boolean,
-          isDealer: boolean
+          isDealer: boolean,
+          pureWinScore: number
         }>
       }>
     }> = {};
@@ -2040,6 +2116,7 @@ const loadExistingSession = async (cleanTitle: string) => {
       const isTenpai = row[12] === 'TRUE'; // M열: 텐파이 여부
       const rank = parseInt(row[13]) || 1;  // N열: 최종 순위
       const uma = parseFloat(row[14]) || 0;  // O열: 최종 우마
+      const pureWinScore = parseInt(row[19]) || 0; // T열: 순수 화료 점수
 
       const cleanGameId = gameId ? gameId.toString().trim() : '';
       const cleanPlayerName = name ? name.toString().trim() : '';
@@ -2094,7 +2171,8 @@ const loadExistingSession = async (cleanTitle: string) => {
           isWin,
           isLose,
           isTenpai,
-          isDealer
+          isDealer,
+          pureWinScore
         };
       }
     });
@@ -2102,18 +2180,20 @@ const loadExistingSession = async (cleanTitle: string) => {
     // Map을 배열로 환원
     const restoredHistory = Object.keys(gamesMap).map(gameId => {
       const g = gamesMap[gameId];
-      const resultsArr = Object.values(g.results);
       const playerNames = g.playerNames;
 
       // 4명이 꽉 차지 않을 경우 방어 코드
       while (playerNames.length < 4) {
-        const missing = resultsArr.find(r => !playerNames.includes(r.name));
+        const missing = Object.values(g.results).find(r => !playerNames.includes(r.name));
         if (missing) {
           playerNames.push(missing.name);
         } else {
           playerNames.push(`플레이어${playerNames.length + 1}`);
         }
       }
+
+      // playerNames의 정해진 순서대로 resultsArr를 100% 일치시켜 정렬 정산
+      const resultsArr = playerNames.map(name => g.results[name] || { name, score: 25000, uma: 0, rank: 4 });
 
       // records 구조 복원
       const restoredRecords: any = {
@@ -2125,7 +2205,8 @@ const loadExistingSession = async (cleanTitle: string) => {
         tenpai: [[false, false, false, false]],
         status: ["initial"],
         riichiOrder: [[]],
-        dealer: [0]
+        dealer: [0],
+        pureWinScore: [0]
       };
 
       // 플레이어별 시작 점수 세팅
@@ -2154,6 +2235,7 @@ const loadExistingSession = async (cleanTitle: string) => {
         const roundWin = [false, false, false, false];
         const roundLose = [false, false, false, false];
         const roundTenpai = [false, false, false, false];
+        let roundPureWinScore = 0;
 
         for (let pIdx = 0; pIdx < 4; pIdx++) {
           const name = playerNames[pIdx];
@@ -2169,6 +2251,9 @@ const loadExistingSession = async (cleanTitle: string) => {
             roundWin[pIdx] = pData.isWin;
             roundLose[pIdx] = pData.isLose;
             roundTenpai[pIdx] = pData.isTenpai;
+            if (pData.pureWinScore !== undefined) {
+              roundPureWinScore = pData.pureWinScore;
+            }
           } else {
             restoredRecords.score[pIdx].push(0);
             const prevScore = restoredRecords.score[pIdx][restoredRecords.score[pIdx].length - 2] || 25000;
@@ -2182,6 +2267,7 @@ const loadExistingSession = async (cleanTitle: string) => {
         restoredRecords.lose.push(roundLose);
         restoredRecords.tenpai.push(roundTenpai);
         restoredRecords.riichiOrder.push([]);
+        restoredRecords.pureWinScore.push(roundPureWinScore);
       });
 
       if (restoredRecords.time.length > 0 && restoredRecords.time[restoredRecords.time.length - 1] === 'ㅤ') {
@@ -2309,7 +2395,6 @@ const invalidateGame = (index: number) => {
       :isMenuOpen="isPanelMenuOpen"
       :isGameFinished="isGameFinished"
       @show-modal="showModal"
-      @roll-dice="rollDice"
       @toggle-menu="isPanelMenuOpen = !isPanelMenuOpen"
       @close-menu="isPanelMenuOpen = false"
     />

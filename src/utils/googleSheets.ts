@@ -243,11 +243,12 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
       const headers = [
         '대국 일시', '대국 ID', '국 구분', '국 인덱스', '종료 상태',
         '플레이어 이름', '친 여부(딜러)', '점수 변동', '최종 점수',
-        '리치 여부', '화료 여부', '방총 여부', '텐파이 여부', '최종 순위', '최종 우마(포인트)', '소속 회차'
+        '리치 여부', '화료 여부', '방총 여부', '텐파이 여부', '최종 순위', '최종 우마(포인트)', '소속 회차',
+        '선제 여부', '추격 여부', '피추격 여부', '순수 화료 점수'
       ];
       await window.gapi.client.sheets.spreadsheets.values.update({
         spreadsheetId: spreadsheetId,
-        range: `'${detailTitle}'!A1:P1`,
+        range: `'${detailTitle}'!A1:T1`,
         valueInputOption: 'USER_ENTERED',
         resource: {
           values: [headers],
@@ -321,7 +322,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
         }
       });
 
-      // E1:V1: 대국 결과 요약 18개 헤더 기입
+      // F1:W1: 대국 결과 요약 18개 헤더 기입 (E열이 누적 점수변동이므로 F부터 시작)
       const summaryHeaders = [
         '대국 ID', '대국 일시', 
         '동가 이름', '동가 등수', '동가 점수', '동가 우마', 
@@ -331,7 +332,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
       ];
       await window.gapi.client.sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `'${rawTitle}'!E1:V1`,
+        range: `'${rawTitle}'!F1:W1`,
         valueInputOption: 'USER_ENTERED',
         resource: {
           values: [summaryHeaders]
@@ -462,7 +463,7 @@ export const appendRoundRecords = async (spreadsheetId: string, sheetTitle: stri
   if (!spreadsheetId || roundDataRows.length === 0) return;
 
   const isGlobalLog = sheetTitle === '전체 국별기록 (데이터)';
-  const range = `'${sheetTitle}'!A:P`;
+  const range = `'${sheetTitle}'!A:T`;
 
   if (!isGlobalLog) {
     const baseTitle = sheetTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
@@ -494,21 +495,21 @@ export const appendRoundRecords = async (spreadsheetId: string, sheetTitle: stri
 };
 
 /**
- * 표시용 회차 시트의 가로 대국 요약 데이터(E:V)를 추가 적재합니다. (E2부터 정밀 기입!)
+ * 표시용 회차 시트의 가로 대국 요약 데이터(F:W)를 추가 적재합니다. (F2부터 정밀 기입!)
  */
 export const appendSessionSummaryRecords = async (spreadsheetId: string, sheetTitle: string, summaryRows: any[][]): Promise<void> => {
   if (!spreadsheetId || summaryRows.length === 0) return;
   try {
     const response = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `'${sheetTitle}'!E2:E100`
+      range: `'${sheetTitle}'!F2:F100`
     });
     const values = response.result.values || [];
     const existingCount = values.filter((row: any) => row[0] && row[0].toString().trim() !== '').length;
     
     const targetRow = 2 + existingCount;
     const endRow = targetRow + summaryRows.length - 1;
-    const range = `'${sheetTitle}'!E${targetRow}:V${endRow}`;
+    const range = `'${sheetTitle}'!F${targetRow}:W${endRow}`;
     
     await window.gapi.client.sheets.spreadsheets.values.update({
       spreadsheetId,
@@ -518,7 +519,7 @@ export const appendSessionSummaryRecords = async (spreadsheetId: string, sheetTi
         values: summaryRows
       }
     });
-    console.log(`${sheetTitle} 표시 시트 E${targetRow} 행부터 대국 요약 정보 ${summaryRows.length}개 적재 완료`);
+    console.log(`${sheetTitle} 표시 시트 F${targetRow} 행부터 대국 요약 정보 ${summaryRows.length}개 적재 완료`);
   } catch (err) {
     console.error(`${sheetTitle} 요약 정보 적재 실패:`, err);
   }
@@ -833,7 +834,7 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
 export const fetchMemberStats = async (spreadsheetId: string): Promise<any[]> => {
   if (!spreadsheetId) return [];
   try {
-    const range = "'전체 멤버별 통계'!A2:W100";
+    const range = "'전체 멤버별 통계'!A2:AG100";
     const response = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId,
       range
@@ -860,7 +861,8 @@ export const fetchMemberStats = async (spreadsheetId: string): Promise<any[]> =>
           tenpaiRate: cleanVal(8),
           avgWinScore: cleanVal(9),
           avgLoseScore: cleanVal(10),
-          netScore: cleanVal(11),
+          roundSuji: cleanVal(11),
+          netScore: cleanVal(32),
           winEfficiency: cleanVal(12),
           loseLoss: cleanVal(13),
           netEfficiency: cleanVal(14),
@@ -871,13 +873,28 @@ export const fetchMemberStats = async (spreadsheetId: string): Promise<any[]> =>
           avgUma: cleanVal(19),
           riichiWinRate: cleanVal(20),
           riichiLoseRate: cleanVal(21),
-          riichiDrawRate: cleanVal(22)
+          riichiDrawRate: cleanVal(22),
+          riichiSuji: cleanVal(23),
+          riichiIncome: cleanVal(24),
+          riichiExpense: cleanVal(25),
+          firstRiichiRate: cleanVal(26),
+          chaseRiichiRate: cleanVal(27),
+          chasedRiichiRate: cleanVal(28),
+          oyaKaburiRate: cleanVal(29),
+          oyaKaburiAvg: cleanVal(30),
+          loseRiichiRate: cleanVal(31)
         };
       });
     }
     return [];
-  } catch (err) {
+  } catch (err: any) {
     console.warn("구글 시트 전체 통계 로드 실패:", err);
+    const msg = err?.result?.error?.message || "";
+    if (msg.includes("range") || err?.status === 400) {
+      alert("구글 스프레드시트의 열(Column) 개수가 부족하여 전체 기간 통계를 불러오지 못했습니다.\n\n구글 스프레드시트의 '전체 멤버별 통계' 시트에서 W열 오른쪽으로 열을 AG열(33번째 열)까지 늘려주세요.\n(W열 머리글 우클릭 -> '오른쪽에 1개 열 삽입'을 10번 반복)");
+    } else {
+      alert("전체 통계를 불러오는 중 오류가 발생했습니다: " + msg);
+    }
     return [];
   }
 };

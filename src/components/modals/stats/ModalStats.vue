@@ -22,7 +22,9 @@ const activeTab = ref<TabType>('basic')
 const allPlayers = computed(() => {
   if (scopeTab.value === 'all') {
     if (props.googleMemberStats && props.googleMemberStats.length > 0) {
-      return props.googleMemberStats.map(s => s.name);
+      return props.googleMemberStats
+        .map(s => s.name)
+        .filter(name => name && name.trim() !== '');
     }
   }
 
@@ -136,6 +138,26 @@ const stats = computed(() => {
     const cleanWinScore = parseCleanScore(item.avgWinScore);
     const cleanLoseScore = parseCleanScore(item.avgLoseScore);
 
+    const cleanRiichiSuji = parseCleanScore(item.riichiSuji);
+    const riichiSuji = hasRiichi && cleanRiichiSuji !== 0 ? (cleanRiichiSuji > 0 ? '+' : '') + Math.round(cleanRiichiSuji).toString() : '-';
+
+    const cleanRiichiIncome = parseCleanScore(item.riichiIncome);
+    const riichiIncome = hasRiichi && cleanRiichiIncome > 0 ? Math.round(cleanRiichiIncome).toString() : '-';
+
+    const cleanRiichiExpense = parseCleanScore(item.riichiExpense);
+    const riichiExpense = hasRiichi && cleanRiichiExpense > 0 ? Math.round(cleanRiichiExpense).toString() : '-';
+
+    const firstRiichiRate = hasRiichi ? (parseCleanScore(item.firstRiichiRate) * 100).toFixed(1) + '%' : '-';
+    const chaseRiichiRate = hasRiichi ? (parseCleanScore(item.chaseRiichiRate) * 100).toFixed(1) + '%' : '-';
+    const chasedRiichiRate = hasRiichi ? (parseCleanScore(item.chasedRiichiRate) * 100).toFixed(1) + '%' : '-';
+
+    const oyaKaburiRate = item.rounds > 0 && parseCleanScore(item.oyaKaburiRate) > 0 ? (parseCleanScore(item.oyaKaburiRate) * 100).toFixed(1) + '%' : '-';
+    const cleanOyaKaburiAvg = parseCleanScore(item.oyaKaburiAvg);
+    const oyaKaburiAvg = cleanOyaKaburiAvg > 0 ? Math.round(cleanOyaKaburiAvg).toString() : '-';
+
+    const cleanLoseRiichiRate = parseCleanScore(item.loseRiichiRate);
+    const loseRiichiRate = cleanLoseRiichiRate > 0 ? (cleanLoseRiichiRate * 100).toFixed(1) + '%' : '-';
+
     return {
       totalGames: item.games,
       totalRounds: item.rounds,
@@ -152,20 +174,20 @@ const stats = computed(() => {
       riichiWinRate,
       riichiLoseRate,
       riichiRate,
-      riichiSuji: '-',
-      riichiIncome: '-',
-      riichiExpense: '-',
-      firstRiichiRate: '-',
-      chaseRiichiRate: '-',
-      chasedRiichiRate: '-',
+      riichiSuji,
+      riichiIncome,
+      riichiExpense,
+      firstRiichiRate,
+      chaseRiichiRate,
+      chasedRiichiRate,
       riichiDrawRate,
-      oyaKaburiRate: '-',
-      oyaKaburiAvg: '-',
-      loseRiichiRate: '-',
+      oyaKaburiRate,
+      oyaKaburiAvg,
+      loseRiichiRate,
       winEfficiency: Math.round(parseCleanScore(item.winEfficiency)),
       loseLoss: Math.round(parseCleanScore(item.loseLoss)),
       netWinEfficiency: Math.round(parseCleanScore(item.netEfficiency)),
-      roundSuji: item.rounds > 0 ? Math.round(parseCleanScore(item.netScore) / item.rounds) : '-'
+      roundSuji: item.rounds > 0 ? Math.round(parseCleanScore(item.roundSuji)) : '-'
     };
   }
 
@@ -183,6 +205,7 @@ const stats = computed(() => {
   let tobiCount = 0
   let totalFinalScore = 0
   let totalUma = 0
+  let totalNetScore = 0
 
   let riichiCount = 0
   let riichiWinCount = 0
@@ -196,6 +219,7 @@ const stats = computed(() => {
   let riichiDrawCount = 0
 
   let tsumoSufferedCount = 0
+  let oyaKaburiSufferedCount = 0
   let manganOyaKaburiCount = 0
   let manganOyaKaburiScoreSum = 0
   let loseWithRiichiCount = 0
@@ -219,6 +243,9 @@ const stats = computed(() => {
         tobiCount++
       }
 
+      const startingScore = props.option.startingScore || 25000;
+      totalNetScore += (resultEntry.score - startingScore);
+
       // 국별 상세 정보 분석
       if (game.records && !Array.isArray(game.records) && game.records.riichi) {
         const rec = game.records;
@@ -231,7 +258,7 @@ const stats = computed(() => {
           const isLose = !!(rec.lose && rec.lose[r] && rec.lose[r][pIdx]);
           
           const roundStatusVal = rec.status && rec.status[r] ? rec.status[r] : '';
-          const isDraw = (roundStatusVal === 'draw' || roundStatusVal === 'draw_special' || roundStatusVal === 'noten' || roundStatusVal === 'tenpai' || roundStatusVal.includes('유국'));
+          const isDraw = (roundStatusVal.includes('draw') || roundStatusVal === 'noten' || roundStatusVal === 'tenpai' || roundStatusVal.includes('유국'));
           
           const delta = (rec.score && rec.score[pIdx]) ? (rec.score[pIdx][2 * r - 1] || 0) : 0;
 
@@ -275,7 +302,7 @@ const stats = computed(() => {
             }
             if (isLose) {
               riichiLoseCount++
-              riichiLoseScoreSum += delta // 음수
+              riichiLoseScoreSum += delta
             }
             if (isDraw) {
               riichiDrawCount++
@@ -285,11 +312,11 @@ const stats = computed(() => {
             const orderIdx = riichiList.indexOf(pIdx)
             if (orderIdx === 0) {
               firstRiichiCount++
-              if (riichiList.length > 1) {
-                chasedRiichiCount++
-              }
             } else if (orderIdx > 0) {
               chaseRiichiCount++
+            }
+            if (orderIdx !== -1 && orderIdx < riichiList.length - 1) {
+              chasedRiichiCount++
             }
           }
 
@@ -299,11 +326,38 @@ const stats = computed(() => {
 
           if (roundStatusVal === 'tsumo' && !isWin) {
             tsumoSufferedCount++
-            if (isEast && delta <= -4000) {
-              manganOyaKaburiCount++
-              manganOyaKaburiScoreSum += Math.abs(delta)
-            }
+            const limit = hasRiichi ? -5000 : -4000
+            if (isEast) {
+              oyaKaburiSufferedCount++
+              if (delta <= limit) {
+                manganOyaKaburiCount++
+                // 화료한 사람(Winner)을 제외한 나머지 3명의 음수 득실 절대값 합산
+                let pureWinScore = 0
+                if (rec.pureWinScore && rec.pureWinScore[r] !== undefined) {
+                  pureWinScore = rec.pureWinScore[r]
+                } else {
+                  let winnerIdx = -1
+                  for (let w = 0; w < 4; w++) {
+                    if (rec.win && rec.win[r] && rec.win[r][w]) {
+                      winnerIdx = w
+                      break
+                    }
+                  }
+                  for (let w = 0; w < 4; w++) {
+                    if (w !== winnerIdx) {
+                      const wPrev = (r === 1) ? (props.option.startingScore || 25000) : (rec.score && rec.score[w] ? (rec.score[w][2 * (r - 1)] || 0) : 0)
+                      const wCurr = rec.score && rec.score[w] ? (rec.score[w][2 * r] || 0) : 0
+                      const wDelta = wCurr - wPrev
+                      if (wDelta < 0) {
+                        pureWinScore += Math.abs(wDelta)
+                      }
+                    }
+                  }
+                }
+                manganOyaKaburiScoreSum += pureWinScore
+              }
           }
+        }
 
           // 방총 시 리치 여부
           if (isLose && hasRiichi) {
@@ -311,7 +365,7 @@ const stats = computed(() => {
           }
         }
       } else if (game.records && Array.isArray(game.records)) {
-        game.records.forEach((rec: any) => {
+        game.records.forEach((rec: any, rIdx: number) => {
           if (!rec.results) return
           const myResult = rec.results[pIdx]
           if (!myResult) return
@@ -321,9 +375,19 @@ const stats = computed(() => {
           const status = myResult.status // 'win', 'lose', 'draw', 'none'
           const isWin = (status === 'win')
           const isLose = (status === 'lose')
-          const isDraw = (status === 'draw')
+          const isDraw = !!(status && status.includes('draw'))
           const delta = myResult.delta || 0
           const hasRiichi = !!myResult.riichi
+
+          const currScore = myResult.finalScore !== undefined ? myResult.finalScore : null
+          let actualRoundDelta = delta
+          if (currScore !== null) {
+            const prevRec = game.records[rIdx - 1]
+            const prevScore = (prevRec && prevRec.results && prevRec.results[pIdx] && prevRec.results[pIdx].finalScore !== undefined)
+              ? prevRec.results[pIdx].finalScore 
+              : (props.option.startingScore || 25000)
+            actualRoundDelta = currScore - prevScore
+          }
 
           // 선제 리치 여부 분석을 위한 국 내부 리치 리스트 수집
           const riichiList: number[] = []
@@ -333,14 +397,14 @@ const stats = computed(() => {
 
           if (isWin) {
             winCount++
-            totalWinScore += delta
+            totalWinScore += actualRoundDelta
             if (myResult.type === 'tsumo') {
               tsumoWinCount++
             }
           }
           if (isLose) {
             loseCount++
-            totalLoseScore += delta // 음수
+            totalLoseScore += actualRoundDelta // 음수
           }
           if (isDraw) {
             drawCount++
@@ -359,7 +423,7 @@ const stats = computed(() => {
             }
             if (isLose) {
               riichiLoseCount++
-              riichiLoseScoreSum += delta // 음수
+              riichiLoseScoreSum += delta
             }
             if (isDraw) {
               riichiDrawCount++
@@ -369,11 +433,11 @@ const stats = computed(() => {
             const orderIdx = riichiList.indexOf(pIdx)
             if (orderIdx === 0) {
               firstRiichiCount++
-              if (riichiList.length > 1) {
-                chasedRiichiCount++
-              }
             } else if (orderIdx > 0) {
               chaseRiichiCount++
+            }
+            if (orderIdx !== -1 && orderIdx < riichiList.length - 1) {
+              chasedRiichiCount++
             }
           }
 
@@ -383,11 +447,33 @@ const stats = computed(() => {
 
           if (status === 'tsumo' && !isWin) {
             tsumoSufferedCount++
-            if (isEast && delta <= -4000) {
-              manganOyaKaburiCount++
-              manganOyaKaburiScoreSum += Math.abs(delta)
-            }
+            const limit = hasRiichi ? -5000 : -4000
+            if (isEast) {
+              oyaKaburiSufferedCount++
+              if (delta <= limit) {
+                manganOyaKaburiCount++
+                // 화료한 사람(Winner)을 제외한 나머지 3명의 음수 득실 절대값 합산
+                let pureWinScore = 0
+                if (rec.pureWinScore !== undefined) {
+                  pureWinScore = rec.pureWinScore || 0
+                } else if (rec.results) {
+                  const winner = rec.results.find((res: any) => res && res.status === 'win')
+                  const winnerName = winner ? winner.name : ''
+                  rec.results.forEach((res: any, idx: number) => {
+                    if (res && res.name !== winnerName) {
+                      const wPrev = (rIdx === 0) ? (props.option.startingScore || 25000) : (game.records[rIdx - 1]?.results[idx]?.finalScore || 0)
+                      const wCurr = res.finalScore || 0
+                      const wDelta = wCurr - wPrev
+                      if (wDelta < 0) {
+                        pureWinScore += Math.abs(wDelta)
+                      }
+                    }
+                  })
+                }
+                manganOyaKaburiScoreSum += pureWinScore
+              }
           }
+        }
 
           // 방총 시 리치 여부
           if (isLose && hasRiichi) {
@@ -440,9 +526,9 @@ const stats = computed(() => {
   const riichiDrawRate = formatRate(riichiDrawCount, riichiCount)
 
   // 그 외 스탯 연산
-  const oyaKaburiRate = formatRate(manganOyaKaburiCount, tsumoSufferedCount)
+  const oyaKaburiRate = oyaKaburiSufferedCount > 0 ? formatRate(manganOyaKaburiCount, tsumoSufferedCount) : '-'
   const oyaKaburiAvg = formatVal(manganOyaKaburiScoreSum, manganOyaKaburiCount)
-  const loseRiichiRate = formatRate(loseWithRiichiCount, loseCount)
+  const loseRiichiRate = loseWithRiichiCount > 0 ? formatRate(loseWithRiichiCount, loseCount) : '-'
 
   // 화료 효율, 방총 손실, 알짜 화료 효율
   const winRateNum = totalRounds > 0 ? winCount / totalRounds : 0
@@ -453,7 +539,7 @@ const stats = computed(() => {
   const winEfficiency = Number((winRateNum * avgWinNum).toFixed(0))
   const loseLoss = Number((loseRateNum * avgLoseNum).toFixed(0))
   const netWinEfficiency = winEfficiency - loseLoss
-  const roundSuji = Number((winRateNum * avgWinNum - loseRateNum * avgLoseNum).toFixed(0))
+  const roundSuji = totalRounds > 0 ? Math.round(totalNetScore / totalRounds) : '-'
 
   return {
     totalGames,
@@ -563,10 +649,6 @@ const stats = computed(() => {
         <div class="stat_row">
           <span class="stat_label">기록 대국 수</span>
           <span class="stat_value">{{ stats.totalGames }}전</span>
-        </div>
-        <div class="stat_row">
-          <span class="stat_label">총합 국 수</span>
-          <span class="stat_value">{{ stats.totalRounds }}국</span>
         </div>
         <div class="stat_row">
           <span class="stat_label">화료율</span>
