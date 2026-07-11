@@ -1957,6 +1957,10 @@ const loadExistingSession = async (cleanTitle: string) => {
   syncLoaderTitle.value = `'${cleanTitle}' 회차 데이터 복원 중...`;
 
   try {
+    // 0. 로컬에 남아있던 이전 대국 이력 및 캐시 일체 싹 비워버리기 (일괄 동기화 에러 차단)
+    todayGamesHistory.length = 0;
+    localStorage.removeItem("today_games_history");
+
     // 1. 활성 회차 시트 이름 스위칭
     currentSessionSheetName.value = cleanTitle;
     localStorage.setItem("current_session_sheet_name", cleanTitle);
