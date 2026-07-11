@@ -2002,13 +2002,39 @@ const loadExistingSession = async (cleanTitle: string) => {
     });
 
     const dataRows = dataRes.result.values || [];
-    const gamesMap: Record<string, { timestamp: string, results: Record<string, { name: string, score: number, uma: number, rank: number }> }> = {};
+    const gamesMap: Record<string, {
+      timestamp: string,
+      results: Record<string, { name: string, score: number, uma: number, rank: number }>,
+      playerNames: string[],
+      rounds: Record<number, {
+        roundName: string,
+        roundStatus: string,
+        players: Record<string, {
+          deltaScore: number,
+          finalScore: number,
+          isRiichi: boolean,
+          isWin: boolean,
+          isLose: boolean,
+          isTenpai: boolean,
+          isDealer: boolean
+        }>
+      }>
+    }> = {};
 
     dataRows.forEach((row: any) => {
       const timestamp = row[0]; // A열: 대국 일시
       const gameId = row[1];    // B열: 대국 ID
+      const roundName = row[2]; // C열: 국 이름
+      const r = parseInt(row[3]) || 0; // D열: 국 번호
+      const roundStatus = row[4]; // E열: 국 상태
       const name = row[5];      // F열: 플레이어 이름
+      const isDealer = row[6] === 'TRUE'; // G열: 친 여부
+      const deltaScore = parseInt(row[7]) || 0; // H열: 득실점
       const score = parseInt(row[8]) || 0; // I열: 최종 점수
+      const isRiichi = row[9] === 'TRUE'; // J열: 리치 여부
+      const isWin = row[10] === 'TRUE'; // K열: 화료 여부
+      const isLose = row[11] === 'TRUE'; // L열: 방총 여부
+      const isTenpai = row[12] === 'TRUE'; // M열: 텐파이 여부
       const rank = parseInt(row[13]) || 1;  // N열: 최종 순위
       const uma = parseFloat(row[14]) || 0;  // O열: 최종 우마
 
@@ -2026,8 +2052,14 @@ const loadExistingSession = async (cleanTitle: string) => {
         }
         gamesMap[gameId] = {
           timestamp: parsedTime,
-          results: {}
+          results: {},
+          playerNames: [],
+          rounds: {}
         };
+      }
+
+      if (!gamesMap[gameId].playerNames.includes(name)) {
+        gamesMap[gameId].playerNames.push(name);
       }
 
       // 국별로 계속 루프가 돌면서 덮어씌워지므로, 결국 해당 대국ID의 최종 국 결과(최종점수/순위/우마)가 남음
@@ -2037,17 +2069,121 @@ const loadExistingSession = async (cleanTitle: string) => {
         uma,
         rank
       };
+
+      if (r > 0) {
+        if (!gamesMap[gameId].rounds[r]) {
+          gamesMap[gameId].rounds[r] = {
+            roundName: roundName || `${r}국`,
+            roundStatus: roundStatus || '',
+            players: {}
+          };
+        }
+        gamesMap[gameId].rounds[r].players[name] = {
+          deltaScore,
+          finalScore: score,
+          isRiichi,
+          isWin,
+          isLose,
+          isTenpai,
+          isDealer
+        };
+      }
     });
 
     // Map을 배열로 환원
     const restoredHistory = Object.keys(gamesMap).map(gameId => {
       const g = gamesMap[gameId];
       const resultsArr = Object.values(g.results);
+      const playerNames = g.playerNames;
+
+      // 4명이 꽉 차지 않을 경우 방어 코드
+      while (playerNames.length < 4) {
+        const missing = resultsArr.find(r => !playerNames.includes(r.name));
+        if (missing) {
+          playerNames.push(missing.name);
+        } else {
+          playerNames.push(`플레이어${playerNames.length + 1}`);
+        }
+      }
+
+      // records 구조 복원
+      const restoredRecords: any = {
+        time: ["ㅤ"],
+        score: [[], [], [], []],
+        riichi: [[false, false, false, false]],
+        win: [[false, false, false, false]],
+        lose: [[false, false, false, false]],
+        tenpai: [[false, false, false, false]],
+        status: ["initial"],
+        riichiOrder: [[]],
+        dealer: [0]
+      };
+
+      // 플레이어별 시작 점수 세팅
+      for (let pIdx = 0; pIdx < 4; pIdx++) {
+        const name = playerNames[pIdx];
+        let startScore = 25000;
+        if (g.rounds[1] && g.rounds[1].players[name]) {
+          const pData = g.rounds[1].players[name];
+          startScore = pData.finalScore - pData.deltaScore;
+        }
+        restoredRecords.score[pIdx].push(startScore);
+      }
+
+      // 국별 데이터 추가
+      const roundIds = Object.keys(g.rounds).map(Number).sort((a, b) => a - b);
+      roundIds.forEach(r => {
+        const roundData = g.rounds[r];
+        
+        restoredRecords.time.push(roundData.roundName);
+        restoredRecords.time.push("ㅤ");
+
+        restoredRecords.status.push(roundData.roundStatus);
+
+        let dealerIdx = 0;
+        const roundRiichi = [false, false, false, false];
+        const roundWin = [false, false, false, false];
+        const roundLose = [false, false, false, false];
+        const roundTenpai = [false, false, false, false];
+
+        for (let pIdx = 0; pIdx < 4; pIdx++) {
+          const name = playerNames[pIdx];
+          const pData = roundData.players[name];
+          if (pData) {
+            restoredRecords.score[pIdx].push(pData.deltaScore);
+            restoredRecords.score[pIdx].push(pData.finalScore);
+
+            if (pData.isDealer) {
+              dealerIdx = pIdx;
+            }
+            roundRiichi[pIdx] = pData.isRiichi;
+            roundWin[pIdx] = pData.isWin;
+            roundLose[pIdx] = pData.isLose;
+            roundTenpai[pIdx] = pData.isTenpai;
+          } else {
+            restoredRecords.score[pIdx].push(0);
+            const prevScore = restoredRecords.score[pIdx][restoredRecords.score[pIdx].length - 2] || 25000;
+            restoredRecords.score[pIdx].push(prevScore);
+          }
+        }
+
+        restoredRecords.dealer.push(dealerIdx);
+        restoredRecords.riichi.push(roundRiichi);
+        restoredRecords.win.push(roundWin);
+        restoredRecords.lose.push(roundLose);
+        restoredRecords.tenpai.push(roundTenpai);
+        restoredRecords.riichiOrder.push([]);
+      });
+
+      if (restoredRecords.time.length > 0 && restoredRecords.time[restoredRecords.time.length - 1] === 'ㅤ') {
+        restoredRecords.time[restoredRecords.time.length - 1] = '결과';
+      }
+
       return {
         timestamp: g.timestamp,
         results: resultsArr,
-        records: [], // 롤백용 세부 국 기록은 생략
-        playerNames: resultsArr.map(r => r.name)
+        records: restoredRecords,
+        playerNames: playerNames
       };
     });
 

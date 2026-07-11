@@ -207,7 +207,97 @@ const stats = computed(() => {
       }
 
       // 국별 상세 정보 분석
-      if (game.records && Array.isArray(game.records)) {
+      if (game.records && !Array.isArray(game.records) && game.records.riichi) {
+        const rec = game.records;
+        const roundsLen = rec.riichi.length;
+        for (let r = 1; r < roundsLen; r++) {
+          totalRounds++
+
+          const hasRiichi = !!(rec.riichi && rec.riichi[r] && rec.riichi[r][pIdx]);
+          const isWin = !!(rec.win && rec.win[r] && rec.win[r][pIdx]);
+          const isLose = !!(rec.lose && rec.lose[r] && rec.lose[r][pIdx]);
+          
+          const roundStatusVal = rec.status && rec.status[r] ? rec.status[r] : '';
+          const isDraw = (roundStatusVal === 'draw' || roundStatusVal === 'draw_special' || roundStatusVal === 'noten' || roundStatusVal === 'tenpai' || roundStatusVal.includes('유국'));
+          
+          const delta = (rec.score && rec.score[pIdx]) ? (rec.score[pIdx][2 * r - 1] || 0) : 0;
+
+          // 선제 리치 여부 분석을 위한 국 내부 리치 리스트 수집
+          const riichiList: number[] = [];
+          if (rec.riichiOrder && rec.riichiOrder[r]) {
+            rec.riichiOrder[r].forEach((val: any) => riichiList.push(Number(val)));
+          }
+          if (riichiList.length === 0 && rec.riichi && rec.riichi[r]) {
+            rec.riichi[r].forEach((val: boolean, idx: number) => {
+              if (val) riichiList.push(idx);
+            });
+          }
+
+          if (isWin) {
+            winCount++
+            totalWinScore += delta
+            if (roundStatusVal === 'tsumo') {
+              tsumoWinCount++
+            }
+          }
+          if (isLose) {
+            loseCount++
+            totalLoseScore += delta // 음수
+          }
+          if (isDraw) {
+            drawCount++
+            const isTenpai = !!(rec.tenpai && rec.tenpai[r] && rec.tenpai[r][pIdx]);
+            if (isTenpai) {
+              drawTenpaiCount++
+            }
+          }
+
+          if (hasRiichi) {
+            riichiCount++
+            riichiDeltaSum += delta
+
+            if (isWin) {
+              riichiWinCount++
+              riichiWinScoreSum += delta
+            }
+            if (isLose) {
+              riichiLoseCount++
+              riichiLoseScoreSum += delta // 음수
+            }
+            if (isDraw) {
+              riichiDrawCount++
+            }
+
+            // 선제, 추격, 피추격
+            const orderIdx = riichiList.indexOf(pIdx)
+            if (orderIdx === 0) {
+              firstRiichiCount++
+              if (riichiList.length > 1) {
+                chasedRiichiCount++
+              }
+            } else if (orderIdx > 0) {
+              chaseRiichiCount++
+            }
+          }
+
+          // 오야카부리 & 쯔모당함
+          const dealerIdx = (rec.dealer && rec.dealer[r] !== undefined) ? rec.dealer[r] : 0
+          const isEast = (dealerIdx === pIdx)
+
+          if (roundStatusVal === 'tsumo' && !isWin) {
+            tsumoSufferedCount++
+            if (isEast && delta <= -4000) {
+              manganOyaKaburiCount++
+              manganOyaKaburiScoreSum += Math.abs(delta)
+            }
+          }
+
+          // 방총 시 리치 여부
+          if (isLose && hasRiichi) {
+            loseWithRiichiCount++
+          }
+        }
+      } else if (game.records && Array.isArray(game.records)) {
         game.records.forEach((rec: any) => {
           if (!rec.results) return
           const myResult = rec.results[pIdx]
