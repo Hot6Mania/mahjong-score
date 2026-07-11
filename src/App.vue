@@ -127,6 +127,10 @@ const validGoogleSessions = ref<string[]>([])
 const isLoadingSessions = ref(false)
 const selectedSessionToLoad = ref("")
 
+// 차트 시각화 전용 데이터 소스 상태
+const chartPlayers = ref<any[]>([])
+const chartRecords = ref<any>({ score: [], time: [] })
+
 // 구글 스프레드시트로부터 회차 목록(기본/raw/데이터 탭이 모두 완비된 리스트) 수집
 const loadGoogleSessions = async () => {
   if (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) {
@@ -663,6 +667,12 @@ const resetAll = () => {
 /**모달 창 켜기*/
 const showModal = (type: string, status?: string) => {
   isPanelMenuOpen.value = false;
+  
+  if (type === 'result_chart') {
+    chartPlayers.value = players.map(p => ({ name: p.name }));
+    chartRecords.value = JSON.parse(JSON.stringify(records));
+  }
+  
   Object.assign(modalInfo, {
     isOpen: true,
     type: type,
@@ -1851,6 +1861,24 @@ const confirmStartNewDay = async () => {
   await startNewDay();
 };
 
+// 총 우마 창에서 특정 대국 행을 클릭했을 때의 차트 팝업 기동
+const handleHistoryGameClick = (index: number) => {
+  if (index < 0 || index >= todayGamesHistory.length) return;
+  const game = todayGamesHistory[index];
+  if (!game || !game.records || !Array.isArray(game.records.score) || game.records.score.length === 0) {
+    triggerToast("국별 상세 성적이 존재하지 않아 그래프를 표시할 수 없습니다.");
+    return;
+  }
+  
+  // 플레이어 이름 목록 셋업
+  const names = game.playerNames || game.results.map((r: any) => r.name);
+  chartPlayers.value = names.map((n: string) => ({ name: n }));
+  chartRecords.value = JSON.parse(JSON.stringify(game.records));
+  
+  // 게임 결과 차트 모달 띄우기
+  showModal('result_chart');
+};
+
 // 구글 스프레드시트로부터 기존 회차 정보를 읽어와 로컬 상태(멤버 풀, 누적 점수, 대국 이력)를 역으로 완벽하게 복원합니다.
 const loadExistingSession = async (cleanTitle: string) => {
   if (!cleanTitle) return;
@@ -2090,6 +2118,8 @@ const invalidateGame = (index: number) => {
       :googleMemberStats="googleMemberStats"
       :isSaving="isSaving"
       :syncProgress="syncProgress"
+      :chartPlayers="chartPlayers"
+      :chartRecords="chartRecords"
       @show-modal="showModal"
       @hide-modal="hideModal"
       @set-arrow-button="setArrowButton"
@@ -2116,6 +2146,7 @@ const invalidateGame = (index: number) => {
       @invalidate-game="invalidateGame"
       @load-existing-session="loadExistingSession"
       @open-choose-session-popup="openChooseSessionPopup"
+      @click-game="handleHistoryGameClick"
     />
   </Transition>
 

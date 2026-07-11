@@ -12,6 +12,7 @@ const props = defineProps<Props>()
 /**emits 정의*/
 type Emits = {
   (e: 'invalidate-game', index: number): void
+  (e: 'click-game', index: number): void
 }
 const emit = defineEmits<Emits>()
 
@@ -131,7 +132,7 @@ const formatScore = (score: number) => {
       </thead>
       <tbody>
         <!-- 각 행(Row)은 회차(1회전, 2회전...)를 의미함 -->
-        <tr v-for="(_, gameIdx) in history" :key="gameIdx">
+        <tr v-for="(_, gameIdx) in history" :key="gameIdx" @click="emit('click-game', gameIdx)" class="game_row" style="cursor: pointer;">
           <td class="sticky_col cell_round_header">
             <div class="round_title_wrapper" style="display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;">
               <span class="round_text">{{ gameIdx + 1 }}회전</span>
@@ -360,5 +361,12 @@ tr:hover .sticky_col {
   border-bottom: none !important;
   font-size: 13px;
   font-weight: bold;
+}
+
+.game_row:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+.game_row:hover .sticky_col {
+  background-color: rgba(255, 255, 255, 0.05);
 }
 </style>

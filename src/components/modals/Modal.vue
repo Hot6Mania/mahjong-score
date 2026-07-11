@@ -6,8 +6,15 @@ import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats } from "@/com
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
+import { Line as LineChart } from "vue-chartjs"
+import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, CategoryScale, LinearScale, PointElement, type ChartOptions } from "chart.js"
+
 /**i18n 속성 가져오기*/
 const { t } = useI18n()
+
+/**차트 컴포넌트 등록*/
+ChartJS.register(Title, Tooltip, Legend, LineElement, CategoryScale, LinearScale, PointElement)
+ChartJS.defaults.font.family = "'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif" // 폰트 설정
 
 
 /**props 정의*/
@@ -26,7 +33,9 @@ interface Props {
   isGameSaved: boolean,
   isSaving?: boolean,
   newlyAddedLocalMembers?: string[],
-  syncProgress?: number
+  syncProgress?: number,
+  chartPlayers?: any[],
+  chartRecords?: any
 }
 const props = defineProps<Props>()
 
@@ -59,6 +68,7 @@ type Emits = {
   (e: 'invalidate-game', index: number): void,
   (e: 'load-existing-session', cleanTitle: string): void,
   (e: 'open-choose-session-popup'): void,
+  (e: 'click-game', index: number): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -199,7 +209,88 @@ const scoreSheetInfo = computed(() => {
   });
 })
 
+/**점수차트 정보 계산*/
+const scoreChartInfo = computed(() => {
+  const isDarkTheme = document.documentElement.classList.contains('dark');
+  const textColor = isDarkTheme ? '#e5e5e5' : '#1a1a1a';
+  const gridColor = isDarkTheme ? '#444444' : '#e8e8e8';
 
+  const sourcePlayers = props.chartPlayers || props.players;
+  const sourceRecords = props.chartRecords || props.records;
+
+  if (!sourceRecords || !sourceRecords.score || sourceRecords.score.length === 0) {
+    return { data: { labels: [], datasets: [] }, options: {} };
+  }
+
+  let datasets = sourcePlayers.map((p, idx) => ({
+    label: p.name, // 이름 가져오기
+    data: sourceRecords.score[idx] ? sourceRecords.score[idx].filter((_: any, i: number) => i % 2 === 0) : [], // 점수기록 가져오기
+    borderColor: ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'][idx] || '#888', // 선 색상
+    backgroundColor: ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'][idx] || '#888', // 점 색상
+    pointRadius: 3, // 점 크기
+  }));
+  
+  const rawTimes = sourceRecords.time || [];
+  let times = ['', ...rawTimes.filter((_: any, i: number) => i % 2 === 1)]; // 시간 가져오기
+  let tmp = '';
+  for (let i = 1; i < times.length; i++) {
+    if (tmp === '' || tmp !== times[i][0] + times[i][1]) { // 이전국이랑 다르면
+      tmp = times[i][0] + times[i][1]; // 앞 두 글자 저장
+      times[i] = tmp;
+    } else {
+      times[i] = ''; // 같으면 빈 문자열로 변경
+    }
+  }
+  let data = {
+    labels: times,
+    datasets: datasets
+  };
+  let options: ChartOptions<'line'> = {
+    responsive: true, // 반응형
+    maintainAspectRatio: false, // 크기조절
+    animations: {
+      y: {
+        from: (ctx) => {
+          const yScale = ctx.chart.scales.y;
+          return yScale.getPixelForValue(25000); // 애니메이션 시작점 25000
+        }
+      },
+    },
+    scales: {
+      x: {
+        ticks: {
+          autoSkip: false, // 모든 라벨 표시
+          color: textColor,
+        },
+        grid: {
+          color: gridColor,
+        }
+      },
+      y: {
+        ticks: {
+          color: textColor,
+        },
+        grid: {
+          color: gridColor,
+        }
+      }
+    },
+    plugins: {
+      legend: {
+        position: 'top',
+        labels: {
+          usePointStyle: true, // 범례 모양 변경
+          pointStyle: 'rectRounded',
+          color: textColor,
+        }
+      },
+    },
+  };
+  return {
+    data: data,
+    options: options
+  };
+})
 
 /**토글 버튼 색상*/
 const toggleButtonStyle = (status: string) => {
@@ -377,7 +468,7 @@ const getSignColor = (sign: number, x: boolean) => {
   <!-- 게임 결과창(표) -->
   <div v-else-if="modalInfo.type==='result_sheet'" class="modal_content" @click.stop>
     <div style="display: flex; flex-direction: column; align-items: stretch; gap: 10px;">
-      <div class="container_resultsheet">
+      <div class="container_resultsheet" @click.stop="emit('show-modal', 'result_chart')">
         <div v-for="(_, i) in class_resultsheet" 
           :key="i"
           :class="class_resultsheet[i]"
@@ -442,6 +533,12 @@ const getSignColor = (sign: number, x: boolean) => {
       </button>
     </div>
   </div>
+  <!-- 게임 결과창(차트) -->
+  <div v-else-if="modalInfo.type==='result_chart'" class="modal_content" @click.stop>
+    <div class="container_resultchart" @click.stop="emit('show-modal', 'result_sheet')">
+      <LineChart :data="scoreChartInfo.data" :options="scoreChartInfo.options"/>
+    </div>
+  </div>
   <!-- 점수 기록창 -->
   <div v-else-if="modalInfo.type==='show_record'" class="modal_content" @click.stop>
     <ModalRecordList
@@ -458,6 +555,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players="players"
       :history="todayGamesHistory"
       @invalidate-game="(idx) => emit('invalidate-game', idx)"
+      @click-game="(idx) => emit('click-game', idx)"
     />
   </div>
   <!-- 오늘의 스탯창 -->
