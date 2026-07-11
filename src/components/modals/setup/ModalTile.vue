@@ -9,7 +9,8 @@ interface Props {
   googleInfo: GoogleInfo,
   players?: Player[],
   todayGamesHistory?: any[],
-  newlyAddedLocalMembers?: string[]
+  newlyAddedLocalMembers?: string[],
+  showConfirm: (message: string) => Promise<boolean>
 }
 const props = defineProps<Props>()
 
@@ -26,9 +27,9 @@ const emit = defineEmits<Emits>()
 
 const currentStep = ref<'setup_today_pool' | 'select_match_4' | 'draw_seats'>('setup_today_pool')
 
-const handleToggleConnection = () => {
+const handleToggleConnection = async () => {
   if (props.googleInfo.isLoggedIn) {
-    if (confirm("구글 계정 로그아웃을 진행하시겠습니까? (로컬 모드로 전환됩니다)")) {
+    if (await props.showConfirm("구글 계정 로그아웃을 진행하시겠습니까? (로컬 모드로 전환됩니다)")) {
       emit('google-logout')
     }
   } else {
@@ -176,13 +177,13 @@ const handleAddNewMember = () => {
 }
 
 // 전체 명단에서 멤버 제거 기능
-const removeLocalMember = (name: string) => {
+const removeLocalMember = async (name: string) => {
   if (hasPlayedGame(name)) {
     alert(`'${name}'님은 오늘 플레이한 기록이 있어 전체 명단에서 삭제할 수 없습니다. (우선 '총 우마' 페이지에서 해당 플레이어가 포함된 회전을 무효 처리해야 합니다.)`)
     return
   }
   
-  if (!confirm(`'${name}'님을 전체 명단에서 완전히 삭제하시겠습니까?`)) {
+  if (!await props.showConfirm(`'${name}'님을 전체 명단에서 완전히 삭제하시겠습니까?`)) {
     return
   }
 

@@ -35,7 +35,8 @@ interface Props {
   newlyAddedLocalMembers?: string[],
   syncProgress?: number,
   chartPlayers?: any[],
-  chartRecords?: any
+  chartRecords?: any,
+  showConfirm: (message: string) => Promise<boolean>
 }
 const props = defineProps<Props>()
 
@@ -448,6 +449,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :todayGamesHistory="todayGamesHistory"
       :newlyAddedLocalMembers="newlyAddedLocalMembers"
+      :showConfirm="showConfirm"
       @start-game-with-seats="(assignment) => emit('start-game-with-seats', assignment)"
       @add-new-member="(name) => emit('add-new-member', name)"
       @delete-member="(name) => emit('delete-member', name)"
