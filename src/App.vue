@@ -2055,10 +2055,15 @@ const loadExistingSession = async (cleanTitle: string) => {
     restoredHistory.forEach(h => todayGamesHistory.push(h));
     localStorage.setItem("today_games_history", JSON.stringify(restoredHistory));
 
-    // 4. 게임 상태 리셋 가드
+    // 4. 게임 상태 리셋 가드 (기존 찌꺼기 싹 날리고 깨끗하게 상태 싱크)
     resetAll();
     isGameSaved.value = true;
     localStorage.setItem("is_game_saved", "true");
+    
+    // 로컬 스토리지 진행 게임 데이터 캐시들도 리셋 상태로 동기화 갱신
+    localStorage.setItem("mahjong_players", JSON.stringify(players));
+    localStorage.setItem("mahjong_records", JSON.stringify(records));
+    localStorage.setItem("mahjong_panelInfo", JSON.stringify(panelInfo));
 
     syncProgress.value = 100;
     triggerToast("기존 회차 데이터 복원이 완벽하게 처리되었습니다!");
@@ -2069,6 +2074,8 @@ const loadExistingSession = async (cleanTitle: string) => {
     isSaving.value = false;
     setTimeout(() => {
       syncProgress.value = 0;
+      // 복원 완료 후, 4인 선택 및 자리뽑기 모달 즉시 기동!
+      showModal('choose_seat');
     }, 800);
   }
 };

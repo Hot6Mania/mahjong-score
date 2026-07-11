@@ -115,6 +115,8 @@ watch(() => props.googleInfo.todayMembers, (newVal) => {
     if (!props.googleInfo.isLoggedIn) {
       offlineMemberList.value = [...newVal]
     }
+    // 복원 데이터 유입 시, 멤버 선택 2단계로 즉시 분기 스위칭!
+    currentStep.value = 'select_match_4'
   }
 }, { deep: true })
 
