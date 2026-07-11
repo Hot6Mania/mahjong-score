@@ -274,6 +274,17 @@ watch(option, (newVal) => {
   localStorage.setItem("mahjong_option", JSON.stringify(newVal));
 }, { deep: true });
 
+// 구글 스프레드시트 주소 유입 시 강제 ID 정제 감시자
+watch(() => googleInfo.spreadsheetId, (newVal) => {
+  if (newVal && newVal.includes("docs.google.com")) {
+    const matches = newVal.match(/\/d\/([a-zA-Z0-9-_]+)/);
+    if (matches && matches[1]) {
+      googleInfo.spreadsheetId = matches[1];
+      localStorage.setItem("google_spreadsheet_id", matches[1]);
+    }
+  }
+}, { immediate: true });
+
 /**시작시 언어 변경 및 자리선택 타일창 띄우기*/
 onMounted(async () => {
   // 버전 체크를 통한 모바일/데스크톱 브라우저 캐시 강제 갱신 (마이그레이션 적용)
