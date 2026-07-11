@@ -2038,11 +2038,14 @@ const loadExistingSession = async (cleanTitle: string) => {
       const rank = parseInt(row[13]) || 1;  // N열: 최종 순위
       const uma = parseFloat(row[14]) || 0;  // O열: 최종 우마
 
-      if (!gameId || !name) return;
+      const cleanGameId = gameId ? gameId.toString().trim() : '';
+      const cleanPlayerName = name ? name.toString().trim() : '';
 
-      if (!gamesMap[gameId]) {
+      if (!cleanGameId || !cleanPlayerName) return;
+
+      if (!gamesMap[cleanGameId]) {
         let parsedTime = new Date().toISOString();
-        const numId = Number(gameId);
+        const numId = Number(cleanGameId);
         if (!isNaN(numId) && numId > 0) {
           parsedTime = new Date(numId).toISOString();
         } else if (timestamp) {
@@ -2053,7 +2056,7 @@ const loadExistingSession = async (cleanTitle: string) => {
             parsedTime = d.toISOString();
           }
         }
-        gamesMap[gameId] = {
+        gamesMap[cleanGameId] = {
           timestamp: parsedTime,
           results: {},
           playerNames: [],
@@ -2061,27 +2064,27 @@ const loadExistingSession = async (cleanTitle: string) => {
         };
       }
 
-      if (!gamesMap[gameId].playerNames.includes(name)) {
-        gamesMap[gameId].playerNames.push(name);
+      if (!gamesMap[cleanGameId].playerNames.includes(cleanPlayerName)) {
+        gamesMap[cleanGameId].playerNames.push(cleanPlayerName);
       }
 
       // 국별로 계속 루프가 돌면서 덮어씌워지므로, 결국 해당 대국ID의 최종 국 결과(최종점수/순위/우마)가 남음
-      gamesMap[gameId].results[name] = {
-        name,
+      gamesMap[cleanGameId].results[cleanPlayerName] = {
+        name: cleanPlayerName,
         score,
         uma,
         rank
       };
 
       if (r > 0) {
-        if (!gamesMap[gameId].rounds[r]) {
-          gamesMap[gameId].rounds[r] = {
+        if (!gamesMap[cleanGameId].rounds[r]) {
+          gamesMap[cleanGameId].rounds[r] = {
             roundName: roundName || `${r}국`,
             roundStatus: roundStatus || '',
             players: {}
           };
         }
-        gamesMap[gameId].rounds[r].players[name] = {
+        gamesMap[cleanGameId].rounds[r].players[cleanPlayerName] = {
           deltaScore,
           finalScore: score,
           isRiichi,
