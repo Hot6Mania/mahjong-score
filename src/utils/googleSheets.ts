@@ -6,19 +6,31 @@ let accessToken: string | null = null;
  */
 export const initGapi = (): Promise<void> => {
   return new Promise((resolve, reject) => {
-    if (typeof window.gapi === 'undefined') {
-      reject(new Error('GAPI SDK not loaded yet.'));
-      return;
-    }
-    window.gapi.load('client', async () => {
-      try {
-        await window.gapi.client.init({});
-        await window.gapi.client.load('https://sheets.googleapis.com/$discovery/rest?version=v4');
-        resolve();
-      } catch (err) {
-        reject(err);
+    let retryCount = 0;
+    const maxRetries = 50; // 최대 5초간 대기
+    
+    const checkAndInit = () => {
+      if (typeof window.gapi !== 'undefined') {
+        window.gapi.load('client', async () => {
+          try {
+            await window.gapi.client.init({});
+            await window.gapi.client.load('https://sheets.googleapis.com/$discovery/rest?version=v4');
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        });
+      } else {
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          reject(new Error('GAPI SDK not loaded yet. (Timeout 5s)'));
+        } else {
+          setTimeout(checkAndInit, 100); // 100ms 대기 후 재검증
+        }
       }
-    });
+    };
+    
+    checkAndInit();
   });
 };
 

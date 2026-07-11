@@ -302,8 +302,20 @@ onMounted(async () => {
   try {
     await initGapi();
     if (googleInfo.clientId) {
-      initGis(googleInfo.clientId, onGoogleTokenReceived);
-      await tryAutoLogin(onGoogleTokenReceived);
+      // google GIS SDK 로드 대기 (최대 5초)
+      let gisRetry = 0;
+      const initGisWithRetry = () => {
+        if (typeof window.google !== 'undefined' && window.google.accounts) {
+          initGis(googleInfo.clientId, onGoogleTokenReceived);
+          tryAutoLogin(onGoogleTokenReceived).catch(e => console.warn("자동 로그인 확인 실패:", e));
+        } else if (gisRetry < 50) {
+          gisRetry++;
+          setTimeout(initGisWithRetry, 100);
+        } else {
+          console.error("Google Identity SDK 로드 실패 (Timeout 5s)");
+        }
+      };
+      initGisWithRetry();
     }
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
