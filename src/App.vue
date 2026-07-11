@@ -1978,7 +1978,8 @@ const loadExistingSession = async (cleanTitle: string) => {
 
     rawRows.forEach((row: any) => {
       const name = row[0]; // A열: 이름
-      const pts = parseFloat(row[2]) || 0; // C열: 누적 우마
+      let pts = parseFloat(row[2]) || 0; // C열: 누적 우마
+      if (isNaN(pts)) pts = 0;
       if (name && name.trim()) {
         const cleanName = name.trim();
         restoredMembers.push(cleanName);
@@ -1986,13 +1987,15 @@ const loadExistingSession = async (cleanTitle: string) => {
       }
     });
 
-    // 멤버 풀 및 누적 포인트 상태 갱신
-    googleInfo.todayMembers = restoredMembers;
-    localStorage.setItem("today_members", JSON.stringify(restoredMembers));
-    
-    Object.keys(localPoints).forEach(key => delete localPoints[key]);
-    Object.assign(localPoints, restoredPoints);
-    localStorage.setItem("today_members_points", JSON.stringify(restoredPoints));
+    // 멤버 풀 및 누적 포인트 상태 갱신 (빈 껍데기 세션 복원 시 로컬 캐시 훼손 차단)
+    if (restoredMembers.length > 0) {
+      googleInfo.todayMembers = restoredMembers;
+      localStorage.setItem("today_members", JSON.stringify(restoredMembers));
+      
+      Object.keys(localPoints).forEach(key => delete localPoints[key]);
+      Object.assign(localPoints, restoredPoints);
+      localStorage.setItem("today_members_points", JSON.stringify(restoredPoints));
+    }
 
     // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:P500 긁어오기)
     syncProgress.value = 70;
