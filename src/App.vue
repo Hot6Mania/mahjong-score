@@ -6,7 +6,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, tryAutoLogin } from "@/utils/googleSheets"
+import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures } from "@/utils/googleSheets"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
@@ -307,7 +307,6 @@ onMounted(async () => {
       const initGisWithRetry = () => {
         if (typeof window.google !== 'undefined' && window.google.accounts) {
           initGis(googleInfo.clientId, onGoogleTokenReceived);
-          tryAutoLogin(onGoogleTokenReceived).catch(e => console.warn("자동 로그인 확인 실패:", e));
         } else if (gisRetry < 50) {
           gisRetry++;
           setTimeout(initGisWithRetry, 100);
@@ -1455,8 +1454,8 @@ const handlePromptConfirm = async () => {
     return;
   }
 
-  // 입력값에서 ID 추출 정규식 적용
-  const matches = val.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  // 입력값에서 ID 추출 정규식 적용 (다양한 u/0 세션 주소 및 htmlview 주소 완벽 호환)
+  const matches = val.match(/\/d\/([a-zA-Z0-9-_]+)/);
   const extractedId = (matches && matches[1]) ? matches[1] : val;
 
   googleInfo.spreadsheetId = extractedId;
