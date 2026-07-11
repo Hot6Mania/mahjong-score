@@ -1,25 +1,23 @@
-# riichi-mahjong
+# 마작 점수 계산기 (mahjong-score)
 
-> [!NOTE]
-> **점수 표시가 안되는 탁자에서 리치마작을 즐길때 사용하기 위한 점수 카운터 입니다.**
-> 
-> **It is a score counter created for use when playing riichi mahjong on tables without score displays.**
-> 
-> **スコア表示ができない卓でリーチ麻雀を楽しむ際に使うための点数カウンターです。**
+마작 대국 관리, 점수 계산 및 Google Sheet 데이터 연동 기능을 제공하는 웹 앱입니다.
 
-## Page Link
+[he1fire.github.io/riichi-mahjong](he1fire.github.io/riichi-mahjong) 프로젝트를 참고하여 제작하였습니다.
 
-### [he1fire.github.io/riichi-mahjong](https://he1fire.github.io/riichi-mahjong)
+기존 사이트에 유국만관 기능이 없는 것이 아쉬워서 만들게 되었습니다.
 
-## How To Use
+Iphone SE 가로 화면(667x375) 화면에 최적화되어 있습니다.
 
-[![ko](https://img.shields.io/badge/readme-ko-limegreen?style=for-the-badge)](README-ko.md) [![en](https://img.shields.io/badge/readme-en-blue?style=for-the-badge)](README-en.md) [![ja](https://img.shields.io/badge/readme-ja-red?style=for-the-badge)](README-ja.md)
+구글 연동 모드는 시트 세팅이 필요한데 세팅 스켈레톤은 올려놓지 않았습니다. 필요하면 말씀해주세요
 
-|언어 변경 / change language / 言語変更|
-|:---:|
-|<img src="images/gl/change_lang.gif" style="width: 100%; height: auto;"/>|
-|옵션 버튼에서 언어를 바꿀 수 있습니다.<br>You can change the language in the settings.<br>セッティングで言語を変えることができます。|
-
-## Please Share Your Opinion
-
-Feel free to send your opinions, translation suggestions, or feature requests to cmg3172@naver.com or [open a new issue here.](https://github.com/he1fire/riichi-mahjong/issues/new)
+## 주요 기능
+- **대국 점수 계산 및 우마 기록**
+    - 여러 대국 게임 결과 기록 후 확인 가능
+    - 총 우마 페이지에서 해당 회차 멤버별 우마 확인 가능
+    - 스탯 데이터(화료율, 방총률, 리치율 등) 확인 페이지
+- **구글 연동 모드 지원**
+    - 로컬 모드와 구글 연동 모드 지원
+- **구글 시트 동기화**
+        - 해당 회차 데이터 구글 시트에 일괄 동기화
+- **회차 관리**
+        - 기존 회차를 구글 시트에서 복원하는 '기존 회차 이어하기' 및 '신규 회차 시작' 기능 제공

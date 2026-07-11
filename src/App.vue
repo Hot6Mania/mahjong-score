@@ -352,7 +352,6 @@ const toggleFullScreen = () => {
 /**언어 변경*/
 const changeLocale = () => {
   const targetLanguage = 'ko'; // 한국어로 고정
-  router.push({params: {locale: targetLanguage}}); // 라우팅 경로 설정
   locale.value=targetLanguage; // 언어 변경
   document.title=t('pageTitle') // 페이지 이름 설정
   document.documentElement.setAttribute('lang', targetLanguage); // lang 속성 변경

@@ -8,12 +8,9 @@ export default defineConfig({
   plugins: [
     vue(),
     sitemap({
-      hostname: 'https://he1fire.github.io', // 여기는 도메인만!
+      hostname: 'https://hot6mania.github.io',
       dynamicRoutes: [
-        '/mahjong-score/',   // 메인
-        '/mahjong-score/ko', // 한국어
-        '/mahjong-score/en', // 영어
-        '/mahjong-score/ja'  // 일본어
+        '/mahjong-score/'   // 메인
       ],
       exclude: ['/', '/404'],
       outDir: 'dist',
