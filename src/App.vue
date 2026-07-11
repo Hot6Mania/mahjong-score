@@ -1323,7 +1323,7 @@ const onGoogleTokenReceived = async (_token: string) => {
 
 // 멤버 목록 로드
 const loadMemberList = async () => {
-  if (!googleInfo.spreadsheetId) return;
+  if (googleInfo.syncMode !== 'google' || !googleInfo.isLoggedIn || !googleInfo.spreadsheetId) return;
   try {
     const list = await fetchMemberList(googleInfo.spreadsheetId);
     googleInfo.memberList = list;
@@ -1334,7 +1334,7 @@ const loadMemberList = async () => {
 
 // 오늘의 대국 참여 멤버 로드
 const loadTodayMembers = async () => {
-  if (!googleInfo.spreadsheetId) return;
+  if (googleInfo.syncMode !== 'google' || !googleInfo.isLoggedIn || !googleInfo.spreadsheetId) return;
   try {
     const sessionSheetName = await getOrInitSessionSheetName();
     const pointsMap = await fetchSessionMembers(googleInfo.spreadsheetId, sessionSheetName);
@@ -1346,12 +1346,27 @@ const loadTodayMembers = async () => {
 
 // 전체 명단에 신규 멤버 등록
 const addNewMember = async (name: string) => {
-  if (!googleInfo.spreadsheetId) return;
+  // 구글 연동 모드인 경우 구글 시트에 멤버 추가
+  if (googleInfo.syncMode === 'google' && googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
+    try {
+      await addNewMembersToDb(googleInfo.spreadsheetId, [name]);
+      await loadMemberList();
+    } catch (err) {
+      console.error("신규 멤버 구글 시트 등록 실패:", err);
+    }
+    return;
+  }
+
+  // 로컬 모드인 경우 오프라인 리스트 갱신
   try {
-    await addNewMembersToDb(googleInfo.spreadsheetId, [name]);
-    await loadMemberList();
-  } catch (err) {
-    console.error("신규 멤버 등록 실패:", err);
+    const offlineListRaw = localStorage.getItem("offline_member_list") || "[]";
+    const offlineList: string[] = JSON.parse(offlineListRaw);
+    if (!offlineList.includes(name)) {
+      offlineList.push(name);
+      localStorage.setItem("offline_member_list", JSON.stringify(offlineList));
+    }
+  } catch (e) {
+    console.warn("오프라인 멤버 추가 실패:", e);
   }
 };
 
@@ -1875,8 +1890,8 @@ const handleHistoryGameClick = (index: number) => {
   chartPlayers.value = names.map((n: string) => ({ name: n }));
   chartRecords.value = JSON.parse(JSON.stringify(game.records));
   
-  // 게임 결과 차트 모달 띄우기
-  showModal('result_chart');
+  // 과거 대국 전용 차트 모달 기동
+  showModal('history_chart');
 };
 
 // 구글 스프레드시트로부터 기존 회차 정보를 읽어와 로컬 상태(멤버 풀, 누적 점수, 대국 이력)를 역으로 완벽하게 복원합니다.
@@ -2118,8 +2133,8 @@ const invalidateGame = (index: number) => {
       :googleMemberStats="googleMemberStats"
       :isSaving="isSaving"
       :syncProgress="syncProgress"
-      :chartPlayers="chartPlayers"
-      :chartRecords="chartRecords"
+      :chart-players="chartPlayers"
+      :chart-records="chartRecords"
       @show-modal="showModal"
       @hide-modal="hideModal"
       @set-arrow-button="setArrowButton"

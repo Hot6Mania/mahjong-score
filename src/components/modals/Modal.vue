@@ -215,8 +215,8 @@ const scoreChartInfo = computed(() => {
   const textColor = isDarkTheme ? '#e5e5e5' : '#1a1a1a';
   const gridColor = isDarkTheme ? '#444444' : '#e8e8e8';
 
-  const sourcePlayers = props.chartPlayers || props.players;
-  const sourceRecords = props.chartRecords || props.records;
+  const sourcePlayers = (props.chartPlayers && props.chartPlayers.length > 0) ? props.chartPlayers : props.players;
+  const sourceRecords = (props.chartRecords && props.chartRecords.score && props.chartRecords.score.length > 0) ? props.chartRecords : props.records;
 
   if (!sourceRecords || !sourceRecords.score || sourceRecords.score.length === 0) {
     return { data: { labels: [], datasets: [] }, options: {} };
@@ -536,13 +536,21 @@ const getSignColor = (sign: number, x: boolean) => {
   <!-- 게임 결과창(차트) -->
   <div v-else-if="modalInfo.type==='result_chart'" class="modal_content" @click.stop>
     <div class="container_resultchart" @click.stop="emit('show-modal', 'result_sheet')">
-      <LineChart :data="scoreChartInfo.data" :options="scoreChartInfo.options"/>
+      <LineChart 
+        :key="`result-chart-${records?.time?.length || 0}-${players?.[0]?.name || ''}`"
+        :data="scoreChartInfo.data" 
+        :options="scoreChartInfo.options"
+      />
     </div>
   </div>
   <!-- 과거 대국 결과 차트창 (클릭 시 총 우마 창으로 복귀) -->
   <div v-else-if="modalInfo.type==='history_chart'" class="modal_content" @click.stop>
     <div class="container_resultchart" @click.stop="emit('show-modal', 'total_uma')">
-      <LineChart :data="scoreChartInfo.data" :options="scoreChartInfo.options"/>
+      <LineChart 
+        :key="`history-chart-${chartRecords?.time?.length || 0}-${chartPlayers?.[0]?.name || ''}`"
+        :data="scoreChartInfo.data" 
+        :options="scoreChartInfo.options"
+      />
     </div>
   </div>
   <!-- 점수 기록창 -->
