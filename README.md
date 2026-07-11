@@ -2,7 +2,7 @@
 
 마작 대국 관리, 점수 계산 및 Google Sheet 데이터 연동 기능을 제공하는 웹 앱입니다.
 
-[he1fire.github.io/riichi-mahjong](he1fire.github.io/riichi-mahjong) 프로젝트를 참고하여 제작하였습니다.
+[he1fire.github.io/riichi-mahjong](https://github.com/he1fire/riichi-mahjong)프로젝트를 참고하여 제작하였습니다.
 
 기존 사이트에 유국만관 기능이 없는 것이 아쉬워서 만들게 되었습니다.
 
