@@ -2376,7 +2376,7 @@ const loadExistingSession = async (cleanTitle: string) => {
     }
 
     syncProgress.value = 100;
-    triggerToast("기존 회차 데이터 복원이 완벽하게 처리되었습니다!");
+    triggerToast("기존 회차 데이터 복원이 처리되었습니다.");
   } catch (err) {
     console.error("기존 회차 세션 복원 중 실패:", err);
     alert("회차 복원에 실패했습니다. 시트 주소 및 네트워크 권한을 점검해 주세요.");
