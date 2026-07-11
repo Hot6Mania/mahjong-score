@@ -331,7 +331,7 @@ const getSignColor = (sign: number, x: boolean) => {
 </script>
 
 <template>
-<div class="modal" @click="emit('hide-modal')">
+<div class="modal" @click="modalInfo.type === 'history_chart' ? emit('show-modal', 'total_uma') : emit('hide-modal')">
   <!-- 화료 인원 선택창 -->
   <div v-if="modalInfo.type==='check_player_win'" class="modal_content" @click.stop>
     <ModalCheckPlayer
@@ -536,6 +536,12 @@ const getSignColor = (sign: number, x: boolean) => {
   <!-- 게임 결과창(차트) -->
   <div v-else-if="modalInfo.type==='result_chart'" class="modal_content" @click.stop>
     <div class="container_resultchart" @click.stop="emit('show-modal', 'result_sheet')">
+      <LineChart :data="scoreChartInfo.data" :options="scoreChartInfo.options"/>
+    </div>
+  </div>
+  <!-- 과거 대국 결과 차트창 (클릭 시 총 우마 창으로 복귀) -->
+  <div v-else-if="modalInfo.type==='history_chart'" class="modal_content" @click.stop>
+    <div class="container_resultchart" @click.stop="emit('show-modal', 'total_uma')">
       <LineChart :data="scoreChartInfo.data" :options="scoreChartInfo.options"/>
     </div>
   </div>
