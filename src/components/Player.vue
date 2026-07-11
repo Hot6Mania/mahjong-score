@@ -9,6 +9,7 @@ interface Props {
   option: Option,
   modalInfo: ModalInfo,
   animateRank: boolean,
+  isGameFinished: boolean,
 }
 const props = defineProps<Props>()
 
@@ -54,7 +55,7 @@ const isScoringActive = computed(() => {
 const shouldShowRank = computed(() => {
   if (props.player.rank === -1) return false;
   if (props.player.rank !== 0) return true;
-  return props.option.alwaysShowRank || isScoringActive.value;
+  return props.option.alwaysShowRank || isScoringActive.value || props.isGameFinished;
 })
 
 /**등수별 색상 계산*/

@@ -8,7 +8,8 @@ interface Props {
   seatTile: SeatTile,
   googleInfo: GoogleInfo,
   players?: Player[],
-  todayGamesHistory?: any[]
+  todayGamesHistory?: any[],
+  newlyAddedLocalMembers?: string[]
 }
 const props = defineProps<Props>()
 
@@ -16,11 +17,24 @@ const props = defineProps<Props>()
 type Emits = {
   (e: 'start-game-with-seats', assignment: Record<string, string>): void,
   (e: 'add-new-member', name: string): void,
-  (e: 'save-today-members', names: string[]): void
+  (e: 'delete-member', name: string): void,
+  (e: 'save-today-members', names: string[]): void,
+  (e: 'google-login'): void,
+  (e: 'google-logout'): void
 }
 const emit = defineEmits<Emits>()
 
 const currentStep = ref<'setup_today_pool' | 'select_match_4' | 'draw_seats'>('setup_today_pool')
+
+const handleToggleConnection = () => {
+  if (props.googleInfo.isLoggedIn) {
+    if (confirm("구글 계정 로그아웃을 진행하시겠습니까? (로컬 모드로 전환됩니다)")) {
+      emit('google-logout')
+    }
+  } else {
+    emit('google-login')
+  }
+}
 
 // 1단계: 오늘의 멤버 풀
 const tempTodayMembers = ref<string[]>([])
@@ -40,14 +54,38 @@ const openedTiles = ref<boolean[]>([false, false, false, false])
 const randomizedTiles = ref<string[]>([]) 
 
 const displayMemberList = computed(() => {
-  if (props.googleInfo.isLoggedIn && props.googleInfo.memberList.length > 0) {
-    return props.googleInfo.memberList
+  if (props.googleInfo.isLoggedIn) {
+    return props.googleInfo.memberList || []
   }
   return offlineMemberList.value
 })
 
+// 입력 중인 멤버 이름에 따른 구글 시트 멤버 자동완성 제안 목록
+const suggestions = computed(() => {
+  const text = newMemberName.value.trim()
+  if (!text) return []
+  if (!props.googleInfo.isLoggedIn || !props.googleInfo.memberList) return []
+  
+  return props.googleInfo.memberList.filter(name => 
+    name.toLowerCase().includes(text.toLowerCase()) && 
+    !tempTodayMembers.value.includes(name) // 이미 참가자로 선택된 사람은 추천에서 배제
+  )
+})
+
+const selectSuggestion = (name: string) => {
+  if (!tempTodayMembers.value.includes(name)) {
+    tempTodayMembers.value.push(name)
+  }
+  newMemberName.value = ''
+}
+
 onMounted(() => {
   shuffleTiles()
+  
+  // 모바일 브라우저 주소창 자동 숨김 꼼수 강제 실행 (약간의 딜레이 후 1px 스크롤)
+  setTimeout(() => {
+    window.scrollTo(0, 1)
+  }, 300)
   
   if (props.googleInfo.todayMembers && props.googleInfo.todayMembers.length > 0) {
     tempTodayMembers.value = [...props.googleInfo.todayMembers]
@@ -114,14 +152,18 @@ const toggleTodayMember = (name: string) => {
 const handleAddNewMember = () => {
   const name = newMemberName.value.trim()
   if (!name) return
+  
+  // 기존 멤버인 경우: 오늘의 멤버(tempTodayMembers)에 즉시 추가(클릭된 효과)
   if (displayMemberList.value.includes(name)) {
-    alert("이미 등록된 멤버 이름입니다.")
+    if (!tempTodayMembers.value.includes(name)) {
+      tempTodayMembers.value.push(name)
+    }
+    newMemberName.value = ''
     return
   }
-  
-  if (props.googleInfo.isLoggedIn) {
-    emit('add-new-member', name)
-  } else {
+  // 신규 멤버인 경우: 신규 등록 진행 (로그인 상태 여부와 관계없이 이벤트를 송출하여 로컬 스토리지에 보존)
+  emit('add-new-member', name)
+  if (!props.googleInfo.isLoggedIn) {
     offlineMemberList.value.push(name)
   }
   
@@ -131,21 +173,31 @@ const handleAddNewMember = () => {
   newMemberName.value = ''
 }
 
-// 오프라인 로컬 멤버 제거 기능
+// 전체 명단에서 멤버 제거 기능
 const removeLocalMember = (name: string) => {
   if (hasPlayedGame(name)) {
     alert(`'${name}'님은 오늘 플레이한 기록이 있어 전체 명단에서 삭제할 수 없습니다. (우선 '총 우마' 페이지에서 해당 플레이어가 포함된 회전을 무효 처리해야 합니다.)`)
     return
   }
-  // 1. 로컬 전체 명단에서 삭제
-  const idx = offlineMemberList.value.indexOf(name)
-  if (idx > -1) {
-    offlineMemberList.value.splice(idx, 1)
+  
+  if (!confirm(`'${name}'님을 전체 명단에서 완전히 삭제하시겠습니까?`)) {
+    return
   }
-  // 2. 오늘의 참가 풀에서 삭제
+
+  // 1. 오늘의 참가 풀에서 우선 제거
   const tIdx = tempTodayMembers.value.indexOf(name)
   if (tIdx > -1) {
     tempTodayMembers.value.splice(tIdx, 1)
+  }
+
+  // 2. 부모 컴포넌트에 이벤트를 전송하여 명단 데이터(스토리지/구글 시트) 동기화
+  emit('delete-member', name)
+  if (!props.googleInfo.isLoggedIn) {
+    // 오프라인 로컬 전체 명단에서 삭제
+    const idx = offlineMemberList.value.indexOf(name)
+    if (idx > -1) {
+      offlineMemberList.value.splice(idx, 1)
+    }
   }
 }
 
@@ -267,30 +319,43 @@ const tileBackStyle = (tileIdx: number) => {
     <div class="step_header">
       <span class="step_indicator">1 / 3 단계</span>
       <h3 class="step_title">오늘의 멤버 설정</h3>
+      <div class="connection_status" @click="handleToggleConnection" title="클릭하여 로그인/로그아웃">
+        <span v-if="googleInfo.isLoggedIn" class="status_text">
+          <span class="status_dot green"></span> 연동 모드
+        </span>
+        <span v-else class="status_text">
+          <span class="status_dot gray"></span> 로컬 모드
+        </span>
+      </div>
     </div>
 
-    <div v-if="!googleInfo.isLoggedIn" class="offline_banner">
-      로컬 모드 (멤버 직접 등록)
-    </div>
-
-    <div class="add_member_bar">
+    <div class="add_member_bar" style="position: relative;">
       <input 
         type="text" 
         v-model="newMemberName" 
-        placeholder="새 멤버 등록" 
+        placeholder="멤버 등록" 
         @keyup.enter="handleAddNewMember"
         maxlength="20"
       />
       <button @click="handleAddNewMember" class="btn_add">추가</button>
+      
+      <!-- 자동완성 제안 목록 -->
+      <div v-if="suggestions.length > 0" class="autocomplete_suggestions">
+        <div 
+          v-for="(name, idx) in suggestions" 
+          :key="idx" 
+          class="suggestion_item"
+          @mousedown.prevent.stop="selectSuggestion(name)"
+          @touchstart.prevent.stop="selectSuggestion(name)"
+        >
+          {{ name }}
+        </div>
+      </div>
     </div>
 
     <!-- 통합 멤버 명단 체크박스 -->
-    <div class="member_grid">
-      <div v-if="displayMemberList.length === 0" class="empty_checklist_msg" style="grid-column: span 2; padding: 15px; text-align: center; color: var(--text-dimmed); font-size: 13px;">
-        등록된 멤버가 없습니다.<br>새 이름을 입력하고 추가 버튼을 누르세요.
-      </div>
+    <div v-if="displayMemberList.length > 0" class="member_grid horizontal-3row-scroll">
       <div 
-        v-else
         v-for="(name, i) in displayMemberList" 
         :key="i"
         class="grid_member_item"
@@ -301,15 +366,20 @@ const tileBackStyle = (tileIdx: number) => {
         <span v-show="tempTodayMembers.includes(name)" style="margin-right: 4px;">✓</span>
         <span>{{ name.length > 5 ? name.substring(0, 4) : name }}<span v-if="name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
         
-        <!-- 로컬 오프라인 상태일 때 개별 삭제할 수 있는 버튼 -->
+        <!-- 개별 멤버 삭제 버튼 (오늘 참가 대국 기록이 없으며, 오프라인 모드이거나 새로 가입한 로컬 임시 멤버일 때만 노출) -->
         <span 
-          v-if="!googleInfo.isLoggedIn"
+          v-if="!hasPlayedGame(name) && (!googleInfo.isLoggedIn || (newlyAddedLocalMembers && newlyAddedLocalMembers.includes(name)))"
           @click.stop="removeLocalMember(name)" 
           class="btn_delete_member"
         >
           ✕
         </span>
       </div>
+    </div>
+    
+    <!-- 비어있을 때 정중앙 정렬 전용 안내창 -->
+    <div v-else class="empty_checklist_container">
+      등록된 멤버가 없습니다.<br>새 이름을 입력하고 추가 버튼을 누르세요.
     </div>
 
     <div class="helper_text">
@@ -436,6 +506,46 @@ const tileBackStyle = (tileIdx: number) => {
 </template>
 
 <style scoped>
+.autocomplete_suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background-color: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  z-index: 100;
+  max-height: 150px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.dark .autocomplete_suggestions {
+  background-color: #1e1e1e;
+  border: 1px solid #444;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+}
+
+.suggestion_item {
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  color: #1f2937;
+  text-align: left;
+  transition: background-color 0.15s ease;
+}
+.dark .suggestion_item {
+  color: #f3f4f6;
+}
+
+.suggestion_item:hover {
+  background-color: #f3f4f6;
+  color: var(--color-toggle-on, #4caf50);
+}
+.dark .suggestion_item:hover {
+  background-color: #2a2a2a;
+  color: var(--color-toggle-on, #4caf50);
+}
+
 .modal_tile_wrapper {
   padding: 10px;
   width: 320px;
@@ -450,6 +560,7 @@ const tileBackStyle = (tileIdx: number) => {
 }
 .step_header {
   margin-bottom: 8px;
+  position: relative;
 }
 .step_indicator {
   font-size: 11px;
@@ -468,15 +579,40 @@ const tileBackStyle = (tileIdx: number) => {
   margin-bottom: 8px;
   font-weight: bold;
 }
-.offline_banner {
-  font-size: 11px;
-  color: var(--color-negative);
-  background-color: var(--bg-stripe-dark);
-  padding: 4px 8px;
-  border-radius: 4px;
-  border: 1px dashed var(--border-color);
-  margin-bottom: 8px;
-  text-align: center;
+.connection_status {
+  position: absolute;
+  left: 0px;
+  top: 0px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--text-dimmed, #888);
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s ease;
+}
+.connection_status:hover {
+  opacity: 0.75;
+}
+.status_text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.status_dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status_dot.green {
+  background-color: var(--color-positive, #4caf50);
+  box-shadow: 0 0 8px var(--color-positive, #4caf50);
+}
+.status_dot.gray {
+  background-color: #888888;
+  box-shadow: 0 0 6px #888888;
 }
 
 /* 1단계 스타일 */
@@ -504,73 +640,155 @@ const tileBackStyle = (tileIdx: number) => {
   font-size: 13px;
   cursor: pointer;
 }
-.member_checklist {
+.empty_checklist_container {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 140px;
-  overflow-y: scroll !important;
-  padding: 4px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  width: 100%;
+  height: 130px;
+  border: 1px dashed var(--border-color);
+  border-radius: 6px;
   background-color: var(--bg-stripe-dark);
+  color: var(--text-dimmed);
+  font-size: 13px;
+  line-height: 1.5;
+  box-sizing: border-box;
+  padding: 15px;
 }
-
+.member_checklist,
 .member_grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
-  max-height: 150px;
-  overflow-y: scroll !important;
-  padding: 4px;
+  display: grid !important;
+  grid-template-columns: repeat(3, 1fr) !important;
+  gap: 6px !important;
+  max-height: 120px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 6px 4px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 6px;
   background-color: var(--bg-stripe-dark);
+  scrollbar-width: thin;
 }
 
-/* 스크롤바 강제 노출 스타일 (그날의 멤버 설정, 그 판의 멘쯔 설정) */
+/* 좌우 가로 스크롤 모드 */
+.horizontal-scroll {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  -webkit-overflow-scrolling: touch;
+  height: 64px !important;
+  max-height: 64px !important;
+  padding: 8px 6px !important;
+}
+.horizontal-scroll .grid_member_item {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 90px !important;
+  height: 44px !important;
+  padding: 10px 14px !important;
+  font-size: 14px !important;
+}
+.horizontal-scroll .grid_member_item:has(.btn_delete_member) {
+  padding-right: 26px !important;
+}
+.horizontal-scroll .btn_delete_member {
+  width: 18px !important;
+  height: 18px !important;
+  font-size: 11px !important;
+  right: 4px !important;
+}
+
+/* 좌우 3줄 가로 스크롤 모드 */
+.horizontal-3row-scroll {
+  display: grid !important;
+  grid-template-rows: repeat(3, 36px) !important;
+  grid-auto-flow: column !important;
+  grid-auto-columns: 80px !important;
+  gap: 6px !important;
+  height: 130px !important;
+  max-height: 130px !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding: 6px 4px !important;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--bg-stripe-dark);
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+.horizontal-3row-scroll .grid_member_item {
+  width: 80px !important;
+  min-width: 80px !important;
+  height: 36px !important;
+  padding: 4px 6px !important;
+  font-size: 11px !important;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.horizontal-3row-scroll .grid_member_item:has(.btn_delete_member) {
+  padding-right: 18px !important;
+}
+.horizontal-3row-scroll .btn_delete_member {
+  width: 14px !important;
+  height: 14px !important;
+  font-size: 9px !important;
+  right: 2px !important;
+}
+
+/* 스크롤바 강제 노출 스타일 (세로 스크롤바) */
 .member_checklist::-webkit-scrollbar,
 .member_grid::-webkit-scrollbar {
-  width: 10px;
+  width: 6px;
   display: block !important;
+}
+.horizontal-3row-scroll::-webkit-scrollbar,
+.horizontal-scroll::-webkit-scrollbar {
+  height: 6px !important;
+  width: auto !important;
 }
 .member_checklist::-webkit-scrollbar-track,
 .member_grid::-webkit-scrollbar-track {
   background: var(--bg-stripe-dark);
-  border-radius: 5px;
+  border-radius: 3px;
 }
 .member_checklist::-webkit-scrollbar-thumb,
 .member_grid::-webkit-scrollbar-thumb {
-  background: #888888; /* 항상 잘 보이는 회색 */
-  border: 2px solid var(--bg-stripe-dark);
-  border-radius: 5px;
+  background: #888888;
+  border-radius: 3px;
 }
 .member_checklist::-webkit-scrollbar-thumb:hover,
 .member_grid::-webkit-scrollbar-thumb:hover {
   background: var(--color-toggle-on);
 }
-.member_checklist,
-.member_grid {
-  scrollbar-width: thin;
-  scrollbar-color: #888888 var(--bg-stripe-dark);
-}
 
 .grid_member_item {
+  width: 100% !important;
+  min-width: 0 !important;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 6px;
+  padding: 6px 4px !important;
   background-color: var(--bg-stripe-light);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 12px !important;
   font-weight: bold;
   text-align: center;
   user-select: none;
-  min-height: 44px;
+  height: 38px !important;
+  box-sizing: border-box;
+  position: relative;
   transition: background-color 0.2s, border-color 0.2s, color 0.2s;
   color: var(--text-color);
+}
+.grid_member_item:has(.btn_delete_member) {
+  padding-right: 18px !important;
 }
 .grid_member_item.active {
   background-color: var(--color-toggle-on);
@@ -580,17 +798,18 @@ const tileBackStyle = (tileIdx: number) => {
 
 .btn_delete_member {
   position: absolute;
-  right: 6px;
-  top: 6px;
-  width: 18px;
-  height: 18px;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
   background-color: rgba(255, 0, 0, 0.15);
   color: var(--color-negative);
   border-radius: 50%;
-  font-size: 11px;
+  font-size: 9px;
   font-weight: bold;
   transition: background-color 0.2s, color 0.2s;
   z-index: 2;

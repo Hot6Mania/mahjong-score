@@ -7,15 +7,25 @@ interface Props {
   players: Player[]
   history: any[]
   option: Option
+  googleMemberStats?: any[] // 구글 스프레드시트에서 실시간 갱신된 전체 기간 스탯
 }
 const props = defineProps<Props>()
+
+// 스탯 계산 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
+const scopeTab = ref<'session' | 'all'>('session')
 
 // 탭 종류
 type TabType = 'basic' | 'riichi' | 'other'
 const activeTab = ref<TabType>('basic')
 
-// 오늘 참가한 모든 플레이어 목록 추출
+// 오늘 참가한 모든 플레이어 목록 추출 (스코프에 따라 전체 명단 반환)
 const allPlayers = computed(() => {
+  if (scopeTab.value === 'all') {
+    if (props.googleMemberStats && props.googleMemberStats.length > 0) {
+      return props.googleMemberStats.map(s => s.name);
+    }
+  }
+
   const set = new Set<string>()
   if (props.todayMembers && props.todayMembers.length > 0) {
     props.todayMembers.forEach(name => set.add(name))
@@ -42,16 +52,109 @@ const allPlayers = computed(() => {
 const selectedPlayer = ref<string>('')
 
 // 리액티브하게 초기 플레이어 및 선택값 갱신
-watch(allPlayers, (newVal) => {
-  if (newVal.length > 0 && (!selectedPlayer.value || !newVal.includes(selectedPlayer.value))) {
-    selectedPlayer.value = newVal[0]
+watch([allPlayers, scopeTab], ([newVal]) => {
+  if (newVal.length > 0) {
+    if (!selectedPlayer.value || !newVal.includes(selectedPlayer.value)) {
+      selectedPlayer.value = newVal[0]
+    }
+  } else {
+    selectedPlayer.value = ''
   }
 }, { immediate: true })
+
+// 기본 빈 스탯 객체 틀
+const emptyStats = {
+  totalGames: 0,
+  totalRounds: 0,
+  winRate: '-',
+  loseRate: '-',
+  tsumoRate: '-',
+  drawRate: '-',
+  drawTenpaiRate: '-',
+  avgWinScore: '-',
+  avgLoseScore: '-',
+  avgRank: '-',
+  tobiRate: '-',
+  expectedScore: '-',
+  riichiWinRate: '-',
+  riichiLoseRate: '-',
+  riichiRate: '-',
+  riichiSuji: '-',
+  riichiIncome: '-',
+  riichiExpense: '-',
+  firstRiichiRate: '-',
+  chaseRiichiRate: '-',
+  chasedRiichiRate: '-',
+  riichiDrawRate: '-',
+  oyaKaburiRate: '-',
+  oyaKaburiAvg: '-',
+  loseRiichiRate: '-',
+  winEfficiency: 0,
+  loseLoss: 0,
+  netWinEfficiency: 0,
+  roundSuji: 0
+}
 
 // 스탯 계산기
 const stats = computed(() => {
   const name = selectedPlayer.value
-  if (!name) return null
+  if (!name) return emptyStats
+
+  if (scopeTab.value === 'all') {
+    const item = props.googleMemberStats?.find(s => s.name === name);
+    if (!item) {
+      return emptyStats;
+    }
+    
+    const winRate = (item.winRate * 100).toFixed(1) + '%';
+    const loseRate = (item.loseRate * 100).toFixed(1) + '%';
+    const riichiRate = (item.riichiRate * 100).toFixed(1) + '%';
+    const tsumoRate = (item.tsumoRate * 100).toFixed(1) + '%';
+    const drawRate = (item.drawRate * 100).toFixed(1) + '%';
+    const drawTenpaiRate = (item.drawTenpaiRate * 100).toFixed(1) + '%';
+    const tobiRate = (item.tobiRate * 100).toFixed(1) + '%';
+    const riichiWinRate = (item.riichiWinRate * 100).toFixed(1) + '%';
+    const riichiLoseRate = (item.riichiLoseRate * 100).toFixed(1) + '%';
+    const riichiDrawRate = (item.riichiDrawRate * 100).toFixed(1) + '%';
+
+    const avgRank = item.rank > 0 ? item.rank.toFixed(2) + '위' : '-';
+    const expectedScoreVal = item.games > 0 ? (item.uma / item.games) : 0;
+    const expectedScore = item.games > 0
+      ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(2)
+      : '-';
+    
+    return {
+      totalGames: item.games,
+      totalRounds: item.rounds,
+      winRate,
+      loseRate,
+      tsumoRate,
+      drawRate,
+      drawTenpaiRate,
+      avgWinScore: item.avgWinScore > 0 ? item.avgWinScore.toLocaleString() : '-',
+      avgLoseScore: item.avgLoseScore > 0 ? item.avgLoseScore.toLocaleString() : '-',
+      avgRank,
+      tobiRate,
+      expectedScore,
+      riichiWinRate,
+      riichiLoseRate,
+      riichiRate,
+      riichiSuji: '-',
+      riichiIncome: '-',
+      riichiExpense: '-',
+      firstRiichiRate: '-',
+      chaseRiichiRate: '-',
+      chasedRiichiRate: '-',
+      riichiDrawRate,
+      oyaKaburiRate: '-',
+      oyaKaburiAvg: '-',
+      loseRiichiRate: '-',
+      winEfficiency: item.winEfficiency,
+      loseLoss: item.loseLoss,
+      netWinEfficiency: item.netEfficiency,
+      roundSuji: 0
+    };
+  }
 
   // 집계 변수들
   let totalGames = 0
@@ -103,97 +206,91 @@ const stats = computed(() => {
         tobiCount++
       }
 
-      // 세부 라운드 기록(records)이 누락된 구버전 기록이면 세부 통계 계산만 건너뜀
-      if (!game.records) return
+      // 국별 상세 정보 분석
+      if (game.records && Array.isArray(game.records)) {
+        game.records.forEach((rec: any) => {
+          if (!rec.results) return
+          const myResult = rec.results[pIdx]
+          if (!myResult) return
 
-      // 각 국(Round)별 집계
-      const rec = game.records
-      const roundsLen = rec.riichi ? rec.riichi.length : 0
+          totalRounds++
 
-      // 국 인덱스는 1부터 시작 (0은 시작 상태)
-      for (let r = 1; r < roundsLen; r++) {
-        totalRounds++
+          const status = myResult.status // 'win', 'lose', 'draw', 'none'
+          const isWin = (status === 'win')
+          const isLose = (status === 'lose')
+          const isDraw = (status === 'draw')
+          const delta = myResult.delta || 0
+          const hasRiichi = !!myResult.riichi
 
-        const isWin = (rec.win && rec.win[r]) ? rec.win[r][pIdx] : false
-        const isLose = (rec.lose && rec.lose[r]) ? rec.lose[r][pIdx] : false
-        const status = (rec.status && rec.status[r]) ? rec.status[r] : 'draw'
-        const isDraw = (status === 'normal_draw' || status === 'special_draw')
-        const isTenpai = (rec.tenpai && rec.tenpai[r]) ? rec.tenpai[r][pIdx] : false
-        
-        // 델타 점수 (해당 국 시작 시점과 종료 시점의 차이)
-        const scoreAfter = (rec.score && rec.score[pIdx] && rec.score[pIdx][2 * r] !== undefined) ? rec.score[pIdx][2 * r] : 0
-        const scoreBefore = (rec.score && rec.score[pIdx] && rec.score[pIdx][2 * (r - 1)] !== undefined) ? rec.score[pIdx][2 * (r - 1)] : 0
-        const delta = scoreAfter - scoreBefore
-
-        // 화료 및 방총
-        if (isWin) {
-          winCount++
-          totalWinScore += delta
-          if (status === 'tsumo') {
-            tsumoWinCount++
-          }
-        }
-        if (isLose) {
-          loseCount++
-          totalLoseScore += delta // 음수 값
-        }
-
-        // 유국
-        if (isDraw) {
-          drawCount++
-          if (isTenpai) {
-            drawTenpaiCount++
-          }
-        }
-
-        // 리치 관련
-        const riichiList = (rec.riichiOrder && rec.riichiOrder[r]) ? rec.riichiOrder[r] : []
-        const hasRiichi = riichiList.includes(pIdx)
-
-        if (hasRiichi) {
-          riichiCount++
-          riichiDeltaSum += delta
+          // 선제 리치 여부 분석을 위한 국 내부 리치 리스트 수집
+          const riichiList: number[] = []
+          rec.results.forEach((res: any, idx: number) => {
+            if (res && res.riichi) riichiList.push(idx)
+          })
 
           if (isWin) {
-            riichiWinCount++
-            riichiWinScoreSum += delta
+            winCount++
+            totalWinScore += delta
+            if (myResult.type === 'tsumo') {
+              tsumoWinCount++
+            }
           }
           if (isLose) {
-            riichiLoseCount++
-            riichiLoseScoreSum += delta // 음수
+            loseCount++
+            totalLoseScore += delta // 음수
           }
           if (isDraw) {
-            riichiDrawCount++
-          }
-
-          // 선제, 추격, 피추격
-          const orderIdx = riichiList.indexOf(pIdx)
-          if (orderIdx === 0) {
-            firstRiichiCount++
-            if (riichiList.length > 1) {
-              chasedRiichiCount++
+            drawCount++
+            if (myResult.tenpai) {
+              drawTenpaiCount++
             }
-          } else if (orderIdx > 0) {
-            chaseRiichiCount++
           }
-        }
 
-        // 오야카부리 & 쯔모당함
-        const dealerIdx = (rec.dealer && rec.dealer[r] !== undefined) ? rec.dealer[r] : 0
-        const isEast = (dealerIdx === pIdx)
+          if (hasRiichi) {
+            riichiCount++
+            riichiDeltaSum += delta
 
-        if (status === 'tsumo' && !isWin) {
-          tsumoSufferedCount++
-          if (isEast && delta <= -4000) {
-            manganOyaKaburiCount++
-            manganOyaKaburiScoreSum += Math.abs(delta)
+            if (isWin) {
+              riichiWinCount++
+              riichiWinScoreSum += delta
+            }
+            if (isLose) {
+              riichiLoseCount++
+              riichiLoseScoreSum += delta // 음수
+            }
+            if (isDraw) {
+              riichiDrawCount++
+            }
+
+            // 선제, 추격, 피추격
+            const orderIdx = riichiList.indexOf(pIdx)
+            if (orderIdx === 0) {
+              firstRiichiCount++
+              if (riichiList.length > 1) {
+                chasedRiichiCount++
+              }
+            } else if (orderIdx > 0) {
+              chaseRiichiCount++
+            }
           }
-        }
 
-        // 방총 시 리치 여부
-        if (isLose && hasRiichi) {
-          loseWithRiichiCount++
-        }
+          // 오야카부리 & 쯔모당함
+          const dealerIdx = (rec.dealer && rec.dealer[pIdx] !== undefined) ? rec.dealer[pIdx] : 0
+          const isEast = (dealerIdx === pIdx)
+
+          if (status === 'tsumo' && !isWin) {
+            tsumoSufferedCount++
+            if (isEast && delta <= -4000) {
+              manganOyaKaburiCount++
+              manganOyaKaburiScoreSum += Math.abs(delta)
+            }
+          }
+
+          // 방총 시 리치 여부
+          if (isLose && hasRiichi) {
+            loseWithRiichiCount++
+          }
+        })
       }
     })
   }
@@ -224,7 +321,7 @@ const stats = computed(() => {
 
   const expectedScoreVal = totalGames > 0 ? totalUma / totalGames : 0
   const expectedScore = totalGames > 0
-    ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(1)
+    ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(2)
     : '-'
 
   // 리치 스탯 연산
@@ -250,15 +347,10 @@ const stats = computed(() => {
   const loseRateNum = totalRounds > 0 ? loseCount / totalRounds : 0
   const avgLoseNum = loseCount > 0 ? Math.abs(totalLoseScore) / loseCount : 0
 
-  const winEfficiency = Math.round(winRateNum * avgWinNum)
-  const loseLoss = Math.round(loseRateNum * avgLoseNum)
+  const winEfficiency = Number((winRateNum * avgWinNum).toFixed(0))
+  const loseLoss = Number((loseRateNum * avgLoseNum).toFixed(0))
   const netWinEfficiency = winEfficiency - loseLoss
-
-  // 국수지
-  const avgFinalScoreNum = totalGames > 0 ? totalFinalScore / totalGames : 0
-  const roundSuji = totalRounds > 0 
-    ? Math.round((avgFinalScoreNum - props.option.startingScore) * totalGames / totalRounds) 
-    : 0
+  const roundSuji = Number((winRateNum * avgWinNum - loseRateNum * avgLoseNum).toFixed(0))
 
   return {
     totalGames,
@@ -298,7 +390,23 @@ const stats = computed(() => {
 
 <template>
 <div class="container_stats_modal">
-  <h3 class="title">오늘의 스탯</h3>
+  <!-- 스코프 탭바 (브라우저 탭 스타일) -->
+  <div class="scope_tab_bar">
+    <button 
+      class="scope_tab" 
+      :class="{ active: scopeTab === 'session' }" 
+      @click="scopeTab = 'session'"
+    >
+      이번 회차 스탯
+    </button>
+    <button 
+      class="scope_tab" 
+      :class="{ active: scopeTab === 'all' }" 
+      @click="scopeTab = 'all'"
+    >
+      전체 기간 스탯
+    </button>
+  </div>
 
   <!-- 플레이어 선택기 -->
   <div class="player_selector_container">
@@ -400,7 +508,7 @@ const stats = computed(() => {
       </div>
 
       <!-- 리치 스탯 탭 -->
-      <div v-if="activeTab === 'riichi'" class="stats_group">
+      <div v-else-if="activeTab === 'riichi'" class="stats_group">
         <div class="stat_row">
           <span class="stat_label">리치율</span>
           <span class="stat_value">{{ stats.riichiRate }}</span>
@@ -410,7 +518,7 @@ const stats = computed(() => {
           <span class="stat_value text_positive">{{ stats.riichiWinRate }}</span>
         </div>
         <div class="stat_row">
-          <span class="stat_label">리치 방총률</span>
+          <span class="stat_label">리치 방총율</span>
           <span class="stat_value text_negative">{{ stats.riichiLoseRate }}</span>
         </div>
         <div class="stat_row">
@@ -446,7 +554,7 @@ const stats = computed(() => {
       </div>
 
       <!-- 그 외 탭 -->
-      <div v-if="activeTab === 'other'" class="stats_group">
+      <div v-else-if="activeTab === 'other'" class="stats_group">
         <div class="stat_row">
           <span class="stat_label">아픈 오야카부리율</span>
           <span class="stat_value text_negative">{{ stats.oyaKaburiRate }}</span>
@@ -490,6 +598,45 @@ const stats = computed(() => {
 </template>
 
 <style scoped>
+/* 스코프 탭바 (브라우저 탭 스타일) */
+.scope_tab_bar {
+  display: flex;
+  background-color: var(--bg-card, #2a2a2a);
+  padding: 5px;
+  border-radius: 10px;
+  margin-bottom: 10px; /* 여백 축소 */
+  border: 1px solid var(--border-color, #333);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.scope_tab {
+  flex: 1;
+  padding: 10px 16px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  font-family: 'Outfit', 'Inter', 'Noto Sans KR', sans-serif;
+  border: none;
+  background: transparent;
+  color: var(--text-color, #fff);
+  opacity: 0.55;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: center;
+}
+
+.scope_tab:hover {
+  opacity: 0.9;
+}
+
+.scope_tab.active {
+  opacity: 1;
+  background-color: var(--bg-modal, #1e1e1e);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  color: var(--color-toggle-on, #4caf50);
+}
+
 .container_stats_modal {
   width: 100%;
   max-width: 720px; /* 옆으로 펼쳐지도록 넓은 너비 설정 */
@@ -515,9 +662,9 @@ const stats = computed(() => {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  margin-bottom: 12px;
+  margin-bottom: 8px; /* 여백 축소 */
   background-color: var(--bg-card);
-  padding: 8px 10px;
+  padding: 4px 8px; /* 패딩 축소로 더욱 납작하게 만듦 */
   border-radius: 6px;
   box-sizing: border-box;
 }
@@ -539,6 +686,13 @@ const stats = computed(() => {
   color: var(--text-color);
   font-weight: bold;
   cursor: pointer;
+  color-scheme: dark light;
+}
+
+/* 드롭다운 옵션의 배경색과 글자색을 명시적으로 강제하여 안보이는 현상 방지 */
+.player_select option {
+  background-color: var(--bg-modal, #1e1e1e) !important;
+  color: var(--text-color, #ffffff) !important;
 }
 
 /* 탭 메뉴 */
@@ -667,5 +821,45 @@ const stats = computed(() => {
   .stats_group {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+/* 라이트 모드(화이트 모드) 가독성 오버라이드 */
+html:not(.dark) .scope_tab_bar {
+  background-color: #f1f5f9 !important;
+  border: 1px solid #cbd5e1 !important;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05) !important;
+}
+html:not(.dark) .scope_tab {
+  color: #475569 !important;
+}
+html:not(.dark) .scope_tab.active {
+  background-color: #ffffff !important;
+  color: var(--color-toggle-on, #4caf50) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
+}
+html:not(.dark) .player_selector_container {
+  background-color: #f8fafc !important;
+  border: 1px solid #cbd5e1 !important;
+}
+html:not(.dark) .player_select {
+  background-color: #ffffff !important;
+  color: #1e293b !important;
+  border: 1px solid #cbd5e1 !important;
+}
+html:not(.dark) .player_select option {
+  background-color: #ffffff !important;
+  color: #1e293b !important;
+}
+html:not(.dark) .stat_row {
+  background-color: #f8fafc !important;
+  border: 1px solid #cbd5e1 !important;
+  border-left: 3px solid var(--color-toggle-on, #4caf50) !important;
+}
+html:not(.dark) .tab_btn {
+  color: #475569 !important;
+}
+html:not(.dark) .tab_btn.active {
+  color: var(--color-toggle-on, #4caf50) !important;
+  border-bottom-color: var(--color-toggle-on, #4caf50) !important;
 }
 </style>

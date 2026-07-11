@@ -5,10 +5,21 @@ import { ref, onMounted } from "vue"
 /**i18n 속성 가져오기*/
 const { t } = useI18n()
 
+/**Props 정의*/
+type Props = {
+  googleInfo: {
+    isLoggedIn: boolean
+    spreadsheetId: string
+    syncMode: string
+  }
+}
+const props = defineProps<Props>()
+
 /**emits 정의*/
 type Emits = {
   (e: 'show-modal', type: string, status?: string): void,
-  (e: 'start-new-game'): void
+  (e: 'start-new-game'): void,
+  (e: 'sync-local-to-google'): void
 }
 const emit = defineEmits<Emits>()
 
@@ -28,6 +39,11 @@ const toggleTheme = () => {
     document.documentElement.classList.remove('dark')
     localStorage.setItem('theme', 'light')
   }
+}
+
+const handleSyncClick = () => {
+  if (!props.googleInfo.isLoggedIn) return; // 로컬 모드일 때는 클릭 무반응
+  emit('sync-local-to-google')
 }
 </script>
 
@@ -51,6 +67,14 @@ const toggleTheme = () => {
   </div>
   <div @click.stop="emit('start-new-game')" class="btn_new_game" style="color: var(--color-negative); font-weight: bold;">
     새 게임
+  </div>
+  <!-- 3번째 row, 1번째 column에 동기화 다이렉트 버튼 배치 -->
+  <div 
+    class="btn_direct_sync" 
+    :class="{ disabled: !googleInfo.isLoggedIn }" 
+    @click.stop="handleSyncClick"
+  >
+    동기화
   </div>
   <!-- 3번째 row, 2번째 column에 동기화 설정, 3번째 column에 스탯 배치 -->
   <div class="btn_sync" @click.stop="emit('show-modal', 'sync')">
@@ -91,6 +115,17 @@ const toggleTheme = () => {
 }
 .container_choose_menu > div:hover {
   opacity: 0.6;
+}
+.btn_direct_sync {
+  grid-row: 3;
+  grid-column: 1;
+  font-weight: bold;
+  color: var(--color-positive, #4caf50); /* 연두색 기본 */
+}
+.btn_direct_sync.disabled {
+  color: #888888 !important; /* 로컬 모드일 때 회색 비활성 */
+  cursor: not-allowed !important;
+  opacity: 0.5 !important;
 }
 .btn_sync {
   grid-row: 3;

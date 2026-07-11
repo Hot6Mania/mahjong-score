@@ -6,7 +6,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, appendGameResult, addNewMemberToDb, fetchTodayMembers, saveTodayMembers, updateTodayMemberPoints } from "@/utils/googleSheets"
+import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, tryAutoLogin } from "@/utils/googleSheets"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
@@ -101,7 +101,7 @@ const defaultOption: OptionType = {
   cheatScore: false, // 촌보 지불 점수
   riichiPayout: true, // 남은 공탁금 처리
   alwaysShowRank: false, // 등수 상시 표시
-  sekiOrder: false, // 동점 석순 기준
+  sekiOrder: true, // 동점 석순 기준
 };
 const savedOption = localStorage.getItem("mahjong_option");
 const option = reactive<OptionType>(savedOption ? { ...defaultOption, ...JSON.parse(savedOption) } : defaultOption);
@@ -111,7 +111,7 @@ const modalInfo = reactive({ // 모달창
   status: "", // 라운드 형태 - 론 쯔모 일반유국 특수유국
 })
 const googleInfo = reactive<GoogleInfo>({ // 구글 연동 정보
-  clientId: localStorage.getItem("google_client_id") || "", // 구글 클라이언트 ID
+  clientId: localStorage.getItem("google_client_id") || "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com", // 구글 클라이언트 ID
   spreadsheetId: localStorage.getItem("google_spreadsheet_id") || "", // 구글 스프레드시트 ID
   isLoggedIn: false, // 로그인 여부
   syncMode: (localStorage.getItem("sync_mode") as 'local' | 'google') || 'local', // 연동 모드 (기본값 로컬)
@@ -119,6 +119,55 @@ const googleInfo = reactive<GoogleInfo>({ // 구글 연동 정보
   todayMembers: JSON.parse(localStorage.getItem("today_members") || "[]"), // 오늘 참가할 멤버 풀 (쿠키/스토리지 보존)
   selectedMembers: [] // 선택된 멤버 4명
 })
+
+// 회차 수집 및 팝업 제어 변수들
+const isShowChooseSessionPopup = ref(false)  // 설정에서 '기존 회차'를 클릭했을 때의 팝업
+const isShowSessionChoosePopup = ref(false)  // 로그인 성공 직후 뜨는 기존/신규 분기 선택 팝업
+const validGoogleSessions = ref<string[]>([])
+const isLoadingSessions = ref(false)
+const selectedSessionToLoad = ref("")
+
+// 구글 스프레드시트로부터 회차 목록(기본/raw/데이터 탭이 모두 완비된 리스트) 수집
+const loadGoogleSessions = async () => {
+  if (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) {
+    validGoogleSessions.value = [];
+    return;
+  }
+  isLoadingSessions.value = true;
+  try {
+    const res = await window.gapi.client.sheets.spreadsheets.get({
+      spreadsheetId: googleInfo.spreadsheetId
+    });
+    const sheetTitles: string[] = res.result.sheets.map((s: any) => s.properties.title);
+    
+    // 1. '제n회 YYMMDD' 패턴의 기본 탭 이름들 필터링
+    const candidates = sheetTitles.filter(t => /^제\d+회\s+\d{6}$/.test(t));
+    
+    // 2. (raw)와 (데이터) 탭이 둘 다 완비된 탭만 활성화
+    const validList: string[] = [];
+    candidates.forEach(cleanTitle => {
+      const rawTitle = `${cleanTitle} (raw)`;
+      const detailTitle = `${cleanTitle} (데이터)`;
+      if (sheetTitles.includes(rawTitle) && sheetTitles.includes(detailTitle)) {
+        validList.push(cleanTitle);
+      }
+    });
+    
+    // 최신 회차가 위로 오도록 정렬
+    validList.sort((a, b) => b.localeCompare(a));
+    validGoogleSessions.value = validList;
+    if (validList.length > 0) {
+      selectedSessionToLoad.value = validList[0];
+    } else {
+      selectedSessionToLoad.value = "";
+    }
+  } catch (err) {
+    console.error("구글 시트 회차 수집 실패:", err);
+    validGoogleSessions.value = [];
+  } finally {
+    isLoadingSessions.value = false;
+  }
+};
 
 // 로컬 모드용 오늘 누적 포인트 맵
 const localPoints = reactive<Record<string, number>>(
@@ -141,6 +190,49 @@ const isGameSaved = ref(localStorage.getItem("is_game_saved") === "true");
 const animateRank = ref(false);
 const activeGapSeat = ref<string | null>(null);
 const isPanelMenuOpen = ref(false);
+
+const isSaving = ref(false);
+const syncProgress = ref(0);
+const syncLoaderTitle = ref("구글 스프레드시트 일괄 동기화 중...");
+const googleMemberStats = ref<any[]>([]);
+const currentSessionSheetName = ref(localStorage.getItem("current_session_sheet_name") || "");
+
+const isShowSpreadsheetIdPrompt = ref(false);
+const tempPromptSpreadsheetUrl = ref("");
+const isSyncAfterPrompt = ref(false);
+
+const toast = reactive({
+  show: false,
+  message: "",
+  type: "success"
+});
+
+const triggerToast = (msg: string, type = "success") => {
+  toast.message = msg;
+  toast.type = type;
+  toast.show = true;
+  setTimeout(() => {
+    toast.show = false;
+  }, 3000);
+};
+
+const getOrInitSessionSheetName = async (): Promise<string> => {
+  if (!googleInfo.spreadsheetId || !googleInfo.isLoggedIn) {
+    const now = new Date();
+    const yy = now.getFullYear().toString().slice(-2);
+    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
+    const dd = now.getDate().toString().padStart(2, '0');
+    const yymmdd = `${yy}${mm}${dd}`;
+    return `제1회 ${yymmdd}`;
+  }
+  if (currentSessionSheetName.value) {
+    return currentSessionSheetName.value;
+  }
+  const name = await getNextSessionSheetName(googleInfo.spreadsheetId);
+  currentSessionSheetName.value = name;
+  localStorage.setItem("current_session_sheet_name", name);
+  return name;
+};
 
 // 이름이 바뀔 때마다 앞 글자 겹치지 않는 유니크 축약명을 설정하는 감시자
 watch(() => players.map(p => p.name), (newNames) => {
@@ -207,6 +299,7 @@ onMounted(async () => {
     await initGapi();
     if (googleInfo.clientId) {
       initGis(googleInfo.clientId, onGoogleTokenReceived);
+      await tryAutoLogin(onGoogleTokenReceived);
     }
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
@@ -1115,6 +1208,10 @@ const rollbackRecord = (idx: number) => {
     records.riichi.pop();
     records.win.pop();
     records.lose.pop();
+    if (records.tenpai) records.tenpai.pop();
+    if (records.status) records.status.pop();
+    if (records.riichiOrder) records.riichiOrder.pop();
+    if (records.dealer) records.dealer.pop();
   }
   players.forEach((x) => {x.isRiichi=false;}); // 리치봉 제거
   for (let i=0;i<records.score.length;i++){
@@ -1131,11 +1228,88 @@ const rollbackRecord = (idx: number) => {
   hideModal(); // 모달 창 끄기
 }
 
+const isManualLogin = ref(false);
+
 // 구글 토큰 수령 시 콜백
 const onGoogleTokenReceived = async (_token: string) => {
   googleInfo.isLoggedIn = true;
+  googleInfo.syncMode = "google";
+  localStorage.setItem("sync_mode", "google");
+
+  if (isManualLogin.value) {
+    isManualLogin.value = false;
+    
+    // 로딩 진행바 팝업 켜기
+    isSaving.value = true;
+    syncLoaderTitle.value = "구글 스프레드시트 데이터 불러오는 중...";
+    syncProgress.value = 10;
+
+    try {
+      // 1. 스프레드시트 필수 구조 검증 (35%)
+      syncProgress.value = 35;
+      if (googleInfo.spreadsheetId) {
+        const isValid = await verifySpreadsheetStructures(googleInfo.spreadsheetId);
+        if (!isValid) {
+          googleInfo.memberList = [];
+          googleInfo.todayMembers = [];
+          isSaving.value = false;
+          return;
+        }
+      }
+
+      // 2. 전체 멤버 목록 로드 (70%)
+      syncProgress.value = 70;
+      await loadMemberList();
+
+      // 3. 전체 멤버별 통계 로드 (95%)
+      syncProgress.value = 95;
+      try {
+        const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+        googleMemberStats.value = stats;
+      } catch (statsErr) {
+        console.warn("로그인 시 통계 로드 실패:", statsErr);
+      }
+
+      // 4. 로드 완수 (100%)
+      syncProgress.value = 100;
+
+      // 0.5초 대기 후 로더를 닫고 토스트 및 회차 선택 분기 팝업 기동
+      setTimeout(async () => {
+        isSaving.value = false;
+        triggerToast("로그인 완료!");
+        await loadGoogleSessions();
+        isShowSessionChoosePopup.value = true;
+      }, 500);
+
+    } catch (err) {
+      console.error("로그인 후 스프레드시트 정보 로드 중 에러:", err);
+      isSaving.value = false;
+      alert("스프레드시트 정보 로드 중 오류가 발생했습니다.");
+    }
+    return;
+  }
+
+  if (googleInfo.spreadsheetId) {
+    const isValid = await verifySpreadsheetStructures(googleInfo.spreadsheetId);
+    if (!isValid) {
+      googleInfo.memberList = [];
+      googleInfo.todayMembers = [];
+      return;
+    }
+  }
+
   await loadMemberList();
   await loadTodayMembers();
+
+  // 자동 로그인 완료 직후에도 전체 기간 통계 동기화
+  if (googleInfo.spreadsheetId) {
+    try {
+      const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+      googleMemberStats.value = stats;
+    } catch (e) {
+      console.warn("자동 로그인 후 통계 로드 실패:", e);
+    }
+  }
 };
 
 // 멤버 목록 로드
@@ -1153,7 +1327,8 @@ const loadMemberList = async () => {
 const loadTodayMembers = async () => {
   if (!googleInfo.spreadsheetId) return;
   try {
-    const pointsMap = await fetchTodayMembers(googleInfo.spreadsheetId);
+    const sessionSheetName = await getOrInitSessionSheetName();
+    const pointsMap = await fetchSessionMembers(googleInfo.spreadsheetId, sessionSheetName);
     googleInfo.todayMembers = Object.keys(pointsMap);
   } catch (err) {
     console.error("오늘의 멤버 로드 실패:", err);
@@ -1164,11 +1339,41 @@ const loadTodayMembers = async () => {
 const addNewMember = async (name: string) => {
   if (!googleInfo.spreadsheetId) return;
   try {
-    await addNewMemberToDb(googleInfo.spreadsheetId, name);
+    await addNewMembersToDb(googleInfo.spreadsheetId, [name]);
     await loadMemberList();
   } catch (err) {
     console.error("신규 멤버 등록 실패:", err);
   }
+};
+
+// 전체 명단에서 멤버 영구 삭제
+const deleteMember = async (name: string) => {
+  const hasPlayed = todayGamesHistory.some(game => game.results.some((r: any) => r.name === name));
+  if (hasPlayed) {
+    alert("오늘 대국을 진행한 플레이어는 삭제할 수 없습니다.");
+    return;
+  }
+  
+  const offlineListRaw = localStorage.getItem("offline_member_list") || "[]";
+  try {
+    const offlineList: string[] = JSON.parse(offlineListRaw);
+    const filtered = offlineList.filter(n => n !== name);
+    localStorage.setItem("offline_member_list", JSON.stringify(filtered));
+  } catch (e) {
+    console.warn("오프라인 멤버 삭제 실패:", e);
+  }
+
+  if (googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
+    try {
+      await deleteMemberFromDb(googleInfo.spreadsheetId, name);
+      await loadMemberList();
+    } catch (err) {
+      console.error("구글 시트 멤버 삭제 실패:", err);
+    }
+  }
+  
+  googleInfo.todayMembers = googleInfo.todayMembers.filter(n => n !== name);
+  localStorage.setItem("today_members", JSON.stringify(googleInfo.todayMembers));
 };
 
 // 오늘의 멤버 풀 저장 및 구글 시트 동기화
@@ -1177,7 +1382,9 @@ const saveTodayMembersPool = async (names: string[]) => {
   localStorage.setItem("today_members", JSON.stringify(names));
   if (!googleInfo.spreadsheetId) return;
   try {
-    await saveTodayMembers(googleInfo.spreadsheetId, names);
+    const sessionSheetName = await getOrInitSessionSheetName();
+    await createSessionSheetIfNotExist(googleInfo.spreadsheetId, sessionSheetName, names);
+    await saveSessionMembers(googleInfo.spreadsheetId, sessionSheetName, names);
   } catch (err) {
     console.error("오늘의 멤버 풀 저장 실패:", err);
   }
@@ -1185,12 +1392,63 @@ const saveTodayMembersPool = async (names: string[]) => {
 
 // 구글 로그인 트리거
 const googleLogin = () => {
-  if (!googleInfo.clientId) {
-    alert("설정에서 Google Client ID를 먼저 입력해 주세요.");
+  // 스프레드시트 ID가 비어 있다면 커스텀 입력 모달 팝업을 기동
+  if (!googleInfo.spreadsheetId) {
+    isManualLogin.value = true;
+    tempPromptSpreadsheetUrl.value = "";
+    isShowSpreadsheetIdPrompt.value = true;
     return;
+  }
+
+  // 고정 클라이언트 ID 자동 바인딩 가드
+  if (!googleInfo.clientId) {
+    googleInfo.clientId = "113337424108-9s6lki64f33k68o1j66q3a5v4t3rm00d.apps.googleusercontent.com";
+    localStorage.setItem("google_client_id", googleInfo.clientId);
+  }
+
+  isManualLogin.value = true;
+  initGis(googleInfo.clientId, onGoogleTokenReceived);
+  loginGoogle();
+};
+
+// 커스텀 스프레드시트 주소 입력 팝업 확인 버튼 클릭 핸들러
+const handlePromptConfirm = () => {
+  const val = tempPromptSpreadsheetUrl.value.trim();
+  if (!val) {
+    triggerToast("스프레드시트 주소가 입력되지 않았습니다.", "error");
+    return;
+  }
+
+  // 입력값에서 ID 추출 정규식 적용
+  const matches = val.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  const extractedId = (matches && matches[1]) ? matches[1] : val;
+
+  googleInfo.spreadsheetId = extractedId;
+  localStorage.setItem("google_spreadsheet_id", extractedId);
+  isShowSpreadsheetIdPrompt.value = false;
+
+  // 동기화 시도 중 주소가 유실되어 입력 창을 띄웠던 경우 바로 동기화 재시도
+  if (isSyncAfterPrompt.value) {
+    isSyncAfterPrompt.value = false;
+    syncLocalDataToGoogle();
+    return;
+  }
+
+  // 주소 입력 완료 후 로그인 연동 즉각 개시!
+  if (!googleInfo.clientId) {
+    googleInfo.clientId = "113337424108-9s6lki64f33k68o1j66q3a5v4t3rm00d.apps.googleusercontent.com";
+    localStorage.setItem("google_client_id", googleInfo.clientId);
   }
   initGis(googleInfo.clientId, onGoogleTokenReceived);
   loginGoogle();
+};
+
+// 커스텀 스프레드시트 주소 입력 팝업 취소 버튼 클릭 핸들러
+const handlePromptCancel = () => {
+  isShowSpreadsheetIdPrompt.value = false;
+  isManualLogin.value = false;
+  isSyncAfterPrompt.value = false;
+  triggerToast("스프레드시트 주소 등록이 취소되었습니다.");
 };
 
 // 구글 로그아웃 트리거
@@ -1200,6 +1458,10 @@ const googleLogout = () => {
   googleInfo.memberList = [];
   googleInfo.todayMembers = [];
   localStorage.removeItem("today_members");
+  
+  // 동기화 모드를 강제로 로컬 모드로 리셋
+  googleInfo.syncMode = "local";
+  localStorage.setItem("sync_mode", "local");
 };
 
 // 설정 값 로컬 스토리지에 동기화
@@ -1231,6 +1493,13 @@ const startGameWithSeats = (assignment: Record<string, string>) => {
 
 // 대국 완전 초기화 후 자리 설정 모달 켜기
 const startNewGame = (skipConfirm = false) => {
+  if (isGameFinished.value && !isGameSaved.value) {
+    if (!confirm("대국 결과가 아직 기록되지 않았습니다. 정말 새 게임을 시작하시겠습니까?")) {
+      return;
+    }
+    skipConfirm = true;
+  }
+
   if (skipConfirm || confirm("현재 진행 중인 게임이 초기화됩니다. 새 게임을 시작하시겠습니까?")) {
     resetAll();
     showModal('choose_seat');
@@ -1245,11 +1514,6 @@ const saveGameToSheet = async () => {
     return;
   }
 
-  // 구글 연동 모드일 때만 구글 세션 필수 체크
-  if (googleInfo.syncMode === 'google' && (!googleInfo.spreadsheetId || !googleInfo.isLoggedIn)) {
-    alert("구글 연동 모드입니다. 구글 로그인 및 스프레드시트 ID가 유효한지 확인해 주세요.");
-    return;
-  }
 
   try {
     const pointsDelta: Record<string, number> = {};
@@ -1288,25 +1552,7 @@ const saveGameToSheet = async () => {
       };
     });
 
-    // 점수 순으로 정렬해서 1위부터 4위까지 나열 (석순 옵션 적용)
-    const sortedResult = [...scoreSheet].sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      if (option.sekiOrder) {
-        const aIdx = players.findIndex(p => p.name === a.name);
-        const bIdx = players.findIndex(p => p.name === b.name);
-        return aIdx - bIdx;
-      }
-      return 0;
-    });
 
-    // 구글 시트에 들어갈 행(Row) 생성
-    const resultRow = [
-      new Date().toLocaleString('ko-KR'),
-      sortedResult[0].name, sortedResult[0].score, sortedResult[0].point,
-      sortedResult[1].name, sortedResult[1].score, sortedResult[1].point,
-      sortedResult[2].name, sortedResult[2].score, sortedResult[2].point,
-      sortedResult[3].name, sortedResult[3].score, sortedResult[3].point,
-    ];
 
     // 로컬 스토리지 누적 포인트 갱신
     Object.keys(pointsDelta).forEach(name => {
@@ -1334,7 +1580,8 @@ const saveGameToSheet = async () => {
     todayGamesHistory.push({
       timestamp: new Date().toISOString(),
       results: historyResults,
-      records: JSON.parse(JSON.stringify(records))
+      records: JSON.parse(JSON.stringify(records)),
+      playerNames: players.map(p => p.name)
     });
     localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
 
@@ -1342,64 +1589,397 @@ const saveGameToSheet = async () => {
     isGameSaved.value = true;
     localStorage.setItem("is_game_saved", "true");
 
-    // 구글 연동 모드 시 구글 시트 전송 진행
-    if (googleInfo.syncMode === 'google') {
-      // 1. 대국 로그 기록
-      await appendGameResult(googleInfo.spreadsheetId, resultRow);
-      // 2. 오늘의 멤버 누적 점수 합산 업데이트
-      await updateTodayMemberPoints(googleInfo.spreadsheetId, pointsDelta);
-      alert("대국 결과 및 누적 포인트가 구글 스프레드시트에 업데이트되었습니다!");
-    } else {
-      alert("게임 결과가 로컬 스코어판에 성공적으로 누적 기록되었습니다!");
-    }
+    // 로컬에만 누적 보관하며, 일괄 동기화 버튼을 통해 구글 전송 처리
+    triggerToast("게임 결과 로컬 기록 완료!");
   } catch (err) {
     console.error("결과 기록 실패:", err);
     alert("결과 기록 중 오류가 발생했습니다.");
   }
 };
 
-// 로컬에서 플레이하던 대기 멤버들의 누적 포인트를 구글 스프레드시트에 일괄 업로드
+// 로컬에서 플레이하던 대국 기록들을 구글 스프레드시트에 일괄 업로드
 const syncLocalDataToGoogle = async () => {
-  if (!googleInfo.spreadsheetId || !googleInfo.isLoggedIn) {
-    alert("구글 로그인 상태와 스프레드시트 ID가 유효한지 확인해 주세요.");
+  if (!googleInfo.isLoggedIn) {
+    alert("구글 연동 모드에서만 동기화가 가능합니다.");
+    return;
+  }
+
+  // 동기화 요청 시 스프레드시트 주소가 유실되어 있는 경우 커스텀 팝업 기동
+  if (!googleInfo.spreadsheetId) {
+    isSyncAfterPrompt.value = true;
+    tempPromptSpreadsheetUrl.value = "";
+    isShowSpreadsheetIdPrompt.value = true;
     return;
   }
   try {
-    const activeNames = googleInfo.todayMembers;
-    if (activeNames.length === 0) {
-      alert("오늘 등록된 로컬 대국 멤버가 없습니다.");
+    const isValid = await verifySpreadsheetStructures(googleInfo.spreadsheetId);
+    if (!isValid) return;
+
+    if (todayGamesHistory.length === 0) {
+      alert("오늘 기록된 로컬 대국 이력이 없습니다.");
       return;
     }
 
-    // 로컬 데이터를 오늘의멤버 구글 시트에 행 단위로 동기화
-    const rows: any[][] = [['이름', '누적포인트']];
-    activeNames.forEach(name => {
-      const point = localPoints[name] !== undefined ? localPoints[name] : 0;
-      rows.push([name, point]);
-    });
+    const isConfirmed = confirm(`오늘 로컬에 기록된 총 ${todayGamesHistory.length}개의 대국 기록을 구글 스프레드시트에 일괄 업로드하시겠습니까?`);
+    if (!isConfirmed) {
+      isSaving.value = false;
+      return;
+    }
+
+    isSaving.value = true;
+    syncLoaderTitle.value = "구글 스프레드시트 일괄 동기화 중...";
+    syncProgress.value = 5;
+
+    // 1. 이미 업로드된 대국 ID 목록 조회 (중복 방지)
+    const sessionSheetName = await getOrInitSessionSheetName();
+    const uploadedGameIds = new Set<string>();
     
-    // 시트 초기화 후 덮어쓰기
-    await window.gapi.client.sheets.spreadsheets.values.clear({
-      spreadsheetId: googleInfo.spreadsheetId,
-      range: '오늘의멤버!A:B',
+    // A. '전체 국별기록 (데이터)'의 B열 조회
+    try {
+      const res = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: googleInfo.spreadsheetId,
+        range: "'전체 국별기록 (데이터)'!B2:B",
+      });
+      if (res.result.values) {
+        res.result.values.forEach((row: any) => {
+          if (row[0]) {
+            uploadedGameIds.add(row[0].toString().trim());
+          }
+        });
+      }
+    } catch (e) {
+      console.warn("기존 전체 국별기록 (데이터) ID 조회 실패:", e);
+    }
+    syncProgress.value = 15;
+
+    // B. 신규 대국 필터링 및 Tidy 국별 데이터 조립
+    const allRoundRows: any[][] = [];
+    let skipCount = 0;
+
+    todayGamesHistory.forEach(game => {
+      const gameId = new Date(game.timestamp).getTime().toString();
+      if (uploadedGameIds.has(gameId)) {
+        skipCount++;
+        return;
+      }
+
+      const timestamp = new Date(game.timestamp).toLocaleString('ko-KR');
+      const records = game.records;
+      const results = game.results;
+
+      // 대국 당시의 플레이어 순서 명단(0~3 인덱스 매칭) 복원 (현재 판의 플레이어 배치와 꼬임 방지!)
+      const orderedNames = (game as any).playerNames || (() => {
+        const rowRanks = [0, 1, 2, 3].map(i => {
+          const score = records.score[i][records.score[i].length - 1];
+          let rank = 1;
+          for (let j = 0; j < 4; j++) {
+            const otherScore = records.score[j][records.score[j].length - 1];
+            if (otherScore > score) rank++;
+            else if (otherScore === score && j < i) rank++;
+          }
+          return { idx: i, rank };
+        });
+        const list: string[] = new Array(4);
+        rowRanks.forEach(item => {
+          const match = results.find((rObj: any) => rObj.rank === item.rank) || results[item.idx];
+          list[item.idx] = match.name;
+        });
+        return list;
+      })();
+
+      const totalRounds = records.riichi.length - 1;
+      for (let r = 1; r <= totalRounds; r++) {
+        const roundName = records.time[2 * r - 1] || `${r}국`;
+        const roundStatus = records.status && records.status[r] ? records.status[r] : '';
+        const dealerIdx = records.dealer && records.dealer[r] !== undefined ? records.dealer[r] : -1;
+        
+        for (let p = 0; p < results.length; p++) {
+          const playerName = results[p].name;
+          const isDealer = (p === dealerIdx) ? 'TRUE' : 'FALSE';
+          const pIdx = orderedNames.indexOf(playerName);
+          if (pIdx === -1) continue;
+          
+          const deltaScore = records.score[pIdx][2 * r - 1];
+          const finalScore = records.score[pIdx][2 * r];
+          const isRiichi = records.riichi[r][pIdx] ? 'TRUE' : 'FALSE';
+          const isWin = records.win[r][pIdx] ? 'TRUE' : 'FALSE';
+          const isLose = records.lose[r][pIdx] ? 'TRUE' : 'FALSE';
+          const isTenpai = records.tenpai && records.tenpai[r] && records.tenpai[r][pIdx] ? 'TRUE' : 'FALSE';
+          
+          const historyItem = results.find((h: any) => h.name === playerName);
+          const finalRank = historyItem ? historyItem.rank : 4;
+          const finalUma = historyItem ? historyItem.uma : 0;
+          
+          const rowData = [
+            timestamp,
+            gameId,
+            roundName,
+            r,
+            roundStatus,
+            playerName,
+            isDealer,
+            deltaScore,
+            finalScore,
+            isRiichi,
+            isWin,
+            isLose,
+            isTenpai,
+            finalRank,
+            finalUma,
+            sessionSheetName
+          ];
+          
+          allRoundRows.push(rowData);
+        }
+      }
     });
-    
-    await window.gapi.client.sheets.spreadsheets.values.update({
-      spreadsheetId: googleInfo.spreadsheetId,
-      range: `오늘의멤버!A1:B${rows.length}`,
-      valueInputOption: 'USER_ENTERED',
-      resource: {
-        values: rows,
-      },
-    });
-    alert("로컬의 하루 누적 점수 현황이 구글 스프레드시트에 성공적으로 일괄 동기화되었습니다!");
+
+    if (allRoundRows.length > 0) {
+      syncProgress.value = 40;
+      // 신규 등록된 임시 멤버가 있다면 구글 시트에 일괄 동기화 (fetchMemberList에 추가)
+      const offlineMembers = todayGamesHistory.reduce((acc: string[], game) => {
+        game.results.forEach((r: any) => {
+          if (!acc.includes(r.name)) acc.push(r.name);
+        });
+        return acc;
+      }, []);
+      await addNewMembersToDb(googleInfo.spreadsheetId, offlineMembers);
+      syncProgress.value = 55;
+
+      // 오늘의 멤버 누적 포인트 가산 업데이트
+      const deltaMap: Record<string, number> = {};
+      todayGamesHistory.forEach(game => {
+        const gameId = new Date(game.timestamp).getTime().toString();
+        if (uploadedGameIds.has(gameId)) return;
+        game.results.forEach((r: any) => {
+          deltaMap[r.name] = parseFloat(((deltaMap[r.name] || 0) + r.uma).toFixed(1));
+        });
+      });
+      await updateSessionMemberPoints(googleInfo.spreadsheetId, sessionSheetName, deltaMap);
+      syncProgress.value = 65;
+
+      // [1] '전체 국별기록 (데이터)' 일괄 업데이트
+      await appendRoundRecords(googleInfo.spreadsheetId, '전체 국별기록 (데이터)', allRoundRows, googleInfo.todayMembers);
+      syncProgress.value = 75;
+      
+      // [2] 회차별 상세 시트에 국별기록 일괄 업데이트
+      await appendRoundRecords(googleInfo.spreadsheetId, sessionSheetName + " (데이터)", allRoundRows, googleInfo.todayMembers);
+      syncProgress.value = 85;
+      
+      // [3] 회차별 가로 대국 요약 데이터 일괄 적재
+      try {
+        const summaryRows: any[][] = [];
+        todayGamesHistory.forEach(game => {
+          const gameId = new Date(game.timestamp).getTime().toString();
+          const timestamp = new Date(game.timestamp).toLocaleString('ko-KR');
+          
+          if (uploadedGameIds.has(gameId)) return;
+          
+          const rawResults = [...game.results];
+          summaryRows.push([
+            gameId,
+            timestamp,
+            rawResults[0]?.name || "", rawResults[0]?.rank || 4, rawResults[0]?.score || 0, rawResults[0]?.uma || 0,
+            rawResults[1]?.name || "", rawResults[1]?.rank || 4, rawResults[1]?.score || 0, rawResults[1]?.uma || 0,
+            rawResults[2]?.name || "", rawResults[2]?.rank || 4, rawResults[2]?.score || 0, rawResults[2]?.uma || 0,
+            rawResults[3]?.name || "", rawResults[3]?.rank || 4, rawResults[3]?.score || 0, rawResults[3]?.uma || 0
+          ]);
+        });
+        if (summaryRows.length > 0) {
+          await appendSessionSummaryRecords(googleInfo.spreadsheetId, sessionSheetName + " (raw)", summaryRows);
+        }
+      } catch (sumErr) {
+        console.warn("일괄 대국 요약 적재 실패:", sumErr);
+      }
+      syncProgress.value = 92;
+      
+      // [4] 회차별 변동추이 Upsert 일괄 적재
+      try {
+        const nowTime = new Date().toLocaleString('ko-KR');
+        await upsertSessionUmaHistory(googleInfo.spreadsheetId, sessionSheetName, todayGamesHistory, nowTime);
+      } catch (umaErr) {
+        console.warn("일괄 변동추이 적재 실패:", umaErr);
+      }
+      syncProgress.value = 97;
+      
+      // 일괄 동기화 완료 후 구글 전체 통계 바로 새로고침
+      try {
+        const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+        googleMemberStats.value = stats;
+      } catch (e) {
+        console.warn("일괄 동기화 후 통계 로드 실패:", e);
+      }
+      
+      syncProgress.value = 100;
+      triggerToast("동기화 성공!");
+    } else {
+      if (skipCount > 0) {
+        alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재합니다.)`);
+      } else {
+        alert("동기화할 세부 기록이 없습니다.");
+      }
+    }
   } catch (err) {
     console.error("일괄 동기화 실패:", err);
-    alert("동기화 중 오류가 발생했습니다. 구글 권한을 확인해 주세요.");
+    alert("일괄 동기화 중 오류가 발생했습니다.");
+  } finally {
+    isSaving.value = false;
+    setTimeout(() => {
+      syncProgress.value = 0;
+    }, 1000);
   }
 };
 
-// 새로운 날 시작 (로컬 점수 및 명단 초기화)
+// 설정창에서 '기존 회차'를 클릭했을 때 팝업 기동
+const openChooseSessionPopup = async () => {
+  await loadGoogleSessions();
+  isShowChooseSessionPopup.value = true;
+};
+
+// 기존 회차 이어하기 팝업 확인 처리
+const confirmLoadSession = async () => {
+  if (!selectedSessionToLoad.value) return;
+  isShowChooseSessionPopup.value = false;
+  isShowSessionChoosePopup.value = false;
+  modalInfo.isOpen = false; // 설정 창도 닫아주기
+  await loadExistingSession(selectedSessionToLoad.value);
+};
+
+// 신규 회차 시작 팝업 확인 처리
+const confirmStartNewDay = async () => {
+  isShowSessionChoosePopup.value = false;
+  modalInfo.isOpen = false; // 설정 창도 닫아주기
+  await startNewDay();
+};
+
+// 구글 스프레드시트로부터 기존 회차 정보를 읽어와 로컬 상태(멤버 풀, 누적 점수, 대국 이력)를 역으로 완벽하게 복원합니다.
+const loadExistingSession = async (cleanTitle: string) => {
+  if (!cleanTitle) return;
+  const isConfirmed = confirm(`'${cleanTitle}' 회차의 기존 데이터를 불러와서 기록을 이어 나가시겠습니까?\n(로컬에 진행 중이던 오늘 데이터는 덮어씌워집니다.)`);
+  if (!isConfirmed) return;
+
+  isSaving.value = true;
+  syncProgress.value = 15;
+  syncLoaderTitle.value = `'${cleanTitle}' 회차 데이터 복원 중...`;
+
+  try {
+    // 1. 활성 회차 시트 이름 스위칭
+    currentSessionSheetName.value = cleanTitle;
+    localStorage.setItem("current_session_sheet_name", cleanTitle);
+
+    // 2. 오늘의 멤버 목록 & 누적 포인트 복원 (cleanTitle (raw) 시트의 A2:D20 긁어오기)
+    syncProgress.value = 40;
+    const rawRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: googleInfo.spreadsheetId,
+      range: `'${cleanTitle} (raw)'!A2:D20`
+    });
+    
+    const rawRows = rawRes.result.values || [];
+    const restoredMembers: string[] = [];
+    const restoredPoints: Record<string, number> = {};
+
+    rawRows.forEach((row: any) => {
+      const name = row[0]; // A열: 이름
+      const pts = parseFloat(row[2]) || 0; // C열: 누적 우마
+      if (name && name.trim()) {
+        const cleanName = name.trim();
+        restoredMembers.push(cleanName);
+        restoredPoints[cleanName] = pts;
+      }
+    });
+
+    // 멤버 풀 및 누적 포인트 상태 갱신
+    googleInfo.todayMembers = restoredMembers;
+    localStorage.setItem("today_members", JSON.stringify(restoredMembers));
+    
+    Object.keys(localPoints).forEach(key => delete localPoints[key]);
+    Object.assign(localPoints, restoredPoints);
+    localStorage.setItem("today_members_points", JSON.stringify(restoredPoints));
+
+    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:P500 긁어오기)
+    syncProgress.value = 70;
+    const dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: googleInfo.spreadsheetId,
+      range: `'${cleanTitle} (데이터)'!A2:P500`
+    });
+
+    const dataRows = dataRes.result.values || [];
+    const gamesMap: Record<string, { timestamp: string, results: Record<string, { name: string, score: number, uma: number, rank: number }> }> = {};
+
+    dataRows.forEach((row: any) => {
+      const timestamp = row[0]; // A열: 대국 일시
+      const gameId = row[1];    // B열: 대국 ID
+      const name = row[5];      // F열: 플레이어 이름
+      const score = parseInt(row[8]) || 0; // I열: 최종 점수
+      const rank = parseInt(row[13]) || 1;  // N열: 최종 순위
+      const uma = parseFloat(row[14]) || 0;  // O열: 최종 우마
+
+      if (!gameId || !name) return;
+
+      if (!gamesMap[gameId]) {
+        let parsedTime = new Date().toISOString();
+        if (timestamp) {
+          // '2026. 7. 12. 오전 12:45:00' 형태 파싱 호환성 처리
+          const cleanTimeStr = timestamp.replace("오전", "AM").replace("오후", "PM").replace(/\./g, '/');
+          const d = new Date(cleanTimeStr);
+          if (!isNaN(d.getTime())) {
+            parsedTime = d.toISOString();
+          }
+        }
+        gamesMap[gameId] = {
+          timestamp: parsedTime,
+          results: {}
+        };
+      }
+
+      // 국별로 계속 루프가 돌면서 덮어씌워지므로, 결국 해당 대국ID의 최종 국 결과(최종점수/순위/우마)가 남음
+      gamesMap[gameId].results[name] = {
+        name,
+        score,
+        uma,
+        rank
+      };
+    });
+
+    // Map을 배열로 환원
+    const restoredHistory = Object.keys(gamesMap).map(gameId => {
+      const g = gamesMap[gameId];
+      const resultsArr = Object.values(g.results);
+      return {
+        timestamp: g.timestamp,
+        results: resultsArr,
+        records: [], // 롤백용 세부 국 기록은 생략
+        playerNames: resultsArr.map(r => r.name)
+      };
+    });
+
+    // 시간 오름차순(오래된 순) 정렬
+    restoredHistory.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    // 대국 이력 상태 갱신
+    todayGamesHistory.length = 0;
+    restoredHistory.forEach(h => todayGamesHistory.push(h));
+    localStorage.setItem("today_games_history", JSON.stringify(restoredHistory));
+
+    // 4. 게임 상태 리셋 가드
+    resetAll();
+    isGameSaved.value = true;
+    localStorage.setItem("is_game_saved", "true");
+
+    syncProgress.value = 100;
+    triggerToast("기존 회차 데이터 복원이 완벽하게 처리되었습니다!");
+  } catch (err) {
+    console.error("기존 회차 세션 복원 중 실패:", err);
+    alert("회차 복원에 실패했습니다. 시트 주소 및 네트워크 권한을 점검해 주세요.");
+  } finally {
+    isSaving.value = false;
+    setTimeout(() => {
+      syncProgress.value = 0;
+    }, 800);
+  }
+};
+
+// 새로운 날 시작 (로컬 성적 및 명단 초기화)
 const startNewDay = async () => {
   const isConfirmed = confirm("로컬에 기록된 오늘 하루의 점수 및 명단 세션이 완전히 초기화됩니다. 새로운 날을 시작하시겠습니까?");
   if (!isConfirmed) return;
@@ -1464,6 +2044,12 @@ const invalidateGame = (index: number) => {
 
 <template>
 <div class="background" @dblclick.self="toggleFullScreen()" @click="onBackgroundClick">
+  <!-- 커스텀 토스트 알림 연출 -->
+  <Transition name="toast-fade">
+    <div v-if="toast.show" class="custom-toast" :class="toast.type">
+      {{ toast.message }}
+    </div>
+  </Transition>
   <!-- 각 방향별 player 컴포넌트 생성 -->
   <main role="main">
     <Player v-for="(_, i) in players"
@@ -1472,6 +2058,7 @@ const invalidateGame = (index: number) => {
       :option
       :modalInfo
       :animateRank="animateRank"
+      :isGameFinished="isGameFinished"
       @toggle-active-riichi="toggleActiveRiichi"
       @start-show-gap="startShowGap"
       @end-show-gap="endShowGap"
@@ -1501,6 +2088,9 @@ const invalidateGame = (index: number) => {
       :googleInfo
       :todayGamesHistory="todayGamesHistory"
       :isGameSaved="isGameSaved"
+      :googleMemberStats="googleMemberStats"
+      :isSaving="isSaving"
+      :syncProgress="syncProgress"
       @show-modal="showModal"
       @hide-modal="hideModal"
       @set-arrow-button="setArrowButton"
@@ -1519,21 +2109,175 @@ const invalidateGame = (index: number) => {
       @google-logout="googleLogout"
       @save-game-to-sheet="saveGameToSheet"
       @add-new-member="addNewMember"
+      @delete-member="deleteMember"
       @save-today-members="saveTodayMembersPool"
       @start-new-game="startNewGame"
       @sync-local-to-google="syncLocalDataToGoogle"
       @start-new-day="startNewDay"
       @invalidate-game="invalidateGame"
+      @load-existing-session="loadExistingSession"
+      @open-choose-session-popup="openChooseSessionPopup"
     />
+  </Transition>
+
+  <!-- 동기화 진행 상태 바 (isSaving이 true일 때 팝업 노출) -->
+  <div v-if="isSaving" class="sync-loader-overlay">
+    <div class="sync-loader-card">
+      <div class="sync-loader-title">{{ syncLoaderTitle }}</div>
+      <div class="sync-progress-container">
+        <div class="sync-progress-bar" :style="{ width: syncProgress + '%' }"></div>
+      </div>
+      <div class="sync-progress-text">{{ syncProgress }}%</div>
+    </div>
+  </div>
+
+  <!-- 스프레드시트 주소 입력을 위한 커스텀 모달 팝업 -->
+  <Transition name="modal-fade">
+    <div v-if="isShowSpreadsheetIdPrompt" class="custom-prompt-overlay" @click.self="handlePromptCancel">
+      <div class="custom-prompt-card">
+        <div class="custom-prompt-header">
+          <h3>구글 스프레드시트 주소 입력</h3>
+        </div>
+        <div class="custom-prompt-body">
+          <input 
+            type="text" 
+            v-model="tempPromptSpreadsheetUrl" 
+            placeholder="https://docs.google.com/spreadsheets/d/... 또는 ID 직접 입력"
+            class="custom-prompt-input"
+            @keyup.enter="handlePromptConfirm"
+          />
+        </div>
+        <div class="custom-prompt-actions">
+          <button class="btn-prompt-cancel" @click="handlePromptCancel">취소</button>
+          <button class="btn-prompt-confirm" @click="handlePromptConfirm">확인</button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- [팝업 1] 설정창에서 기존 회차를 누를 때 띄워주는 이어하기 전용 팝업 -->
+  <Transition name="modal-fade">
+    <div v-if="isShowChooseSessionPopup" class="custom-prompt-overlay" @click.self="isShowChooseSessionPopup = false">
+      <div class="custom-prompt-card">
+        <div class="custom-prompt-header">
+          <h3>기존 회차 이어하기</h3>
+        </div>
+        <div class="custom-prompt-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <label style="font-size: 13px; font-weight: bold; align-self: flex-start;">이어할 회차를 선택해 주세요:</label>
+          <select v-model="selectedSessionToLoad" class="custom-prompt-input" style="height: 38px; font-weight: bold; background-color: var(--color-input-bg, #fff); color: var(--color-text, #333); border: 1px solid var(--color-border, #ccc); border-radius: 4px; padding: 0 8px; width: 100%;">
+            <option v-for="sess in validGoogleSessions" :key="sess" :value="sess">
+              {{ sess }}
+            </option>
+            <option v-if="validGoogleSessions.length === 0" value="">
+              {{ isLoadingSessions ? '회차 수집 중...' : '유효한 기존 회차가 없습니다' }}
+            </option>
+          </select>
+        </div>
+        <div class="custom-prompt-actions">
+          <button class="btn-prompt-cancel" @click="isShowChooseSessionPopup = false">취소</button>
+          <button class="btn-prompt-confirm" :disabled="!selectedSessionToLoad" @click="confirmLoadSession">확인</button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- [팝업 2] 로그인 완료 직후 뜨는 기존 회차 이어하기 vs 신규 회차 시작 양자택일 분기 팝업 -->
+  <Transition name="modal-fade">
+    <div v-if="isShowSessionChoosePopup" class="custom-prompt-overlay" @click.self="isShowSessionChoosePopup = false">
+      <div class="custom-prompt-card" style="max-width: 340px;">
+        <div class="custom-prompt-header">
+          <h3>회차 시작 방식 선택</h3>
+        </div>
+        <div class="custom-prompt-body" style="display: flex; flex-direction: column; gap: 12px; padding: 10px 0;">
+          <div style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+            <label style="font-size: 13px; font-weight: bold; align-self: flex-start;">이어할 기존 회차 선택:</label>
+            <select v-model="selectedSessionToLoad" class="custom-prompt-input" style="height: 38px; font-weight: bold; background-color: var(--color-input-bg, #fff); color: var(--color-text, #333); border: 1px solid var(--color-border, #ccc); border-radius: 4px; padding: 0 8px; width: 100%;">
+              <option v-for="sess in validGoogleSessions" :key="sess" :value="sess">
+                {{ sess }}
+              </option>
+              <option v-if="validGoogleSessions.length === 0" value="">
+                {{ isLoadingSessions ? '회차 수집 중...' : '유효한 기존 회차가 없습니다' }}
+              </option>
+            </select>
+          </div>
+        </div>
+        <div class="custom-prompt-actions" style="display: flex; flex-direction: column; gap: 8px; width: 100%; margin-top: 10px;">
+          <!-- 기존 회차 이어하기 (위) -->
+          <button 
+            class="btn-prompt-confirm" 
+            :disabled="!selectedSessionToLoad" 
+            @click="confirmLoadSession"
+            style="width: 100%; margin: 0; padding: 10px; font-size: 14px;"
+          >
+            기존 회차 이어하기
+          </button>
+          <!-- 신규 회차 시작 (아래, 빨간색) -->
+          <button 
+            class="btn-prompt-cancel" 
+            @click="confirmStartNewDay"
+            style="width: 100%; margin: 0; padding: 10px; font-size: 14px; background-color: var(--color-negative); color: white; border: none;"
+          >
+            신규 회차 시작
+          </button>
+        </div>
+      </div>
+    </div>
   </Transition>
 </div>
 </template>
 
 <style>
-/* 모달 자연스러운 페이드인/아웃 */
+/* 동기화 진행률 모달 스타일 */
+.sync-loader-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+.sync-loader-card {
+  background: var(--bg-modal, #1e1e1e);
+  border: 1px solid var(--border-color, #444);
+  padding: 30px;
+  border-radius: 12px;
+  width: 320px;
+  text-align: center;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  color: var(--text-color, #fff);
+}
+.sync-loader-title {
+  font-size: 18px;
+  font-weight: bold;
+  margin-bottom: 20px;
+}
+.sync-progress-container {
+  width: 100%;
+  height: 12px;
+  background: #333;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.sync-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4caf50, #8bc34a);
+  transition: width 0.3s ease;
+}
+.sync-progress-text {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+/* 모달 즉시 반응 (애니메이션 제거) */
 .modal-fade-enter-active,
 .modal-fade-leave-active {
-  transition: opacity 0.2s ease;
+  transition: none !important;
 }
 .modal-fade-leave-active {
   pointer-events: none !important;
@@ -1541,5 +2285,134 @@ const invalidateGame = (index: number) => {
 .modal-fade-enter-from,
 .modal-fade-leave-to {
   opacity: 0;
+}
+
+/* 커스텀 토스트 알림 */
+.custom-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 14px 28px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: bold;
+  z-index: 10000;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+  transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.custom-toast.success {
+  background-color: #4caf50;
+  color: #ffffff;
+}
+.toast-fade-enter-from,
+.toast-fade-leave-to {
+  opacity: 0;
+  top: 0px;
+}
+
+/* 화이트/다크 테마별 동기화 팝업 배경 최적화 */
+.sync-loader-card {
+  background: #ffffff !important;
+  border: 1px solid #e0e0e0 !important;
+  color: #2c3e50 !important;
+}
+.dark .sync-loader-card {
+  background: #1e1e1e !important;
+  border: 1px solid #444 !important;
+  color: #ffffff !important;
+}
+
+/* 커스텀 스프레드시트 주소 입력 프롬프트 모달 스타일 */
+.custom-prompt-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2100;
+  backdrop-filter: blur(4px);
+}
+.custom-prompt-card {
+  background-color: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  width: 460px;
+  max-width: 90vw;
+  padding: 24px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+  box-sizing: border-box;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+}
+.dark .custom-prompt-card {
+  background-color: #1e1e1e;
+  border: 1px solid #444;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.5);
+}
+.custom-prompt-header h3 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  font-weight: bold;
+  text-align: center;
+  color: #2c3e50;
+}
+.dark .custom-prompt-header h3 {
+  color: #ffffff;
+}
+.custom-prompt-input {
+  width: 100% !important;
+  max-width: 100% !important;
+  display: block !important;
+  padding: 10px 12px !important;
+  font-size: 13px !important;
+  background-color: #f8fafc !important;
+  color: #1e293b !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 6px !important;
+  box-sizing: border-box !important;
+  margin: 12px 0 18px 0 !important;
+  outline: none !important;
+}
+.dark .custom-prompt-input {
+  background-color: #2a2a2a !important;
+  color: #ffffff !important;
+  border: 1px solid #444 !important;
+}
+.custom-prompt-input:focus {
+  border-color: var(--color-toggle-on, #4caf50) !important;
+}
+.custom-prompt-actions {
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: flex-end !important;
+  gap: 10px !important;
+  width: 100% !important;
+}
+.custom-prompt-actions button {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: bold;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.custom-prompt-actions button:hover {
+  opacity: 0.85;
+}
+.btn-prompt-cancel {
+  background-color: #4b5563;
+  color: #fff;
+}
+.btn-prompt-confirm {
+  background-color: var(--color-toggle-on, #4caf50);
+  color: #fff;
 }
 </style>

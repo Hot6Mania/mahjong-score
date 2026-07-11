@@ -4,17 +4,11 @@ import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
 import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
-import { computed } from "vue"
+import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Line as LineChart } from "vue-chartjs"
-import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, CategoryScale, LinearScale, PointElement, type ChartOptions } from "chart.js"
-
 /**i18n 속성 가져오기*/
 const { t } = useI18n()
 
-/**차트 컴포넌트 등록*/
-ChartJS.register(Title, Tooltip, Legend, LineElement, CategoryScale, LinearScale, PointElement)
-ChartJS.defaults.font.family = "'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif" // 폰트 설정
 
 /**props 정의*/
 interface Props {
@@ -27,8 +21,12 @@ interface Props {
   option: Option,
   modalInfo: ModalInfo,
   googleInfo: GoogleInfo,
+  googleMemberStats: any[],
   todayGamesHistory: any[],
-  isGameSaved: boolean
+  isGameSaved: boolean,
+  isSaving?: boolean,
+  newlyAddedLocalMembers?: string[],
+  syncProgress?: number
 }
 const props = defineProps<Props>()
 
@@ -53,13 +51,92 @@ type Emits = {
   (e: 'google-logout'): void,
   (e: 'save-game-to-sheet'): void,
   (e: 'add-new-member', name: string): void,
+  (e: 'delete-member', name: string): void,
   (e: 'save-today-members', names: string[]): void,
   (e: 'start-new-game', skipConfirm?: boolean): void,
   (e: 'sync-local-to-google'): void,
   (e: 'start-new-day'): void,
   (e: 'invalidate-game', index: number): void,
+  (e: 'load-existing-session', cleanTitle: string): void,
+  (e: 'open-choose-session-popup'): void,
 }
 const emit = defineEmits<Emits>()
+
+// 구글 스프레드시트 주소 편집 상태
+const isEditingSpreadsheetId = ref(false);
+
+// 회차 정보 로딩 및 수집 상태
+const validGoogleSessions = ref<string[]>([]);
+const isLoadingSessions = ref(false);
+const selectedSessionToLoad = ref("");
+
+// 구글 스프레드시트로부터 회차 목록(기본/raw/데이터 탭이 모두 완비된 리스트) 수집
+const loadGoogleSessions = async () => {
+  if (!props.googleInfo.isLoggedIn || !props.googleInfo.spreadsheetId) {
+    validGoogleSessions.value = [];
+    return;
+  }
+  isLoadingSessions.value = true;
+  try {
+    const res = await window.gapi.client.sheets.spreadsheets.get({
+      spreadsheetId: props.googleInfo.spreadsheetId
+    });
+    const sheetTitles: string[] = res.result.sheets.map((s: any) => s.properties.title);
+    
+    // 1. '제n회 YYMMDD' 패턴의 기본 탭 이름들 필터링
+    const candidates = sheetTitles.filter(t => /^제\d+회\s+\d{6}$/.test(t));
+    
+    // 2. (raw)와 (데이터) 탭이 둘 다 완비된 탭만 활성화
+    const validList: string[] = [];
+    candidates.forEach(cleanTitle => {
+      const rawTitle = `${cleanTitle} (raw)`;
+      const detailTitle = `${cleanTitle} (데이터)`;
+      if (sheetTitles.includes(rawTitle) && sheetTitles.includes(detailTitle)) {
+        validList.push(cleanTitle);
+      }
+    });
+    
+    // 최신 회차가 위로 오도록 정렬
+    validList.sort((a, b) => b.localeCompare(a));
+    validGoogleSessions.value = validList;
+    if (validList.length > 0) {
+      selectedSessionToLoad.value = validList[0];
+    } else {
+      selectedSessionToLoad.value = "";
+    }
+  } catch (err) {
+    console.error("구글 시트 회차 수집 실패:", err);
+    validGoogleSessions.value = [];
+  } finally {
+    isLoadingSessions.value = false;
+  }
+};
+
+// 동기화 모달 혹은 옵션 설정 모달을 열었을 때 자동으로 회차 정보 로드
+watch(
+  () => [props.modalInfo.type, props.googleInfo.isLoggedIn, props.googleInfo.spreadsheetId],
+  () => {
+    if (props.modalInfo.type === 'sync' || props.modalInfo.type === 'set_options') {
+      loadGoogleSessions();
+    }
+  },
+  { immediate: true }
+);
+
+// 주소/ID 입력 시 ID만 추출하여 상태 업데이트
+const onSpreadsheetInput = (e: Event) => {
+  const target = e.target as HTMLInputElement;
+  const val = target.value.trim();
+  
+  // URL 주소에서 ID 추출 정규식
+  const matches = val.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (matches && matches[1]) {
+    props.googleInfo.spreadsheetId = matches[1];
+    target.value = matches[1]; // UI의 입력 필드 값도 실시간으로 추출된 ID로 갱신
+  } else {
+    props.googleInfo.spreadsheetId = val;
+  }
+};
 
 /**data 정의*/
 const arr_wind = ['東', '南', '西', '北']
@@ -122,79 +199,7 @@ const scoreSheetInfo = computed(() => {
   });
 })
 
-/**점수차트 정보 계산*/
-const scoreChartInfo = computed(() => {
-  const isDarkTheme = document.documentElement.classList.contains('dark');
-  const textColor = isDarkTheme ? '#e5e5e5' : '#1a1a1a';
-  const gridColor = isDarkTheme ? '#444444' : '#e8e8e8';
 
-  let datasets=props.players.map((_, idx) => ({
-    label: props.players[idx].name, // 이름 가져오기
-    data: props.records.score[idx].filter((_, i) => i%2===0), // 점수기록 가져오기)
-    borderColor: ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'][idx], // 선 색상
-    backgroundColor: ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'][idx], // 점 색상
-    pointRadius: 3, // 점 크기
-  }));
-  let times=['', ...props.records.time.filter((_, i) => i%2===1)]; // 시간 가져오기
-  let tmp='';
-  for (let i=1;i<times.length;i++){
-    if (tmp==='' || tmp!==times[i][0]+times[i][1]){ // 이전국이랑 다르면
-      tmp=times[i][0]+times[i][1]; // 앞 두 글자 저장
-      times[i]=tmp;
-    }
-    else
-      times[i]=''; // 같으면 빈 문자열로 변경
-  }
-  let data={
-    labels: times,
-    datasets: datasets
-  };
-  let options: ChartOptions<'line'> = {
-    responsive: true, // 반응형
-    maintainAspectRatio: false, // 크기조절
-    animations: {
-      y: {
-        from: (ctx) => {
-          const yScale = ctx.chart.scales.y;
-          return yScale.getPixelForValue(25000); // 애니메이션 시작점 25000
-        }
-      },
-    },
-    scales: {
-      x: {
-        ticks: {
-          autoSkip: false, // 모든 라벨 표시
-          color: textColor,
-        },
-        grid: {
-          color: gridColor,
-        }
-      },
-      y: {
-        ticks: {
-          color: textColor,
-        },
-        grid: {
-          color: gridColor,
-        }
-      }
-    },
-    plugins: {
-      legend: {
-        position: 'top',
-        labels: {
-          usePointStyle: true, // 범례 모양 변경
-          pointStyle: 'rectRounded',
-          color: textColor,
-        }
-      },
-    },
-  };
-  return {
-    data: data,
-    options: options
-  };
-})
 
 /**토글 버튼 색상*/
 const toggleButtonStyle = (status: string) => {
@@ -351,22 +356,28 @@ const getSignColor = (sign: number, x: boolean) => {
       :googleInfo
       :players
       :todayGamesHistory="todayGamesHistory"
+      :newlyAddedLocalMembers="newlyAddedLocalMembers"
       @start-game-with-seats="(assignment) => emit('start-game-with-seats', assignment)"
       @add-new-member="(name) => emit('add-new-member', name)"
+      @delete-member="(name) => emit('delete-member', name)"
       @save-today-members="(names) => emit('save-today-members', names)"
+      @google-login="emit('google-login')"
+      @google-logout="emit('google-logout')"
     />
   </div>
   <!-- 메뉴 선택창 -->
   <div v-else-if="modalInfo.type==='choose_menu_kind'" class="modal_content" @click.stop>
     <ModalChooseMenu
+      :googleInfo
       @show-modal="(type, status) => emit('show-modal', type, status)"
       @start-new-game="emit('start-new-game')"
+      @sync-local-to-google="emit('sync-local-to-google')"
     />
   </div>
   <!-- 게임 결과창(표) -->
   <div v-else-if="modalInfo.type==='result_sheet'" class="modal_content" @click.stop>
     <div style="display: flex; flex-direction: column; align-items: stretch; gap: 10px;">
-      <div class="container_resultsheet" @click.stop="emit('show-modal', 'result_chart')">
+      <div class="container_resultsheet">
         <div v-for="(_, i) in class_resultsheet" 
           :key="i"
           :class="class_resultsheet[i]"
@@ -382,7 +393,7 @@ const getSignColor = (sign: number, x: boolean) => {
         </div>
         <div style="grid-area: score_contents;">
           <div v-for="(_, i) in scoreSheetInfo" :key="i">
-          {{ scoreSheetInfo[i].score }}(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span>)
+            {{ scoreSheetInfo[i].score }}(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span>)
           </div>
         </div>
         <div style="grid-area: riichi_contents;">
@@ -399,25 +410,27 @@ const getSignColor = (sign: number, x: boolean) => {
         </div>
       </div>
       <button 
-        @click.stop="isGameSaved ? null : emit('save-game-to-sheet')"
+        @click.stop="isGameSaved ? null : emit('save-game-to-sheet')" 
         :disabled="isGameSaved"
+        :class="isGameSaved ? 'saved-button' : 'record-btn'"
         :style="{
           margin: '0 5px',
           padding: '8px',
           fontSize: '16px',
           fontWeight: 'bold',
-          backgroundColor: isGameSaved ? 'var(--border-color)' : '#4285f4',
-          color: isGameSaved ? 'var(--text-color)' : 'white',
           border: 'none',
           borderRadius: '4px',
           cursor: isGameSaved ? 'default' : 'pointer',
-          opacity: isGameSaved ? '0.6' : '1.0',
-          transition: 'opacity 0.2s, background-color 0.2s'
+          transition: 'opacity 0.2s, background-color 0.2s',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px'
         }"
         onmouseover="if(!this.disabled) this.style.opacity='0.9'"
         onmouseout="if(!this.disabled) this.style.opacity='1.0'"
       >
-        {{ isGameSaved ? '기록 완료됨' : (googleInfo.syncMode === 'google' ? '구글 스프레드시트에 결과 기록하기' : '결과 기록하기') }}
+        {{ isGameSaved ? '기록 완료' : '결과 기록하기' }}
       </button>
       <button 
         @click.stop="emit('start-new-game', true)"
@@ -427,12 +440,6 @@ const getSignColor = (sign: number, x: boolean) => {
       >
         새 게임 시작하기
       </button>
-    </div>
-  </div>
-  <!-- 게임 결과창(차트) -->
-  <div v-else-if="modalInfo.type==='result_chart'" class="modal_content" @click.stop>
-    <div class="container_resultchart" @click.stop="emit('show-modal', 'result_sheet')">
-      <LineChart :data="scoreChartInfo.data" :options="scoreChartInfo.options"/>
     </div>
   </div>
   <!-- 점수 기록창 -->
@@ -460,6 +467,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players="players"
       :history="todayGamesHistory"
       :option="option"
+      :googleMemberStats="googleMemberStats"
     />
   </div>
   <!-- 점수 롤백창 -->
@@ -562,22 +570,37 @@ const getSignColor = (sign: number, x: boolean) => {
           </span>
         </div>
       </div>
-      <button 
-        @click.stop="emit('start-new-day')"
-        style="width: calc(100% - 10px); padding: 8px; margin-bottom: 5px; font-size: 15px; font-weight: bold; background-color: transparent; color: var(--color-negative); border: 2px solid var(--color-negative); border-radius: 4px; cursor: pointer; transition: background-color 0.2s, color 0.2s;"
-        onmouseover="this.style.backgroundColor='var(--color-negative)'; this.style.color='white';"
-        onmouseout="this.style.backgroundColor='transparent'; this.style.color='var(--color-negative)';"
-      >
-        새로운 날 시작 (이전 기록 초기화)
-      </button>
-      <button 
-        @click.stop="emit('start-new-game')"
-        style="width: calc(100% - 10px); padding: 8px; margin-bottom: 5px; font-size: 15px; font-weight: bold; background-color: var(--color-negative); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
-        onmouseover="this.style.opacity='0.9'"
-        onmouseout="this.style.opacity='1.0'"
-      >
-        새 게임 시작하기 (초기화)
-      </button>
+      <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 -->
+      <div style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
+        <!-- 왼쪽: 기존 회차 (클릭 시 브라우저 내 팝업 띄움) -->
+        <button 
+          type="button"
+          :disabled="!googleInfo.isLoggedIn || !googleInfo.spreadsheetId"
+          @click.stop="emit('open-choose-session-popup')"
+          style="flex: 1; padding: 10px; font-size: 13px; font-weight: bold; border-radius: 4px; border: none; transition: opacity 0.2s; height: 36px; display: inline-flex; alignItems: center; justifyContent: center;"
+          :style="{
+            backgroundColor: (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) ? '#888' : 'var(--color-toggle-on, #4caf50)',
+            color: 'white',
+            cursor: (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) ? 'not-allowed' : 'pointer',
+            opacity: (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) ? '0.6' : '1.0'
+          }"
+          onmouseover="if(!this.disabled) this.style.opacity='0.9'"
+          onmouseout="if(!this.disabled) this.style.opacity='1.0'"
+        >
+          기존 회차
+        </button>
+
+        <!-- 오른쪽: 신규 회차 시작 (빨간색) -->
+        <button 
+          type="button"
+          @click.stop="emit('start-new-day')"
+          style="flex: 1; padding: 10px; font-size: 13px; font-weight: bold; background-color: var(--color-negative, #f44336); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s; height: 36px; display: inline-flex; alignItems: center; justifyContent: center;"
+          onmouseover="this.style.opacity='0.9'"
+          onmouseout="this.style.opacity='1.0'"
+        >
+          신규 회차
+        </button>
+      </div>
     </div>
   </div>
   <!-- 동기화 창 -->
@@ -600,38 +623,78 @@ const getSignColor = (sign: number, x: boolean) => {
         <span style="font-size: 15px;">{{ googleInfo.isLoggedIn ? '구글 로그인 완료' : '구글 오프라인' }}</span>
       </div>
       
-      <div class="sync_fields">
-        <div class="input_group">
-          <label>Google OAuth Client ID</label>
-          <input 
-            type="text" 
-            v-model="googleInfo.clientId" 
-            placeholder="Client ID 입력"
-            @change="emit('save-google-settings')"
-            style="width: 250px; font-size: 14px;"
-          />
-        </div>
-        <div class="input_group">
-          <label>Spreadsheet ID</label>
-          <input 
-            type="text" 
-            v-model="googleInfo.spreadsheetId" 
-            placeholder="스프레드시트 ID 입력"
-            @change="emit('save-google-settings')"
-            style="width: 250px; font-size: 14px;"
-          />
+      <div class="sync_fields" style="margin-top: 10px; display: flex; flex-direction: column; align-items: center;">
+        <div class="input_group" style="display: flex; flex-direction: column; align-items: center; width: 100%;">
+          <label style="font-size: 14px; font-weight: bold; margin-bottom: 6px; display: block; text-align: center;">스프레드시트 주소 입력</label>
+          
+          <!-- 저장되어 있고 편집 상태가 아닐 때: 캐시 저장됨 표시 및 마스킹 -->
+          <div v-if="!isEditingSpreadsheetId" style="display: flex; align-items: center; gap: 8px; justify-content: center; width: 100%;">
+            <div style="flex: 1; min-width: 200px; max-width: 320px; background-color: var(--color-input-bg, #f3f3f3); padding: 8px 12px; border-radius: 4px; font-size: 13px; color: var(--color-text-muted, #666); border: 1px dashed var(--color-border, #ccc); font-family: sans-serif; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <span>🔒 주소 저장됨</span>
+            </div>
+            <button 
+              type="button"
+              @click="isEditingSpreadsheetId = true" 
+              style="padding: 8px 12px; font-size: 13px; font-weight: bold; background-color: var(--color-btn, #555); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
+              onmouseover="this.style.opacity='0.9'"
+              onmouseout="this.style.opacity='1.0'"
+            >
+              수정
+            </button>
+          </div>
+
+          <!-- 편집 상태이거나 저장된 값이 없을 때: 주소 입력 필드 표시 -->
+          <div v-else style="display: flex; align-items: center; gap: 8px; justify-content: center; width: 100%;">
+            <input 
+              type="text" 
+              :value="googleInfo.spreadsheetId" 
+              @input="onSpreadsheetInput"
+              @change="emit('save-google-settings')"
+              placeholder="스프레드시트 주소 전체 또는 ID 입력"
+              style="flex: 1; min-width: 200px; max-width: 320px; padding: 8px 10px; font-size: 13px; border-radius: 4px; border: 1px solid var(--color-border, #ccc); background-color: var(--color-input-bg, #fff); color: var(--color-text, #333);"
+            />
+            <button 
+              v-if="googleInfo.spreadsheetId"
+              type="button"
+              @click="isEditingSpreadsheetId = false"
+              style="padding: 8px 12px; font-size: 13px; font-weight: bold; background-color: var(--color-toggle-on, #4caf50); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
+              onmouseover="this.style.opacity='0.9'"
+              onmouseout="this.style.opacity='1.0'"
+            >
+              완료
+            </button>
+          </div>
         </div>
       </div>
+
+
 
       <div class="action_buttons" style="margin-top: 15px; display: flex; flex-direction: column; gap: 8px;">
         <button 
           v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId" 
-          @click.stop="emit('sync-local-to-google')" 
-          style="width: 100%; padding: 8px; font-size: 14px; font-weight: bold; background-color: var(--color-toggle-on); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
-          onmouseover="this.style.opacity='0.9'"
-          onmouseout="this.style.opacity='1.0'"
+          @click.stop="isSaving ? null : emit('sync-local-to-google')" 
+          :disabled="isSaving"
+          :style="{
+            width: '100%',
+            padding: '8px',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            backgroundColor: isSaving ? 'var(--border-color)' : 'var(--color-toggle-on)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: isSaving ? 'default' : 'pointer',
+            transition: 'opacity 0.2s',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px'
+          }"
+          onmouseover="if(!this.disabled) this.style.opacity='0.9'"
+          onmouseout="if(!this.disabled) this.style.opacity='1.0'"
         >
-          로컬 점수 구글 시트에 일괄 동기화
+          <span v-if="isSaving" class="spinner"></span>
+          {{ isSaving ? `동기화 중 (${syncProgress || 0}%)...` : '로컬 성적 구글 시트에 일괄 동기화' }}
         </button>
         <button v-if="!googleInfo.isLoggedIn" @click.stop="emit('google-login')" class="btn_g_login">
           구글 로그인
@@ -658,6 +721,7 @@ const getSignColor = (sign: number, x: boolean) => {
   top: 0;
   width: 100%;
   height: 100%;
+  height: 100dvh;
   overflow: auto;
   background-color: var(--modal-overlay);
   transition: background-color 0.3s ease;
@@ -674,6 +738,9 @@ const getSignColor = (sign: number, x: boolean) => {
   transform: translate(-50%, -50%);
   width: auto;
   height: auto;
+  max-height: 90%;
+  max-height: 90dvh;
+  overflow-y: auto;
   padding: 5px;
   z-index: 10;
   transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
@@ -807,5 +874,35 @@ const getSignColor = (sign: number, x: boolean) => {
 }
 .btn_g_login:hover, .btn_g_logout:hover {
   opacity: 0.9;
+}
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 결과 기록하기 (미저장) 버튼 */
+.record-btn {
+  background-color: #4285f4;
+  color: #ffffff;
+  opacity: 1.0;
+}
+/* 로컬 기록 완료 후 버튼 (화이트/다크 테마 최적화) */
+.saved-button {
+  background-color: #d1d5db !important;
+  color: #1f2937 !important;
+  opacity: 0.95 !important;
+  cursor: default !important;
+}
+.dark .saved-button {
+  background-color: #374151 !important;
+  color: #d1d5db !important;
 }
 </style>
