@@ -2042,7 +2042,10 @@ const loadExistingSession = async (cleanTitle: string) => {
 
       if (!gamesMap[gameId]) {
         let parsedTime = new Date().toISOString();
-        if (timestamp) {
+        const numId = Number(gameId);
+        if (!isNaN(numId) && numId > 0) {
+          parsedTime = new Date(numId).toISOString();
+        } else if (timestamp) {
           // '2026. 7. 12. 오전 12:45:00' 형태 파싱 호환성 처리
           const cleanTimeStr = timestamp.replace("오전", "AM").replace("오후", "PM").replace(/\./g, '/');
           const d = new Date(cleanTimeStr);
