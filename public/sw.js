@@ -2,7 +2,6 @@ const CACHE_NAME = 'mahjong-score-v2';
 const ASSETS = [
   '/mahjong-score/',
   '/mahjong-score/index.html',
-  '/mahjong-score/assets/',
   '/mahjong-score/riichi-stick.svg',
   '/mahjong-score/manifest.json'
 ];

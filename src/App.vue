@@ -384,7 +384,7 @@ onMounted(async () => {
       };
       initGisWithRetry();
     }
-    await restoreGoogleSessionIfValid();
+    restoreGoogleSessionIfValid();
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
   }
