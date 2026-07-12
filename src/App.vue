@@ -2626,7 +2626,7 @@ const invalidateGame = async (index: number) => {
         </div>
         <div class="custom-prompt-actions">
           <button class="btn-prompt-cancel" @click="isShowChooseSessionPopup = false">취소</button>
-          <button class="btn-prompt-confirm" :disabled="!selectedSessionToLoad" @click="confirmLoadSession">확인</button>
+          <button class="btn-prompt-confirm" :disabled="!selectedSessionToLoad || validGoogleSessions.length === 0" @click="confirmLoadSession">확인</button>
         </div>
       </div>
     </div>
@@ -2656,7 +2656,7 @@ const invalidateGame = async (index: number) => {
           <!-- 기존 회차 이어하기 (위) -->
           <button 
             class="btn-prompt-confirm" 
-            :disabled="!selectedSessionToLoad" 
+            :disabled="!selectedSessionToLoad || validGoogleSessions.length === 0" 
             @click="confirmLoadSession"
             style="width: 100%; margin: 0; padding: 10px; font-size: 14px;"
           >
@@ -2878,6 +2878,12 @@ const invalidateGame = async (index: number) => {
 .btn-prompt-confirm {
   background-color: var(--color-toggle-on, #4caf50);
   color: #fff;
+}
+.custom-prompt-actions button:disabled {
+  background-color: var(--color-disabled, #9e9e9e) !important;
+  color: #fff !important;
+  cursor: not-allowed !important;
+  opacity: 0.6 !important;
 }
 
 /* 커스텀 컨펌 모달 스타일 */
