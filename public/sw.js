@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mahjong-score-v2';
+const CACHE_NAME = 'mahjong-score-v3';
 const ASSETS = [
   '/mahjong-score/',
   '/mahjong-score/index.html',
@@ -7,9 +7,9 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
+  self.skipWaiting(); // 새 서비스 워커 설치 즉시 활성화 유도
   e.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      // 일부 에셋 로드 실패해도 차단하지 않도록 catch로 감쌈
       return Promise.allSettled(ASSETS.map(asset => cache.add(asset)));
     })
   );
@@ -25,7 +25,7 @@ self.addEventListener('activate', (e) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim()) // 새 활성 서비스 워커가 즉시 제어권 획득
   );
 });
 
