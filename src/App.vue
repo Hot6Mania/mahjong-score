@@ -149,6 +149,37 @@ const handleConfirm = (result: boolean) => {
   }
 }
 
+// 구글 연동 오류 상세 표시용 모달 상태
+const errorModalState = reactive({
+  isOpen: false,
+  title: "",
+  message: ""
+})
+
+const showErrorModal = (title: string, err: any) => {
+  errorModalState.title = title;
+  let errMsg = "";
+  if (err instanceof Error) {
+    errMsg = `${err.name}: ${err.message}\n${err.stack || ""}`;
+  } else if (typeof err === 'object') {
+    try {
+      errMsg = JSON.stringify(err, null, 2);
+    } catch (e) {
+      errMsg = String(err);
+    }
+  } else {
+    errMsg = String(err);
+  }
+  errorModalState.message = errMsg;
+  errorModalState.isOpen = true;
+}
+
+const copyErrorMessage = () => {
+  if (!errorModalState.message) return;
+  navigator.clipboard.writeText(errorModalState.message);
+  triggerToast("오류 메시지가 클립보드에 복사되었습니다.");
+}
+
 // 구글 로그인 세션 자동 복원 (Keep Logged In)
 const restoreGoogleSessionIfValid = async () => {
   const keep = localStorage.getItem("keep_logged_in") === "true";
@@ -1437,7 +1468,7 @@ const onGoogleTokenReceived = async (_token: string) => {
     } catch (err) {
       console.error("로그인 후 스프레드시트 정보 로드 중 에러:", err);
       isSaving.value = false;
-      alert("스프레드시트 정보 로드 중 오류가 발생했습니다.");
+      showErrorModal("스프레드시트 정보 로드 실패", err);
     }
     return;
   }
@@ -1633,7 +1664,7 @@ const handlePromptConfirm = async () => {
     } catch (err) {
       console.error("로그인 후 스프레드시트 로드 중 에러:", err);
       isSaving.value = false;
-      alert("스프레드시트 정보 로드 중 오류가 발생했습니다.");
+      showErrorModal("스프레드시트 정보 로드 실패", err);
     }
   }
 };
@@ -2091,7 +2122,7 @@ const syncLocalDataToGoogle = async () => {
     }
   } catch (err) {
     console.error("일괄 동기화 실패:", err);
-    alert("일괄 동기화 중 오류가 발생했습니다.");
+    showErrorModal("일괄 동기화 오류", err);
   } finally {
     isSaving.value = false;
     setTimeout(() => {
@@ -2432,7 +2463,7 @@ const loadExistingSession = async (cleanTitle: string) => {
     triggerToast("기존 회차 데이터 복원이 처리되었습니다.");
   } catch (err) {
     console.error("기존 회차 세션 복원 중 실패:", err);
-    alert("회차 복원에 실패했습니다. 시트 주소 및 네트워크 권한을 점검해 주세요.");
+    showErrorModal("회차 복원 실패", err);
   } finally {
     isSaving.value = false;
     setTimeout(() => {
@@ -2691,6 +2722,41 @@ const invalidateGame = async (index: number) => {
         <div class="custom-confirm-actions">
           <button class="btn-confirm-cancel" @click="handleConfirm(false)">취소</button>
           <button class="btn-confirm-ok" @click="handleConfirm(true)">확인</button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- [디버그/오류 팝업] 구글 API 및 연동 오류 상세 출력 및 복사용 모달 -->
+  <Transition name="modal-fade">
+    <div v-if="errorModalState.isOpen" class="custom-prompt-overlay" @click.self="errorModalState.isOpen = false">
+      <div class="custom-prompt-card" style="max-width: 480px; width: 90%;">
+        <div class="custom-prompt-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+          <h3 style="color: var(--color-negative, #c62828); display: flex; align-items: center; gap: 6px;">
+            ⚠️ {{ errorModalState.title }}
+          </h3>
+        </div>
+        <div class="custom-prompt-body" style="padding: 12px 0; display: flex; flex-direction: column; gap: 8px;">
+          <div style="font-size: 13px; font-weight: bold; align-self: flex-start;">발생한 콘솔 에러 내용:</div>
+          <textarea 
+            readonly 
+            v-model="errorModalState.message" 
+            class="custom-prompt-input"
+            style="height: 160px; font-family: monospace; font-size: 11px; line-height: 1.4; text-align: left; resize: none; width: 100%; white-space: pre; word-wrap: normal; overflow-x: auto; background-color: var(--bg-stripe-light, #f5f5f5); border: 1px solid var(--border-color); border-radius: 4px; padding: 8px; box-sizing: border-box;"
+          ></textarea>
+          <div style="font-size: 11px; color: var(--text-dimmed, #666); text-align: left; line-height: 1.3;">
+            * 이 메시지를 복사해서 개발자에게 전달하면 문제 해결에 큰 도움이 됩니다.
+          </div>
+        </div>
+        <div class="custom-prompt-actions" style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+          <button class="btn-prompt-cancel" @click="errorModalState.isOpen = false">닫기</button>
+          <button 
+            class="btn-prompt-confirm" 
+            @click="copyErrorMessage"
+            style="background-color: var(--color-toggle-on, #3b82f6);"
+          >
+            오류 복사하기
+          </button>
         </div>
       </div>
     </div>
