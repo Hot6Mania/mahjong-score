@@ -1199,10 +1199,28 @@ const saveRound = () => {
     // 3) 남4국 / 서풍전 연장 및 종료 조건 분기
     if (curWind === '南' && curRound === 4) {
       if (isRenchan) {
-        // 친 연장 시에는 남4국 유지 및 연장봉 추가
-        panelInfo.renchan++;
-        if (status === 'tsumo' || status === 'ron') {
-          panelInfo.riichi = 0;
+        // 오야 1위 & 반환점 이상 시 아가리야메/텐파이야메 종료 조건 검증 (단, 특수유국은 제외)
+        let oyaRank = 1;
+        if (option.sekiOrder) {
+          oyaRank = players.filter((x, idx) => x.displayScore > players[chinIdx].displayScore || (x.displayScore === players[chinIdx].displayScore && idx < chinIdx)).length + 1;
+        } else {
+          oyaRank = players.filter(x => x.displayScore > players[chinIdx].displayScore).length + 1;
+        }
+        let isOyaFirst = (oyaRank === 1);
+        let isOyaAboveReturn = players[chinIdx].displayScore >= option.returnScore;
+        let isAgariOrTenpaiYame = isOyaFirst && isOyaAboveReturn && (status === 'tsumo' || status === 'ron' || status === 'normal_draw');
+
+        if (isAgariOrTenpaiYame) {
+          if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+            records.time[records.time.length - 1] = '결과';
+          }
+          showModal('result_sheet');
+        } else {
+          // 친 연장 시에는 남4국 유지 및 연장봉 추가
+          panelInfo.renchan++;
+          if (status === 'tsumo' || status === 'ron') {
+            panelInfo.riichi = 0;
+          }
         }
       } else {
         // 친 연장 실패 시: 반환점수를 넘은 사람이 있는지 검증
@@ -1222,10 +1240,28 @@ const saveRound = () => {
       }
     } else if (curWind === '西') {
       if (isRenchan) {
-        // 서풍전 친 연장 시 서입 국 유지 및 연장봉 추가
-        panelInfo.renchan++;
-        if (status === 'tsumo' || status === 'ron') {
-          panelInfo.riichi = 0;
+        // 오야 1위 & 반환점 이상 시 아가리야메/텐파이야메 종료 조건 검증 (단, 특수유국은 제외)
+        let oyaRank = 1;
+        if (option.sekiOrder) {
+          oyaRank = players.filter((x, idx) => x.displayScore > players[chinIdx].displayScore || (x.displayScore === players[chinIdx].displayScore && idx < chinIdx)).length + 1;
+        } else {
+          oyaRank = players.filter(x => x.displayScore > players[chinIdx].displayScore).length + 1;
+        }
+        let isOyaFirst = (oyaRank === 1);
+        let isOyaAboveReturn = players[chinIdx].displayScore >= option.returnScore;
+        let isAgariOrTenpaiYame = isOyaFirst && isOyaAboveReturn && (status === 'tsumo' || status === 'ron' || status === 'normal_draw');
+
+        if (isAgariOrTenpaiYame) {
+          if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+            records.time[records.time.length - 1] = '결과';
+          }
+          showModal('result_sheet');
+        } else {
+          // 서풍전 친 연장 시 서입 국 유지 및 연장봉 추가
+          panelInfo.renchan++;
+          if (status === 'tsumo' || status === 'ron') {
+            panelInfo.riichi = 0;
+          }
         }
       } else {
         // 친 연장 실패 시: 반환점수를 넘은 사람이 있는지 검증
