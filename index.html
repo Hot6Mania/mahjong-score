@@ -72,12 +72,16 @@
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://apis.google.com/js/api.js" async defer></script>
     <script type="module" src="/src/main.ts"></script>
-    <!-- Register PWA Service Worker -->
+    <!-- Register PWA Service Worker (배포 버전 강제 동기화 쿼리 포함) -->
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/mahjong-score/sw.js')
-            .then(reg => console.log('ServiceWorker registered:', reg))
+          const deployVersion = "20260712_0920";
+          navigator.serviceWorker.register(`/mahjong-score/sw.js?v=${deployVersion}`)
+            .then(reg => {
+              console.log('ServiceWorker registered:', reg);
+              reg.update(); // 강제 업데이트 체크
+            })
             .catch(err => console.log('ServiceWorker registration failed:', err));
         });
       }
