@@ -2007,6 +2007,12 @@ const syncLocalDataToGoogle = async () => {
         });
         return acc;
       }, []);
+
+      // 회차별 시트 및 상세/raw 시트 존재 여부 검증 및 생성 보장
+      const membersToUse = googleInfo.todayMembers.length > 0 ? googleInfo.todayMembers : offlineMembers;
+      await createSessionSheetIfNotExist(googleInfo.spreadsheetId, sessionSheetName, membersToUse);
+      await saveSessionMembers(googleInfo.spreadsheetId, sessionSheetName, membersToUse);
+
       await addNewMembersToDb(googleInfo.spreadsheetId, offlineMembers);
       syncProgress.value = 55;
 
@@ -2446,6 +2452,8 @@ const startNewDay = async () => {
   localStorage.removeItem("today_members");
   localStorage.removeItem("today_members_points");
   localStorage.removeItem("today_games_history");
+  localStorage.removeItem("current_session_sheet_name");
+  currentSessionSheetName.value = "";
   googleInfo.todayMembers = [];
   todayGamesHistory.length = 0; // 반응형 배열 비우기
   Object.keys(localPoints).forEach(key => delete localPoints[key]);
