@@ -213,6 +213,17 @@ const restoreGoogleSessionIfValid = async () => {
       localStorage.removeItem("google_access_token");
       localStorage.removeItem("google_token_expires_at");
     }
+  } else if (keep && localStorage.getItem("google_is_logged_in") === "true") {
+    // 토큰이 만료되었지만 기존 로그인 이력이 있는 경우, 백그라운드 무인 갱신 시도
+    console.log("로컬 캐시 토큰 만료됨. 백그라운드 무인 로그인 복원 시도...");
+    try {
+      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+        window.gapi.client.setToken(null); // 만료된 토큰 청소
+      }
+      tryAutoLogin(onGoogleTokenReceived);
+    } catch (e) {
+      console.warn("구글 자동 로그인 세션 무인 복원 실패:", e);
+    }
   }
 }
 // 차트 시각화 전용 데이터 소스 상태
@@ -406,16 +417,19 @@ onMounted(async () => {
       const initGisWithRetry = () => {
         if (typeof window.google !== 'undefined' && window.google.accounts) {
           initGis(googleInfo.clientId, onGoogleTokenReceived);
+          restoreGoogleSessionIfValid();
         } else if (gisRetry < 50) {
           gisRetry++;
           setTimeout(initGisWithRetry, 100);
         } else {
           console.error("Google Identity SDK 로드 실패 (Timeout 5s)");
+          restoreGoogleSessionIfValid();
         }
       };
       initGisWithRetry();
+    } else {
+      restoreGoogleSessionIfValid();
     }
-    restoreGoogleSessionIfValid();
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
   }
@@ -1399,6 +1413,7 @@ const rollbackRecord = (idx: number) => {
 }
 
 const isManualLogin = ref(false);
+const isSyncPending = ref(false);
 let tokenResolve: (() => void) | null = null;
 
 // 구글 토큰 수령 시 콜백
@@ -1416,6 +1431,13 @@ const onGoogleTokenReceived = async (_token: string) => {
   if (tokenResolve) {
     tokenResolve();
     tokenResolve = null;
+  }
+
+  if (isSyncPending.value) {
+    isSyncPending.value = false;
+    setTimeout(() => {
+      syncLocalDataToGoogle();
+    }, 500);
   }
 
   if (isManualLogin.value) {
@@ -1515,6 +1537,11 @@ const ensureValidToken = () => {
     }
 
     if (keep && token) {
+      // 만료된 토큰이 구글 클라이언트에 캐싱되어 조기 반환되는 버그 방지를 위해 토큰 명시적 클리어
+      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+        window.gapi.client.setToken(null);
+      }
+
       tokenResolve = () => {
         clearTimeout(timeoutId);
         resolve();
@@ -1889,8 +1916,13 @@ const syncLocalDataToGoogle = async () => {
   try {
     await ensureValidToken();
   } catch (authErr) {
-    console.warn("구글 토큰 갱신 실패, 로그인 팝업 기동:", authErr);
-    loginGoogle();
+    console.warn("구글 토큰 갱신 실패, 로그인 유도:", authErr);
+    const confirmLogin = await showConfirm("구글 로그인 세션이 만료되었습니다.\n세션을 연장하고 동기화를 완료하기 위해 다시 로그인하시겠습니까?");
+    if (confirmLogin) {
+      isManualLogin.value = false;
+      isSyncPending.value = true;
+      loginGoogle();
+    }
     return;
   }
 
