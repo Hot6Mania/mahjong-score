@@ -2253,8 +2253,22 @@ const loadExistingSession = async (cleanTitle: string) => {
     });
 
     const dataRows = dataRes.result.values || [];
+
+    // 3.1. 대국 요약 이력(raw) 복원 (수동 입력 대국 복원용)
+    let rawDataRows: any[][] = [];
+    try {
+      const rawDataRes = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: googleInfo.spreadsheetId,
+        range: `'${cleanTitle} (raw)'!F2:W500`
+      });
+      rawDataRows = rawDataRes.result.values || [];
+    } catch (e) {
+      console.warn("raw 시트에서 대국 요약 리스트 로드 실패:", e);
+    }
+
     const gamesMap: Record<string, {
       timestamp: string,
+      isManual?: boolean,
       results: Record<string, { name: string, score: number, uma: number, rank: number }>,
       playerNames: string[],
       rounds: Record<number, {
@@ -2350,10 +2364,74 @@ const loadExistingSession = async (cleanTitle: string) => {
       }
     });
 
+    // 수동 대국 정보(raw) 파싱
+    rawDataRows.forEach((row: any) => {
+      const gameId = row[0] ? row[0].toString().trim() : '';
+      if (!gameId) return;
+
+      // 이미 상세 시트에서 파싱 완료된 것은 스킵
+      if (gamesMap[gameId]) return;
+
+      const timestamp = row[1];
+      let parsedTime = new Date().toISOString();
+      const numId = Number(gameId);
+      if (!isNaN(numId) && numId > 0) {
+        parsedTime = new Date(numId).toISOString();
+      } else if (timestamp) {
+        const cleanTimeStr = timestamp.replace("오전", "AM").replace("오후", "PM").replace(/\./g, '/');
+        const d = new Date(cleanTimeStr);
+        if (!isNaN(d.getTime())) {
+          parsedTime = d.toISOString();
+        }
+      }
+
+      const results: Record<string, { name: string, score: number, uma: number, rank: number }> = {};
+      const playerNames: string[] = [];
+
+      for (let i = 0; i < 4; i++) {
+        const offset = 2 + i * 4;
+        if (row[offset]) {
+          const pName = row[offset].toString().trim();
+          const pRank = parseInt(row[offset + 1]) || 4;
+          const pScore = parseInt(row[offset + 2]) || 0;
+          const pUma = parseFloat(row[offset + 3]) || 0;
+          results[pName] = {
+            name: pName,
+            score: pScore,
+            uma: pUma,
+            rank: pRank
+          };
+          playerNames.push(pName);
+        }
+      }
+
+      if (playerNames.length === 4) {
+        gamesMap[gameId] = {
+          timestamp: parsedTime,
+          isManual: true,
+          results,
+          playerNames,
+          rounds: {}
+        };
+      }
+    });
+
     // Map을 배열로 환원
     const restoredHistory = Object.keys(gamesMap).map(gameId => {
       const g = gamesMap[gameId];
       const playerNames = g.playerNames;
+
+      // 수동 입력 대국 복원 지원
+      if (g.isManual) {
+        const resultsArr = playerNames.map(name => g.results[name] || { name, score: 25000, uma: 0, rank: 4 });
+        return {
+          timestamp: g.timestamp,
+          results: resultsArr,
+          records: null,
+          playerNames: playerNames,
+          isManual: true
+        };
+      }
 
       // 4명이 꽉 차지 않을 경우 방어 코드
       while (playerNames.length < 4) {
