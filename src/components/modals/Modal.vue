@@ -2,7 +2,7 @@
 import { ModalChooseDraw, ModalCheckPlayer, ModalScoreSelect, ModalScoreResult } from "@/components/modals/scoring";
 import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
-import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats } from "@/components/modals/stats";
+import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputManual } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -70,6 +70,8 @@ type Emits = {
   (e: 'load-existing-session', cleanTitle: string): void,
   (e: 'open-choose-session-popup'): void,
   (e: 'click-game', index: number): void,
+  (e: 'add-manual-game', results: any[]): void,
+  (e: 'move-game', index: number, direction: 'up' | 'down'): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -577,6 +579,18 @@ const getSignColor = (sign: number, x: boolean) => {
       :history="todayGamesHistory"
       @invalidate-game="(idx) => emit('invalidate-game', idx)"
       @click-game="(idx) => emit('click-game', idx)"
+      @show-modal="(type, status?) => emit('show-modal', type, status)"
+      @move-game="(idx, dir) => emit('move-game', idx, dir)"
+    />
+  </div>
+  <!-- 오류 대국 입력창 -->
+  <div v-else-if="modalInfo.type==='input_manual_game'" class="modal_content" @click.stop>
+    <ModalInputManual
+      :todayMembers="googleInfo.todayMembers"
+      :option="option"
+      :history="todayGamesHistory"
+      @add-manual-game="(results) => emit('add-manual-game', results)"
+      @show-modal="(type, status?) => emit('show-modal', type, status)"
     />
   </div>
   <!-- 오늘의 스탯창 -->

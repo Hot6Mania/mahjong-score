@@ -226,7 +226,7 @@ const stats = computed(() => {
 
   if (props.history) {
     props.history.forEach(game => {
-      if (!game.results) return
+      if (!game.results || game.isManual) return
 
       // 이 대국에서의 플레이어 인덱스 찾기
       const pIdx = game.results.findIndex((r: any) => r.name === name)

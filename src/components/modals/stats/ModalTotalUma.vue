@@ -13,6 +13,8 @@ const props = defineProps<Props>()
 type Emits = {
   (e: 'invalidate-game', index: number): void
   (e: 'click-game', index: number): void
+  (e: 'show-modal', type: string, status?: string): void
+  (e: 'move-game', index: number, direction: 'up' | 'down'): void
 }
 const emit = defineEmits<Emits>()
 
@@ -134,14 +136,20 @@ const formatScore = (score: number) => {
         <!-- 각 행(Row)은 회차(1회전, 2회전...)를 의미함 -->
         <tr v-for="(_, gameIdx) in history" :key="gameIdx" @click="emit('click-game', gameIdx)" class="game_row" style="cursor: pointer;">
           <td class="sticky_col cell_round_header">
-            <div class="round_title_wrapper" style="display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;">
+            <div class="round_title_wrapper" style="display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 4px; box-sizing: border-box; width: 100%;">
               <span class="round_text">{{ gameIdx + 1 }}회전</span>
-              <button class="btn_invalidate" @click.stop="emit('invalidate-game', gameIdx)" title="기록 무효화">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 12px; height: 12px; display: block;">
-                  <circle cx="12" cy="12" r="10" fill="#f44336" />
-                  <path d="M15.5 8.5L8.5 15.5M8.5 8.5L15.5 15.5" stroke="var(--text-color)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                <div style="display: flex; flex-direction: column; line-height: 0.8; font-size: 8px;">
+                  <button v-if="gameIdx > 0" class="btn_reorder" @click.stop="emit('move-game', gameIdx, 'up')" title="위로 이동" style="background: none; border: none; cursor: pointer; padding: 0; font-size: 8px; color: var(--text-color); opacity: 0.6;">▲</button>
+                  <button v-if="gameIdx < history.length - 1" class="btn_reorder" @click.stop="emit('move-game', gameIdx, 'down')" title="아래로 이동" style="background: none; border: none; cursor: pointer; padding: 0; font-size: 8px; color: var(--text-color); opacity: 0.6;">▼</button>
+                </div>
+                <button class="btn_invalidate" @click.stop="emit('invalidate-game', gameIdx)" title="기록 무효화">
+                  <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 12px; height: 12px; display: block;">
+                    <circle cx="12" cy="12" r="10" fill="#f44336" />
+                    <path d="M15.5 8.5L8.5 15.5M8.5 8.5L15.5 15.5" stroke="var(--text-color)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
             </div>
           </td>
           <!-- 각 플레이어 컬럼별 결과 셀 -->
@@ -184,6 +192,13 @@ const formatScore = (score: number) => {
         </tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- 수동 입력 버튼 추가 -->
+  <div class="action_buttons">
+    <button class="btn_manual_input" @click="emit('show-modal', 'input_manual_game')">
+      오류 대국 입력 (수동)
+    </button>
   </div>
 </div>
 </template>
@@ -368,5 +383,32 @@ tr:hover .sticky_col {
 }
 .game_row:hover .sticky_col {
   background-color: rgba(255, 255, 255, 0.05);
+}
+
+.action_buttons {
+  margin-top: 15px;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.btn_manual_input {
+  background-color: var(--color-toggle-on);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.btn_manual_input:hover {
+  opacity: 0.9;
+}
+
+.btn_manual_input:active {
+  transform: scale(0.98);
 }
 </style>

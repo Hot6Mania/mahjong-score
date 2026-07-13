@@ -1265,7 +1265,7 @@ const saveRound = () => {
         } else {
           // 반환점수를 넘은 사람이 없으면 서입 (서1국 진입)
           changeWindsAndRounds();
-          panelInfo.renchan = 0;
+          panelInfo.renchan = (status === 'normal_draw') ? panelInfo.renchan + 1 : 0;
           panelInfo.riichi = 0;
         }
       }
@@ -1306,7 +1306,7 @@ const saveRound = () => {
         } else {
           // 다음 서국으로 진행
           changeWindsAndRounds();
-          panelInfo.renchan = 0;
+          panelInfo.renchan = (status === 'normal_draw') ? panelInfo.renchan + 1 : 0;
           panelInfo.riichi = 0;
         }
       }
@@ -1316,7 +1316,7 @@ const saveRound = () => {
         panelInfo.renchan++;
       } else {
         changeWindsAndRounds();
-        panelInfo.renchan = 0;
+        panelInfo.renchan = (status === 'normal_draw') ? panelInfo.renchan + 1 : 0;
       }
       if (status === 'tsumo' || status === 'ron') {
         panelInfo.riichi = 0;
@@ -1887,11 +1887,29 @@ const syncLocalDataToGoogle = async () => {
     } catch (e) {
       console.warn("기존 전체 국별기록 (데이터) ID 조회 실패:", e);
     }
+
+    // A2. 회차별 요약 시트(raw)의 A열 조회
+    try {
+      const resRaw = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: googleInfo.spreadsheetId,
+        range: `'${sessionSheetName} (raw)'!A2:A`,
+      });
+      if (resRaw.result.values) {
+        resRaw.result.values.forEach((row: any) => {
+          if (row[0]) {
+            uploadedGameIds.add(row[0].toString().trim());
+          }
+        });
+      }
+    } catch (e) {
+      console.warn("기존 회차 raw ID 조회 실패 (신규 회차일 수 있음):", e);
+    }
     syncProgress.value = 15;
 
     // B. 신규 대국 필터링 및 Tidy 국별 데이터 조립
     const allRoundRows: any[][] = [];
     let skipCount = 0;
+    let newGamesCount = 0;
 
     todayGamesHistory.forEach(game => {
       const gameId = new Date(game.timestamp).getTime().toString();
@@ -1899,13 +1917,14 @@ const syncLocalDataToGoogle = async () => {
         skipCount++;
         return;
       }
+      newGamesCount++;
 
       const timestamp = new Date(game.timestamp).toLocaleString('ko-KR');
       const records = game.records;
       const results = game.results;
 
       // 대국 당시의 플레이어 순서 명단(0~3 인덱스 매칭) 복원 (현재 판의 플레이어 배치와 꼬임 방지!)
-      const orderedNames = (game as any).playerNames || (() => {
+      const orderedNames = (game as any).playerNames || (records ? (() => {
         const rowRanks = [0, 1, 2, 3].map(i => {
           const score = records.score[i][records.score[i].length - 1];
           let rank = 1;
@@ -1922,9 +1941,9 @@ const syncLocalDataToGoogle = async () => {
           list[item.idx] = match.name;
         });
         return list;
-      })();
+      })() : results.map((r: any) => r.name));
 
-      const totalRounds = records.riichi.length - 1;
+      const totalRounds = (records && records.riichi) ? records.riichi.length - 1 : 0;
       for (let r = 1; r <= totalRounds; r++) {
         const roundName = records.time[2 * r - 1] || `${r}국`;
         const roundStatus = records.status && records.status[r] ? records.status[r] : '';
@@ -2029,7 +2048,7 @@ const syncLocalDataToGoogle = async () => {
       }
     });
 
-    if (allRoundRows.length > 0) {
+    if (newGamesCount > 0) {
       syncProgress.value = 40;
       // 신규 등록된 임시 멤버가 있다면 구글 시트에 일괄 동기화 (fetchMemberList에 추가)
       const offlineMembers = todayGamesHistory.reduce((acc: string[], game) => {
@@ -2060,11 +2079,15 @@ const syncLocalDataToGoogle = async () => {
       syncProgress.value = 65;
 
       // [1] '전체 국별기록 (데이터)' 일괄 업데이트
-      await appendRoundRecords(googleInfo.spreadsheetId, '전체 국별기록 (데이터)', allRoundRows, googleInfo.todayMembers);
+      if (allRoundRows.length > 0) {
+        await appendRoundRecords(googleInfo.spreadsheetId, '전체 국별기록 (데이터)', allRoundRows, googleInfo.todayMembers);
+      }
       syncProgress.value = 75;
       
       // [2] 회차별 상세 시트에 국별기록 일괄 업데이트
-      await appendRoundRecords(googleInfo.spreadsheetId, sessionSheetName + " (데이터)", allRoundRows, googleInfo.todayMembers);
+      if (allRoundRows.length > 0) {
+        await appendRoundRecords(googleInfo.spreadsheetId, sessionSheetName + " (데이터)", allRoundRows, googleInfo.todayMembers);
+      }
       syncProgress.value = 85;
       
       // [3] 회차별 가로 대국 요약 데이터 일괄 적재
@@ -2527,6 +2550,63 @@ const invalidateGame = async (index: number) => {
 
   alert(`${index + 1}회전 대국 기록이 무효 처리되었습니다.`);
 };
+
+// 오류 대국 결과 직접 입력 (수동 기록)
+const addManualGame = (results: any[]) => {
+  todayGamesHistory.push({
+    timestamp: new Date().toISOString(),
+    results: results,
+    records: null,
+    playerNames: results.map((r: any) => r.name),
+    isManual: true
+  });
+  localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
+
+  // localPoints 누적 점수 전체 재계산
+  Object.keys(localPoints).forEach(key => {
+    localPoints[key] = 0;
+  });
+
+  todayGamesHistory.forEach((game) => {
+    if (game.results) {
+      game.results.forEach((r: any) => {
+        const prev = localPoints[r.name] || 0;
+        localPoints[r.name] = parseFloat((prev + r.uma).toFixed(1));
+      });
+    }
+  });
+  localStorage.setItem("today_members_points", JSON.stringify(localPoints));
+
+  triggerToast("수동 대국 결과 기록 완료!");
+};
+
+// 회차 대국 기록 순서 조정 (위/아래로 이동)
+const moveGameInHistory = (index: number, direction: 'up' | 'down') => {
+  if (direction === 'up' && index > 0) {
+    const temp = todayGamesHistory[index];
+    todayGamesHistory[index] = todayGamesHistory[index - 1];
+    todayGamesHistory[index - 1] = temp;
+  } else if (direction === 'down' && index < todayGamesHistory.length - 1) {
+    const temp = todayGamesHistory[index];
+    todayGamesHistory[index] = todayGamesHistory[index + 1];
+    todayGamesHistory[index + 1] = temp;
+  }
+  localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
+
+  // localPoints 누적 점수 전체 재계산
+  Object.keys(localPoints).forEach(key => {
+    localPoints[key] = 0;
+  });
+  todayGamesHistory.forEach((game) => {
+    if (game.results) {
+      game.results.forEach((r: any) => {
+        const prev = localPoints[r.name] || 0;
+        localPoints[r.name] = parseFloat((prev + r.uma).toFixed(1));
+      });
+    }
+  });
+  localStorage.setItem("today_members_points", JSON.stringify(localPoints));
+};
 </script>
 
 <template>
@@ -2607,6 +2687,8 @@ const invalidateGame = async (index: number) => {
       @load-existing-session="loadExistingSession"
       @open-choose-session-popup="openChooseSessionPopup"
       @click-game="handleHistoryGameClick"
+      @add-manual-game="addManualGame"
+      @move-game="moveGameInHistory"
     />
   </Transition>
 
