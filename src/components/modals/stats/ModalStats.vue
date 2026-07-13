@@ -12,7 +12,20 @@ interface Props {
 const props = defineProps<Props>()
 
 // 스탯 계산 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
-const scopeTab = ref<'session' | 'all'>('session')
+const scopeTab = ref<'session' | 'backup' | 'all'>('session')
+
+// 로컬 영구 백업 대국 불러오기
+const activeHistory = computed(() => {
+  if (scopeTab.value === 'backup') {
+    try {
+      const raw = localStorage.getItem("permanent_games_history") || "[]"
+      return JSON.parse(raw)
+    } catch (e) {
+      return []
+    }
+  }
+  return props.history || []
+})
 
 // 탭 종류
 type TabType = 'basic' | 'riichi' | 'other'
@@ -38,8 +51,8 @@ const allPlayers = computed(() => {
       if (p.name && !defaultNames.includes(p.name)) set.add(p.name)
     })
   }
-  if (props.history) {
-    props.history.forEach(game => {
+  if (activeHistory.value) {
+    activeHistory.value.forEach((game: any) => {
       if (game.results) {
         game.results.forEach((r: any) => {
           if (r.name) set.add(r.name)
@@ -224,8 +237,8 @@ const stats = computed(() => {
   let manganOyaKaburiScoreSum = 0
   let loseWithRiichiCount = 0
 
-  if (props.history) {
-    props.history.forEach(game => {
+  if (activeHistory.value) {
+    activeHistory.value.forEach((game: any) => {
       if (!game.results || game.isManual) return
 
       // 이 대국에서의 플레이어 인덱스 찾기
@@ -586,14 +599,21 @@ const stats = computed(() => {
       :class="{ active: scopeTab === 'session' }" 
       @click="scopeTab = 'session'"
     >
-      이번 회차 스탯
+      이번 회차
+    </button>
+    <button 
+      class="scope_tab" 
+      :class="{ active: scopeTab === 'backup' }" 
+      @click="scopeTab = 'backup'"
+    >
+      로컬 백업
     </button>
     <button 
       class="scope_tab" 
       :class="{ active: scopeTab === 'all' }" 
       @click="scopeTab = 'all'"
     >
-      전체 기간 스탯
+      전체 기간
     </button>
   </div>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue"
+import { computed, ref } from "vue"
 import type { Player } from "@/types/types.d"
 
 interface Props {
@@ -113,14 +113,22 @@ const getUmaColor = (uma: number) => {
 const formatScore = (score: number) => {
   return String(score)
 }
+
+const isEditOrderMode = ref(false)
+
+const getGameSummaryText = (game: any) => {
+  if (!game || !game.results) return ''
+  const sorted = [...game.results].sort((a, b) => a.rank - b.rank)
+  return sorted.map(r => `${r.name}(${r.rank}위: ${r.uma > 0 ? '+' : ''}${r.uma})`).join(', ')
+}
 </script>
 
 <template>
 <div class="container_total_uma">
   <h3 class="title">총 우마</h3>
 
-  <!-- 대국 기록 테이블 영역 (한 판도 안 했어도 표는 상시 표시됨!) -->
-  <div class="table_wrapper">
+  <!-- 대국 기록 테이블 영역 (순서 편집 모드가 아닐 때만 렌더링) -->
+  <div v-if="!isEditOrderMode" class="table_wrapper">
     <table class="uma_table">
       <thead>
         <tr>
@@ -194,10 +202,55 @@ const formatScore = (score: number) => {
     </table>
   </div>
 
-  <!-- 수동 입력 버튼 추가 -->
+  <!-- 순서 편집 모드 UI (모바일 터치 최적화) -->
+  <div v-if="isEditOrderMode" class="edit_order_wrapper">
+    <div class="edit_order_info">
+      대국의 순서를 조정합니다. 아래 화살표 버튼을 크게 눌러 순서를 바꾸실 수 있습니다.
+    </div>
+    <div class="edit_order_list">
+      <div v-for="(_, gameIdx) in history" :key="gameIdx" class="order_item_card">
+        <div class="order_item_info">
+          <span class="order_round_badge">{{ gameIdx + 1 }}회전</span>
+          <span class="order_summary">{{ getGameSummaryText(history[gameIdx]) }}</span>
+        </div>
+        <div class="order_buttons_large">
+          <button 
+            :disabled="gameIdx === 0" 
+            class="btn_large_reorder btn_order_up" 
+            @click.stop="emit('move-game', gameIdx, 'up')"
+          >
+            ▲ 위로
+          </button>
+          <button 
+            :disabled="gameIdx === history.length - 1" 
+            class="btn_large_reorder btn_order_down" 
+            @click.stop="emit('move-game', gameIdx, 'down')"
+          >
+            ▼ 아래로
+          </button>
+        </div>
+      </div>
+      <div v-if="!history || history.length === 0" class="empty_order_list">
+        순서를 변경할 대국이 없습니다.
+      </div>
+    </div>
+  </div>
+
+  <!-- 수동 입력 & 백업 보관소 & 순서 편집 버튼 배치 -->
   <div class="action_buttons">
-    <button class="btn_manual_input" @click="emit('show-modal', 'input_manual_game')">
+    <button 
+      v-if="history && history.length > 0" 
+      class="btn_manual_input btn_toggle_order" 
+      @click="isEditOrderMode = !isEditOrderMode"
+      :style="isEditOrderMode ? { backgroundColor: 'var(--color-primary)' } : {}"
+    >
+      {{ isEditOrderMode ? '편집 완료' : '대국 순서 편집' }}
+    </button>
+    <button v-if="!isEditOrderMode" class="btn_manual_input btn_yellow" @click="emit('show-modal', 'input_manual_game')">
       오류 대국 입력 (수동)
+    </button>
+    <button v-if="!isEditOrderMode" class="btn_manual_input btn_purple" @click="emit('show-modal', 'backup_archive')">
+      로컬 백업 보관소
     </button>
   </div>
 </div>
@@ -410,5 +463,147 @@ tr:hover .sticky_col {
 
 .btn_manual_input:active {
   transform: scale(0.98);
+}
+
+/* 대국 순서 편집 모드 */
+.edit_order_wrapper {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 15px;
+}
+
+.edit_order_info {
+  font-size: 11.5px;
+  color: var(--text-dimmed);
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.edit_order_list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.order_item_card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.order_item_info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.order_round_badge {
+  font-size: 10px;
+  font-weight: bold;
+  background-color: rgba(255,255,255,0.08);
+  border: 1px solid var(--border-color);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.order_summary {
+  font-size: 11.5px;
+  font-weight: bold;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-color);
+}
+
+.order_buttons_large {
+  display: flex;
+  gap: 8px;
+}
+
+.btn_large_reorder {
+  flex: 1;
+  height: 38px; /* 모바일 터치 영역 보장 */
+  border: 1px solid var(--border-color);
+  background-color: rgba(255, 255, 255, 0.05);
+  color: var(--text-color);
+  font-size: 12px;
+  font-weight: bold;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.btn_large_reorder:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.btn_large_reorder:not(:disabled):active {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.btn_order_up {
+  border-color: rgba(76, 175, 80, 0.3);
+}
+.btn_order_down {
+  border-color: rgba(244, 67, 54, 0.3);
+}
+
+.empty_order_list {
+  text-align: center;
+  color: var(--text-dimmed);
+  padding: 20px;
+  font-size: 12px;
+}
+
+.btn_yellow {
+  background-color: #ff9800 !important;
+}
+
+.btn_purple {
+  background-color: #9c27b0 !important;
+}
+
+.btn_toggle_order {
+  background-color: #00bcd4 !important;
+}
+
+@media (max-height: 500px) {
+  .edit_order_wrapper {
+    padding: 8px;
+    margin-bottom: 8px;
+  }
+  .edit_order_info {
+    font-size: 10px;
+    margin-bottom: 6px;
+  }
+  .edit_order_list {
+    max-height: 110px;
+    gap: 6px;
+  }
+  .order_item_card {
+    padding: 6px 10px;
+    gap: 4px;
+  }
+  .btn_large_reorder {
+    height: 30px;
+    font-size: 11px;
+  }
+  .action_buttons {
+    margin-top: 8px;
+  }
 }
 </style>

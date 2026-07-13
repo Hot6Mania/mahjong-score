@@ -1856,13 +1856,15 @@ const saveGameToSheet = async () => {
         rank: rank
       };
     });
-    todayGamesHistory.push({
+    const newGame = {
       timestamp: new Date().toISOString(),
       results: historyResults,
       records: JSON.parse(JSON.stringify(records)),
       playerNames: players.map(p => p.name)
-    });
+    };
+    todayGamesHistory.push(newGame);
     localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
+    saveToPermanentBackup(newGame);
 
     // 기록 성공 플래그 셋팅 및 복구 보장
     isGameSaved.value = true;
@@ -2682,14 +2684,16 @@ const invalidateGame = async (index: number) => {
 
 // 오류 대국 결과 직접 입력 (수동 기록)
 const addManualGame = (results: any[]) => {
-  todayGamesHistory.push({
+  const manualGame = {
     timestamp: new Date().toISOString(),
     results: results,
     records: null,
     playerNames: results.map((r: any) => r.name),
     isManual: true
-  });
+  };
+  todayGamesHistory.push(manualGame);
   localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
+  saveToPermanentBackup(manualGame);
 
   // localPoints 누적 점수 전체 재계산
   Object.keys(localPoints).forEach(key => {
@@ -2735,6 +2739,55 @@ const moveGameInHistory = (index: number, direction: 'up' | 'down') => {
     }
   });
   localStorage.setItem("today_members_points", JSON.stringify(localPoints));
+};
+
+// 로컬 영구 백업 보관소(최대 50판)에 대국 저장
+const saveToPermanentBackup = (game: any) => {
+  try {
+    const raw = localStorage.getItem("permanent_games_history") || "[]";
+    const list = JSON.parse(raw);
+    
+    // 깊은 복사 후 보관소에 푸시
+    list.push(JSON.parse(JSON.stringify(game)));
+    
+    // 50개 제한 유지
+    while (list.length > 50) {
+      list.shift();
+    }
+    
+    localStorage.setItem("permanent_games_history", JSON.stringify(list));
+  } catch (e) {
+    console.warn("영구 백업 저장 실패:", e);
+  }
+};
+
+// 로컬 백업 보관소에서 선택한 게임을 현재 세션(오늘 회차)의 맨 뒤에 추가
+const addBackupGameToCurrent = (game: any) => {
+  // 깊은 복사
+  const clonedGame = JSON.parse(JSON.stringify(game));
+  // 중복 대국 추가 시 ID 꼬임 방지를 위해 새 타임스탬프 부여
+  clonedGame.timestamp = new Date().toISOString();
+  
+  todayGamesHistory.push(clonedGame);
+  localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
+
+  // localPoints 누적 점수 전체 재계산
+  Object.keys(localPoints).forEach(key => {
+    localPoints[key] = 0;
+  });
+
+  todayGamesHistory.forEach((g) => {
+    if (g.results) {
+      g.results.forEach((r: any) => {
+        const prev = localPoints[r.name] || 0;
+        localPoints[r.name] = parseFloat((prev + r.uma).toFixed(1));
+      });
+    }
+  });
+  localStorage.setItem("today_members_points", JSON.stringify(localPoints));
+
+  triggerToast("백업 대국이 현재 회차에 추가되었습니다!");
+  showModal('total_uma'); // 다시 총 우마 창으로 이동
 };
 </script>
 
@@ -2818,6 +2871,7 @@ const moveGameInHistory = (index: number, direction: 'up' | 'down') => {
       @click-game="handleHistoryGameClick"
       @add-manual-game="addManualGame"
       @move-game="moveGameInHistory"
+      @add-backup-game-to-current="addBackupGameToCurrent"
     />
   </Transition>
 

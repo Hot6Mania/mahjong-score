@@ -2,7 +2,7 @@
 import { ModalChooseDraw, ModalCheckPlayer, ModalScoreSelect, ModalScoreResult } from "@/components/modals/scoring";
 import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
-import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputManual } from "@/components/modals/stats";
+import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputManual, ModalBackupArchive } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -72,11 +72,40 @@ type Emits = {
   (e: 'click-game', index: number): void,
   (e: 'add-manual-game', results: any[]): void,
   (e: 'move-game', index: number, direction: 'up' | 'down'): void,
+  (e: 'add-backup-game-to-current', game: any): void,
 }
 const emit = defineEmits<Emits>()
 
 // 구글 스프레드시트 주소 편집 상태
 const isEditingSpreadsheetId = ref(false);
+
+const optionPlayerSuggestions = computed(() => {
+  const set = new Set<string>()
+  // 1. 구글 오늘 멤버들
+  if (props.googleInfo && props.googleInfo.todayMembers && props.googleInfo.todayMembers.length > 0) {
+    props.googleInfo.todayMembers.forEach(n => set.add(n))
+  }
+  // 2. 대국 이력 기록에 있는 이름들
+  if (props.todayGamesHistory) {
+    props.todayGamesHistory.forEach(game => {
+      if (game.results) {
+        game.results.forEach((r: any) => {
+          if (r.name) set.add(r.name)
+        })
+      }
+    })
+  }
+  // 3. 현재 진행 중인 자리 설정 플레이어 이름들
+  if (props.players) {
+    props.players.forEach(p => {
+      const defaultNames = ['▼', '▶', '▲', '◀']
+      if (p.name && !defaultNames.includes(p.name)) {
+        set.add(p.name)
+      }
+    })
+  }
+  return Array.from(set)
+})
 
 const keepLoggedIn = ref(localStorage.getItem("keep_logged_in") === "true");
 const handleKeepLoggedInChange = () => {
@@ -603,6 +632,13 @@ const getSignColor = (sign: number, x: boolean) => {
       :googleMemberStats="googleMemberStats"
     />
   </div>
+  <!-- 로컬 백업 보관소 창 -->
+  <div v-else-if="modalInfo.type==='backup_archive'" class="modal_content" @click.stop>
+    <ModalBackupArchive
+      @show-modal="(type, status?) => emit('show-modal', type, status)"
+      @add-backup-game-to-current="(game) => emit('add-backup-game-to-current', game)"
+    />
+  </div>
   <!-- 점수 롤백창 -->
   <div v-else-if="modalInfo.type==='rollback_record'" class="modal_content" @click.stop>
     <ModalRollback
@@ -613,6 +649,9 @@ const getSignColor = (sign: number, x: boolean) => {
   </div>
   <!-- 설정 창 -->
   <div v-else-if="modalInfo.type==='set_options'" class="modal_content" @click.stop>
+    <datalist id="optionPlayerSuggestions">
+      <option v-for="name in optionPlayerSuggestions" :key="name" :value="name" />
+    </datalist>
     <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%;">
       <div class="container_option">
         <div
@@ -623,8 +662,8 @@ const getSignColor = (sign: number, x: boolean) => {
           {{ arr_wind[i] }}({{ t(arr_seat[i]) }})<br>
           <input
             type="text"
-            maxlength="4"
             v-model="players[i].name"
+            list="optionPlayerSuggestions"
             :placeholder="t('option.name', {idx:i+1})"
             :name="`name${i+1}`"
           >
