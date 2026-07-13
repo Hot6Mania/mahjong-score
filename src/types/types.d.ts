@@ -20,6 +20,7 @@ export interface ScoringState { // 점수계산 요소
   whoWin: number, // 현재 점수 입력하는 플레이어
   whoLose: number, // 현재 방총 플레이어
   whoCheat: number, // 현재 촌보 플레이어
+  whoBeolbu: number, // 현재 벌부 플레이어
   isFao: boolean, // 책임지불 유무
   whoFao: number, // 현재 책임지불하는 플레이어
   inputFan: number, // 현재 점수 (판)

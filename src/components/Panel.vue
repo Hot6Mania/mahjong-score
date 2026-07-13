@@ -67,7 +67,7 @@ const emit = defineEmits<Emits>()
       <!-- 구분선 -->
       <div class="menu_separator"></div>
       <!-- 촌보 버튼 -->
-      <button class="btn_action cheat" @click="emit('show-modal', 'check_player_cheat')">
+      <button class="btn_action cheat" @click="emit('show-modal', 'choose_cheat_kind')">
         {{ t('panel.cheat') }}
       </button>
     </div>

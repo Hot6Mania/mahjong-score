@@ -53,6 +53,7 @@ const scoringState = reactive({ // 점수계산 요소
   whoWin: -1, // 현재 점수 입력하는 플레이어
   whoLose: -1, // 현재 방총 플레이어
   whoCheat: -1, // 현재 촌보 플레이어
+  whoBeolbu: -1, // 현재 벌부 플레이어
   isFao: false, // 책임지불 유무
   whoFao: -1, // 현재 책임지불하는 플레이어
   inputFan: 0, // 현재 점수 (판)
@@ -836,6 +837,7 @@ const hideModal = () => {
     whoWin: -1,
     whoLose: -1,
     whoCheat: -1,
+    whoBeolbu: -1,
     isFao: false,
     whoFao: -1,
     inputFan: 0,
@@ -871,6 +873,12 @@ const setArrowButton = (status: string, idx: number) => {
       scoringState.whoCheat=-1;
     else
       scoringState.whoCheat=idx;
+  }
+  else if (status==='beolbu'){ // 벌부 버튼
+    if (scoringState.whoBeolbu===idx)
+      scoringState.whoBeolbu=-1;
+    else
+      scoringState.whoBeolbu=idx;
   }
   else if (status==='fao'){ // 책임지불 버튼
     if (scoringState.whoWin===idx || scoringState.whoLose===idx) // 현재 승자 또는 패자와 같을때 비활성화
@@ -980,6 +988,22 @@ const checkInvalidStatus = (status: string) => {
     if (scoringState.whoCheat===-1) // 촌보한 사람이 없음 (불가능한 경우)
       return;
     calculateCheat();
+  }
+  else if (status==='beolbu'){ // 벌부일때
+    if (scoringState.whoBeolbu===-1) // 벌부 지급할 사람이 없음
+      return;
+    
+    // 벌부 점수 차이(deltaScore)를 임시 세팅하여 결과창으로 보냄
+    for (let i = 0; i < players.length; i++) {
+      if (scoringState.whoBeolbu === i) {
+        players[i].deltaScore = -1000;
+      } else {
+        players[i].deltaScore = 0;
+      }
+    }
+    
+    // 동그란 원형 점수 변화 확인창으로 이동 (beolbu 상태 유지)
+    showModal('show_score', 'beolbu');
   }
   else if (status==='tenpai') // 유국일때
     calculateDraw();
@@ -1149,12 +1173,20 @@ const calculateCheat = () => {
 
 /**국 결과값 처리*/
 const saveRound = () => {
+  let status = modalInfo.status;
+  if (status === 'beolbu') {
+    // 벌부 최종 적용: 벌부 낸 플레이어 점수 차감 및 공탁 리치봉 개수 1 증가
+    panelInfo.riichi++;
+    changeScores(panelInfo.riichi, () => {
+      // 대국 계속 진행하므로 모달만 닫고 상태 초기화
+      hideModal();
+    });
+    return;
+  }
+
   // 새 라운드 점수가 기록되기 시작하면 등록 완료 플래그를 완전히 해제하여 저장이 가능하도록 락 해제
   isGameSaved.value = false;
   localStorage.removeItem("is_game_saved");
-
-  // 1. 필요한 상태들을 동기적으로 먼저 안전하게 캡처 (hideModal이 동기적으로 상태를 초기화하기 때문)
-  let status = modalInfo.status;
   
   let chinIdx = players.findIndex(x => x['wind']==='東');
   let isChinWin = players[chinIdx].isWin;

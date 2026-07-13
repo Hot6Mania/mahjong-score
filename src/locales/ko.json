@@ -4,6 +4,7 @@
         "win" : "화료",
         "draw" : "유국",
         "cheat" : "촌보",
+        "beolbu" : "벌부",
         "nagashi" : "유국만관"
     },
     "comments" : {
@@ -15,6 +16,7 @@
         "checkPlayerTenpai" : "텐파이한 사람을 선택해 주세요.",
         "checkPlayerNagashi" : "유국만관한 사람을 선택해 주세요.",
         "checkPlayerCheat" : "촌보한 사람을 선택해 주세요.",
+        "checkPlayerBeolbu" : "벌부를 지급할 사람을 선택하세요.",
         "rollbackRecord" : "{time}으로 되돌리시겠습니까?",
         "copyRecord" : "대국 기록을 복사했습니다.",
         "copyRoomCode" : "방 코드를 복사했습니다."

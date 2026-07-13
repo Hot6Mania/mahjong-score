@@ -9,7 +9,7 @@ const { t } = useI18n()
 interface Props {
   players: Player[],
   scoringState: ScoringState,
-  actionType: 'win' | 'lose' | 'cheat' | 'fao' | 'tenpai' | 'nagashi'
+  actionType: 'win' | 'lose' | 'cheat' | 'fao' | 'tenpai' | 'nagashi' | 'beolbu'
 }
 const props = defineProps<Props>()
 
@@ -31,7 +31,8 @@ const guideMessages: Record<string, string> = {
   cheat: 'comments.checkPlayerCheat',
   fao: 'comments.checkPlayerFao',
   tenpai: 'comments.checkPlayerTenpai',
-  nagashi: 'comments.checkPlayerNagashi'
+  nagashi: 'comments.checkPlayerNagashi',
+  beolbu: 'comments.checkPlayerBeolbu'
 }
 
 /**화살표 버튼 색상*/
@@ -42,6 +43,8 @@ const arrowButtonStyle = (status: string, idx: number) => {
     return {color: props.players[idx].isWin!==true ? (props.players[idx].isLose===true ? 'var(--color-negative)' : 'var(--text-color)') : 'var(--color-disabled)'}; // 선택시 빨간색, 불가능시 회색
   else if (status==='cheat') // 촌보 화살표 버튼
     return {color: props.scoringState.whoCheat===idx ? 'var(--color-negative)' : 'var(--text-color)'}; // 선택시 빨간색
+  else if (status==='beolbu') // 벌부 화살표 버튼
+    return {color: props.scoringState.whoBeolbu===idx ? 'var(--color-negative)' : 'var(--text-color)'}; // 선택시 빨간색
   else if (status==='fao') // 책임지불 화살표 버튼
     return {color: props.scoringState.whoWin!==idx && props.scoringState.whoLose!==idx ? (props.scoringState.whoFao===idx ? 'var(--color-negative)' : 'var(--text-color)') : 'var(--color-disabled)'}; // 선택시 빨간색, 불가능시 회색
   else if (status==='tenpai') // 텐파이 화살표 버튼
@@ -60,6 +63,8 @@ const okButtonStyle = (status: string) => {
     return {color: (cntWin!==1 && cntLose===0) ? 'var(--color-disabled)' : 'var(--text-color)'}; // 2명 이상 화료했는데 쯔모임 (불가능한 경우)
   else if (status==='cheat') // 촌보 ok 버튼
     return {color: props.scoringState.whoCheat===-1 ? 'var(--color-disabled)' : 'var(--text-color)'}; // 촌보한 사람이 없음 (불가능한 경우)
+  else if (status==='beolbu') // 벌부 ok 버튼
+    return {color: props.scoringState.whoBeolbu===-1 ? 'var(--color-disabled)' : 'var(--text-color)'}; // 벌부 지급할 사람이 없음 (불가능한 경우)
   else if (status==='fao') // 책임지불 ok 버튼
     return {color: props.scoringState.whoFao===-1 ? 'var(--color-disabled)' : 'var(--text-color)'}; // 책임지불할 사람이 없음 (불가능한 경우)
   else if (status==='tenpai') // 텐파이 ok 버튼

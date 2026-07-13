@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ModalChooseDraw, ModalCheckPlayer, ModalScoreSelect, ModalScoreResult } from "@/components/modals/scoring";
+import { ModalChooseDraw, ModalCheckPlayer, ModalScoreSelect, ModalScoreResult, ModalChooseCheat } from "@/components/modals/scoring";
 import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
 import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputManual, ModalBackupArchive } from "@/components/modals/stats";
@@ -453,12 +453,28 @@ const getSignColor = (sign: number, x: boolean) => {
       @go-back-to-tenpai="emit('show-modal', 'check_player_tenpai')"
     />
   </div>
+  <!-- 촌보/벌부 종류 선택창 -->
+  <div v-else-if="modalInfo.type==='choose_cheat_kind'" class="modal_content" @click.stop>
+    <ModalChooseCheat
+      @show-modal="(type, status?) => emit('show-modal', type, status)"
+    />
+  </div>
   <!-- 촌보 인원 선택창 -->
   <div v-else-if="modalInfo.type==='check_player_cheat'" class="modal_content" @click.stop>
     <ModalCheckPlayer
       :players
       :scoringState
       actionType="cheat"
+      @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
+      @check-invalid-status="(status) => emit('check-invalid-status', status)"
+    />
+  </div>
+  <!-- 벌부 인원 선택창 -->
+  <div v-else-if="modalInfo.type==='check_player_beolbu'" class="modal_content" @click.stop>
+    <ModalCheckPlayer
+      :players
+      :scoringState
+      actionType="beolbu"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
     />
