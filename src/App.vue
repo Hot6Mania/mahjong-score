@@ -1414,6 +1414,7 @@ const rollbackRecord = (idx: number) => {
 
 const isManualLogin = ref(false);
 const isSyncPending = ref(false);
+const isRestorePending = ref("");
 let tokenResolve: (() => void) | null = null;
 
 // 구글 토큰 수령 시 콜백
@@ -1437,6 +1438,14 @@ const onGoogleTokenReceived = async (_token: string) => {
     isSyncPending.value = false;
     setTimeout(() => {
       syncLocalDataToGoogle();
+    }, 500);
+  }
+
+  if (isRestorePending.value) {
+    const titleToLoad = isRestorePending.value;
+    isRestorePending.value = "";
+    setTimeout(() => {
+      loadExistingSession(titleToLoad);
     }, 500);
   }
 
@@ -1532,6 +1541,20 @@ const ensureValidToken = () => {
     const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
 
     if (keep && token && Date.now() < expiresAt) {
+      // GAPI 클라이언트 메모리에 토큰이 있는지 이중 검증 (iOS 백그라운드 절전 대응)
+      let hasGapiToken = false;
+      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+        const gapiToken = window.gapi.client.getToken();
+        if (gapiToken && gapiToken.access_token) {
+          hasGapiToken = true;
+        }
+      }
+      if (!hasGapiToken) {
+        console.log("GAPI 인메모리 토큰이 휘발되었습니다. localStorage로부터 복구합니다...");
+        if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+          window.gapi.client.setToken({ access_token: token });
+        }
+      }
       resolve();
       return;
     }
@@ -1569,6 +1592,7 @@ const ensureValidToken = () => {
 const loadMemberList = async () => {
   if (googleInfo.syncMode !== 'google' || !googleInfo.isLoggedIn || !googleInfo.spreadsheetId) return;
   try {
+    await ensureValidToken();
     const list = await fetchMemberList(googleInfo.spreadsheetId);
     googleInfo.memberList = list;
   } catch (err) {
@@ -1580,6 +1604,7 @@ const loadMemberList = async () => {
 const loadTodayMembers = async () => {
   if (googleInfo.syncMode !== 'google' || !googleInfo.isLoggedIn || !googleInfo.spreadsheetId) return;
   try {
+    await ensureValidToken();
     const sessionSheetName = await getOrInitSessionSheetName();
     const pointsMap = await fetchSessionMembers(googleInfo.spreadsheetId, sessionSheetName);
     googleInfo.todayMembers = Object.keys(pointsMap);
@@ -1593,10 +1618,16 @@ const addNewMember = async (name: string) => {
   // 구글 연동 모드인 경우 구글 시트에 멤버 추가
   if (googleInfo.syncMode === 'google' && googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
     try {
+      await ensureValidToken();
       await addNewMembersToDb(googleInfo.spreadsheetId, [name]);
       await loadMemberList();
     } catch (err) {
       console.error("신규 멤버 구글 시트 등록 실패:", err);
+      const confirmLogin = await showConfirm("구글 로그인 세션이 만료되었습니다.\n세션을 연장하고 멤버를 등록하기 위해 다시 로그인하시겠습니까?");
+      if (confirmLogin) {
+        isManualLogin.value = false;
+        loginGoogle();
+      }
     }
     return;
   }
@@ -1633,10 +1664,16 @@ const deleteMember = async (name: string) => {
 
   if (googleInfo.syncMode === 'google' && googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
     try {
+      await ensureValidToken();
       await deleteMemberFromDb(googleInfo.spreadsheetId, name);
       await loadMemberList();
     } catch (err) {
       console.error("구글 시트 멤버 삭제 실패:", err);
+      const confirmLogin = await showConfirm("구글 로그인 세션이 만료되었습니다.\n세션을 연장하고 멤버를 삭제하기 위해 다시 로그인하시겠습니까?");
+      if (confirmLogin) {
+        isManualLogin.value = false;
+        loginGoogle();
+      }
     }
   }
   
@@ -1655,6 +1692,7 @@ const saveTodayMembersPool = async (names: string[]) => {
   }
 
   try {
+    await ensureValidToken();
     const sessionSheetName = await getOrInitSessionSheetName();
     await createSessionSheetIfNotExist(googleInfo.spreadsheetId, sessionSheetName, names);
     await saveSessionMembers(googleInfo.spreadsheetId, sessionSheetName, names);
@@ -2290,6 +2328,21 @@ const loadExistingSession = async (cleanTitle: string) => {
   syncLoaderTitle.value = `'${cleanTitle}' 회차 데이터 복원 중...`;
 
   try {
+    // API 호출 전 토큰 유효성 확보 및 GAPI 적재 복구
+    try {
+      await ensureValidToken();
+    } catch (authErr) {
+      console.warn("세션 복원 중 토큰 만료 감지, 로그인 유도:", authErr);
+      const confirmLogin = await showConfirm("구글 로그인 세션이 만료되었습니다.\n세션을 연장하고 회차 데이터를 불러오기 위해 다시 로그인하시겠습니까?");
+      if (confirmLogin) {
+        isManualLogin.value = false;
+        isRestorePending.value = cleanTitle;
+        loginGoogle();
+      }
+      isSaving.value = false;
+      return;
+    }
+
     // 0. 로컬에 남아있던 이전 대국 이력 및 캐시 일체 싹 비워버리기 (일괄 동기화 에러 차단)
     todayGamesHistory.length = 0;
     localStorage.removeItem("today_games_history");
