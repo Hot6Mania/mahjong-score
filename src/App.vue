@@ -6,7 +6,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures } from "@/utils/googleSheets"
+import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, tryAutoLogin } from "@/utils/googleSheets"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
@@ -1399,6 +1399,7 @@ const rollbackRecord = (idx: number) => {
 }
 
 const isManualLogin = ref(false);
+let tokenResolve: (() => void) | null = null;
 
 // 구글 토큰 수령 시 콜백
 const onGoogleTokenReceived = async (_token: string) => {
@@ -1410,6 +1411,11 @@ const onGoogleTokenReceived = async (_token: string) => {
     localStorage.setItem("google_access_token", _token);
     const expiresAt = Date.now() + 3000 * 1000; // 50분 만료 설정
     localStorage.setItem("google_token_expires_at", expiresAt.toString());
+  }
+
+  if (tokenResolve) {
+    tokenResolve();
+    tokenResolve = null;
   }
 
   if (isManualLogin.value) {
@@ -1494,6 +1500,42 @@ const onGoogleTokenReceived = async (_token: string) => {
       console.warn("자동 로그인 후 통계 로드 실패:", e);
     }
   }
+};
+
+// 토큰의 유효성을 보장하며, 만료 시 백그라운드 무인(Silent) 갱신 시도
+const ensureValidToken = () => {
+  return new Promise<void>((resolve, reject) => {
+    const keep = localStorage.getItem("keep_logged_in") === "true";
+    const token = localStorage.getItem("google_access_token");
+    const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
+
+    if (keep && token && Date.now() < expiresAt) {
+      resolve();
+      return;
+    }
+
+    if (keep && token) {
+      tokenResolve = () => {
+        clearTimeout(timeoutId);
+        resolve();
+      };
+      
+      const timeoutId = setTimeout(() => {
+        tokenResolve = null;
+        reject(new Error("Token refresh timed out."));
+      }, 5000); // 5초 타임아웃
+      
+      try {
+        tryAutoLogin(onGoogleTokenReceived);
+      } catch (e) {
+        clearTimeout(timeoutId);
+        tokenResolve = null;
+        reject(e);
+      }
+    } else {
+      reject(new Error("No active Google session found."));
+    }
+  });
 };
 
 // 멤버 목록 로드
@@ -1841,6 +1883,15 @@ const syncLocalDataToGoogle = async () => {
     return;
   }
 
+  // 동기화 진행 전 구글 토큰 유효성 검사 및 필요시 자동 갱신(무인 갱신)
+  try {
+    await ensureValidToken();
+  } catch (authErr) {
+    console.warn("구글 토큰 갱신 실패, 로그인 팝업 기동:", authErr);
+    loginGoogle();
+    return;
+  }
+
   // 동기화 요청 시 스프레드시트 주소가 유실되어 있는 경우 커스텀 팝업 기동
   if (!googleInfo.spreadsheetId) {
     isSyncAfterPrompt.value = true;
@@ -1888,11 +1939,11 @@ const syncLocalDataToGoogle = async () => {
       console.warn("기존 전체 국별기록 (데이터) ID 조회 실패:", e);
     }
 
-    // A2. 회차별 요약 시트(raw)의 A열 조회
+    // A2. 회차별 요약 시트(raw)의 F열 조회 (대국 ID 목록)
     try {
       const resRaw = await window.gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId: googleInfo.spreadsheetId,
-        range: `'${sessionSheetName} (raw)'!A2:A`,
+        range: `'${sessionSheetName} (raw)'!F2:F`,
       });
       if (resRaw.result.values) {
         resRaw.result.values.forEach((row: any) => {
