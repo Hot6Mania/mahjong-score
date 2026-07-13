@@ -52,7 +52,8 @@ const activePlayerIndex = ref<number | null>(null)
 const assignment = ref<Record<string, string>>({}) 
 const playerAssignedWind = ref<Record<string, string>>({}) 
 const openedTiles = ref<boolean[]>([false, false, false, false]) 
-const randomizedTiles = ref<string[]>([]) 
+const randomizedTiles = ref<string[]>([])
+const animateLayout = ref(false) 
 
 const displayMemberList = computed(() => {
   if (props.googleInfo.isLoggedIn) {
@@ -224,13 +225,80 @@ const toggleMatchPlayer = (name: string) => {
   }
 }
 
+const windColors: Record<string, { bg: string, border: string, text: string, rgb: string }> = {
+  '東': { bg: '#ff1744', border: '#b2002d', text: '#ffffff', rgb: '255, 23, 68' },   // 빨강
+  '南': { bg: '#ffd600', border: '#c7a700', text: '#111827', rgb: '255, 214, 0' },   // 노랑
+  '西': { bg: '#00e676', border: '#00b248', text: '#111827', rgb: '0, 230, 118' },   // 초록
+  '北': { bg: '#2979ff', border: '#004ecb', text: '#ffffff', rgb: '41, 121, 255' }    // 파랑
+}
+
+const getPlayerCardStyle = (idx: number, name: string) => {
+  const wind = playerAssignedWind.value[name]
+  
+  // 1. 포커싱된 상태
+  if (activePlayerIndex.value === idx) {
+    if (wind) {
+      // 이미 방위가 결정된 상태로 포커싱됨 (자동 선택 혹은 뒤집힌 후) -> 해당 방위의 솔리드 원색 적용
+      const color = windColors[wind]
+      return {
+        backgroundColor: color.bg,
+        borderColor: color.border,
+        color: color.text,
+        boxShadow: `0 0 12px rgba(${color.rgb}, 0.8)`
+      }
+    } else {
+      // 방위 선택 전 대기 포커싱 -> 중립적인 강한 하이라이트 (연두색 테두리 광원)
+      return {
+        backgroundColor: 'var(--input-bg-color)',
+        borderColor: 'var(--color-toggle-on)',
+        color: 'var(--text-color)',
+        boxShadow: '0 0 12px var(--color-toggle-on)'
+      }
+    }
+  }
+  
+  // 2. 배정 완료된 상태
+  if (wind) {
+    const color = windColors[wind]
+    const hasGlow = animateLayout.value // 전체 배치 완료 시에만 은은한 광원 효과 점등
+    return {
+      backgroundColor: color.bg,
+      borderColor: color.border,
+      color: color.text,
+      opacity: 1, // 비활성화 된 것처럼 옅어지는 현상 차단
+      boxShadow: hasGlow ? `0 0 12px 2px rgba(${color.rgb}, 0.7)` : 'none'
+    }
+  }
+  return {}
+}
+
+const getTileBackStyle = (tileIdx: number) => {
+  const wind = randomizedTiles.value[tileIdx]
+  const playerName = assignment.value[wind]
+  if (!playerName) return {}
+  
+  const pIdx = selected4Names.value.indexOf(playerName)
+  if (pIdx === -1) return {}
+  
+  const color = windColors[wind]
+  return {
+    backgroundColor: color.bg,
+    borderColor: color.border,
+    color: color.text,
+    boxShadow: `0 2px 6px rgba(${color.rgb}, 0.4)`
+  }
+}
+
+// 자리 뽑기 화면 진입 시 초기화 로직
+
 const proceedToDrawSeats = () => {
   if (selected4Names.value.length !== 4) return
   
-  activePlayerIndex.value = null
+  activePlayerIndex.value = null // 시작 시 아무도 포커싱되지 않은 상태로 설정
   assignment.value = {}
   playerAssignedWind.value = {}
   openedTiles.value = [false, false, false, false]
+  animateLayout.value = false // 레이아웃 정렬 애니메이션 상태 초기화
   shuffleTiles()
   
   currentStep.value = 'draw_seats'
@@ -255,44 +323,78 @@ const flipTile = (tileIdx: number) => {
   assignment.value[wind] = playerName
   playerAssignedWind.value[playerName] = wind
 
+  // 수동 선택 시에는 다음 닉네임으로 자동 포커싱을 하지 않고 포커스를 해제(null)합니다.
   activePlayerIndex.value = null
+
+  // 4인이 모두 수동 선택 완료되면 0.8초의 정지 시간(Gap)을 가진 뒤, 레이아웃 정렬 기동
+  if (Object.keys(playerAssignedWind.value).length === 4) {
+    setTimeout(() => {
+      animateLayout.value = true
+    }, 800)
+  }
 }
 
 const isAssignmentComplete = computed(() => {
   return Object.keys(playerAssignedWind.value).length === 4
 })
 
+const getTileTranslation = (tileIdx: number) => {
+  if (!animateLayout.value) return 'translateX(0px)'
+  
+  const wind = randomizedTiles.value[tileIdx]
+  const playerName = assignment.value[wind]
+  if (!playerName) return 'translateX(0px)'
+  
+  const pIdx = selected4Names.value.indexOf(playerName)
+  if (pIdx === -1) return 'translateX(0px)'
+  
+  // 4열 매칭 가로 활공 거리 계산: (대상 플레이어열 - 원래 타일열) * (100% 열너비 + 8px grid gap)
+  return `translateX(calc(${pIdx - tileIdx} * (100% + 8px)))`
+}
+
 const drawAllAtOnce = () => {
   if (isAutoDrawing.value) return
   isAutoDrawing.value = true
 
-  // 1. 초기 셔플 및 상태 리셋
+  // 1. 초기 셔플 및 상태 리셋 (아무도 하이라이트 되지 않음)
   shuffleTiles()
   assignment.value = {}
   playerAssignedWind.value = {}
   openedTiles.value = [false, false, false, false]
   activePlayerIndex.value = null
+  animateLayout.value = false // 레이아웃 슬라이드 상태 리셋
+
+  // 4개 타일을 임의 순서로 뒤집어 가속 교차 슬라이드 연출
+  const drawOrder = secureShuffle([0, 1, 2, 3])
 
   // 2. 0.5초 간격으로 4명 순차적 배정 시작
   let step = 0
-  activePlayerIndex.value = 0 // 첫 주자 하이라이트
-
   const nextStep = () => {
     if (step < 4) {
       setTimeout(() => {
+        const tileIdx = drawOrder[step]
         const playerName = selected4Names.value[step]
-        const wind = randomizedTiles.value[step]
+        const wind = randomizedTiles.value[tileIdx]
 
-        openedTiles.value[step] = true
+        // 닉네임 하이라이트 불 들어오는 것과 동시에 자리 패가 뒤집힘
+        activePlayerIndex.value = step
+        openedTiles.value[tileIdx] = true
         assignment.value[wind] = playerName
         playerAssignedWind.value[playerName] = wind
 
         step++
         if (step === 4) {
-          activePlayerIndex.value = null
-          isAutoDrawing.value = false
+          // 마지막 주자까지 뽑힌 후 0.5초 대기했다가 하이라이트 정리
+          setTimeout(() => {
+            activePlayerIndex.value = null
+            isAutoDrawing.value = false
+            
+            // 모든 뒤집기 및 하이라이트 해제 후, 뽑는 간격(500ms~600ms)만큼의 여유를 둔 뒤 레이아웃 슬라이드 기동
+            setTimeout(() => {
+              animateLayout.value = true
+            }, 600)
+          }, 500)
         } else {
-          activePlayerIndex.value = step // 다음 주자 하이라이트
           nextStep()
         }
       }, 500)
@@ -305,13 +407,6 @@ const drawAllAtOnce = () => {
 const startGame = () => {
   if (!isAssignmentComplete.value) return
   emit('start-game-with-seats', assignment.value)
-}
-
-const tileBackStyle = (tileIdx: number) => {
-  const wind = randomizedTiles.value[tileIdx]
-  return {
-    color: wind === '東' ? 'var(--color-east)' : 'var(--text-color)'
-  }
 }
 </script>
 
@@ -455,10 +550,11 @@ const tileBackStyle = (tileIdx: number) => {
             selected: activePlayerIndex === i,
             assigned: playerAssignedWind[name] !== undefined
           }"
+          :style="getPlayerCardStyle(i, name)"
           @click="isAutoDrawing ? null : selectPlayer(i)"
         >
-          <span class="player_name_text">{{ name.length > 5 ? name.substring(0, 4) : name }}<span v-if="name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
-          <span v-if="playerAssignedWind[name]" class="assigned_wind">
+          <span class="player_name_text">{{ name.length > 4 ? name.substring(0, 4) : name }}</span>
+          <span v-if="playerAssignedWind[name]" class="assigned_wind" :style="{ color: windColors[playerAssignedWind[name]].border, borderColor: windColors[playerAssignedWind[name]].border }">
             {{ playerAssignedWind[name] }}
           </span>
         </div>
@@ -470,11 +566,12 @@ const tileBackStyle = (tileIdx: number) => {
           :key="i"
           class="draw_tile"
           :class="{ flipped: openedTiles[i] }"
+          :style="{ transform: getTileTranslation(i) }"
           @click="flipTile(i)"
         >
           <div class="draw_tile_inner">
-            <div class="draw_tile_front">🀫</div>
-            <div class="draw_tile_back" :style="tileBackStyle(i)">
+            <div class="draw_tile_front"></div>
+            <div class="draw_tile_back" :style="getTileBackStyle(i)">
               {{ randomizedTiles[i] }}
             </div>
           </div>
@@ -902,21 +999,28 @@ const tileBackStyle = (tileIdx: number) => {
 .players_list {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
 }
 .draw_player_item {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
+  justify-content: center;
+  padding: 6px 2px;
   background-color: var(--bg-stripe-light);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 14px;
   font-weight: bold;
+  text-align: center;
+  min-height: 52px;
   transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s;
+  word-break: break-all;
+}
+.player_name_text {
+  font-size: 14px; /* 닉네임 글자 크기 확대 */
+  line-height: 1.2;
 }
 .draw_player_item.selected {
   border-color: var(--color-toggle-on);
@@ -924,40 +1028,44 @@ const tileBackStyle = (tileIdx: number) => {
   box-shadow: 0 0 4px var(--color-toggle-on);
 }
 .draw_player_item.assigned {
-  opacity: 0.4;
-  cursor: default;
-  background-color: var(--bg-stripe-dark);
+  border-color: var(--color-toggle-on);
+  background-color: rgba(76, 175, 80, 0.05);
 }
 .assigned_wind {
-  font-size: 11px;
-  color: var(--color-toggle-on);
+  font-size: 8.5px; /* 바람 뱃지는 아주 작게 유지 */
+  line-height: 1;
   background: var(--bg-color);
-  padding: 1px 4px;
-  border-radius: 4px;
+  padding: 1px 3px;
+  border-radius: 3px;
   border: 1px solid var(--border-color);
+  margin-top: 3px;
+  font-weight: bold;
 }
 .tiles_grid {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(4, 62px);
-  grid-template-rows: 80px;
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   justify-content: center;
+  margin-top: 8px;
 }
 .tiles_grid.disabled {
-  opacity: 0.4;
   pointer-events: none;
 }
 .draw_tile {
   perspective: 1000px;
   cursor: pointer;
   height: 80px;
-  width: 62px;
+  width: 100%;
+  transition: transform 0.9s cubic-bezier(0.34, 1.56, 0.64, 1); /* easeOutBack 가속 및 오버슛 연출 */
+  will-change: transform;
 }
 .draw_tile_inner {
   position: relative;
   width: 100%;
+  max-width: 62px;
   height: 100%;
+  margin: 0 auto;
   text-align: center;
   transition: transform 0.4s ease;
   transform-style: preserve-3d;
@@ -982,9 +1090,16 @@ const tileBackStyle = (tileIdx: number) => {
   box-sizing: border-box;
 }
 .draw_tile_front {
-  background-color: var(--color-toggle-on);
-  color: #fff;
-  font-size: 40px;
+  background-color: #ff9f43; /* 연주황색 베이스 */
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 4px,
+    rgba(255, 255, 255, 0.18) 5px,
+    rgba(255, 255, 255, 0.18) 6px
+  ); /* 옅은 흰색 세로줄 */
+  border: 1px solid rgba(255, 255, 255, 0.45) !important; /* 훨씬 옅고 자연스러운 테두리 */
+  box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.08), 1px 1px 3px rgba(0, 0, 0, 0.2);
   user-select: none;
 }
 .draw_tile_back {
