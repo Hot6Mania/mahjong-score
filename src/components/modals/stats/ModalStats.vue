@@ -683,6 +683,10 @@ const stats = computed(() => {
           <span class="stat_value">{{ stats.tsumoRate }}</span>
         </div>
         <div class="stat_row">
+          <span class="stat_label">리치율</span>
+          <span class="stat_value">{{ stats.riichiRate }}</span>
+        </div>
+        <div class="stat_row">
           <span class="stat_label">유국률</span>
           <span class="stat_value">{{ stats.drawRate }}</span>
         </div>
