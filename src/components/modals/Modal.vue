@@ -79,34 +79,6 @@ const emit = defineEmits<Emits>()
 // 구글 스프레드시트 주소 편집 상태
 const isEditingSpreadsheetId = ref(false);
 
-const optionPlayerSuggestions = computed(() => {
-  const set = new Set<string>()
-  // 1. 구글 오늘 멤버들
-  if (props.googleInfo && props.googleInfo.todayMembers && props.googleInfo.todayMembers.length > 0) {
-    props.googleInfo.todayMembers.forEach(n => set.add(n))
-  }
-  // 2. 대국 이력 기록에 있는 이름들
-  if (props.todayGamesHistory) {
-    props.todayGamesHistory.forEach(game => {
-      if (game.results) {
-        game.results.forEach((r: any) => {
-          if (r.name) set.add(r.name)
-        })
-      }
-    })
-  }
-  // 3. 현재 진행 중인 자리 설정 플레이어 이름들
-  if (props.players) {
-    props.players.forEach(p => {
-      const defaultNames = ['▼', '▶', '▲', '◀']
-      if (p.name && !defaultNames.includes(p.name)) {
-        set.add(p.name)
-      }
-    })
-  }
-  return Array.from(set)
-})
-
 const keepLoggedIn = ref(localStorage.getItem("keep_logged_in") === "true");
 const handleKeepLoggedInChange = () => {
   localStorage.setItem("keep_logged_in", keepLoggedIn.value ? "true" : "false");
@@ -665,9 +637,6 @@ const getSignColor = (sign: number, x: boolean) => {
   </div>
   <!-- 설정 창 -->
   <div v-else-if="modalInfo.type==='set_options'" class="modal_content" @click.stop>
-    <datalist id="optionPlayerSuggestions">
-      <option v-for="name in optionPlayerSuggestions" :key="name" :value="name" />
-    </datalist>
     <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%;">
       <div class="container_option">
         <div
@@ -679,7 +648,7 @@ const getSignColor = (sign: number, x: boolean) => {
           <input
             type="text"
             v-model="players[i].name"
-            list="optionPlayerSuggestions"
+            autocomplete="off"
             :placeholder="t('option.name', {idx:i+1})"
             :name="`name${i+1}`"
           >

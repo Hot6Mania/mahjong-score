@@ -23,19 +23,7 @@ const seatPlayers = reactive([
   { name: "", score: 25000, uma: 0.0, rank: 4 }
 ])
 
-// Autocomplete list (all player names in database)
-const allKnownMembers = computed(() => {
-  const set = new Set<string>()
-  props.todayMembers.forEach(n => set.add(n))
-  props.history.forEach(game => {
-    if (game.results) {
-      game.results.forEach((r: any) => {
-        if (r.name) set.add(r.name)
-      })
-    }
-  })
-  return Array.from(set)
-})
+
 
 // Dynamic Auto Calculation
 const autoCalculate = () => {
@@ -127,9 +115,7 @@ const submit = () => {
     <span class="warning-text">* 이 기록은 전체 통계(화료율, 방총률 등)에는 반영되지 않으며, 누적 점수(우마) 및 게임 결과 이력에만 기록됩니다.</span>
   </p>
 
-  <datalist id="memberSuggestions">
-    <option v-for="name in allKnownMembers" :key="name" :value="name" />
-  </datalist>
+
 
   <div class="form_grid">
     <div class="grid_header">
@@ -149,9 +135,9 @@ const submit = () => {
         <input 
           type="text" 
           v-model="p.name" 
-          list="memberSuggestions" 
-          placeholder="닉네임 선택/입력" 
+          placeholder="닉네임 입력" 
           class="input_name"
+          autocomplete="off"
         />
       </div>
       <div class="cell">

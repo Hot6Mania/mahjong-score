@@ -62,24 +62,23 @@ const displayMemberList = computed(() => {
   return offlineMemberList.value
 })
 
-// 입력 중인 멤버 이름에 따른 구글 시트 멤버 자동완성 제안 목록
-const suggestions = computed(() => {
-  const text = newMemberName.value.trim()
-  if (!text) return []
-  if (!props.googleInfo.isLoggedIn || !props.googleInfo.memberList) return []
-  
-  return props.googleInfo.memberList.filter(name => 
-    name.toLowerCase().includes(text.toLowerCase()) && 
-    !tempTodayMembers.value.includes(name) // 이미 참가자로 선택된 사람은 추천에서 배제
-  )
-})
+const isManualPlacement = ref(false)
 
-const selectSuggestion = (name: string) => {
-  if (!tempTodayMembers.value.includes(name)) {
-    tempTodayMembers.value.push(name)
+watch(isManualPlacement, (newVal) => {
+  if (newVal) {
+    openedTiles.value = [true, true, true, true]
+  } else {
+    // 배정된 타일만 뒤집힌 상태 유지, 미배정 타일은 덮기
+    const nextOpened = [false, false, false, false]
+    for (let i = 0; i < 4; i++) {
+      const wind = randomizedTiles.value[i]
+      if (assignment.value[wind]) {
+        nextOpened[i] = true
+      }
+    }
+    openedTiles.value = nextOpened
   }
-  newMemberName.value = ''
-}
+})
 
 onMounted(() => {
   shuffleTiles()
@@ -299,6 +298,7 @@ const proceedToDrawSeats = () => {
   playerAssignedWind.value = {}
   openedTiles.value = [false, false, false, false]
   animateLayout.value = false // 레이아웃 정렬 애니메이션 상태 초기화
+  isManualPlacement.value = false // 수동 배치 체크 리셋
   shuffleTiles()
   
   currentStep.value = 'draw_seats'
@@ -314,10 +314,16 @@ const isAutoDrawing = ref(false)
 
 const flipTile = (tileIdx: number) => {
   if (activePlayerIndex.value === null || isAutoDrawing.value) return 
-  if (openedTiles.value[tileIdx]) return 
+  
+  const wind = randomizedTiles.value[tileIdx]
+  
+  // 일반 모드일 때 이미 뒤집힌 타일이면 무시
+  if (!isManualPlacement.value && openedTiles.value[tileIdx]) return
+  
+  // 수동 직접배치 모드일 때 이미 배정된 방위면 무시
+  if (isManualPlacement.value && assignment.value[wind]) return
 
   const playerName = selected4Names.value[activePlayerIndex.value]
-  const wind = randomizedTiles.value[tileIdx]
 
   openedTiles.value[tileIdx] = true
   assignment.value[wind] = playerName
@@ -434,21 +440,9 @@ const startGame = () => {
         placeholder="멤버 등록" 
         @keyup.enter="handleAddNewMember"
         maxlength="20"
+        autocomplete="off"
       />
       <button @click="handleAddNewMember" class="btn_add">추가</button>
-      
-      <!-- 자동완성 제안 목록 -->
-      <div v-if="suggestions.length > 0" class="autocomplete_suggestions">
-        <div 
-          v-for="(name, idx) in suggestions" 
-          :key="idx" 
-          class="suggestion_item"
-          @mousedown.prevent.stop="selectSuggestion(name)"
-          @touchstart.prevent.stop="selectSuggestion(name)"
-        >
-          {{ name }}
-        </div>
-      </div>
     </div>
 
     <!-- 통합 멤버 명단 체크박스 -->
@@ -540,6 +534,19 @@ const startGame = () => {
       </h3>
     </div>
     
+    <!-- 직접 보고 배치 체크박스 추가 -->
+    <div style="margin-top: -6px; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; font-size: 13px; font-weight: bold; color: var(--text-color);">
+        <input 
+          type="checkbox" 
+          v-model="isManualPlacement" 
+          :disabled="isAutoDrawing || isAssignmentComplete"
+          style="width: 15px; height: 15px; cursor: pointer;"
+        />
+        직접 자리 정하기
+      </label>
+    </div>
+    
     <div class="draw_container">
       <div class="players_list">
         <div 
@@ -565,7 +572,7 @@ const startGame = () => {
           v-for="(_, i) in 4" 
           :key="i"
           class="draw_tile"
-          :class="{ flipped: openedTiles[i] }"
+          :class="{ flipped: openedTiles[i], assigned_done: !!assignment[randomizedTiles[i]] }"
           :style="{ transform: getTileTranslation(i) }"
           @click="flipTile(i)"
         >
@@ -581,7 +588,7 @@ const startGame = () => {
     
     <!-- 한번에 버튼 -->
     <button 
-      v-if="!isAssignmentComplete" 
+      v-if="!isAssignmentComplete && !isManualPlacement" 
       class="btn_draw_all" 
       :disabled="isAutoDrawing"
       @click="drawAllAtOnce"
@@ -1128,5 +1135,10 @@ const startGame = () => {
 .btn_draw_all:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.draw_tile.assigned_done {
+  opacity: 0.45;
+  pointer-events: none;
+  filter: grayscale(30%);
 }
 </style>
