@@ -2383,11 +2383,11 @@ const loadExistingSession = async (cleanTitle: string) => {
     currentSessionSheetName.value = cleanTitle;
     localStorage.setItem("current_session_sheet_name", cleanTitle);
 
-    // 2. 오늘의 멤버 목록 & 누적 포인트 복원 (cleanTitle (raw) 시트의 A2:E20 긁어오기)
+    // 2. 오늘의 멤버 목록 & 누적 포인트 복원 (cleanTitle (raw) 시트의 A2:E50 긁어오기)
     syncProgress.value = 40;
     const rawRes = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: googleInfo.spreadsheetId,
-      range: `'${cleanTitle} (raw)'!A2:E20`
+      range: `'${cleanTitle} (raw)'!A2:E50`
     });
     
     const rawRows = rawRes.result.values || [];
@@ -2415,11 +2415,11 @@ const loadExistingSession = async (cleanTitle: string) => {
       localStorage.setItem("today_members_points", JSON.stringify(restoredPoints));
     }
 
-    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:T500 긁어오기)
+    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:T 긁어오기)
     syncProgress.value = 70;
     const dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: googleInfo.spreadsheetId,
-      range: `'${cleanTitle} (데이터)'!A2:T500`
+      range: `'${cleanTitle} (데이터)'!A2:T`
     });
 
     const dataRows = dataRes.result.values || [];
@@ -2429,7 +2429,7 @@ const loadExistingSession = async (cleanTitle: string) => {
     try {
       const rawDataRes = await window.gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId: googleInfo.spreadsheetId,
-        range: `'${cleanTitle} (raw)'!F2:W500`
+        range: `'${cleanTitle} (raw)'!F2:W`
       });
       rawDataRows = rawDataRes.result.values || [];
     } catch (e) {
