@@ -231,17 +231,8 @@ const scoreChartInfo = computed(() => {
     return { data: { labels: [], datasets: [] }, options: {} };
   }
 
-  // 모든 플레이어의 시작점수 중 100단위로 나누어 떨어지는 정상적인 값(최빈값 또는 첫번째 값)을 공통 시작점수로 추정
-  let commonStartScore = Number(props.option?.startingScore || 25000);
-  if (sourceRecords.score && sourceRecords.score.length > 0) {
-    const candidateScores = sourceRecords.score
-      .map((arr: any) => arr && arr[0])
-      .map((val: any) => Number(val))
-      .filter((val: number) => !isNaN(val) && val > 0 && val % 100 === 0);
-    if (candidateScores.length > 0) {
-      commonStartScore = candidateScores[0];
-    }
-  }
+  // 모든 게임의 그래프 시작점수를 사용자가 설정한 시작 점수(기본값 25000)로 고정
+  const commonStartScore = Number(props.option?.startingScore || 25000);
 
   let datasets = sourcePlayers.map((p, idx) => {
     const rawScores = sourceRecords.score[idx] || [];

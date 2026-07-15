@@ -2646,30 +2646,8 @@ const loadExistingSession = async (cleanTitle: string) => {
       };
 
       // 플레이어별 시작 점수 세팅
-      // 과거의 finalScore 버그를 방어하기 위해, results의 최종 스코어에서 각 국의 deltaScore 총합을 빼서 정확한 시작 점수를 역산합니다.
-      const calculatedStartScores = playerNames.map((name) => {
-        const finalGameScore = g.results[name]?.score ?? 25000;
-        let totalDelta = 0;
-        Object.keys(g.rounds).forEach(rKey => {
-          const rData = g.rounds[Number(rKey)];
-          const pData = rData.players[name];
-          if (pData) {
-            totalDelta += pData.deltaScore;
-          }
-        });
-        return finalGameScore - totalDelta;
-      });
-
-      // 모든 플레이어가 동일한 시작 점수(예: 25000, 30000)를 가져야 하므로, 대표값을 찾아내어 세팅합니다.
-      let startScore = 25000;
-      if (calculatedStartScores.length > 0) {
-        const sampleScore = calculatedStartScores[0];
-        if (sampleScore > 0 && sampleScore % 100 === 0) {
-          startScore = sampleScore;
-        } else {
-          startScore = 25000;
-        }
-      }
+      // 모든 게임의 시작 점수는 유저 규칙상 25000(또는 설정된 시작 점수)으로 고정합니다.
+      const startScore = Number(option.startingScore || 25000);
 
       for (let pIdx = 0; pIdx < 4; pIdx++) {
         restoredRecords.score[pIdx].push(startScore);
