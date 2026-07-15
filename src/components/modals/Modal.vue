@@ -232,11 +232,12 @@ const scoreChartInfo = computed(() => {
   }
 
   // 모든 플레이어의 시작점수 중 100단위로 나누어 떨어지는 정상적인 값(최빈값 또는 첫번째 값)을 공통 시작점수로 추정
-  let commonStartScore = props.option?.startingScore || 25000;
+  let commonStartScore = Number(props.option?.startingScore || 25000);
   if (sourceRecords.score && sourceRecords.score.length > 0) {
     const candidateScores = sourceRecords.score
       .map((arr: any) => arr && arr[0])
-      .filter((val: any) => typeof val === 'number' && val > 0 && val % 100 === 0);
+      .map((val: any) => Number(val))
+      .filter((val: number) => !isNaN(val) && val > 0 && val % 100 === 0);
     if (candidateScores.length > 0) {
       commonStartScore = candidateScores[0];
     }
@@ -249,7 +250,7 @@ const scoreChartInfo = computed(() => {
       let currentScore = commonStartScore;
       restoredData.push(currentScore);
       for (let i = 1; i < rawScores.length; i += 2) {
-        const delta = rawScores[i] || 0;
+        const delta = Number(rawScores[i] || 0);
         currentScore += delta;
         restoredData.push(currentScore);
       }
@@ -681,7 +682,7 @@ const getSignColor = (sign: number, x: boolean) => {
           {{ t('option.startingScore') }}<br>
           <input 
             type="number"
-            v-model="option.startingScore"
+            v-model.number="option.startingScore"
             :placeholder="String(25000)"
             :name="'startingScore'"
           >
@@ -690,7 +691,7 @@ const getSignColor = (sign: number, x: boolean) => {
           {{ t('option.returnScore') }}<br>
           <input 
             type="number"
-            v-model="option.returnScore"
+            v-model.number="option.returnScore"
             :placeholder="String(30000)"
             :name="'returnScore'"
           >
@@ -716,7 +717,7 @@ const getSignColor = (sign: number, x: boolean) => {
             :key="i"
             style="width: 51px;"
             type="number"
-            v-model="option.rankUma[i]"
+            v-model.number="option.rankUma[i]"
             :placeholder="t('option.rank', {idx:i+1})"
             :name="`uma${i+1}`"
             :style="{ marginRight: i===option.rankUma.length-1 ? '0px' : '10px' }"

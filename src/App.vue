@@ -105,7 +105,22 @@ const defaultOption: OptionType = {
   sekiOrder: true, // 동점 석순 기준
 };
 const savedOption = localStorage.getItem("mahjong_option");
-const option = reactive<OptionType>(savedOption ? { ...defaultOption, ...JSON.parse(savedOption) } : defaultOption);
+const loadSavedOption = (): OptionType => {
+  if (!savedOption) return defaultOption;
+  try {
+    const parsed = JSON.parse(savedOption);
+    return {
+      ...defaultOption,
+      ...parsed,
+      startingScore: Number(parsed.startingScore ?? defaultOption.startingScore),
+      returnScore: Number(parsed.returnScore ?? defaultOption.returnScore),
+      rankUma: Array.isArray(parsed.rankUma) ? parsed.rankUma.map(Number) : defaultOption.rankUma,
+    };
+  } catch (e) {
+    return defaultOption;
+  }
+};
+const option = reactive<OptionType>(loadSavedOption());
 const modalInfo = reactive({ // 모달창
   isOpen: false, // on/off
   type: "", // 종류
