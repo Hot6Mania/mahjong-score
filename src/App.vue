@@ -2150,7 +2150,7 @@ const syncLocalDataToGoogle = async () => {
           const prevScore = (r === 1) ? option.startingScore : records.score[pIdx][2 * (r - 1)];
           const currScore = records.score[pIdx][2 * r];
           const deltaScore = currScore - prevScore;
-          const finalScore = (r === 1) ? (records.score[pIdx][records.score[pIdx].length - 1]) : currScore;
+          const finalScore = currScore;
           const isRiichi = records.riichi[r][pIdx] ? 'TRUE' : 'FALSE';
           const isWin = records.win[r][pIdx] ? 'TRUE' : 'FALSE';
           const isLose = records.lose[r][pIdx] ? 'TRUE' : 'FALSE';
@@ -2631,13 +2631,32 @@ const loadExistingSession = async (cleanTitle: string) => {
       };
 
       // 플레이어별 시작 점수 세팅
-      for (let pIdx = 0; pIdx < 4; pIdx++) {
-        const name = playerNames[pIdx];
-        let startScore = 25000;
-        if (g.rounds[1] && g.rounds[1].players[name]) {
-          const pData = g.rounds[1].players[name];
-          startScore = pData.finalScore - pData.deltaScore;
+      // 과거의 finalScore 버그를 방어하기 위해, results의 최종 스코어에서 각 국의 deltaScore 총합을 빼서 정확한 시작 점수를 역산합니다.
+      const calculatedStartScores = playerNames.map((name) => {
+        const finalGameScore = g.results[name]?.score ?? 25000;
+        let totalDelta = 0;
+        Object.keys(g.rounds).forEach(rKey => {
+          const rData = g.rounds[Number(rKey)];
+          const pData = rData.players[name];
+          if (pData) {
+            totalDelta += pData.deltaScore;
+          }
+        });
+        return finalGameScore - totalDelta;
+      });
+
+      // 모든 플레이어가 동일한 시작 점수(예: 25000, 30000)를 가져야 하므로, 대표값을 찾아내어 세팅합니다.
+      let startScore = 25000;
+      if (calculatedStartScores.length > 0) {
+        const sampleScore = calculatedStartScores[0];
+        if (sampleScore > 0 && sampleScore % 100 === 0) {
+          startScore = sampleScore;
+        } else {
+          startScore = 25000;
         }
+      }
+
+      for (let pIdx = 0; pIdx < 4; pIdx++) {
         restoredRecords.score[pIdx].push(startScore);
       }
 
@@ -2661,9 +2680,13 @@ const loadExistingSession = async (cleanTitle: string) => {
         for (let pIdx = 0; pIdx < 4; pIdx++) {
           const name = playerNames[pIdx];
           const pData = roundData.players[name];
+          const prevScore = restoredRecords.score[pIdx][restoredRecords.score[pIdx].length - 1]; // 이전 국의 최종 점수 (또는 시작 점수)
+          
           if (pData) {
             restoredRecords.score[pIdx].push(pData.deltaScore);
-            restoredRecords.score[pIdx].push(pData.finalScore);
+            // 버그가 있는 pData.finalScore 대신, 이전 국 점수에 deltaScore를 누적 합산하여 복원
+            const calculatedFinal = prevScore + pData.deltaScore;
+            restoredRecords.score[pIdx].push(calculatedFinal);
 
             if (pData.isDealer) {
               dealerIdx = pIdx;
@@ -2677,7 +2700,6 @@ const loadExistingSession = async (cleanTitle: string) => {
             }
           } else {
             restoredRecords.score[pIdx].push(0);
-            const prevScore = restoredRecords.score[pIdx][restoredRecords.score[pIdx].length - 2] || 25000;
             restoredRecords.score[pIdx].push(prevScore);
           }
         }
