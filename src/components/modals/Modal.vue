@@ -231,13 +231,37 @@ const scoreChartInfo = computed(() => {
     return { data: { labels: [], datasets: [] }, options: {} };
   }
 
-  let datasets = sourcePlayers.map((p, idx) => ({
-    label: p.name, // 이름 가져오기
-    data: sourceRecords.score[idx] ? sourceRecords.score[idx].filter((_: any, i: number) => i % 2 === 0) : [], // 점수기록 가져오기
-    borderColor: ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'][idx] || '#888', // 선 색상
-    backgroundColor: ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'][idx] || '#888', // 점 색상
-    pointRadius: 3, // 점 크기
-  }));
+  // 모든 플레이어의 시작점수 중 100단위로 나누어 떨어지는 정상적인 값(최빈값 또는 첫번째 값)을 공통 시작점수로 추정
+  let commonStartScore = props.option?.startingScore || 25000;
+  if (sourceRecords.score && sourceRecords.score.length > 0) {
+    const candidateScores = sourceRecords.score
+      .map((arr: any) => arr && arr[0])
+      .filter((val: any) => typeof val === 'number' && val > 0 && val % 100 === 0);
+    if (candidateScores.length > 0) {
+      commonStartScore = candidateScores[0];
+    }
+  }
+
+  let datasets = sourcePlayers.map((p, idx) => {
+    const rawScores = sourceRecords.score[idx] || [];
+    const restoredData: number[] = [];
+    if (rawScores.length > 0) {
+      let currentScore = commonStartScore;
+      restoredData.push(currentScore);
+      for (let i = 1; i < rawScores.length; i += 2) {
+        const delta = rawScores[i] || 0;
+        currentScore += delta;
+        restoredData.push(currentScore);
+      }
+    }
+    return {
+      label: p.name, // 이름 가져오기
+      data: restoredData, // 보정된 점수기록 가져오기
+      borderColor: ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'][idx] || '#888', // 선 색상
+      backgroundColor: ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'][idx] || '#888', // 점 색상
+      pointRadius: 3, // 점 크기
+    };
+  });
   
   const rawTimes = sourceRecords.time || [];
   let times = ['', ...rawTimes.filter((_: any, i: number) => i % 2 === 1)]; // 시간 가져오기
