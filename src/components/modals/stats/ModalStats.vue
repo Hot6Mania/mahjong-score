@@ -137,7 +137,7 @@ const stats = computed(() => {
     const avgRank = item.games > 0 ? item.rank.toFixed(2) + '위' : '-';
     const expectedScoreVal = item.games > 0 ? (item.uma / item.games) : 0;
     const expectedScore = item.games > 0
-      ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(2)
+      ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(1)
       : '-';
     
     // 천의 자리 구분 쉼표가 있을 수 있으므로 방어 처리
@@ -523,7 +523,7 @@ const stats = computed(() => {
 
   const expectedScoreVal = totalGames > 0 ? totalUma / totalGames : 0
   const expectedScore = totalGames > 0
-    ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(2)
+    ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(1)
     : '-'
 
   // 리치 스탯 연산
