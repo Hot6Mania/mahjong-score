@@ -83,7 +83,7 @@ watch(isManualPlacement, (newVal) => {
 onMounted(() => {
   shuffleTiles()
   
-  // 모바일 브라우저 주소창 자동 숨김 꼼수 강제 실행 (약간의 딜레이 후 1px 스크롤)
+  // 모바일 브라우저 주소창 자동 숨김을 위해 로드 후 1회 강제 1px 스크롤
   setTimeout(() => {
     window.scrollTo(0, 1)
   }, 300)

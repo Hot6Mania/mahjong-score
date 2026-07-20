@@ -128,16 +128,26 @@ input[type='number']::-webkit-outer-spin-button, input[type='number']::-webkit-i
   }
 }
 
-/* 가로모드 모바일 브라우저 주소창 숨김 유도용 전체 스크롤 활성화 */
+/* 절전 모드 스타일 (애니메이션 및 트랜지션 정지하여 배터리 절약) */
+.power-saving *,
+.power-saving *::before,
+.power-saving *::after {
+  animation-duration: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0s !important;
+  scroll-behavior: auto !important;
+}
+
+/* 가로모드 모바일 브라우저 주소창 숨김 유도용 전체 스크롤 활성화 (최소한의 1px 확보) */
 @media (orientation: landscape) {
   html {
     overflow-y: scroll !important;
     overscroll-behavior: auto !important;
   }
   body {
-    height: calc(100vh + 80px) !important;
+    height: calc(100vh + 1px) !important;
   }
   .background {
-    height: calc(100vh + 80px) !important;
+    height: calc(100vh + 1px) !important;
   }
 }

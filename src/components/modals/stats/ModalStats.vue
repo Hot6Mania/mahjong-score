@@ -121,18 +121,18 @@ const stats = computed(() => {
       return emptyStats;
     }
     
-    const winRate = item.rounds > 0 ? (item.winRate * 100).toFixed(1) + '%' : '-';
-    const loseRate = item.rounds > 0 ? (item.loseRate * 100).toFixed(1) + '%' : '-';
-    const riichiRate = item.rounds > 0 ? (item.riichiRate * 100).toFixed(1) + '%' : '-';
-    const tsumoRate = (item.rounds > 0 && item.winRate > 0) ? (item.tsumoRate * 100).toFixed(1) + '%' : '-';
-    const drawRate = item.rounds > 0 ? (item.drawRate * 100).toFixed(1) + '%' : '-';
-    const drawTenpaiRate = (item.rounds > 0 && item.drawRate > 0) ? (item.drawTenpaiRate * 100).toFixed(1) + '%' : '-';
-    const tobiRate = item.games > 0 ? (item.tobiRate * 100).toFixed(1) + '%' : '-';
+    const winRate = item.rounds > 0 ? (item.winRate * 100).toFixed(2) + '%' : '-';
+    const loseRate = item.rounds > 0 ? (item.loseRate * 100).toFixed(2) + '%' : '-';
+    const riichiRate = item.rounds > 0 ? (item.riichiRate * 100).toFixed(2) + '%' : '-';
+    const tsumoRate = (item.rounds > 0 && item.winRate > 0) ? (item.tsumoRate * 100).toFixed(2) + '%' : '-';
+    const drawRate = item.rounds > 0 ? (item.drawRate * 100).toFixed(2) + '%' : '-';
+    const drawTenpaiRate = (item.rounds > 0 && item.drawRate > 0) ? (item.drawTenpaiRate * 100).toFixed(2) + '%' : '-';
+    const tobiRate = item.games > 0 ? (item.tobiRate * 100).toFixed(2) + '%' : '-';
     
     const hasRiichi = item.riichiRate > 0 && item.rounds > 0;
-    const riichiWinRate = hasRiichi ? (item.riichiWinRate * 100).toFixed(1) + '%' : '-';
-    const riichiLoseRate = hasRiichi ? (item.riichiLoseRate * 100).toFixed(1) + '%' : '-';
-    const riichiDrawRate = hasRiichi ? (item.riichiDrawRate * 100).toFixed(1) + '%' : '-';
+    const riichiWinRate = hasRiichi ? (item.riichiWinRate * 100).toFixed(2) + '%' : '-';
+    const riichiLoseRate = hasRiichi ? (item.riichiLoseRate * 100).toFixed(2) + '%' : '-';
+    const riichiDrawRate = hasRiichi ? (item.riichiDrawRate * 100).toFixed(2) + '%' : '-';
 
     const avgRank = item.games > 0 ? item.rank.toFixed(2) + '위' : '-';
     const expectedScoreVal = item.games > 0 ? (item.uma / item.games) : 0;
@@ -160,16 +160,16 @@ const stats = computed(() => {
     const cleanRiichiExpense = parseCleanScore(item.riichiExpense);
     const riichiExpense = hasRiichi && cleanRiichiExpense > 0 ? Math.round(cleanRiichiExpense).toString() : '-';
 
-    const firstRiichiRate = hasRiichi ? (parseCleanScore(item.firstRiichiRate) * 100).toFixed(1) + '%' : '-';
-    const chaseRiichiRate = hasRiichi ? (parseCleanScore(item.chaseRiichiRate) * 100).toFixed(1) + '%' : '-';
-    const chasedRiichiRate = hasRiichi ? (parseCleanScore(item.chasedRiichiRate) * 100).toFixed(1) + '%' : '-';
+    const firstRiichiRate = hasRiichi ? (parseCleanScore(item.firstRiichiRate) * 100).toFixed(2) + '%' : '-';
+    const chaseRiichiRate = hasRiichi ? (parseCleanScore(item.chaseRiichiRate) * 100).toFixed(2) + '%' : '-';
+    const chasedRiichiRate = hasRiichi ? (parseCleanScore(item.chasedRiichiRate) * 100).toFixed(2) + '%' : '-';
 
-    const oyaKaburiRate = item.rounds > 0 && parseCleanScore(item.oyaKaburiRate) > 0 ? (parseCleanScore(item.oyaKaburiRate) * 100).toFixed(1) + '%' : '-';
+    const oyaKaburiRate = item.rounds > 0 && parseCleanScore(item.oyaKaburiRate) > 0 ? (parseCleanScore(item.oyaKaburiRate) * 100).toFixed(2) + '%' : '-';
     const cleanOyaKaburiAvg = parseCleanScore(item.oyaKaburiAvg);
     const oyaKaburiAvg = cleanOyaKaburiAvg > 0 ? Math.round(cleanOyaKaburiAvg).toString() : '-';
 
     const cleanLoseRiichiRate = parseCleanScore(item.loseRiichiRate);
-    const loseRiichiRate = cleanLoseRiichiRate > 0 ? (cleanLoseRiichiRate * 100).toFixed(1) + '%' : '-';
+    const loseRiichiRate = cleanLoseRiichiRate > 0 ? (cleanLoseRiichiRate * 100).toFixed(2) + '%' : '-';
 
     return {
       totalGames: item.games,
@@ -499,7 +499,7 @@ const stats = computed(() => {
 
   // 기본 스탯 연산
   const formatRate = (num: number, den: number) => {
-    return den > 0 ? ((num / den) * 100).toFixed(1) + '%' : '-'
+    return den > 0 ? ((num / den) * 100).toFixed(2) + '%' : '-'
   }
 
   const formatVal = (num: number, den: number, showSign = false) => {

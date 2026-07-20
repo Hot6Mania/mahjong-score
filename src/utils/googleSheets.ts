@@ -831,7 +831,7 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
 /**
  * '전체 멤버별 통계' 시트에서 스탯 목록을 가져옵니다.
  */
-export const fetchMemberStats = async (spreadsheetId: string): Promise<any[]> => {
+export const fetchMemberStats = async (spreadsheetId: string, silent = false): Promise<any[]> => {
   if (!spreadsheetId) return [];
   try {
     const range = "'전체 멤버별 통계'!A2:AG100";
@@ -889,11 +889,13 @@ export const fetchMemberStats = async (spreadsheetId: string): Promise<any[]> =>
     return [];
   } catch (err: any) {
     console.warn("구글 시트 전체 통계 로드 실패:", err);
-    const msg = err?.result?.error?.message || "";
-    if (msg.includes("range") || err?.status === 400) {
-      alert("구글 스프레드시트의 열(Column) 개수가 부족하여 전체 기간 통계를 불러오지 못했습니다.\n\n구글 스프레드시트의 '전체 멤버별 통계' 시트에서 W열 오른쪽으로 열을 AG열(33번째 열)까지 늘려주세요.\n(W열 머리글 우클릭 -> '오른쪽에 1개 열 삽입'을 10번 반복)");
-    } else {
-      alert("전체 통계를 불러오는 중 오류가 발생했습니다: " + msg);
+    if (!silent) {
+      const msg = err?.result?.error?.message || "";
+      if (msg.includes("range") || err?.status === 400) {
+        alert("구글 스프레드시트의 열(Column) 개수가 부족하여 전체 기간 통계를 불러오지 못했습니다.\n\n구글 스프레드시트의 '전체 멤버별 통계' 시트에서 W열 오른쪽으로 열을 AG열(33번째 열)까지 늘려주세요.\n(W열 머리글 우클릭 -> '오른쪽에 1개 열 삽입'을 10번 반복)");
+      } else {
+        alert("전체 통계를 불러오는 중 오류가 발생했습니다: " + msg);
+      }
     }
     return [];
   }

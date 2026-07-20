@@ -103,6 +103,7 @@ const defaultOption: OptionType = {
   riichiPayout: true, // 남은 공탁금 처리
   alwaysShowRank: false, // 등수 상시 표시
   sekiOrder: true, // 동점 석순 기준
+  powerSaving: false, // 절전 모드
 };
 const savedOption = localStorage.getItem("mahjong_option");
 const loadSavedOption = (): OptionType => {
@@ -115,12 +116,21 @@ const loadSavedOption = (): OptionType => {
       startingScore: Number(parsed.startingScore ?? defaultOption.startingScore),
       returnScore: Number(parsed.returnScore ?? defaultOption.returnScore),
       rankUma: Array.isArray(parsed.rankUma) ? parsed.rankUma.map(Number) : defaultOption.rankUma,
+      powerSaving: !!parsed.powerSaving,
     };
   } catch (e) {
     return defaultOption;
   }
 };
 const option = reactive<OptionType>(loadSavedOption());
+
+watch(() => option.powerSaving, (newVal) => {
+  if (newVal) {
+    document.documentElement.classList.add("power-saving");
+  } else {
+    document.documentElement.classList.remove("power-saving");
+  }
+}, { immediate: true });
 const modalInfo = reactive({ // 모달창
   isOpen: false, // on/off
   type: "", // 종류
@@ -467,16 +477,10 @@ onMounted(async () => {
     showModal('choose_seat');
   }
 
-  // iOS/Android 가로모드 주소창 숨김을 위한 꼼수 (스크롤 자동 트리거)
-  const triggerHideAddressBar = () => {
-    setTimeout(() => {
-      window.scrollTo(0, 1);
-    }, 200);
-  };
-  triggerHideAddressBar();
-  window.addEventListener('touchstart', triggerHideAddressBar, { once: true });
-  window.addEventListener('click', triggerHideAddressBar, { once: true });
-  window.addEventListener('resize', triggerHideAddressBar);
+  // 모바일 주소창 자동 숨김을 위해 로드 후 1회 강제 1px 스크롤
+  setTimeout(() => {
+    window.scrollTo(0, 1);
+  }, 300);
 })
 
 
@@ -646,9 +650,7 @@ const changeWindsAndRounds = () => {
 
 /**점수 변동 효과*/
 const changeScores = (targetRiichi: number, onComplete?: () => void) => {
-  animateRank.value = true;
   let currentScore=players.map(x => x.displayScore); // 현재 점수 저장
-  let arrCut: number[][]=[[],[],[],[]];
   
   // 1. 이전 점수 기준 순위 계산 (동점 석순 옵션 반영)
   let oldRanks = players.map((_, i) => {
@@ -669,6 +671,20 @@ const changeScores = (targetRiichi: number, onComplete?: () => void) => {
     }
   });
 
+  if (option.powerSaving) {
+    // 절전 모드: 애니메이션 없이 즉각 반영
+    for (let i = 0; i < players.length; i++) {
+      players[i].displayScore = finalScores[i];
+      players[i].effectScore = NaN;
+      players[i].rank = 0;
+    }
+    panelInfo.riichi = targetRiichi;
+    if (onComplete) onComplete();
+    return;
+  }
+
+  animateRank.value = true;
+  let arrCut: number[][]=[[],[],[],[]];
   for (let i=0;i<players.length;i++){
     for (let j=0;j<50;j++) // 변경될 점수 사이를 50등분해서 저장
       arrCut[i].push(currentScore[i]+(players[i].deltaScore/50)*(j+1));
@@ -932,6 +948,8 @@ const setToggleButton = (status: string) => {
     option.alwaysShowRank=!option.alwaysShowRank;
   else if (status==='sekiorder') // 동점 석순 토글
     option.sekiOrder=!option.sekiOrder;
+  else if (status==='powersaving') // 절전 모드 토글
+    option.powerSaving=!option.powerSaving;
 }
 
 /**판/부 버튼 동작 설정*/

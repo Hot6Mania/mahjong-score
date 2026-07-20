@@ -79,7 +79,7 @@ const emit = defineEmits<Emits>()
 // 구글 스프레드시트 주소 편집 상태
 const isEditingSpreadsheetId = ref(false);
 
-const keepLoggedIn = ref(localStorage.getItem("keep_logged_in") === "true");
+const keepLoggedIn = ref(localStorage.getItem("keep_logged_in") !== "false");
 const handleKeepLoggedInChange = () => {
   localStorage.setItem("keep_logged_in", keepLoggedIn.value ? "true" : "false");
 };
@@ -742,6 +742,13 @@ const getSignColor = (sign: number, x: boolean) => {
             <span v-show="option.sekiOrder===false">X</span>
           </span>
         </div>
+        <div style="grid-area: option9;" @click.stop="emit('set-toggle-button', 'powersaving')">
+          {{ t('option.powerSaving') }}<br>
+          <span :style="toggleButtonStyle('powersaving')">
+            <span v-show="option.powerSaving===true">O</span>
+            <span v-show="option.powerSaving===false">X</span>
+          </span>
+        </div>
       </div>
       <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 -->
       <div style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
@@ -940,13 +947,14 @@ const getSignColor = (sign: number, x: boolean) => {
 
 .container_option{
   display: grid;
-  grid-template-rows: repeat(4, 60px);
+  grid-template-rows: repeat(5, 60px);
   grid-template-columns: repeat(4, 120px);
   grid-template-areas:
   'input_name0 input_name1 input_name2 input_name3'
   'option0 option1 option2 option3'
   'option4 option4 option5 option6'
-  'option7 option7 option8 option8';
+  'option7 option7 option8 option8'
+  'option9 option9 . .';
   text-align: center;
   font-size: 20px;
   gap: 10px;
