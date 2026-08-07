@@ -23,13 +23,93 @@ const activeHistory = computed(() => {
     } catch (e) {
       return []
     }
+  } else if (scopeTab.value === 'all') {
+    const list = [...(props.history || [])]
+    try {
+      const raw = localStorage.getItem("permanent_games_history") || "[]"
+      const perm = JSON.parse(raw)
+      perm.forEach((g: any) => {
+        if (!list.some(existing => existing.timestamp && existing.timestamp === g.timestamp)) {
+          list.push(g)
+        }
+      })
+    } catch (e) {}
+    return list
   }
   return props.history || []
 })
 
 // 탭 종류
-type TabType = 'basic' | 'riichi' | 'other'
+type TabType = 'basic' | 'riichi' | 'other' | 'rank'
 const activeTab = ref<TabType>('basic')
+
+// 호버 중인 순위 카드/차트 세그먼트 (1, 2, 3, 4)
+const hoveredRank = ref<number | null>(null)
+
+// 1위, 2위, 3위, 4위 순위 분포 계산
+const rankStats = computed(() => {
+  const name = selectedPlayer.value
+  if (!name) {
+    return {
+      totalGames: 0,
+      r1: 0, r2: 0, r3: 0, r4: 0,
+      p1: 0, p2: 0, p3: 0, p4: 0,
+      top2Rate: '-',
+      lastAvoidRate: '-',
+      avgRank: '-'
+    }
+  }
+
+  let r1 = 0, r2 = 0, r3 = 0, r4 = 0
+  if (activeHistory.value) {
+    activeHistory.value.forEach((game: any) => {
+      if (!game.results || game.isManual) return
+      const pIdx = game.results.findIndex((r: any) => r.name === name)
+      if (pIdx === -1) return
+
+      const rank = game.results[pIdx].rank
+      if (rank === 1) r1++
+      else if (rank === 2) r2++
+      else if (rank === 3) r3++
+      else if (rank === 4) r4++
+    })
+  }
+
+  const totalGames = r1 + r2 + r3 + r4
+
+  // 세션/백업에 대국 기록이 없고 전체 기간 구글 통계만 존재하는 경우 폴백
+  if (totalGames === 0 && scopeTab.value === 'all' && props.googleMemberStats) {
+    const item = props.googleMemberStats.find(s => s.name === name)
+    if (item && item.games > 0) {
+      return {
+        totalGames: item.games,
+        r1: 0, r2: 0, r3: 0, r4: 0,
+        p1: 0, p2: 0, p3: 0, p4: 0,
+        top2Rate: '-',
+        lastAvoidRate: '-',
+        avgRank: item.rank ? item.rank.toFixed(2) + '위' : '-'
+      }
+    }
+  }
+
+  const p1 = totalGames > 0 ? (r1 / totalGames) * 100 : 0
+  const p2 = totalGames > 0 ? (r2 / totalGames) * 100 : 0
+  const p3 = totalGames > 0 ? (r3 / totalGames) * 100 : 0
+  const p4 = totalGames > 0 ? (r4 / totalGames) * 100 : 0
+
+  const top2Rate = totalGames > 0 ? ((r1 + r2) / totalGames * 100).toFixed(2) + '%' : '-'
+  const lastAvoidRate = totalGames > 0 ? ((r1 + r2 + r3) / totalGames * 100).toFixed(2) + '%' : '-'
+  const avgRankVal = totalGames > 0 ? ((r1 * 1 + r2 * 2 + r3 * 3 + r4 * 4) / totalGames).toFixed(2) + '위' : '-'
+
+  return {
+    totalGames,
+    r1, r2, r3, r4,
+    p1, p2, p3, p4,
+    top2Rate,
+    lastAvoidRate,
+    avgRank: avgRankVal
+  }
+})
 
 // 오늘 참가한 모든 플레이어 목록 추출 (스코프에 따라 전체 명단 반환)
 const allPlayers = computed(() => {
@@ -653,6 +733,13 @@ const stats = computed(() => {
     >
       그 외
     </button>
+    <button 
+      class="tab_btn" 
+      :class="{ active: activeTab === 'rank' }" 
+      @click="activeTab = 'rank'"
+    >
+      순위 비율
+    </button>
   </div>
 
   <!-- 스탯 데이터 테이블 -->
@@ -801,6 +888,174 @@ const stats = computed(() => {
           <span class="stat_value">{{ stats.totalRounds }}국</span>
         </div>
       </div>
+
+      <!-- 순위 비율 탭 (원형 그래프 및 1위/2위/3위/4위 상세 분포) -->
+      <div v-else-if="activeTab === 'rank'" class="rank_tab_wrapper">
+        <div class="rank_chart_section">
+          <!-- SVG 원형 그래프 (도넛 차트) -->
+          <div class="chart_box">
+            <svg viewBox="0 0 200 200" class="donut_svg">
+              <!-- 베이스 링 (배경) -->
+              <circle 
+                cx="100" 
+                cy="100" 
+                r="60" 
+                fill="none" 
+                stroke="var(--border-color, rgba(255,255,255,0.1))" 
+                stroke-width="20"
+              />
+              
+              <!-- 원형 조각들 (12시 방향 시작 회전) -->
+              <g transform="rotate(-90 100 100)">
+                <!-- 4위 (빨강: Player.vue 등수 색상) -->
+                <circle 
+                  v-if="rankStats.p4 > 0"
+                  cx="100" cy="100" r="60" 
+                  fill="none" 
+                  stroke="var(--color-rank-4)" 
+                  stroke-width="20" 
+                  :stroke-dasharray="`${(rankStats.p4 / 100) * 376.9911} 376.9911`"
+                  :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2 + rankStats.p3) / 100) * 376.9911}`"
+                  class="donut_segment"
+                  :class="{ active: hoveredRank === 4 }"
+                  @mouseenter="hoveredRank = 4"
+                  @mouseleave="hoveredRank = null"
+                />
+                <!-- 3위 (노랑/앰버: Player.vue 등수 색상) -->
+                <circle 
+                  v-if="rankStats.p3 > 0"
+                  cx="100" cy="100" r="60" 
+                  fill="none" 
+                  stroke="var(--color-rank-3)" 
+                  stroke-width="20" 
+                  :stroke-dasharray="`${(rankStats.p3 / 100) * 376.9911} 376.9911`"
+                  :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2) / 100) * 376.9911}`"
+                  class="donut_segment"
+                  :class="{ active: hoveredRank === 3 }"
+                  @mouseenter="hoveredRank = 3"
+                  @mouseleave="hoveredRank = null"
+                />
+                <!-- 2위 (청록: Player.vue 등수 색상) -->
+                <circle 
+                  v-if="rankStats.p2 > 0"
+                  cx="100" cy="100" r="60" 
+                  fill="none" 
+                  stroke="var(--color-rank-2)" 
+                  stroke-width="20" 
+                  :stroke-dasharray="`${(rankStats.p2 / 100) * 376.9911} 376.9911`"
+                  :stroke-dashoffset="`-${(rankStats.p1 / 100) * 376.9911}`"
+                  class="donut_segment"
+                  :class="{ active: hoveredRank === 2 }"
+                  @mouseenter="hoveredRank = 2"
+                  @mouseleave="hoveredRank = null"
+                />
+                <!-- 1위 (초록: Player.vue 등수 색상) -->
+                <circle 
+                  v-if="rankStats.p1 > 0"
+                  cx="100" cy="100" r="60" 
+                  fill="none" 
+                  stroke="var(--color-rank-1)" 
+                  stroke-width="20" 
+                  :stroke-dasharray="`${(rankStats.p1 / 100) * 376.9911} 376.9911`"
+                  stroke-dashoffset="0"
+                  class="donut_segment"
+                  :class="{ active: hoveredRank === 1 }"
+                  @mouseenter="hoveredRank = 1"
+                  @mouseleave="hoveredRank = null"
+                />
+              </g>
+
+              <!-- 차트 중앙 레이블 -->
+              <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
+              <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ rankStats.totalGames }}전</text>
+              <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ rankStats.avgRank }}</text>
+            </svg>
+          </div>
+
+          <!-- 순위별 상세 수치 카드 목록 -->
+          <div class="rank_details_list">
+            <div 
+              class="rank_detail_card" 
+              :class="{ highlighted: hoveredRank === 1 }"
+              @mouseenter="hoveredRank = 1"
+              @mouseleave="hoveredRank = null"
+            >
+              <div class="rank_card_header">
+                <span class="rank_badge badge_1">🥇 1위</span>
+                <span class="rank_count_val">{{ rankStats.r1 }}회</span>
+                <span class="rank_percent_val text_rank_1">{{ rankStats.p1.toFixed(1) }}%</span>
+              </div>
+              <div class="rank_bar_track">
+                <div class="rank_bar_fill bar_1" :style="{ width: rankStats.p1 + '%' }"></div>
+              </div>
+            </div>
+
+            <div 
+              class="rank_detail_card" 
+              :class="{ highlighted: hoveredRank === 2 }"
+              @mouseenter="hoveredRank = 2"
+              @mouseleave="hoveredRank = null"
+            >
+              <div class="rank_card_header">
+                <span class="rank_badge badge_2">🥈 2위</span>
+                <span class="rank_count_val">{{ rankStats.r2 }}회</span>
+                <span class="rank_percent_val text_rank_2">{{ rankStats.p2.toFixed(1) }}%</span>
+              </div>
+              <div class="rank_bar_track">
+                <div class="rank_bar_fill bar_2" :style="{ width: rankStats.p2 + '%' }"></div>
+              </div>
+            </div>
+
+            <div 
+              class="rank_detail_card" 
+              :class="{ highlighted: hoveredRank === 3 }"
+              @mouseenter="hoveredRank = 3"
+              @mouseleave="hoveredRank = null"
+            >
+              <div class="rank_card_header">
+                <span class="rank_badge badge_3">🥉 3위</span>
+                <span class="rank_count_val">{{ rankStats.r3 }}회</span>
+                <span class="rank_percent_val text_rank_3">{{ rankStats.p3.toFixed(1) }}%</span>
+              </div>
+              <div class="rank_bar_track">
+                <div class="rank_bar_fill bar_3" :style="{ width: rankStats.p3 + '%' }"></div>
+              </div>
+            </div>
+
+            <div 
+              class="rank_detail_card" 
+              :class="{ highlighted: hoveredRank === 4 }"
+              @mouseenter="hoveredRank = 4"
+              @mouseleave="hoveredRank = null"
+            >
+              <div class="rank_card_header">
+                <span class="rank_badge badge_4">4위</span>
+                <span class="rank_count_val">{{ rankStats.r4 }}회</span>
+                <span class="rank_percent_val text_rank_4">{{ rankStats.p4.toFixed(1) }}%</span>
+              </div>
+              <div class="rank_bar_track">
+                <div class="rank_bar_fill bar_4" :style="{ width: rankStats.p4 + '%' }"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 핵심 요약 지표 카드 -->
+        <div class="rank_summary_grid">
+          <div class="summary_stat_box">
+            <span class="summary_label">연대율 (1~2위)</span>
+            <span class="summary_value highlight">{{ rankStats.top2Rate }}</span>
+          </div>
+          <div class="summary_stat_box">
+            <span class="summary_label">라스 회피율 (1~3위)</span>
+            <span class="summary_value text_positive">{{ rankStats.lastAvoidRate }}</span>
+          </div>
+          <div class="summary_stat_box">
+            <span class="summary_label">평균 순위</span>
+            <span class="summary_value">{{ rankStats.avgRank }}</span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -847,6 +1102,10 @@ const stats = computed(() => {
 }
 
 .container_stats_modal {
+  --color-rank-1: #28a745; /* 1위: 초록 (Player.vue 등수 색상 통일) */
+  --color-rank-2: #17a2b8; /* 2위: 청록 (Player.vue 등수 색상 통일) */
+  --color-rank-3: #d97706; /* 3위: 앰버/노랑 */
+  --color-rank-4: #dc3545; /* 4위: 빨강 (Player.vue 등수 색상 통일) */
   width: 100%;
   max-width: 720px; /* 옆으로 펼쳐지도록 넓은 너비 설정 */
   display: flex;
@@ -854,6 +1113,13 @@ const stats = computed(() => {
   color: var(--text-color);
   font-family: inherit;
   box-sizing: border-box;
+}
+
+html.dark .container_stats_modal {
+  --color-rank-1: #4ade80; /* 다크모드 선명한 초록 */
+  --color-rank-2: #38bdf8; /* 다크모드 선명한 청록 */
+  --color-rank-3: #fbbf24; /* 다크모드 선명한 노랑 */
+  --color-rank-4: #f87171; /* 다크모드 선명한 빨강 */
 }
 
 .title {
@@ -1070,5 +1336,237 @@ html:not(.dark) .tab_btn {
 html:not(.dark) .tab_btn.active {
   color: var(--color-toggle-on, #4caf50) !important;
   border-bottom-color: var(--color-toggle-on, #4caf50) !important;
+}
+
+/* 순위 비율 탭 래퍼 */
+.rank_tab_wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.rank_chart_section {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background-color: var(--bg-modal);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.chart_box {
+  width: 190px;
+  height: 190px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.donut_svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.donut_segment {
+  transition: stroke-width 0.25s ease, opacity 0.25s ease, filter 0.25s ease;
+  transform-origin: center;
+  cursor: pointer;
+}
+
+.donut_segment.active {
+  stroke-width: 24;
+  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.4));
+}
+
+.chart_center_label {
+  font-size: 11px;
+  fill: var(--text-color);
+  opacity: 0.65;
+  font-weight: 600;
+}
+
+.chart_center_value {
+  font-size: 19px;
+  fill: var(--text-color);
+  font-weight: 800;
+}
+
+.chart_center_sub {
+  font-size: 12px;
+  fill: var(--color-toggle-on, #4caf50);
+  font-weight: 700;
+}
+
+.rank_details_list {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rank_detail_card {
+  background-color: var(--bg-card, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 12px;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  cursor: pointer;
+}
+
+.rank_detail_card.highlighted {
+  transform: translateX(4px);
+  border-color: var(--color-toggle-on, #4caf50);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.rank_card_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+  font-size: 13px;
+}
+
+.rank_badge {
+  font-weight: 800;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge_1 {
+  background: rgba(40, 167, 69, 0.15);
+  color: var(--color-rank-1);
+  border: 1px solid var(--color-rank-1);
+}
+
+.badge_2 {
+  background: rgba(23, 162, 184, 0.15);
+  color: var(--color-rank-2);
+  border: 1px solid var(--color-rank-2);
+}
+
+.badge_3 {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--color-rank-3);
+  border: 1px solid var(--color-rank-3);
+}
+
+.badge_4 {
+  background: rgba(220, 53, 69, 0.15);
+  color: var(--color-rank-4);
+  border: 1px solid var(--color-rank-4);
+}
+
+.rank_count_val {
+  font-weight: 700;
+  color: var(--text-color);
+  margin-left: auto;
+  margin-right: 10px;
+  font-size: 13px;
+}
+
+.rank_percent_val {
+  font-weight: 800;
+  font-size: 14px;
+  min-width: 50px;
+  text-align: right;
+}
+
+.text_rank_1 { color: var(--color-rank-1); }
+.text_rank_2 { color: var(--color-rank-2); }
+.text_rank_3 { color: var(--color-rank-3); }
+.text_rank_4 { color: var(--color-rank-4); }
+
+.rank_bar_track {
+  width: 100%;
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.rank_bar_fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.bar_1 { background: var(--color-rank-1); }
+.bar_2 { background: var(--color-rank-2); }
+.bar_3 { background: var(--color-rank-3); }
+.bar_4 { background: var(--color-rank-4); }
+
+.rank_summary_grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+
+.summary_stat_box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--bg-modal);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 6px;
+  text-align: center;
+}
+
+.summary_label {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-bottom: 3px;
+  font-weight: 600;
+}
+
+.summary_value {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+@media (max-width: 520px) {
+  .rank_chart_section {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .rank_details_list {
+    width: 100%;
+  }
+}
+
+/* 라이트 모드 오버라이드 */
+html:not(.dark) .rank_chart_section,
+html:not(.dark) .summary_stat_box {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+}
+
+html:not(.dark) .rank_detail_card {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+}
+
+html:not(.dark) .chart_center_label,
+html:not(.dark) .chart_center_value {
+  fill: #1e293b !important;
+}
+
+html:not(.dark) .rank_bar_track {
+  background-color: rgba(0, 0, 0, 0.08) !important;
 }
 </style>
