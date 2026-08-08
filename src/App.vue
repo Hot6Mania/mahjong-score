@@ -498,27 +498,67 @@ const toggleFullScreen = () => {
   }
 }
 
-/**모바일 주소창 숨기기 (스크롤 유도)*/
-const hideAddressBar = () => {
-  window.scrollTo({
-    top: 150,
-    behavior: 'smooth'
-  });
-  document.documentElement.scrollTop = 150;
-  document.body.scrollTop = 150;
+let touchStartY = 0;
+let isBtnDragging = false;
 
-  setTimeout(() => {
-    window.scrollTo(0, 200);
-  }, 120);
-
-  if (document.fullscreenEnabled && !document.fullscreenElement) {
+/**모바일 주소창 숨기기 (터치 드래그 연동, 물리 스크롤 & Fullscreen)*/
+const triggerAddressBarHide = () => {
+  // 1. Android Chrome, Samsung Internet 등 Fullscreen API 지원 브라우저 주소창/네비게이션바 즉시 숨김
+  const doc = document as any;
+  const el = document.documentElement as any;
+  const reqFS = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+  
+  if (reqFS && !doc.fullscreenElement && !doc.webkitFullscreenElement) {
     try {
-      toggleFullScreen();
-    } catch (e) {
-      // ignore
-    }
+      const p = reqFS.call(el);
+      if (p && p.catch) p.catch(() => {});
+    } catch (e) {}
   }
-}
+
+  // 2. iOS Safari 및 일반 모바일 브라우저를 위한 강제 높이 확보 및 단계적 애니메이션 스크롤
+  document.body.style.minHeight = 'calc(100vh + 400px)';
+  document.documentElement.style.overflowY = 'scroll';
+
+  let frame = 0;
+  const stepScroll = () => {
+    window.scrollBy(0, 20);
+    document.documentElement.scrollTop += 20;
+    document.body.scrollTop += 20;
+    frame++;
+    if (frame < 15) {
+      requestAnimationFrame(stepScroll);
+    }
+  };
+  stepScroll();
+
+  window.scrollTo({ top: 300, behavior: 'smooth' });
+};
+
+const onBtnTouchStart = (e: TouchEvent) => {
+  if (e.touches.length > 0) {
+    touchStartY = e.touches[0].clientY;
+    isBtnDragging = true;
+  }
+  triggerAddressBarHide();
+};
+
+const onBtnTouchMove = (e: TouchEvent) => {
+  if (!isBtnDragging || e.touches.length === 0) return;
+  const currentY = e.touches[0].clientY;
+  const deltaY = touchStartY - currentY; // 위로 터치해서 드래그 시 양수
+  
+  if (Math.abs(deltaY) > 1) {
+    window.scrollBy(0, deltaY * 2.5);
+    document.documentElement.scrollTop += deltaY * 2.5;
+    document.body.scrollTop += deltaY * 2.5;
+    touchStartY = currentY;
+  }
+};
+
+const onBtnTouchEnd = () => {
+  isBtnDragging = false;
+  triggerAddressBarHide();
+};
 
 /**언어 변경*/
 const changeLocale = () => {
@@ -2972,10 +3012,13 @@ const addBackupGameToCurrent = (game: any) => {
     </div>
   </Transition>
 
-  <!-- 화면 좌하단 원형 주소창 숨김 미니 버튼 -->
+  <!-- 화면 좌하단 원형 주소창 숨김 미니 버튼 (터치 드래그 및 물리 스크롤 연동) -->
   <button 
     class="btn-hide-addressbar" 
-    @click.stop="hideAddressBar" 
+    @touchstart.stop="onBtnTouchStart"
+    @touchmove.stop="onBtnTouchMove"
+    @touchend.stop="onBtnTouchEnd"
+    @click.stop="triggerAddressBarHide" 
     title="주소창 숨기기" 
     aria-label="주소창 숨기기"
   >

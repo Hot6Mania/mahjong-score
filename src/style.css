@@ -62,12 +62,12 @@ html.dark {
 }
 html{
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: scroll !important;
   overscroll-behavior: auto;
 }
 body {
-  min-height: calc(100vh + 200px);
-  min-height: calc(100dvh + 200px);
+  min-height: calc(100vh + 300px) !important;
+  min-height: calc(100dvh + 300px) !important;
   background-color: var(--bg-color);
   color: var(--text-color);
   transition: background-color 0.3s ease, color 0.3s ease;
