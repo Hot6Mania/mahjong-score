@@ -498,12 +498,13 @@ const toggleFullScreen = () => {
   }
 }
 
+let touchStartX = 0;
 let touchStartY = 0;
 let isBtnDragging = false;
 
-/**모바일 주소창 숨기기 (터치 드래그 연동, 물리 스크롤 & Fullscreen)*/
+/** 모바일 주소창 숨기기 (터치 드래그 연동, iOS 사파리 & Android 물리 스크롤/Fullscreen) */
 const triggerAddressBarHide = () => {
-  // 1. Android Chrome, Samsung Internet 등 Fullscreen API 지원 브라우저 주소창/네비게이션바 즉시 숨김
+  // 1. Android Chrome, Samsung Internet 등 Fullscreen API 지원 브라우저 지원
   const doc = document as any;
   const el = document.documentElement as any;
   const reqFS = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
@@ -515,27 +516,28 @@ const triggerAddressBarHide = () => {
     } catch (e) {}
   }
 
-  // 2. iOS Safari 및 일반 모바일 브라우저를 위한 강제 높이 확보 및 단계적 애니메이션 스크롤
-  document.body.style.minHeight = 'calc(100vh + 400px)';
-  document.documentElement.style.overflowY = 'scroll';
+  // 2. iOS 사파리 및 WebKit 엔진 물리적 뷰포트 스크롤 트리거
+  document.body.style.height = '3000px';
+  document.body.style.minHeight = '3000px';
 
-  let frame = 0;
+  let step = 0;
   const stepScroll = () => {
-    window.scrollBy(0, 20);
-    document.documentElement.scrollTop += 20;
-    document.body.scrollTop += 20;
-    frame++;
-    if (frame < 15) {
+    window.scrollBy(0, 30);
+    document.documentElement.scrollTop += 30;
+    document.body.scrollTop += 30;
+    step++;
+    if (step < 12) {
       requestAnimationFrame(stepScroll);
     }
   };
   stepScroll();
 
-  window.scrollTo({ top: 300, behavior: 'smooth' });
+  window.scrollTo(0, 400);
 };
 
 const onBtnTouchStart = (e: TouchEvent) => {
-  if (e.touches.length > 0) {
+  if (e.touches && e.touches.length > 0) {
+    touchStartX = e.touches[0].clientX;
     touchStartY = e.touches[0].clientY;
     isBtnDragging = true;
   }
@@ -543,14 +545,29 @@ const onBtnTouchStart = (e: TouchEvent) => {
 };
 
 const onBtnTouchMove = (e: TouchEvent) => {
-  if (!isBtnDragging || e.touches.length === 0) return;
+  if (!isBtnDragging || !e.touches || e.touches.length === 0) return;
+
+  // iOS 사파리 터치 제스처 취소 방지
+  if (e.cancelable) {
+    e.preventDefault();
+  }
+
+  const currentX = e.touches[0].clientX;
   const currentY = e.touches[0].clientY;
-  const deltaY = touchStartY - currentY; // 위로 터치해서 드래그 시 양수
   
-  if (Math.abs(deltaY) > 1) {
-    window.scrollBy(0, deltaY * 2.5);
-    document.documentElement.scrollTop += deltaY * 2.5;
-    document.body.scrollTop += deltaY * 2.5;
+  const deltaX = touchStartX - currentX;
+  const deltaY = touchStartY - currentY;
+  
+  // 회전된 화면(Portrait 모드) 및 가로 화면 모두 지원하도록 축 자동 판별
+  const dragVal = Math.abs(deltaY) > Math.abs(deltaX) ? deltaY : deltaX;
+  
+  if (Math.abs(dragVal) > 1) {
+    const amount = dragVal * 3;
+    window.scrollBy(0, amount);
+    document.documentElement.scrollTop += amount;
+    document.body.scrollTop += amount;
+
+    touchStartX = currentX;
     touchStartY = currentY;
   }
 };
@@ -3004,6 +3021,9 @@ const addBackupGameToCurrent = (game: any) => {
 </script>
 
 <template>
+<!-- iOS WebKit 사파리 주소창 숨김 스크롤을 위한 물리 스크롤 더미 스페이서 -->
+<div class="ios-scroll-spacer"></div>
+
 <div class="background" @dblclick.self="toggleFullScreen()" @click="onBackgroundClick">
   <!-- 커스텀 토스트 알림 연출 -->
   <Transition name="toast-fade">

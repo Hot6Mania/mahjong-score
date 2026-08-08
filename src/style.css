@@ -60,14 +60,28 @@ html.dark {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+/* iOS WebKit 사파리 주소창 숨김 더미 스페이서 */
+.ios-scroll-spacer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 3000px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: -9999;
+}
+
 html{
   overflow-x: hidden;
   overflow-y: scroll !important;
   overscroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
 }
 body {
-  min-height: calc(100vh + 300px) !important;
-  min-height: calc(100dvh + 300px) !important;
+  position: relative;
+  min-height: 3000px !important;
+  height: 3000px !important;
   background-color: var(--bg-color);
   color: var(--text-color);
   transition: background-color 0.3s ease, color 0.3s ease;
