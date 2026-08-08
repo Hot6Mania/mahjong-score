@@ -90,59 +90,21 @@ const rankStats = computed(() => {
   }
 
   let r1 = 0, r2 = 0, r3 = 0, r4 = 0
+  let totalGames = 0
 
-  // 1. 스코프별 대국 리스트 취합
-  const historyList = activeHistory.value || []
-  const allGames: any[] = [...historyList]
-
-  // 'all' (전체 기간) 스코프일 경우, 로컬 영구 백업 대국 및 오늘 대국까지 포함
-  if (scopeTab.value === 'all') {
-    try {
-      const rawBackup = localStorage.getItem("permanent_games_history") || "[]"
-      const backupGames = JSON.parse(rawBackup)
-      backupGames.forEach((bg: any) => {
-        if (!allGames.some(g => (g.timestamp && bg.timestamp && g.timestamp === bg.timestamp) || (g.id && bg.id && g.id === bg.id))) {
-          allGames.push(bg)
-        }
-      })
-    } catch (e) {}
-
-    try {
-      const rawToday = localStorage.getItem("today_games_history") || "[]"
-      const todayGames = JSON.parse(rawToday)
-      todayGames.forEach((tg: any) => {
-        if (!allGames.some(g => (g.timestamp && tg.timestamp && g.timestamp === tg.timestamp) || (g.id && tg.id && g.id === tg.id))) {
-          allGames.push(tg)
-        }
-      })
-    } catch (e) {}
-  }
-
-  allGames.forEach((game: any) => {
-    const res = extractGameResult(game, name)
-    if (!res) return
-
-    if (res.rank === 1) r1++
-    else if (res.rank === 2) r2++
-    else if (res.rank === 3) r3++
-    else if (res.rank === 4) r4++
-  })
-
-  let totalGames = r1 + r2 + r3 + r4
-
-  // 구글 통계 폴백: 개별 대국 기록이 로컬에 없어 0건으로 잡히지만 구글 전체 멤버 통계가 있는 경우
-  if (totalGames === 0 && scopeTab.value === 'all' && props.googleMemberStats) {
+  // 1. 전체 기간('all') 스코프일 경우, 구글 시트에서 불러온 통계(props.googleMemberStats)를 최우선 참조
+  if (scopeTab.value === 'all' && props.googleMemberStats) {
     const item = props.googleMemberStats.find(s => s.name === name)
     if (item && item.games > 0) {
       if ((item.r1 || 0) + (item.r2 || 0) + (item.r3 || 0) + (item.r4 || 0) > 0) {
-        // 구글 시트 AH~AK열에서 읽어온 실제 1~4위 횟수 적용
+        // 구글 시트 (AH~AK열)에서 읽어온 실제 1~4위 횟수 적용
         r1 = item.r1 || 0
         r2 = item.r2 || 0
         r3 = item.r3 || 0
         r4 = item.r4 || 0
         totalGames = r1 + r2 + r3 + r4
       } else {
-        // 시트에 아직 AH~AK열 수식이 적용되지 않았을 때의 추정 폴백
+        // AH~AK열 수식이 시트에 미적용된 경우: 평균 순위 및 대국수 기반 추정 수치 적용
         totalGames = item.games
         const avgR = item.rank || 2.5
 
@@ -163,6 +125,46 @@ const rankStats = computed(() => {
         r4 = Math.max(0, estR4)
       }
     }
+  }
+
+  // 2. 'session'/'backup' 스코프이거나, 구글 시트에 해당 멤버 기록이 없는 경우: 로컬 대국 기록 기반 집계
+  if (totalGames === 0) {
+    const historyList = activeHistory.value || []
+    const allGames: any[] = [...historyList]
+
+    if (scopeTab.value === 'all') {
+      try {
+        const rawBackup = localStorage.getItem("permanent_games_history") || "[]"
+        const backupGames = JSON.parse(rawBackup)
+        backupGames.forEach((bg: any) => {
+          if (!allGames.some(g => (g.timestamp && bg.timestamp && g.timestamp === bg.timestamp) || (g.id && bg.id && g.id === bg.id))) {
+            allGames.push(bg)
+          }
+        })
+      } catch (e) {}
+
+      try {
+        const rawToday = localStorage.getItem("today_games_history") || "[]"
+        const todayGames = JSON.parse(rawToday)
+        todayGames.forEach((tg: any) => {
+          if (!allGames.some(g => (g.timestamp && tg.timestamp && g.timestamp === tg.timestamp) || (g.id && tg.id && g.id === tg.id))) {
+            allGames.push(tg)
+          }
+        })
+      } catch (e) {}
+    }
+
+    allGames.forEach((game: any) => {
+      const res = extractGameResult(game, name)
+      if (!res) return
+
+      if (res.rank === 1) r1++
+      else if (res.rank === 2) r2++
+      else if (res.rank === 3) r3++
+      else if (res.rank === 4) r4++
+    })
+
+    totalGames = r1 + r2 + r3 + r4
   }
 
   const p1 = totalGames > 0 ? (r1 / totalGames) * 100 : 0
