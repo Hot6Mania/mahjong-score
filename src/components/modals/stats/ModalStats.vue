@@ -46,6 +46,35 @@ const activeTab = ref<TabType>('basic')
 // 호버 중인 순위 카드/차트 세그먼트 (1, 2, 3, 4)
 const hoveredRank = ref<number | null>(null)
 
+/** 게임 결과에서 특정 플레이어의 결과 정보({ name, score, uma, rank }) 안전하게 추출 */
+const extractGameResult = (game: any, name: string): { name: string, score: number, uma: number, rank: number } | null => {
+  if (!game || !game.results) return null
+  let pResult: any = null
+
+  if (Array.isArray(game.results)) {
+    pResult = game.results.find((r: any) => r && (r.name === name || r.playerName === name))
+  } else if (typeof game.results === 'object') {
+    if (game.results[name]) {
+      pResult = game.results[name]
+    } else {
+      pResult = Object.values(game.results).find((r: any) => r && (r.name === name || r.playerName === name))
+    }
+  }
+
+  if (pResult) {
+    const rankNum = Number(pResult.rank)
+    const scoreNum = Number(pResult.score)
+    const umaNum = Number(pResult.uma)
+    return {
+      name: pResult.name || name,
+      rank: !isNaN(rankNum) ? rankNum : 0,
+      score: !isNaN(scoreNum) ? scoreNum : 0,
+      uma: !isNaN(umaNum) ? umaNum : 0
+    }
+  }
+  return null
+}
+
 // 1위, 2위, 3위, 4위 순위 분포 계산
 const rankStats = computed(() => {
   const name = selectedPlayer.value
@@ -61,33 +90,77 @@ const rankStats = computed(() => {
   }
 
   let r1 = 0, r2 = 0, r3 = 0, r4 = 0
-  if (activeHistory.value) {
-    activeHistory.value.forEach((game: any) => {
-      if (!game.results || game.isManual) return
-      const pIdx = game.results.findIndex((r: any) => r.name === name)
-      if (pIdx === -1) return
 
-      const rank = game.results[pIdx].rank
-      if (rank === 1) r1++
-      else if (rank === 2) r2++
-      else if (rank === 3) r3++
-      else if (rank === 4) r4++
-    })
+  // 1. 스코프별 대국 리스트 취합
+  const historyList = activeHistory.value || []
+  const allGames: any[] = [...historyList]
+
+  // 'all' (전체 기간) 스코프일 경우, 로컬 영구 백업 대국 및 오늘 대국까지 포함
+  if (scopeTab.value === 'all') {
+    try {
+      const rawBackup = localStorage.getItem("permanent_games_history") || "[]"
+      const backupGames = JSON.parse(rawBackup)
+      backupGames.forEach((bg: any) => {
+        if (!allGames.some(g => (g.timestamp && bg.timestamp && g.timestamp === bg.timestamp) || (g.id && bg.id && g.id === bg.id))) {
+          allGames.push(bg)
+        }
+      })
+    } catch (e) {}
+
+    try {
+      const rawToday = localStorage.getItem("today_games_history") || "[]"
+      const todayGames = JSON.parse(rawToday)
+      todayGames.forEach((tg: any) => {
+        if (!allGames.some(g => (g.timestamp && tg.timestamp && g.timestamp === tg.timestamp) || (g.id && tg.id && g.id === tg.id))) {
+          allGames.push(tg)
+        }
+      })
+    } catch (e) {}
   }
 
-  const totalGames = r1 + r2 + r3 + r4
+  allGames.forEach((game: any) => {
+    const res = extractGameResult(game, name)
+    if (!res) return
 
-  // 세션/백업에 대국 기록이 없고 전체 기간 구글 통계만 존재하는 경우 폴백
+    if (res.rank === 1) r1++
+    else if (res.rank === 2) r2++
+    else if (res.rank === 3) r3++
+    else if (res.rank === 4) r4++
+  })
+
+  let totalGames = r1 + r2 + r3 + r4
+
+  // 구글 통계 폴백: 개별 대국 기록이 로컬에 없어 0건으로 잡히지만 구글 전체 멤버 통계가 있는 경우
   if (totalGames === 0 && scopeTab.value === 'all' && props.googleMemberStats) {
     const item = props.googleMemberStats.find(s => s.name === name)
     if (item && item.games > 0) {
-      return {
-        totalGames: item.games,
-        r1: 0, r2: 0, r3: 0, r4: 0,
-        p1: 0, p2: 0, p3: 0, p4: 0,
-        top2Rate: '-',
-        lastAvoidRate: '-',
-        avgRank: item.rank ? item.rank.toFixed(2) + '위' : '-'
+      if ((item.r1 || 0) + (item.r2 || 0) + (item.r3 || 0) + (item.r4 || 0) > 0) {
+        // 구글 시트 AH~AK열에서 읽어온 실제 1~4위 횟수 적용
+        r1 = item.r1 || 0
+        r2 = item.r2 || 0
+        r3 = item.r3 || 0
+        r4 = item.r4 || 0
+        totalGames = r1 + r2 + r3 + r4
+      } else {
+        // 시트에 아직 AH~AK열 수식이 적용되지 않았을 때의 추정 폴백
+        totalGames = item.games
+        const avgR = item.rank || 2.5
+
+        let estR1 = Math.round(totalGames * Math.max(0, (4 - avgR) / 3))
+        let estR4 = Math.round(totalGames * Math.max(0, (avgR - 1) / 3))
+        let rem = totalGames - (estR1 + estR4)
+        if (rem < 0) {
+          estR1 = Math.floor(totalGames / 4)
+          estR4 = Math.floor(totalGames / 4)
+          rem = totalGames - estR1 - estR4
+        }
+        let estR2 = Math.floor(rem / 2)
+        let estR3 = rem - estR2
+
+        r1 = Math.max(0, estR1)
+        r2 = Math.max(0, estR2)
+        r3 = Math.max(0, estR3)
+        r4 = Math.max(0, estR4)
       }
     }
   }
@@ -319,16 +392,12 @@ const stats = computed(() => {
 
   if (activeHistory.value) {
     activeHistory.value.forEach((game: any) => {
-      if (!game.results || game.isManual) return
-
-      // 이 대국에서의 플레이어 인덱스 찾기
-      const pIdx = game.results.findIndex((r: any) => r.name === name)
-      if (pIdx === -1) return // 해당 게임 미참가
+      const resultEntry = extractGameResult(game, name)
+      if (!resultEntry) return
 
       totalGames++
 
       // 최종 등수 및 최종 점수
-      const resultEntry = game.results[pIdx]
       totalRanks += resultEntry.rank
       totalFinalScore += resultEntry.score
       totalUma += resultEntry.uma || 0
@@ -338,6 +407,17 @@ const stats = computed(() => {
 
       const startingScore = props.option.startingScore || 25000;
       totalNetScore += (resultEntry.score - startingScore);
+
+      // 국별 상세 정보 분석을 위해 pIdx 추출
+      let pIdx = -1
+      if (Array.isArray(game.results)) {
+        pIdx = game.results.findIndex((r: any) => r && (r.name === name || r.playerName === name))
+      } else if (game.playerNames && Array.isArray(game.playerNames)) {
+        pIdx = game.playerNames.indexOf(name)
+      }
+      if (pIdx === -1 && typeof game.results === 'object') {
+        pIdx = Object.keys(game.results).indexOf(name)
+      }
 
       // 국별 상세 정보 분석
       if (game.records && !Array.isArray(game.records) && game.records.riichi) {

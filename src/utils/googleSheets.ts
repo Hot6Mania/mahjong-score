@@ -834,7 +834,7 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
 export const fetchMemberStats = async (spreadsheetId: string, silent = false): Promise<any[]> => {
   if (!spreadsheetId) return [];
   try {
-    const range = "'전체 멤버별 통계'!A2:AG100";
+    const range = "'전체 멤버별 통계'!A2:AK100";
     const response = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId,
       range
@@ -863,6 +863,10 @@ export const fetchMemberStats = async (spreadsheetId: string, silent = false): P
           avgLoseScore: cleanVal(10),
           roundSuji: cleanVal(11),
           netScore: cleanVal(32),
+          r1: cleanVal(33, true),
+          r2: cleanVal(34, true),
+          r3: cleanVal(35, true),
+          r4: cleanVal(36, true),
           winEfficiency: cleanVal(12),
           loseLoss: cleanVal(13),
           netEfficiency: cleanVal(14),
