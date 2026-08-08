@@ -1063,7 +1063,7 @@ const stats = computed(() => {
               @mouseleave="hoveredRank = null"
             >
               <div class="rank_card_header">
-                <span class="rank_badge badge_1">🥇 1위</span>
+                <span class="rank_badge badge_1">1위</span>
                 <span class="rank_count_val">{{ rankStats.r1 }}회</span>
                 <span class="rank_percent_val text_rank_1">{{ rankStats.p1.toFixed(1) }}%</span>
               </div>
@@ -1079,7 +1079,7 @@ const stats = computed(() => {
               @mouseleave="hoveredRank = null"
             >
               <div class="rank_card_header">
-                <span class="rank_badge badge_2">🥈 2위</span>
+                <span class="rank_badge badge_2">2위</span>
                 <span class="rank_count_val">{{ rankStats.r2 }}회</span>
                 <span class="rank_percent_val text_rank_2">{{ rankStats.p2.toFixed(1) }}%</span>
               </div>
@@ -1095,7 +1095,7 @@ const stats = computed(() => {
               @mouseleave="hoveredRank = null"
             >
               <div class="rank_card_header">
-                <span class="rank_badge badge_3">🥉 3위</span>
+                <span class="rank_badge badge_3">3위</span>
                 <span class="rank_count_val">{{ rankStats.r3 }}회</span>
                 <span class="rank_percent_val text_rank_3">{{ rankStats.p3.toFixed(1) }}%</span>
               </div>
