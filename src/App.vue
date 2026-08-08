@@ -498,84 +498,7 @@ const toggleFullScreen = () => {
   }
 }
 
-let touchStartX = 0;
-let touchStartY = 0;
-let isBtnDragging = false;
 
-/** 모바일 주소창 숨기기 (터치 드래그 연동, iOS 사파리 & Android 물리 스크롤/Fullscreen) */
-const triggerAddressBarHide = () => {
-  // 1. Android Chrome, Samsung Internet 등 Fullscreen API 지원 브라우저 지원
-  const doc = document as any;
-  const el = document.documentElement as any;
-  const reqFS = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
-  
-  if (reqFS && !doc.fullscreenElement && !doc.webkitFullscreenElement) {
-    try {
-      const p = reqFS.call(el);
-      if (p && p.catch) p.catch(() => {});
-    } catch (e) {}
-  }
-
-  // 2. iOS 사파리 및 WebKit 엔진 물리적 뷰포트 스크롤 트리거
-  document.body.style.height = '3000px';
-  document.body.style.minHeight = '3000px';
-
-  let step = 0;
-  const stepScroll = () => {
-    window.scrollBy(0, 30);
-    document.documentElement.scrollTop += 30;
-    document.body.scrollTop += 30;
-    step++;
-    if (step < 12) {
-      requestAnimationFrame(stepScroll);
-    }
-  };
-  stepScroll();
-
-  window.scrollTo(0, 400);
-};
-
-const onBtnTouchStart = (e: TouchEvent) => {
-  if (e.touches && e.touches.length > 0) {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
-    isBtnDragging = true;
-  }
-  triggerAddressBarHide();
-};
-
-const onBtnTouchMove = (e: TouchEvent) => {
-  if (!isBtnDragging || !e.touches || e.touches.length === 0) return;
-
-  // iOS 사파리 터치 제스처 취소 방지
-  if (e.cancelable) {
-    e.preventDefault();
-  }
-
-  const currentX = e.touches[0].clientX;
-  const currentY = e.touches[0].clientY;
-  
-  const deltaX = touchStartX - currentX;
-  const deltaY = touchStartY - currentY;
-  
-  // 회전된 화면(Portrait 모드) 및 가로 화면 모두 지원하도록 축 자동 판별
-  const dragVal = Math.abs(deltaY) > Math.abs(deltaX) ? deltaY : deltaX;
-  
-  if (Math.abs(dragVal) > 1) {
-    const amount = dragVal * 3;
-    window.scrollBy(0, amount);
-    document.documentElement.scrollTop += amount;
-    document.body.scrollTop += amount;
-
-    touchStartX = currentX;
-    touchStartY = currentY;
-  }
-};
-
-const onBtnTouchEnd = () => {
-  isBtnDragging = false;
-  triggerAddressBarHide();
-};
 
 /**언어 변경*/
 const changeLocale = () => {
@@ -3032,21 +2955,7 @@ const addBackupGameToCurrent = (game: any) => {
     </div>
   </Transition>
 
-  <!-- 화면 좌하단 원형 주소창 숨김 미니 버튼 (터치 드래그 및 물리 스크롤 연동) -->
-  <button 
-    class="btn-hide-addressbar" 
-    @touchstart.stop="onBtnTouchStart"
-    @touchmove.stop="onBtnTouchMove"
-    @touchend.stop="onBtnTouchEnd"
-    @click.stop="triggerAddressBarHide" 
-    title="주소창 숨기기" 
-    aria-label="주소창 숨기기"
-  >
-    <svg class="btn-hide-addressbar-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-      <path d="M12 16L6 10H18L12 16Z"/>
-      <path d="M4 4H20V6H4V4Z"/>
-    </svg>
-  </button>
+
 
   <!-- 각 방향별 player 컴포넌트 생성 -->
   <main role="main">
@@ -3563,50 +3472,5 @@ const addBackupGameToCurrent = (game: any) => {
   filter: brightness(1.08);
 }
 
-/* 화면 좌하단 주소창 숨김 원형 미니 버튼 */
-.btn-hide-addressbar {
-  position: fixed;
-  bottom: 12px;
-  left: 12px;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--text-color, #ffffff);
-  background: var(--card-bg-color, rgba(20, 20, 20, 0.75));
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
-  border-radius: 50%;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  cursor: pointer;
-  opacity: 0.75;
-  transition: opacity 0.2s ease, transform 0.15s ease, background-color 0.2s ease, box-shadow 0.2s ease;
-  user-select: none;
-  -webkit-user-select: none;
-}
 
-.btn-hide-addressbar:hover {
-  opacity: 1;
-  transform: scale(1.08);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  background: var(--bg-stripe-dark, rgba(40, 40, 40, 0.85));
-}
-
-.btn-hide-addressbar:active {
-  transform: scale(0.92);
-  opacity: 0.95;
-}
-
-.btn-hide-addressbar-icon {
-  flex-shrink: 0;
-  transition: transform 0.2s ease;
-}
-
-.btn-hide-addressbar:hover .btn-hide-addressbar-icon {
-  transform: translateY(1px);
-}
 </style>
