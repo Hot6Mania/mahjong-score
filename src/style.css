@@ -61,10 +61,13 @@ html.dark {
   scrollbar-width: none;
 }
 html{
-  overflow: hidden;
-  overscroll-behavior: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: auto;
 }
 body {
+  min-height: calc(100vh + 200px);
+  min-height: calc(100dvh + 200px);
   background-color: var(--bg-color);
   color: var(--text-color);
   transition: background-color 0.3s ease, color 0.3s ease;
@@ -138,16 +141,22 @@ input[type='number']::-webkit-outer-spin-button, input[type='number']::-webkit-i
   scroll-behavior: auto !important;
 }
 
-/* 가로모드 모바일 브라우저 주소창 숨김 유도용 전체 스크롤 활성화 (최소한의 1px 확보) */
+/* 가로모드 모바일 브라우저 주소창 숨김 유도용 전체 스크롤 활성화 */
 @media (orientation: landscape) {
   html {
     overflow-y: scroll !important;
     overscroll-behavior: auto !important;
   }
   body {
-    height: calc(100vh + 1px) !important;
+    height: calc(100vh + 200px) !important;
+    height: calc(100dvh + 200px) !important;
   }
   .background {
-    height: calc(100vh + 1px) !important;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
   }
 }

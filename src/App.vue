@@ -498,6 +498,28 @@ const toggleFullScreen = () => {
   }
 }
 
+/**모바일 주소창 숨기기 (스크롤 유도)*/
+const hideAddressBar = () => {
+  window.scrollTo({
+    top: 150,
+    behavior: 'smooth'
+  });
+  document.documentElement.scrollTop = 150;
+  document.body.scrollTop = 150;
+
+  setTimeout(() => {
+    window.scrollTo(0, 200);
+  }, 120);
+
+  if (document.fullscreenEnabled && !document.fullscreenElement) {
+    try {
+      toggleFullScreen();
+    } catch (e) {
+      // ignore
+    }
+  }
+}
+
 /**언어 변경*/
 const changeLocale = () => {
   const targetLanguage = 'ko'; // 한국어로 고정
@@ -2949,6 +2971,20 @@ const addBackupGameToCurrent = (game: any) => {
       {{ toast.message }}
     </div>
   </Transition>
+
+  <!-- 화면 좌하단 원형 주소창 숨김 미니 버튼 -->
+  <button 
+    class="btn-hide-addressbar" 
+    @click.stop="hideAddressBar" 
+    title="주소창 숨기기" 
+    aria-label="주소창 숨기기"
+  >
+    <svg class="btn-hide-addressbar-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+      <path d="M12 16L6 10H18L12 16Z"/>
+      <path d="M4 4H20V6H4V4Z"/>
+    </svg>
+  </button>
+
   <!-- 각 방향별 player 컴포넌트 생성 -->
   <main role="main">
     <Player v-for="(_, i) in players"
@@ -3462,5 +3498,52 @@ const addBackupGameToCurrent = (game: any) => {
 }
 .btn-confirm-ok:hover {
   filter: brightness(1.08);
+}
+
+/* 화면 좌하단 주소창 숨김 원형 미니 버튼 */
+.btn-hide-addressbar {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--text-color, #ffffff);
+  background: var(--card-bg-color, rgba(20, 20, 20, 0.75));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
+  border-radius: 50%;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.2s ease, transform 0.15s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.btn-hide-addressbar:hover {
+  opacity: 1;
+  transform: scale(1.08);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  background: var(--bg-stripe-dark, rgba(40, 40, 40, 0.85));
+}
+
+.btn-hide-addressbar:active {
+  transform: scale(0.92);
+  opacity: 0.95;
+}
+
+.btn-hide-addressbar-icon {
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.btn-hide-addressbar:hover .btn-hide-addressbar-icon {
+  transform: translateY(1px);
 }
 </style>
