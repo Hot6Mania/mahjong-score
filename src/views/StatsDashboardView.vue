@@ -72,7 +72,17 @@ const showToast = (msg: string) => {
 // ==========================================
 const allStats = ref<MemberStatItem[]>([]);
 const searchQuery = ref('');
-type SortKey = 'totalUma' | 'avgUma' | 'avgRank' | 'totalGames' | 'top2Rate';
+type SortKey =
+  | 'totalUma'
+  | 'avgUma'
+  | 'avgRank'
+  | 'totalGames'
+  | 'top2Rate'
+  | 'rankDist'
+  | 'rank1Rate'
+  | 'rank2Rate'
+  | 'rank3Rate'
+  | 'rank4Rate';
 const sortKey = ref<SortKey>('totalUma');
 const sortOrder = ref<'asc' | 'desc'>('desc');
 
@@ -102,11 +112,53 @@ const dismissNotice = () => {
   localStorage.setItem('hide_stats_modal_notice_until', String(Date.now() + 7 * 24 * 60 * 60 * 1000));
 };
 
+const getRankRate = (item: MemberStatItem, rank: 1 | 2 | 3 | 4): number => {
+  if (!item.totalGames || item.totalGames <= 0) return 0;
+  if (rank === 1) return (item.rank1Count || 0) / item.totalGames;
+  if (rank === 2) return (item.rank2Count || 0) / item.totalGames;
+  if (rank === 3) return (item.rank3Count || 0) / item.totalGames;
+  return (item.rank4Count || 0) / item.totalGames;
+};
+
+// 1>2>3>4 다단계 순위비율 정렬 비교기 (primaryRank를 우선 비교 후 나머지 순차 비교)
+const compareRankDist = (a: MemberStatItem, b: MemberStatItem, primaryRank: 1 | 2 | 3 | 4 = 1): number => {
+  const ranksOrder = [primaryRank, 1, 2, 3, 4].filter((v, i, self) => self.indexOf(v) === i) as (1 | 2 | 3 | 4)[];
+  for (const r of ranksOrder) {
+    const rateA = getRankRate(a, r);
+    const rateB = getRankRate(b, r);
+    if (Math.abs(rateA - rateB) > 1e-6) {
+      return rateA > rateB ? 1 : -1;
+    }
+  }
+  // 비율 모두 동률 시 누적 우마 및 대국수 비교
+  if (Math.abs(a.totalUma - b.totalUma) > 1e-4) {
+    return a.totalUma > b.totalUma ? 1 : -1;
+  }
+  return a.totalGames > b.totalGames ? 1 : -1;
+};
+
 const filteredStats = computed(() => {
   // 1) 전체 리스트를 현재 정렬 기준에 따라 정렬
   const sorted = [...allStats.value].sort((a, b) => {
-    let valA = a[sortKey.value];
-    let valB = b[sortKey.value];
+    if (sortKey.value === 'rankDist' || sortKey.value === 'rank1Rate') {
+      const diff = compareRankDist(a, b, 1);
+      return sortOrder.value === 'desc' ? -diff : diff;
+    }
+    if (sortKey.value === 'rank2Rate') {
+      const diff = compareRankDist(a, b, 2);
+      return sortOrder.value === 'desc' ? -diff : diff;
+    }
+    if (sortKey.value === 'rank3Rate') {
+      const diff = compareRankDist(a, b, 3);
+      return sortOrder.value === 'desc' ? -diff : diff;
+    }
+    if (sortKey.value === 'rank4Rate') {
+      const diff = compareRankDist(a, b, 4);
+      return sortOrder.value === 'desc' ? -diff : diff;
+    }
+
+    const valA = a[sortKey.value] as number;
+    const valB = b[sortKey.value] as number;
 
     if (sortOrder.value === 'asc') {
       return valA > valB ? 1 : -1;
@@ -702,41 +754,53 @@ const getRankClass = (rank: number) => {
               <option value="avgRank">평균 순위순</option>
               <option value="totalGames">대국수순</option>
               <option value="top2Rate">연대율순</option>
+              <option value="rankDist">순위 비율순 (1>2>3>4)</option>
             </select>
           </div>
         </div>
 
-        <!-- 랭킹 테이블 (화료율/방총율 등 삭제, 평균우마 추가, 순위분포 옆 비율 표시) -->
+        <!-- 랭킹 테이블 (화료율/방총율 등 삭제, 평균우마 추가, 순위분포 1~4등 독립 열 구성) -->
         <div class="table-container">
           <table class="stats-table">
             <thead>
               <tr>
-                <th class="col-rank">순위</th>
-                <th class="col-name">이름</th>
-                <th class="col-sortable" @click="handleSort('totalUma')">
+                <th rowspan="2" class="col-rank">순위</th>
+                <th rowspan="2" class="col-name">이름</th>
+                <th rowspan="2" class="col-sortable" @click="handleSort('totalUma')">
                   누적 우마
                   <span class="sort-mark" v-if="sortKey === 'totalUma'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
-                <th class="col-sortable" @click="handleSort('avgUma')">
+                <th rowspan="2" class="col-sortable" @click="handleSort('avgUma')">
                   평균 우마
                   <span class="sort-mark" v-if="sortKey === 'avgUma'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
-                <th class="col-sortable" @click="handleSort('totalGames')">대국수</th>
-                <th class="col-sortable" @click="handleSort('top2Rate')">연대율</th>
-                <th class="col-sortable" @click="handleSort('avgRank')">
+                <th rowspan="2" class="col-sortable" @click="handleSort('totalGames')">대국수</th>
+                <th rowspan="2" class="col-sortable" @click="handleSort('top2Rate')">연대율</th>
+                <th rowspan="2" class="col-sortable" @click="handleSort('avgRank')">
                   평균 순위
                   <span class="sort-mark" v-if="sortKey === 'avgRank'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
                 </th>
-                <th class="col-ranks-dist-th">
-                  <div class="dist-th-wrapper">
-                    <span class="dist-th-title">순위 분포 &amp; 비율</span>
-                    <div class="dist-badge-wrapper dist-th-badges">
-                      <div class="dist-badge r1 dist-header-badge" title="1위 분포">1등</div>
-                      <div class="dist-badge r2 dist-header-badge" title="2위 분포">2등</div>
-                      <div class="dist-badge r3 dist-header-badge" title="3위 분포">3등</div>
-                      <div class="dist-badge r4 dist-header-badge" title="4위 분포">4등</div>
-                    </div>
-                  </div>
+                <th colspan="4" class="col-ranks-dist-group-th col-sortable" @click="handleSort('rankDist')" title="1>2>3>4 순위비율 우선순위 정렬">
+                  순위 분포 &amp; 비율
+                  <span class="sort-mark" v-if="sortKey === 'rankDist'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
+                </th>
+              </tr>
+              <tr class="header-sub-row">
+                <th class="col-sortable col-rank-item-th" @click="handleSort('rankDist')" title="1위 비율순 정렬 (동률 시 2>3>4위)">
+                  <div class="dist-badge r1 dist-header-badge">1등</div>
+                  <span class="sort-mark" v-if="sortKey === 'rankDist' || sortKey === 'rank1Rate'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
+                </th>
+                <th class="col-sortable col-rank-item-th" @click="handleSort('rank2Rate')" title="2위 비율순 정렬">
+                  <div class="dist-badge r2 dist-header-badge">2등</div>
+                  <span class="sort-mark" v-if="sortKey === 'rank2Rate'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
+                </th>
+                <th class="col-sortable col-rank-item-th" @click="handleSort('rank3Rate')" title="3위 비율순 정렬">
+                  <div class="dist-badge r3 dist-header-badge">3등</div>
+                  <span class="sort-mark" v-if="sortKey === 'rank3Rate'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
+                </th>
+                <th class="col-sortable col-rank-item-th" @click="handleSort('rank4Rate')" title="4위 비율순 정렬">
+                  <div class="dist-badge r4 dist-header-badge">4등</div>
+                  <span class="sort-mark" v-if="sortKey === 'rank4Rate'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
               </tr>
             </thead>
@@ -763,25 +827,29 @@ const getRankClass = (rank: number) => {
                 <td>{{ member.totalGames }}전</td>
                 <td>{{ member.top2Rate.toFixed(1) }}%</td>
                 <td>{{ member.avgRank.toFixed(2) }}위</td>
-                <!-- 순위 분포 뱃지 및 비율 작게 표시 -->
-                <td class="col-ranks-dist">
-                  <div class="dist-badge-wrapper">
-                    <div class="dist-badge r1" :title="'1위 ' + member.rank1Count + '회'">
-                      <span class="dist-cnt">{{ member.rank1Count }}</span>
-                      <span class="dist-pct">({{ getDistPct(member.rank1Count, member.totalGames) }}%)</span>
-                    </div>
-                    <div class="dist-badge r2" :title="'2위 ' + member.rank2Count + '회'">
-                      <span class="dist-cnt">{{ member.rank2Count }}</span>
-                      <span class="dist-pct">({{ getDistPct(member.rank2Count, member.totalGames) }}%)</span>
-                    </div>
-                    <div class="dist-badge r3" :title="'3위 ' + member.rank3Count + '회'">
-                      <span class="dist-cnt">{{ member.rank3Count }}</span>
-                      <span class="dist-pct">({{ getDistPct(member.rank3Count, member.totalGames) }}%)</span>
-                    </div>
-                    <div class="dist-badge r4" :title="'4위 ' + member.rank4Count + '회'">
-                      <span class="dist-cnt">{{ member.rank4Count }}</span>
-                      <span class="dist-pct">({{ getDistPct(member.rank4Count, member.totalGames) }}%)</span>
-                    </div>
+                <!-- 1등, 2등, 3등, 4등 독립 열 -->
+                <td class="col-rank-item">
+                  <div class="dist-badge r1" :title="'1위 ' + member.rank1Count + '회'">
+                    <span class="dist-cnt">{{ member.rank1Count }}</span>
+                    <span class="dist-pct">({{ getDistPct(member.rank1Count, member.totalGames) }}%)</span>
+                  </div>
+                </td>
+                <td class="col-rank-item">
+                  <div class="dist-badge r2" :title="'2위 ' + member.rank2Count + '회'">
+                    <span class="dist-cnt">{{ member.rank2Count }}</span>
+                    <span class="dist-pct">({{ getDistPct(member.rank2Count, member.totalGames) }}%)</span>
+                  </div>
+                </td>
+                <td class="col-rank-item">
+                  <div class="dist-badge r3" :title="'3위 ' + member.rank3Count + '회'">
+                    <span class="dist-cnt">{{ member.rank3Count }}</span>
+                    <span class="dist-pct">({{ getDistPct(member.rank3Count, member.totalGames) }}%)</span>
+                  </div>
+                </td>
+                <td class="col-rank-item">
+                  <div class="dist-badge r4" :title="'4위 ' + member.rank4Count + '회'">
+                    <span class="dist-cnt">{{ member.rank4Count }}</span>
+                    <span class="dist-pct">({{ getDistPct(member.rank4Count, member.totalGames) }}%)</span>
                   </div>
                 </td>
               </tr>
@@ -2004,29 +2072,36 @@ const getRankClass = (rank: number) => {
 .dist-badge.r3 { background: rgba(245, 158, 11, 0.15); color: #d97706; }
 .dist-badge.r4 { background: rgba(239, 68, 68, 0.15); color: #dc2626; }
 
-.col-ranks-dist-th {
+.col-ranks-dist-group-th {
   vertical-align: middle;
   padding: 6px 8px;
-}
-.dist-th-wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-.dist-th-title {
   font-size: 12px;
   font-weight: bold;
+  border-bottom: 1px solid var(--border-color, #eee) !important;
 }
-.dist-th-badges {
-  display: inline-flex;
-  gap: 5px;
+.header-sub-row th {
+  padding: 4px 6px;
+  border-bottom: 2px solid var(--border-color, #eee);
+  font-size: 11px;
+}
+.col-rank-item-th {
+  min-width: 68px;
+  text-align: center;
+  vertical-align: middle;
+}
+.col-rank-item {
+  text-align: center;
+  vertical-align: middle;
+  padding: 6px 4px;
 }
 .dist-header-badge {
   padding: 2px 7px;
   font-size: 11px;
   font-weight: bold;
   border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* ============================================== */
@@ -2097,6 +2172,7 @@ const getRankClass = (rank: number) => {
   position: sticky;
   left: 0;
   background-color: var(--card-bg-color, #fff);
+  opacity: 1;
   z-index: 10;
   border-right: 2px solid var(--border-color, #eee);
   min-width: 90px;
@@ -2108,6 +2184,7 @@ const getRankClass = (rank: number) => {
   position: sticky;
   left: 90px;
   background-color: var(--card-bg-color, #fff);
+  opacity: 1;
   z-index: 10;
   border-right: 2px solid var(--border-color, #eee);
   min-width: 75px;
@@ -2118,6 +2195,7 @@ const getRankClass = (rank: number) => {
   position: sticky;
   right: 0;
   background-color: var(--card-bg-color, #fff);
+  opacity: 1;
   z-index: 10;
   border-left: 2px solid var(--border-color, #eee);
   min-width: 90px;
@@ -2130,10 +2208,23 @@ const getRankClass = (rank: number) => {
 .matrix-table thead th.matrix-col-sticky-name-right {
   z-index: 25;
 }
+.matrix-player-row:hover td {
+  background-color: #f1f5f9;
+}
 .matrix-player-row:hover .matrix-col-sticky-name,
 .matrix-player-row:hover .matrix-col-sticky-total,
 .matrix-player-row:hover .matrix-col-sticky-name-right {
-  background-color: rgba(59, 130, 246, 0.05);
+  background-color: #f1f5f9 !important;
+  opacity: 1 !important;
+}
+html.dark .matrix-player-row:hover td {
+  background-color: #1e293b;
+}
+html.dark .matrix-player-row:hover .matrix-col-sticky-name,
+html.dark .matrix-player-row:hover .matrix-col-sticky-total,
+html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
+  background-color: #1e293b !important;
+  opacity: 1 !important;
 }
 .matrix-table tfoot th {
   position: sticky;
