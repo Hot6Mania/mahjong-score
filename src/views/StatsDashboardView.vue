@@ -87,6 +87,21 @@ const displayPlayerStats = computed<MemberStatItem>(() => {
 const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
 const hoveredRank = ref<number | null>(null);
 
+// 모달 상단 안내 배너 가시성 상태 (7일간 숨김)
+const isNoticeVisible = ref(true);
+const checkNoticeVisibility = () => {
+  const hideUntil = localStorage.getItem('hide_stats_modal_notice_until');
+  if (hideUntil && Number(hideUntil) > Date.now()) {
+    isNoticeVisible.value = false;
+  } else {
+    isNoticeVisible.value = true;
+  }
+};
+const dismissNotice = () => {
+  isNoticeVisible.value = false;
+  localStorage.setItem('hide_stats_modal_notice_until', String(Date.now() + 7 * 24 * 60 * 60 * 1000));
+};
+
 const filteredStats = computed(() => {
   // 1) 전체 리스트를 현재 정렬 기준에 따라 정렬
   const sorted = [...allStats.value].sort((a, b) => {
@@ -397,6 +412,7 @@ const loadAllData = async () => {
 
 onMounted(() => {
   loadAllData();
+  checkNoticeVisibility();
 });
 
 // 링크 복사
@@ -983,9 +999,12 @@ const getRankClass = (rank: number) => {
             </div>
 
             <!-- 세부 스탯 안내 문구 -->
-            <div class="modal_notice_text">
-              ※ 제9회부터의 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.<br />
-              ※ 종합 대국 수(세부 스탯 집계 대국 수) 형식으로 표기됩니다.
+            <div v-if="isNoticeVisible" class="modal_notice_text">
+              <div class="notice_text_content">
+                ※ 제9회부터의 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.<br />
+                ※ 종합 대국 수(세부 스탯 집계 대국 수) 형식으로 표기됩니다.
+              </div>
+              <button class="notice_close_btn" @click="dismissNotice" title="당분간 숨기기">✕</button>
             </div>
 
             <!-- 4개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 -->
@@ -2415,14 +2434,36 @@ html.dark .container_stats_modal {
   border: 1px solid var(--border-color, #333);
 }
 .modal_notice_text {
-  font-size: 11.5px;
+  position: relative;
+  font-size: 10px;
   color: var(--text-dimmed, #64748b);
-  background: rgba(0, 0, 0, 0.03);
+  background: rgba(0, 0, 0, 0.025);
   border: 1px dashed var(--border-color, #cbd5e1);
-  padding: 7px 12px;
-  border-radius: 6px;
-  margin-bottom: 12px;
-  line-height: 1.45;
+  padding: 5px 22px 5px 8px;
+  border-radius: 5px;
+  margin-bottom: 8px;
+  line-height: 1.35;
+}
+.notice_text_content {
+  word-break: keep-all;
+}
+.notice_close_btn {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  background: none;
+  border: none;
+  font-size: 10px;
+  color: var(--text-dimmed, #94a3b8);
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: 3px;
+  transition: color 0.15s, background 0.15s;
+}
+.notice_close_btn:hover {
+  color: var(--text-color, #333);
+  background: rgba(0, 0, 0, 0.06);
 }
 .player_selector_container {
   display: flex;
