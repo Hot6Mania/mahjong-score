@@ -1,4 +1,5 @@
 let tokenClient: any = null;
+let codeClient: any = null;
 let accessToken: string | null = null;
 
 /**
@@ -35,7 +36,7 @@ export const initGapi = (): Promise<void> => {
 };
 
 /**
- * Google Identity Services (GIS) Token Client를 초기화합니다.
+ * Google Identity Services (GIS) Token Client를 초기화합니다 (클라이언트 단독 모드).
  */
 export const initGis = (clientId: string, onTokenCallback: (token: string) => void): void => {
   if (typeof window.google === 'undefined') {
@@ -59,14 +60,120 @@ export const initGis = (clientId: string, onTokenCallback: (token: string) => vo
 };
 
 /**
- * 로그인 팝업을 띄우고 Access Token을 취득합니다.
+ * Google Identity Services (GIS) Code Client를 초기화합니다 (Cloudflare Worker 프록시 모드).
+ * 오프라인 접근(Refresh Token)을 지원하여 백그라운드 무인 갱신을 가능하게 합니다.
+ */
+export const initGisCodeClient = (
+  clientId: string,
+  workerUrl: string,
+  onTokensReceived: (data: { access_token: string; expires_in?: number; refresh_cipher?: string }) => void,
+  onError?: (err: any) => void
+): void => {
+  if (typeof window.google === 'undefined') {
+    console.error('Google Identity SDK not loaded yet.');
+    return;
+  }
+  codeClient = window.google.accounts.oauth2.initCodeClient({
+    client_id: clientId,
+    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    ux_mode: 'popup',
+    callback: async (response: any) => {
+      if (response.error !== undefined) {
+        console.error('Code Client Error:', response);
+        if (onError) onError(response);
+        return;
+      }
+      const code = response.code;
+      try {
+        const cleanWorkerUrl = workerUrl.replace(/\/$/, '');
+        const res = await fetch(`${cleanWorkerUrl}/api/auth/exchange`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || 'Worker token exchange failed');
+        }
+        accessToken = data.access_token;
+        if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+          window.gapi.client.setToken({ access_token: accessToken });
+        }
+        localStorage.setItem("google_is_logged_in", "true");
+        if (data.refresh_cipher) {
+          localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
+        }
+        onTokensReceived(data);
+      } catch (err) {
+        console.error("Worker 토큰 교환 오류:", err);
+        if (onError) onError(err);
+      }
+    },
+  });
+};
+
+/**
+ * 로그인 팝업을 띄우고 Access Token을 취득합니다 (Token Client 방식).
  */
 export const loginGoogle = (): void => {
   if (!tokenClient) {
     alert('구글 로그인 클라이언트가 초기화되지 않았습니다. Client ID 설정을 확인해 주세요.');
     return;
   }
-  tokenClient.requestAccessToken({ prompt: 'consent' });
+  tokenClient.requestAccessToken({ prompt: '' });
+};
+
+/**
+ * 로그인 팝업을 띄우고 Authorization Code를 취득합니다 (Code Client 방식).
+ */
+export const loginGoogleWithCode = (): void => {
+  if (!codeClient) {
+    alert('구글 로그인 클라이언트가 초기화되지 않았습니다. Client ID 및 Worker 설정을 확인해 주세요.');
+    return;
+  }
+  codeClient.requestCode();
+};
+
+/**
+ * Cloudflare Worker를 통해 암호화된 Refresh Token으로 새 Access Token을 발급받습니다.
+ */
+export const refreshAccessTokenViaWorker = async (
+  workerUrl: string,
+  cipher: string
+): Promise<{ access_token: string; expires_in: number } | null> => {
+  if (!workerUrl || !cipher) return null;
+  try {
+    const cleanWorkerUrl = workerUrl.replace(/\/$/, '');
+    const res = await fetch(`${cleanWorkerUrl}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_cipher: cipher }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error || 'Worker refresh failed');
+    }
+    if (data.access_token) {
+      accessToken = data.access_token;
+      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+        window.gapi.client.setToken({ access_token: data.access_token });
+      }
+      return data;
+    }
+  } catch (err) {
+    console.error("Worker 백그라운드 토큰 갱신 에러:", err);
+  }
+  return null;
+};
+
+/**
+ * GAPI 메모리에 Access Token을 수동으로 주입합니다.
+ */
+export const setGapiAccessToken = (token: string): void => {
+  accessToken = token;
+  if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+    window.gapi.client.setToken({ access_token: token });
+  }
 };
 
 /**
@@ -74,12 +181,19 @@ export const loginGoogle = (): void => {
  */
 export const logoutGoogle = (): void => {
   if (accessToken) {
-    window.google.accounts.oauth2.revoke(accessToken, () => {
-      console.log('Access token revoked');
-    });
+    try {
+      window.google?.accounts?.oauth2?.revoke(accessToken, () => {
+        console.log('Access token revoked');
+      });
+    } catch (e) {
+      console.warn("Revoke token error:", e);
+    }
     accessToken = null;
-    window.gapi.client.setToken(null);
+    if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+      window.gapi.client.setToken(null);
+    }
     localStorage.removeItem("google_is_logged_in");
+    localStorage.removeItem("google_refresh_cipher");
   }
 };
 

@@ -1,0 +1,12 @@
+name = "mahjong-auth-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# Cloudflare Workers 무료 플랜 설정 (평생 일 10만 건 무료)
+#
+# 환경 변수 및 시크릿 설정 방법:
+# npx wrangler secret put GOOGLE_CLIENT_ID
+# npx wrangler secret put GOOGLE_CLIENT_SECRET
+# npx wrangler secret put ENCRYPTION_KEY
+#
+# 또는 Cloudflare 대시보드(dash.cloudflare.com) -> Workers -> Settings -> Variables 에서 직접 추가

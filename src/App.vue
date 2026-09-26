@@ -6,7 +6,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, loginGoogle, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, tryAutoLogin } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker } from "@/utils/googleSheets"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
@@ -136,9 +136,11 @@ const modalInfo = reactive({ // 모달창
   type: "", // 종류
   status: "", // 라운드 형태 - 론 쯔모 일반유국 특수유국
 })
+const DEFAULT_WORKER_URL = import.meta.env.VITE_GOOGLE_AUTH_WORKER_URL || "https://mahjong-score.cnabe.workers.dev";
 const googleInfo = reactive<GoogleInfo>({ // 구글 연동 정보
   clientId: localStorage.getItem("google_client_id") || "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com", // 구글 클라이언트 ID
   spreadsheetId: localStorage.getItem("google_spreadsheet_id") || "", // 구글 스프레드시트 ID
+  workerUrl: DEFAULT_WORKER_URL, // Cloudflare Worker 인증 프록시 URL (시스템 상수로 고정)
   isLoggedIn: false, // 로그인 여부
   syncMode: (localStorage.getItem("sync_mode") as 'local' | 'google') || 'local', // 연동 모드 (기본값 로컬)
   memberList: [], // 멤버 전체 목록
@@ -206,12 +208,90 @@ const copyErrorMessage = () => {
   triggerToast("오류 메시지가 클립보드에 복사되었습니다.");
 }
 
+// 백그라운드 토큰 만료 전(10분 전) 무인 자동 갱신 타이머
+let autoRefreshTimer: any = null;
+const setupAutoRefreshTimer = () => {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(async () => {
+    if (!googleInfo.isLoggedIn || !googleInfo.workerUrl) return;
+    const cipher = localStorage.getItem("google_refresh_cipher");
+    if (!cipher) return;
+    const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
+    // 만료 10분 전(또는 이미 지난 경우) 백그라운드 갱신
+    if (expiresAt > 0 && Date.now() > expiresAt - 10 * 60 * 1000) {
+      console.log("토큰 만료 임박(10분 전): Worker를 통해 백그라운드 무인 갱신 시도...");
+      const res = await refreshAccessTokenViaWorker(googleInfo.workerUrl, cipher);
+      if (res && res.access_token) {
+        localStorage.setItem("google_access_token", res.access_token);
+        const newExpiresAt = Date.now() + (res.expires_in || 3600) * 1000;
+        localStorage.setItem("google_token_expires_at", newExpiresAt.toString());
+        console.log("Worker를 통한 구글 토큰 백그라운드 자동 갱신 완료.");
+      }
+    }
+  }, 60 * 1000); // 1분마다 주기적 체크
+};
+
 // 구글 로그인 세션 자동 복원 (Keep Logged In)
 const restoreGoogleSessionIfValid = async () => {
   const keep = localStorage.getItem("keep_logged_in") === "true";
   const token = localStorage.getItem("google_access_token");
   const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
 
+  // 1. Worker 프록시 + Refresh Cipher가 있는 경우
+  if (keep && googleInfo.workerUrl && localStorage.getItem("google_refresh_cipher")) {
+    const cipher = localStorage.getItem("google_refresh_cipher")!;
+    // 기존 캐시 토큰이 아직 유효하면 즉시 재사용
+    if (token && Date.now() < expiresAt) {
+      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+        window.gapi.client.setToken({ access_token: token });
+      }
+      googleInfo.isLoggedIn = true;
+      const savedSyncMode = localStorage.getItem("sync_mode");
+      if (savedSyncMode === "google") {
+        googleInfo.syncMode = "google";
+      }
+      if (googleInfo.spreadsheetId) {
+        await loadMemberList();
+        try {
+          const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+          googleMemberStats.value = stats;
+        } catch (e) {
+          console.warn("세션 복원 중 통계 로드 실패:", e);
+        }
+      }
+      setupAutoRefreshTimer();
+      console.log("구글 세션(Worker 연동 캐시) 복원 완료.");
+      return;
+    }
+
+    // 캐시 토큰이 없거나 만료된 경우 Worker를 통해 백그라운드 즉시 갱신
+    console.log("Worker를 통해 백그라운드 토큰 자동 복원 시도...");
+    const refreshRes = await refreshAccessTokenViaWorker(googleInfo.workerUrl, cipher);
+    if (refreshRes && refreshRes.access_token) {
+      localStorage.setItem("google_access_token", refreshRes.access_token);
+      const newExpiresAt = Date.now() + (refreshRes.expires_in || 3600) * 1000;
+      localStorage.setItem("google_token_expires_at", newExpiresAt.toString());
+      googleInfo.isLoggedIn = true;
+      const savedSyncMode = localStorage.getItem("sync_mode");
+      if (savedSyncMode === "google") {
+        googleInfo.syncMode = "google";
+      }
+      if (googleInfo.spreadsheetId) {
+        await loadMemberList();
+        try {
+          const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+          googleMemberStats.value = stats;
+        } catch (e) {
+          console.warn("세션 복원 중 통계 로드 실패:", e);
+        }
+      }
+      setupAutoRefreshTimer();
+      console.log("Worker를 통한 구글 세션 백그라운드 자동 복원 완료.");
+      return;
+    }
+  }
+
+  // 2. 일반 클라이언트 단독 모드 (토큰 유효기간 내일 때 복원)
   if (keep && token && Date.now() < expiresAt) {
     try {
       if (typeof window.gapi !== 'undefined' && window.gapi.client) {
@@ -238,17 +318,6 @@ const restoreGoogleSessionIfValid = async () => {
       console.warn("구글 자동 로그인 세션 복원 실패:", err);
       localStorage.removeItem("google_access_token");
       localStorage.removeItem("google_token_expires_at");
-    }
-  } else if (keep && localStorage.getItem("google_is_logged_in") === "true") {
-    // 토큰이 만료되었지만 기존 로그인 이력이 있는 경우, 백그라운드 무인 갱신 시도
-    console.log("로컬 캐시 토큰 만료됨. 백그라운드 무인 로그인 복원 시도...");
-    try {
-      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-        window.gapi.client.setToken(null); // 만료된 토큰 청소
-      }
-      tryAutoLogin(onGoogleTokenReceived);
-    } catch (e) {
-      console.warn("구글 자동 로그인 세션 무인 복원 실패:", e);
     }
   }
 }
@@ -442,7 +511,16 @@ onMounted(async () => {
       let gisRetry = 0;
       const initGisWithRetry = () => {
         if (typeof window.google !== 'undefined' && window.google.accounts) {
-          initGis(googleInfo.clientId, onGoogleTokenReceived);
+          if (googleInfo.workerUrl) {
+            initGisCodeClient(googleInfo.clientId, googleInfo.workerUrl, (data) => {
+              if (data.refresh_cipher) {
+                localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
+              }
+              onGoogleTokenReceived(data.access_token, data.expires_in);
+            });
+          } else {
+            initGis(googleInfo.clientId, onGoogleTokenReceived);
+          }
           restoreGoogleSessionIfValid();
         } else if (gisRetry < 50) {
           gisRetry++;
@@ -1489,16 +1567,18 @@ const isRestorePending = ref("");
 let tokenResolve: (() => void) | null = null;
 
 // 구글 토큰 수령 시 콜백
-const onGoogleTokenReceived = async (_token: string) => {
+const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) => {
   googleInfo.isLoggedIn = true;
   googleInfo.syncMode = "google";
   localStorage.setItem("sync_mode", "google");
 
   if (localStorage.getItem("keep_logged_in") === "true") {
     localStorage.setItem("google_access_token", _token);
-    const expiresAt = Date.now() + 3000 * 1000; // 50분 만료 설정
+    const expiresAt = Date.now() + Math.max(expiresIn - 60, 300) * 1000;
     localStorage.setItem("google_token_expires_at", expiresAt.toString());
   }
+
+  setupAutoRefreshTimer();
 
   if (tokenResolve) {
     tokenResolve();
@@ -1604,59 +1684,46 @@ const onGoogleTokenReceived = async (_token: string) => {
   }
 };
 
-// 토큰의 유효성을 보장하며, 만료 시 백그라운드 무인(Silent) 갱신 시도
-const ensureValidToken = () => {
-  return new Promise<void>((resolve, reject) => {
-    const keep = localStorage.getItem("keep_logged_in") === "true";
-    const token = localStorage.getItem("google_access_token");
-    const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
+// 토큰의 유효성을 보장하며, 만료 시 백그라운드 무인 갱신 시도
+const ensureValidToken = async (): Promise<void> => {
+  const keep = localStorage.getItem("keep_logged_in") === "true";
+  const token = localStorage.getItem("google_access_token");
+  const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
 
-    if (keep && token && Date.now() < expiresAt) {
-      // GAPI 클라이언트 메모리에 토큰이 있는지 이중 검증 (iOS 백그라운드 절전 대응)
-      let hasGapiToken = false;
-      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-        const gapiToken = window.gapi.client.getToken();
-        if (gapiToken && gapiToken.access_token) {
-          hasGapiToken = true;
-        }
+  // 1. 이미 유효한 토큰이 있는 경우 (만료 1분 이상 남음)
+  if (keep && token && Date.now() < (expiresAt - 60 * 1000)) {
+    if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+      const gapiToken = window.gapi.client.getToken();
+      if (!gapiToken || !gapiToken.access_token) {
+        window.gapi.client.setToken({ access_token: token });
       }
-      if (!hasGapiToken) {
-        console.log("GAPI 인메모리 토큰이 휘발되었습니다. localStorage로부터 복구합니다...");
-        if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-          window.gapi.client.setToken({ access_token: token });
-        }
-      }
-      resolve();
-      return;
     }
+    return;
+  }
 
-    if (keep && token) {
-      // 만료된 토큰이 구글 클라이언트에 캐싱되어 조기 반환되는 버그 방지를 위해 토큰 명시적 클리어
-      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-        window.gapi.client.setToken(null);
+  // 2. 만료되었거나 임박했으나, Worker URL + Refresh Cipher가 있는 경우 즉시 백그라운드 갱신
+  if (googleInfo.workerUrl && localStorage.getItem("google_refresh_cipher")) {
+    const cipher = localStorage.getItem("google_refresh_cipher")!;
+    console.log("Worker를 통한 백그라운드 토큰 갱신 시도...");
+    try {
+      const res = await refreshAccessTokenViaWorker(googleInfo.workerUrl, cipher);
+      if (res && res.access_token) {
+        localStorage.setItem("google_access_token", res.access_token);
+        const newExpiresAt = Date.now() + (res.expires_in || 3600) * 1000;
+        localStorage.setItem("google_token_expires_at", newExpiresAt.toString());
+        console.log("Worker를 통한 구글 토큰 백그라운드 자동 갱신 완료.");
+        return;
       }
-
-      tokenResolve = () => {
-        clearTimeout(timeoutId);
-        resolve();
-      };
-      
-      const timeoutId = setTimeout(() => {
-        tokenResolve = null;
-        reject(new Error("Token refresh timed out."));
-      }, 5000); // 5초 타임아웃
-      
-      try {
-        tryAutoLogin(onGoogleTokenReceived);
-      } catch (e) {
-        clearTimeout(timeoutId);
-        tokenResolve = null;
-        reject(e);
-      }
-    } else {
-      reject(new Error("No active Google session found."));
+    } catch (workerErr) {
+      console.warn("Worker 토큰 갱신 실패, 기본 재인증 방식으로 전환:", workerErr);
     }
-  });
+  }
+
+  // 3. Worker가 없거나 갱신 실패한 경우
+  if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+    window.gapi.client.setToken(null);
+  }
+  throw new Error("No active Google session found or token expired.");
 };
 
 // 멤버 목록 로드
@@ -1697,7 +1764,7 @@ const addNewMember = async (name: string) => {
       const confirmLogin = await showConfirm("구글 로그인 세션이 만료되었습니다.\n세션을 연장하고 멤버를 등록하기 위해 다시 로그인하시겠습니까?");
       if (confirmLogin) {
         isManualLogin.value = false;
-        loginGoogle();
+        googleLogin();
       }
     }
     return;
@@ -1743,7 +1810,7 @@ const deleteMember = async (name: string) => {
       const confirmLogin = await showConfirm("구글 로그인 세션이 만료되었습니다.\n세션을 연장하고 멤버를 삭제하기 위해 다시 로그인하시겠습니까?");
       if (confirmLogin) {
         isManualLogin.value = false;
-        loginGoogle();
+        googleLogin();
       }
     }
   }
@@ -1781,8 +1848,28 @@ const googleLogin = () => {
   }
 
   isManualLogin.value = true;
-  initGis(googleInfo.clientId, onGoogleTokenReceived);
-  loginGoogle();
+  if (googleInfo.workerUrl) {
+    initGisCodeClient(
+      googleInfo.clientId,
+      googleInfo.workerUrl,
+      (data) => {
+        if (data.refresh_cipher) {
+          localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
+        }
+        onGoogleTokenReceived(data.access_token, data.expires_in);
+      },
+      (err) => {
+        console.warn("Worker 인증 서버 연결 실패, 기존 구글 로그인 방식으로 자동 전환합니다:", err);
+        triggerToast("인증 서버 응답 없음: 기본 구글 로그인으로 자동 전환합니다.", "warning");
+        initGis(googleInfo.clientId, onGoogleTokenReceived);
+        loginGoogle();
+      }
+    );
+    loginGoogleWithCode();
+  } else {
+    initGis(googleInfo.clientId, onGoogleTokenReceived);
+    loginGoogle();
+  }
 };
 
 // 커스텀 스프레드시트 주소 입력 팝업 확인 버튼 클릭 핸들러
@@ -1858,12 +1945,17 @@ const handlePromptCancel = () => {
 // 구글 로그아웃 트리거
 const googleLogout = () => {
   logoutGoogle();
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
   googleInfo.isLoggedIn = false;
   googleInfo.memberList = [];
   googleInfo.todayMembers = [];
   localStorage.removeItem("today_members");
   localStorage.removeItem("google_access_token");
   localStorage.removeItem("google_token_expires_at");
+  localStorage.removeItem("google_refresh_cipher");
   
   // 동기화 모드를 강제로 로컬 모드로 리셋
   googleInfo.syncMode = "local";
@@ -1877,7 +1969,20 @@ const saveGoogleSettings = () => {
   localStorage.setItem("sync_mode", googleInfo.syncMode);
   if (googleInfo.clientId) {
     try {
-      initGis(googleInfo.clientId, onGoogleTokenReceived);
+      if (googleInfo.workerUrl) {
+        initGisCodeClient(
+          googleInfo.clientId,
+          googleInfo.workerUrl,
+          (data) => {
+            if (data.refresh_cipher) {
+              localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
+            }
+            onGoogleTokenReceived(data.access_token, data.expires_in);
+          }
+        );
+      } else {
+        initGis(googleInfo.clientId, onGoogleTokenReceived);
+      }
     } catch (e) {
       console.warn("GIS 초기화 실패:", e);
     }
@@ -2030,7 +2135,7 @@ const syncLocalDataToGoogle = async () => {
     if (confirmLogin) {
       isManualLogin.value = false;
       isSyncPending.value = true;
-      loginGoogle();
+      googleLogin();
     }
     return;
   }
@@ -2416,7 +2521,7 @@ const loadExistingSession = async (cleanTitle: string) => {
       if (confirmLogin) {
         isManualLogin.value = false;
         isRestorePending.value = cleanTitle;
-        loginGoogle();
+        googleLogin();
       }
       isSaving.value = false;
       return;

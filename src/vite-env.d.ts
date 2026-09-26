@@ -8,3 +8,11 @@ declare module "*.json" {
   const value: any;
   export default value;
 }
+
+interface ImportMetaEnv {
+  readonly VITE_GOOGLE_AUTH_WORKER_URL?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}

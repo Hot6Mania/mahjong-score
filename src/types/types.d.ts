@@ -78,6 +78,7 @@ export interface ModalInfo { // 모달창
 export interface GoogleInfo { // 구글 연동 정보
   clientId: string, // 구글 클라이언트 ID
   spreadsheetId: string, // 구글 스프레드시트 ID
+  workerUrl?: string, // Cloudflare Worker 인증 프록시 URL
   isLoggedIn: boolean, // 로그인 여부
   syncMode: 'local' | 'google', // 연동 모드: 'local' 또는 'google'
   memberList: string[], // 멤버 전체 목록
