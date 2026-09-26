@@ -18,7 +18,8 @@ defineProps<Props>()
 type Emits = {
   (e: 'show-modal', modal: string): void,
   (e: 'toggle-menu'): void,
-  (e: 'close-menu'): void
+  (e: 'close-menu'): void,
+  (e: 'open-dashboard'): void,
 }
 const emit = defineEmits<Emits>()
 </script>
@@ -77,9 +78,49 @@ const emit = defineEmits<Emits>()
 <div id="Menu" @click="emit('show-modal', 'choose_menu_kind')">
   <Graphics kind="gear"/>
 </div>
+<!-- 대시보드 바로가기 버튼 (우상단) -->
+<button id="DashboardQuick" @click="emit('open-dashboard')" title="통계 대시보드">
+  <svg class="dashboard-icon-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="18" y1="20" x2="18" y2="10"></line>
+    <line x1="12" y1="20" x2="12" y2="4"></line>
+    <line x1="6" y1="20" x2="6" y2="14"></line>
+  </svg>
+  <span>대시보드</span>
+</button>
 </template>
 
 <style scoped>
+/* 대시보드 바로가기 버튼 (우상단) */
+#DashboardQuick {
+  position: fixed;
+  top: 10px;
+  right: 14px;
+  z-index: 10;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-color, #1a1a1a);
+  background-color: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #cccccc);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+  opacity: 0.9;
+}
+#DashboardQuick:hover {
+  opacity: 1.0;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+.dashboard-icon-svg {
+  color: var(--color-toggle-on, #3b82f6);
+}
+
 /* 박스 바깥 어두워지는 백드롭 */
 .menu_backdrop {
   position: fixed;
@@ -159,8 +200,8 @@ const emit = defineEmits<Emits>()
   gap: 0.5px !important; /* 점들 사이의 밀도 높은 밀착을 위해 간격 축소 */
 }
 :deep(.riichi_circle_mini) {
-  width: 3.5px !important; /* 리치봉 중앙 빨간 점 크기 적절히 확보 */
-  height: 3.5px !important;
+  width: 5.5px !important; /* 리치봉 중앙 빨간 점 크기 적절히 확대 */
+  height: 5.5px !important;
   border-radius: 50% !important;
   margin: 0 !important; /* 마진 초기화로 center에 완벽 안착 */
   background-color: var(--color-negative) !important;
@@ -168,19 +209,19 @@ const emit = defineEmits<Emits>()
 }
 :deep(.renchan_circle_mini) {
   display: inline-block !important;
-  width: 1.5px !important; /* 연장봉의 작은 원통 점 비율 축소 */
-  height: 1.5px !important;
+  width: 2px !important; /* 연장봉의 작은 원통 점 비율 축소 */
+  height: 2px !important;
   border-radius: 50% !important;
-  margin: 0 !important;
+  margin: 0 0.5px !important;
   padding: 0 !important;
   background-color: var(--text-color) !important;
 }
 /* 교대로 위아래로 나누어 번갈아가는 지그재그(staggered) 배치 효과 유지하면서 정중앙 정렬 유지 */
 :deep(.stick_mini > .renchan_circle_mini:nth-child(even)) {
-  transform: translateY(-1.5px) !important; /* 세로 중앙 정렬 기준 위로 1.5px 시프트 */
+  transform: translateY(-1px) !important;
 }
 :deep(.stick_mini > .renchan_circle_mini:nth-child(odd)) {
-  transform: translateY(1.5px) !important; /* 세로 중앙 정렬 기준 아래로 1.5px 시프트 */
+  transform: translateY(1px) !important;
 }
 
 .riichi, .renchan {

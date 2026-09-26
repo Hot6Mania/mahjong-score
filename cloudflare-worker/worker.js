@@ -14,17 +14,18 @@
 
 const CORS_HEADERS = (origin) => ({
   "Access-Control-Allow-Origin": origin || "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Max-Age": "86400",
 });
 
-function jsonResponse(data, status = 200, origin = "*") {
+function jsonResponse(data, status = 200, origin = "*", extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       ...CORS_HEADERS(origin),
+      ...extraHeaders,
     },
   });
 }
@@ -238,6 +239,161 @@ export default {
       } catch (err) {
         console.error("Refresh Exception:", err);
         return jsonResponse({ error: err.message || "Internal server error" }, 500, matchedOrigin);
+      }
+    }
+
+    // ==========================================
+    // 3. 외부 공개 대시보드 API (Cloudflare Edge Cache 3분 적용)
+    // 스프레드시트 ID는 하드코딩하지 않고, 서버 Secret의 암호화 토큰(ENCRYPTED_SPREADSHEET_ID)을 ENCRYPTION_KEY로 복호화하여 사용합니다.
+    // ==========================================
+    const CACHE_HEADERS = { "Cache-Control": "public, max-age=180, s-maxage=180" };
+
+    async function resolveSpreadsheetId(env, url) {
+      // 1) 쿼리 파라미터가 명시된 경우 (개발/테스트 호환성)
+      const fromQuery = url.searchParams.get("spreadsheetId");
+      if (fromQuery && fromQuery.trim()) return fromQuery.trim();
+
+      // 2) 서버 환경변수(Secret)에 저장된 암호화 토큰 복호화
+      if (env.ENCRYPTED_SPREADSHEET_ID && env.ENCRYPTION_KEY) {
+        try {
+          const decrypted = await decrypt(env.ENCRYPTED_SPREADSHEET_ID, env.ENCRYPTION_KEY);
+          if (decrypted && decrypted.trim()) {
+            return decrypted.trim();
+          }
+        } catch (err) {
+          console.error("Failed to decrypt ENCRYPTED_SPREADSHEET_ID:", err);
+        }
+      }
+
+      // 3) 서버 환경변수(Secret)에 평문 SPREADSHEET_ID가 설정된 경우
+      if (env.SPREADSHEET_ID && env.SPREADSHEET_ID.trim()) {
+        return env.SPREADSHEET_ID.trim();
+      }
+
+      return null;
+    }
+
+    // GET /api/public/stats : 전체 멤버별 통계 조회
+    if (url.pathname === "/api/public/stats" && request.method === "GET") {
+      try {
+        const spreadsheetId = await resolveSpreadsheetId(env, url);
+        if (!spreadsheetId) {
+          return jsonResponse({ error: "Spreadsheet ID is not configured on server (ENCRYPTED_SPREADSHEET_ID required)" }, 500, matchedOrigin);
+        }
+
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&gid=1698630951`;
+        const res = await fetch(gvizUrl);
+        const text = await res.text();
+        const jsonStr = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
+        const parsed = JSON.parse(jsonStr);
+
+        return jsonResponse({ success: true, table: parsed.table }, 200, matchedOrigin, CACHE_HEADERS);
+      } catch (err) {
+        console.error("Public stats fetch failed:", err);
+        return jsonResponse({ error: "Failed to fetch stats", details: err.message }, 500, matchedOrigin);
+      }
+    }
+
+    // GET /api/public/stats-matrix : '통계' 탭(역대 회차별 매트릭스) 조회
+    if (url.pathname === "/api/public/stats-matrix" && request.method === "GET") {
+      try {
+        const spreadsheetId = await resolveSpreadsheetId(env, url);
+        if (!spreadsheetId) {
+          return jsonResponse({ error: "Spreadsheet ID is not configured on server (ENCRYPTED_SPREADSHEET_ID required)" }, 500, matchedOrigin);
+        }
+
+        const sheetParam = encodeURIComponent("통계");
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${sheetParam}`;
+        const res = await fetch(gvizUrl);
+        const text = await res.text();
+        const jsonStr = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
+        const parsed = JSON.parse(jsonStr);
+
+        return jsonResponse({ success: true, table: parsed.table }, 200, matchedOrigin, CACHE_HEADERS);
+      } catch (err) {
+        console.error("Public stats matrix fetch failed:", err);
+        return jsonResponse({ error: "Failed to fetch stats matrix", details: err.message }, 500, matchedOrigin);
+      }
+    }
+
+    // GET /api/public/sessions : 회차 목록 조회
+    if (url.pathname === "/api/public/sessions" && request.method === "GET") {
+      try {
+        const spreadsheetId = await resolveSpreadsheetId(env, url);
+        if (!spreadsheetId) {
+          return jsonResponse({ error: "Spreadsheet ID is not configured on server (ENCRYPTED_SPREADSHEET_ID required)" }, 500, matchedOrigin);
+        }
+
+        const editUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+        const res = await fetch(editUrl);
+        const html = await res.text();
+        const regex = /제\d+회\s*\d{6}/g;
+        const matches = [...new Set(html.match(regex) || [])];
+
+        // 회차 번호 내림차순 정렬
+        matches.sort((a, b) => {
+          const numA = parseInt(a.match(/제(\d+)회/)?.[1] || "0", 10);
+          const numB = parseInt(b.match(/제(\d+)회/)?.[1] || "0", 10);
+          return numB - numA;
+        });
+
+        return jsonResponse({ success: true, sessions: matches }, 200, matchedOrigin, CACHE_HEADERS);
+      } catch (err) {
+        console.error("Public sessions fetch failed:", err);
+        return jsonResponse({ error: "Failed to fetch sessions", details: err.message }, 500, matchedOrigin);
+      }
+    }
+
+    // GET /api/public/session-detail : 특정 회차 raw 데이터 조회
+    if (url.pathname === "/api/public/session-detail" && request.method === "GET") {
+      try {
+        const spreadsheetId = await resolveSpreadsheetId(env, url);
+        if (!spreadsheetId) {
+          return jsonResponse({ error: "Spreadsheet ID is not configured on server (ENCRYPTED_SPREADSHEET_ID required)" }, 500, matchedOrigin);
+        }
+
+        const session = url.searchParams.get("session");
+        if (!session) {
+          return jsonResponse({ error: "Missing 'session' parameter" }, 400, matchedOrigin);
+        }
+
+        const match = session.match(/제(\d+)회/);
+        const num = match ? parseInt(match[1], 10) : 9;
+        const primarySheet = num >= 9 ? `${session} (raw)` : session;
+        const secondarySheet = num >= 9 ? session : `${session} (raw)`;
+
+        let parsed = null;
+        try {
+          const res = await fetch(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(primarySheet)}`);
+          if (res.ok) {
+            const text = await res.text();
+            const start = text.indexOf("{");
+            const end = text.lastIndexOf("}");
+            if (start !== -1 && end !== -1) {
+              const data = JSON.parse(text.substring(start, end + 1));
+              if (data.table) parsed = data;
+            }
+          }
+        } catch (e) {}
+
+        if (!parsed) {
+          const res2 = await fetch(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(secondarySheet)}`);
+          const text2 = await res2.text();
+          const start2 = text2.indexOf("{");
+          const end2 = text2.lastIndexOf("}");
+          if (start2 !== -1 && end2 !== -1) {
+            parsed = JSON.parse(text2.substring(start2, end2 + 1));
+          }
+        }
+
+        if (!parsed || !parsed.table) {
+          return jsonResponse({ error: "Failed to parse session detail" }, 404, matchedOrigin);
+        }
+
+        return jsonResponse({ success: true, session, table: parsed.table }, 200, matchedOrigin, CACHE_HEADERS);
+      } catch (err) {
+        console.error("Public session detail fetch failed:", err);
+        return jsonResponse({ error: "Failed to fetch session detail", details: err.message }, 500, matchedOrigin);
       }
     }
 

@@ -2,16 +2,25 @@
 import Player from "@/components/Player.vue"
 import Panel from "@/components/Panel.vue"
 import Modal from "@/components/modals/Modal.vue"
+import StatsDashboardView from "@/views/StatsDashboardView.vue"
 import { reactive, onMounted, watch, ref, computed } from "vue"
-import { useRouter } from "vue-router"
+import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, type SessionMigrationBackup } from "@/utils/googleSheets"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
 /**라우터 가져오기*/
 const router = useRouter()
+const route = useRoute()
+const isStatsRoute = computed(() => {
+  return route.path === '/stats' || route.path.startsWith('/stats') || route.path === '/dashboard';
+})
+
+// 원클릭 대국 기록 + 동기화 상태 관리
+const isSyncingGame = ref(false)
+const isGameSynced = ref(false)
 
 /**i18n 속성 가져오기*/
 const { t, locale } = useI18n()
@@ -551,7 +560,7 @@ onMounted(async () => {
     }
   }
 
-  if (!hasActiveGame) {
+  if (!isStatsRoute.value && !hasActiveGame) {
     showModal('choose_seat');
   }
 
@@ -898,6 +907,7 @@ const resetAll = () => {
 
   // 기록 여부 초기화
   isGameSaved.value = false;
+  isGameSynced.value = false;
   localStorage.removeItem("is_game_saved");
 }
 
@@ -1299,6 +1309,7 @@ const saveRound = () => {
 
   // 새 라운드 점수가 기록되기 시작하면 등록 완료 플래그를 완전히 해제하여 저장이 가능하도록 락 해제
   isGameSaved.value = false;
+  isGameSynced.value = false;
   localStorage.removeItem("is_game_saved");
   
   let chinIdx = players.findIndex(x => x['wind']==='東');
@@ -1819,23 +1830,124 @@ const deleteMember = async (name: string) => {
   localStorage.setItem("today_members", JSON.stringify(googleInfo.todayMembers));
 };
 
-// 오늘의 멤버 풀 저장 및 구글 시트 동기화
+// 오늘의 멤버 풀 저장 및 구글 시트 동기화 (멤버 변경 감지 시 마이그레이션 & 자동 백업 지원)
 const saveTodayMembersPool = async (names: string[]) => {
-  googleInfo.todayMembers = [...names];
-  localStorage.setItem("today_members", JSON.stringify(names));
+  const oldMembers = [...googleInfo.todayMembers];
+  const isDifferent = oldMembers.length > 0 && (
+    oldMembers.length !== names.length ||
+    names.some(n => !oldMembers.includes(n)) ||
+    oldMembers.some(n => !names.includes(n))
+  );
 
-  // 로컬 모드이거나 로그인 상태가 아니라면 구글 시트 싱크를 건너뜀
+  // 로컬 모드이거나 로그인 상태가 아니라면 로컬 상태만 갱신
   if (googleInfo.syncMode !== 'google' || !googleInfo.isLoggedIn || !googleInfo.spreadsheetId) {
+    googleInfo.todayMembers = [...names];
+    localStorage.setItem("today_members", JSON.stringify(names));
     return;
   }
 
   try {
     await ensureValidToken();
     const sessionSheetName = await getOrInitSessionSheetName();
+
+    if (isDifferent) {
+      const confirmMsg = todayGamesHistory.length > 0
+        ? `참석 멤버 구성이 변경되었습니다.\n(기존 ${oldMembers.length}명: ${oldMembers.join(', ')} → 변경 ${names.length}명: ${names.join(', ')})\n\n새 인원수에 맞추어 시트 마이그레이션을 진행하시겠습니까?\n- 기존 시트는 자동 백업 보존됩니다.\n- 이전까지 진행된 대국 기록은 새 시트로 온전히 유지됩니다.`
+        : `참석 멤버 구성이 변경되었습니다.\n(기존 ${oldMembers.length}명 → 변경 ${names.length}명)\n\n새 인원수에 맞추어 시트 템플릿을 재구성하시겠습니까?`;
+
+      const confirmed = await showConfirm(confirmMsg);
+      if (!confirmed) {
+        return;
+      }
+
+      isSaving.value = true;
+      syncLoaderTitle.value = "시트 마이그레이션 & 자동 백업 진행 중...";
+      syncProgress.value = 30;
+
+      const backupTitle = await migrateSessionSheetToNewMembers(
+        googleInfo.spreadsheetId,
+        sessionSheetName,
+        oldMembers,
+        names,
+        todayGamesHistory
+      );
+
+      googleInfo.todayMembers = [...names];
+      localStorage.setItem("today_members", JSON.stringify(names));
+      syncProgress.value = 100;
+      triggerToast(`시트 마이그레이션 완료 (백업: ${backupTitle})`, "success");
+      return;
+    }
+
+    // 변경이 없거나 최초 생성인 경우 기본 생성 및 저장 수행
+    googleInfo.todayMembers = [...names];
+    localStorage.setItem("today_members", JSON.stringify(names));
     await createSessionSheetIfNotExist(googleInfo.spreadsheetId, sessionSheetName, names);
     await saveSessionMembers(googleInfo.spreadsheetId, sessionSheetName, names);
-  } catch (err) {
+  } catch (err: any) {
     console.error("오늘의 멤버 풀 저장 실패:", err);
+    triggerToast(`멤버 풀 저장 실패: ${err?.message || err}`, "error");
+  } finally {
+    isSaving.value = false;
+  }
+};
+
+// 백업 시트 복원 핸들러
+const handleRestoreSessionBackup = async (backup: SessionMigrationBackup) => {
+  if (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) {
+    alert("구글 로그인이 필요합니다.");
+    return;
+  }
+  const confirmed = await showConfirm(
+    `백업 시트 '${backup.backupSheetTitle}'를 복원하시겠습니까?\n\n- 현재 세션 시트가 백업 시점의 상태로 복원됩니다.\n- 당시 멤버 명단(${backup.oldMembers.join(', ')})으로 복원됩니다.`
+  );
+  if (!confirmed) return;
+
+  isSaving.value = true;
+  syncLoaderTitle.value = "백업 시트 복원 진행 중...";
+  syncProgress.value = 40;
+
+  try {
+    await ensureValidToken();
+    await restoreSessionSheetFromBackup(googleInfo.spreadsheetId, backup);
+    googleInfo.todayMembers = [...backup.oldMembers];
+    localStorage.setItem("today_members", JSON.stringify(backup.oldMembers));
+    syncProgress.value = 100;
+    triggerToast("백업 시트가 성공적으로 복원되었습니다.", "success");
+  } catch (err: any) {
+    console.error("백업 시트 복원 실패:", err);
+    triggerToast(`복원 실패: ${err?.message || err}`, "error");
+  } finally {
+    isSaving.value = false;
+  }
+};
+
+// 현재 세션 시트 수동 백업 핸들러
+const handleManualBackupSession = async () => {
+  if (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) {
+    alert("구글 로그인이 필요합니다.");
+    return;
+  }
+  isSaving.value = true;
+  syncLoaderTitle.value = "현재 세션 시트 수동 백업 중...";
+  syncProgress.value = 50;
+
+  try {
+    await ensureValidToken();
+    const sessionSheetName = await getOrInitSessionSheetName();
+    const backupTitle = await backupSessionSheet(
+      googleInfo.spreadsheetId,
+      sessionSheetName,
+      googleInfo.todayMembers,
+      todayGamesHistory
+    );
+    syncProgress.value = 100;
+    triggerToast(`수동 백업 완료 (${backupTitle})`, "success");
+  } catch (err: any) {
+    console.error("수동 백업 실패:", err);
+    triggerToast(`수동 백업 실패: ${err?.message || err}`, "error");
+  } finally {
+    isSaving.value = false;
   }
 };
 
@@ -2017,7 +2129,7 @@ const startNewGame = async (skipConfirm = false) => {
 };
 
 // 현재 게임 결과 정산 데이터를 구글 스프레드시트 및 로컬 스토리지에 기록합니다.
-const saveGameToSheet = async () => {
+const saveGameToSheet = async (silent: boolean = false) => {
   // 현재 판의 플레이어 명단 & 최종 점수 조합이 이미 대국 히스토리 리스트에 등록되어 있는지 대조 검사
   const currentSetup = players.map(p => ({ name: p.name, score: p.displayScore }));
   const isAlreadyInHistory = todayGamesHistory.some((g: any) => {
@@ -2030,7 +2142,7 @@ const saveGameToSheet = async () => {
 
   // 이미 기록된 게임이며 히스토리 리스트에도 진짜 존재할 때만 추가 기록 차단
   if (isGameSaved.value && isAlreadyInHistory) {
-    alert("이미 기록된 대국입니다.");
+    if (!silent) alert("이미 기록된 대국입니다.");
     return;
   }
 
@@ -2112,7 +2224,9 @@ const saveGameToSheet = async () => {
     localStorage.setItem("is_game_saved", "true");
 
     // 로컬에만 누적 보관하며, 일괄 동기화 버튼을 통해 구글 전송 처리
-    triggerToast("게임 결과 로컬 기록 완료!");
+    if (!silent) {
+      triggerToast("게임 결과 로컬 기록 완료!");
+    }
   } catch (err) {
     console.error("결과 기록 실패:", err);
     alert("결과 기록 중 오류가 발생했습니다.");
@@ -2120,10 +2234,10 @@ const saveGameToSheet = async () => {
 };
 
 // 로컬에서 플레이하던 대국 기록들을 구글 스프레드시트에 일괄 업로드
-const syncLocalDataToGoogle = async () => {
+const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<boolean> => {
   if (!googleInfo.isLoggedIn) {
     alert("구글 연동 모드에서만 동기화가 가능합니다.");
-    return;
+    return false;
   }
 
   // 동기화 진행 전 구글 토큰 유효성 검사 및 필요시 자동 갱신(무인 갱신)
@@ -2137,7 +2251,7 @@ const syncLocalDataToGoogle = async () => {
       isSyncPending.value = true;
       googleLogin();
     }
-    return;
+    return false;
   }
 
   // 동기화 요청 시 스프레드시트 주소가 유실되어 있는 경우 커스텀 팝업 기동
@@ -2145,21 +2259,23 @@ const syncLocalDataToGoogle = async () => {
     isSyncAfterPrompt.value = true;
     tempPromptSpreadsheetUrl.value = "";
     isShowSpreadsheetIdPrompt.value = true;
-    return;
+    return false;
   }
   try {
     const isValid = await verifySpreadsheetStructures(googleInfo.spreadsheetId);
-    if (!isValid) return;
+    if (!isValid) return false;
 
     if (todayGamesHistory.length === 0) {
-      alert("오늘 기록된 로컬 대국 이력이 없습니다.");
-      return;
+      if (!skipConfirm) alert("오늘 기록된 로컬 대국 이력이 없습니다.");
+      return false;
     }
 
-    const isConfirmed = await showConfirm(`오늘 로컬에 기록된 총 ${todayGamesHistory.length}개의 대국 기록을 구글 스프레드시트에 일괄 업로드하시겠습니까?`);
-    if (!isConfirmed) {
-      isSaving.value = false;
-      return;
+    if (!skipConfirm) {
+      const isConfirmed = await showConfirm(`오늘 로컬에 기록된 총 ${todayGamesHistory.length}개의 대국 기록을 구글 스프레드시트에 일괄 업로드하시겠습니까?`);
+      if (!isConfirmed) {
+        isSaving.value = false;
+        return false;
+      }
     }
 
     isSaving.value = true;
@@ -2443,21 +2559,54 @@ const syncLocalDataToGoogle = async () => {
       
       syncProgress.value = 100;
       triggerToast("동기화 성공!");
+      return true;
     } else {
       if (skipCount > 0) {
-        alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재합니다.)`);
+        if (!skipConfirm) {
+          alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재합니다.)`);
+        } else {
+          triggerToast("이미 구글 시트에 최신 반영되어 있습니다.");
+        }
+        return true;
       } else {
-        alert("동기화할 세부 기록이 없습니다.");
+        if (!skipConfirm) alert("동기화할 세부 기록이 없습니다.");
+        return false;
       }
     }
   } catch (err) {
     console.error("일괄 동기화 실패:", err);
     showErrorModal("일괄 동기화 오류", err);
+    return false;
   } finally {
     isSaving.value = false;
     setTimeout(() => {
       syncProgress.value = 0;
     }, 1000);
+  }
+};
+
+// 대국 종료 후 1클릭으로 로컬 저장 + 구글 시트 동기화를 즉시 완결하는 원클릭 액션
+const saveAndSyncGame = async () => {
+  if (isSyncingGame.value || isGameSynced.value) return;
+  isSyncingGame.value = true;
+
+  try {
+    // 1. 로컬에 아직 미저장 상태라면 로컬 저장 먼저 안전하게 실행 (데이터 유실 방지)
+    if (!isGameSaved.value) {
+      await saveGameToSheet(true); // silent = true
+    }
+
+    // 2. 구글 스프레드시트 일괄 동기화 (확인창 생략)
+    if (googleInfo.isLoggedIn && googleInfo.syncMode === 'google') {
+      const success = await syncLocalDataToGoogle(true); // skipConfirm = true
+      if (success) {
+        isGameSynced.value = true;
+      }
+    }
+  } catch (err) {
+    console.error("원클릭 기록 + 동기화 오류:", err);
+  } finally {
+    isSyncingGame.value = false;
   }
 };
 
@@ -3061,10 +3210,15 @@ const addBackupGameToCurrent = (game: any) => {
 </script>
 
 <template>
-<!-- iOS WebKit 사파리 주소창 숨김 스크롤을 위한 물리 스크롤 더미 스페이서 -->
-<div class="ios-scroll-spacer"></div>
+  <StatsDashboardView 
+    v-if="isStatsRoute" 
+    @go-to-scorer="router.push('/')" 
+  />
+  <div v-else class="scorer-root">
+    <!-- iOS WebKit 사파리 주소창 숨김 스크롤을 위한 물리 스크롤 더미 스페이서 -->
+    <div class="ios-scroll-spacer"></div>
 
-<div class="background" @dblclick.self="toggleFullScreen()" @click="onBackgroundClick">
+    <div class="background" @dblclick.self="toggleFullScreen()" @click="onBackgroundClick">
   <!-- 커스텀 토스트 알림 연출 -->
   <Transition name="toast-fade">
     <div v-if="toast.show" class="custom-toast" :class="toast.type">
@@ -3095,6 +3249,7 @@ const addBackupGameToCurrent = (game: any) => {
       @show-modal="showModal"
       @toggle-menu="isPanelMenuOpen = !isPanelMenuOpen"
       @close-menu="isPanelMenuOpen = false"
+      @open-dashboard="router.push('/stats')"
     />
   </main>
   <!-- modal 컴포넌트 생성 (자연스러운 페이드인 효과를 위해 Transition 적용) -->
@@ -3111,6 +3266,8 @@ const addBackupGameToCurrent = (game: any) => {
       :googleInfo
       :todayGamesHistory="todayGamesHistory"
       :isGameSaved="isGameSaved"
+      :isSyncingGame="isSyncingGame"
+      :isGameSynced="isGameSynced"
       :googleMemberStats="googleMemberStats"
       :isSaving="isSaving"
       :syncProgress="syncProgress"
@@ -3134,6 +3291,7 @@ const addBackupGameToCurrent = (game: any) => {
       @google-login="googleLogin"
       @google-logout="googleLogout"
       @save-game-to-sheet="saveGameToSheet"
+      @save-and-sync-game="saveAndSyncGame"
       @add-new-member="addNewMember"
       @delete-member="deleteMember"
       @save-today-members="saveTodayMembersPool"
@@ -3147,6 +3305,8 @@ const addBackupGameToCurrent = (game: any) => {
       @add-manual-game="addManualGame"
       @move-game="moveGameInHistory"
       @add-backup-game-to-current="addBackupGameToCurrent"
+      @restore-session-backup="handleRestoreSessionBackup"
+      @manual-backup-session="handleManualBackupSession"
     />
   </Transition>
 
@@ -3301,6 +3461,7 @@ const addBackupGameToCurrent = (game: any) => {
       </div>
     </div>
   </Transition>
+  </div>
 </div>
 </template>
 

@@ -1070,3 +1070,330 @@ export const verifySpreadsheetStructures = async (spreadsheetId: string): Promis
     return false;
   }
 };
+
+export interface SessionMigrationBackup {
+  id: string;
+  timestamp: number;
+  timeStr: string;
+  sessionSheetName: string;
+  backupSheetTitle: string;
+  oldMembers: string[];
+  newMembers: string[];
+  gamesCount: number;
+}
+
+/**
+ * 회차 중간 멤버 변경 시: 기존 시트를 안전하게 백업하고 새 인원수 템플릿으로 시트를 마이그레이션합니다.
+ */
+export const migrateSessionSheetToNewMembers = async (
+  spreadsheetId: string,
+  sessionTitle: string,
+  oldMembers: string[],
+  newMembers: string[],
+  todayGames: any[] = []
+): Promise<string> => {
+  if (!spreadsheetId || !sessionTitle) throw new Error("스프레드시트 ID 또는 세션 이름이 누락되었습니다.");
+
+  const cleanTitle = sessionTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
+  const rawTitle = `${cleanTitle} (raw)`;
+
+  const now = new Date();
+  const HH = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  const backupTitle = `${cleanTitle}_백업_${HH}${mm}_${ss}`;
+
+  // 1. 현재 스프레드시트 메타데이터 조회
+  const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+  const sheets = resMetadata.result.sheets || [];
+
+  const currentCleanSheet = sheets.find((s: any) => s.properties.title === cleanTitle);
+
+  // 2. 만약 기존 cleanTitle 시트가 존재한다면, backupTitle로 이름 변경(Rename)하여 100% 온전하게 백업 보존
+  if (currentCleanSheet) {
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId: currentCleanSheet.properties.sheetId,
+                title: backupTitle
+              },
+              fields: 'title'
+            }
+          }
+        ]
+      }
+    });
+    console.log(`기존 시트 '${cleanTitle}'을 '${backupTitle}'로 안전하게 백업 전환 완료.`);
+  }
+
+  // 3. 새 멤버 수에 맞는 템플릿 탐색 (5인 이하는 샘플(5인), 5인 초과는 샘플(N인))
+  const numMembers = newMembers.length;
+  const sampleTitle = numMembers <= 5 ? '샘플(5인)' : `샘플(${numMembers}인)`;
+  const sampleSheet = sheets.find((s: any) => s.properties.title === sampleTitle);
+
+  if (!sampleSheet) {
+    // 롤백: 템플릿이 없을 경우 백업 시트 이름을 다시 원래대로 복원
+    if (currentCleanSheet) {
+      await window.gapi.client.sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        resource: {
+          requests: [
+            {
+              updateSheetProperties: {
+                properties: {
+                  sheetId: currentCleanSheet.properties.sheetId,
+                  title: cleanTitle
+                },
+                fields: 'title'
+              }
+            }
+          ]
+        }
+      });
+    }
+    throw new Error(`스프레드시트에 '${sampleTitle}' 템플릿 시트가 존재하지 않습니다. 구글 시트에서 템플릿을 생성해 주세요.`);
+  }
+
+  // 4. 새 템플릿 복제하여 cleanTitle 시트 개설
+  const sourceSheetId = sampleSheet.properties.sheetId;
+  const resDup: any = await window.gapi.client.sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    resource: {
+      requests: [
+        {
+          duplicateSheet: {
+            sourceSheetId: sourceSheetId,
+            newSheetName: cleanTitle,
+            insertSheetIndex: 0
+          }
+        }
+      ]
+    }
+  });
+
+  const newSheetId = resDup.result?.replies?.[0]?.duplicateSheet?.properties?.sheetId;
+  if (newSheetId !== undefined) {
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId: newSheetId,
+                hidden: false
+              },
+              fields: 'hidden'
+            }
+          }
+        ]
+      }
+    });
+  }
+
+  // 5. 복제된 시트 1행에 새 멤버 이름 2열 간격 기입 (B1, D1, F1...)
+  const row1Values: string[] = [];
+  for (let i = 0; i < newMembers.length; i++) {
+    row1Values.push(newMembers[i]);
+    row1Values.push("");
+  }
+  const colLimitLetter = getColumnLetter(1 + row1Values.length);
+  await window.gapi.client.sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${cleanTitle}'!B1:${colLimitLetter}1`,
+    valueInputOption: 'USER_ENTERED',
+    resource: {
+      values: [row1Values]
+    }
+  });
+
+  // 6. '시트명' 셀 탐색 및 rawTitle 연동 주소 기입
+  let searchRow = -1;
+  let searchCol = -1;
+  try {
+    const scanRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${sampleTitle}'!A1:Z100`
+    });
+    const rows = scanRes.result.values || [];
+    for (let r = 0; r < rows.length; r++) {
+      for (let c = 0; c < rows[r].length; c++) {
+        if (rows[r][c] && rows[r][c].toString().trim() === '시트명') {
+          searchRow = r;
+          searchCol = c;
+          break;
+        }
+      }
+      if (searchRow !== -1) break;
+    }
+  } catch (scanErr) {
+    console.warn("시트명 탐색용 템플릿 스캔 실패:", scanErr);
+  }
+
+  const targetR = searchRow !== -1 ? searchRow + 1 : 2;
+  const targetC = searchCol !== -1 ? searchCol + 1 : 2;
+  const targetCell = `'${cleanTitle}'!${getColumnLetter(targetC)}${targetR}`;
+
+  await window.gapi.client.sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: targetCell,
+    valueInputOption: 'USER_ENTERED',
+    resource: {
+      values: [[rawTitle]]
+    }
+  });
+
+  // 7. raw 시트 A2:A20에 새 멤버 목록 반영
+  await saveSessionMembers(spreadsheetId, cleanTitle, newMembers);
+
+  // 8. 로컬 스토리지에 백업 이력 저장
+  const backupRecord: SessionMigrationBackup = {
+    id: `migration_${Date.now()}`,
+    timestamp: now.getTime(),
+    timeStr: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${HH}:${mm}:${ss}`,
+    sessionSheetName: cleanTitle,
+    backupSheetTitle: backupTitle,
+    oldMembers: [...oldMembers],
+    newMembers: [...newMembers],
+    gamesCount: todayGames.length
+  };
+
+  try {
+    const rawBackups = localStorage.getItem("session_migration_backups") || "[]";
+    const backups: SessionMigrationBackup[] = JSON.parse(rawBackups);
+    backups.unshift(backupRecord);
+    if (backups.length > 30) backups.length = 30;
+    localStorage.setItem("session_migration_backups", JSON.stringify(backups));
+  } catch (e) {
+    console.warn("마이그레이션 백업 로컬 기록 실패:", e);
+  }
+
+  return backupTitle;
+};
+
+/**
+ * 현재 세션 시트를 수동으로 백업합니다.
+ */
+export const backupSessionSheet = async (
+  spreadsheetId: string,
+  sessionTitle: string,
+  currentMembers: string[],
+  todayGames: any[] = []
+): Promise<string> => {
+  if (!spreadsheetId || !sessionTitle) throw new Error("스프레드시트 ID 또는 세션 이름이 누락되었습니다.");
+
+  const cleanTitle = sessionTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
+
+  const now = new Date();
+  const HH = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  const backupTitle = `${cleanTitle}_수동백업_${HH}${mm}_${ss}`;
+
+  const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+  const sheets = resMetadata.result.sheets || [];
+  const currentSheet = sheets.find((s: any) => s.properties.title === cleanTitle);
+  if (!currentSheet) {
+    throw new Error(`백업할 시트 '${cleanTitle}'가 존재하지 않습니다.`);
+  }
+
+  await window.gapi.client.sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    resource: {
+      requests: [
+        {
+          duplicateSheet: {
+            sourceSheetId: currentSheet.properties.sheetId,
+            newSheetName: backupTitle,
+            insertSheetIndex: currentSheet.properties.index + 1
+          }
+        }
+      ]
+    }
+  });
+
+  const backupRecord: SessionMigrationBackup = {
+    id: `manual_${Date.now()}`,
+    timestamp: now.getTime(),
+    timeStr: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${HH}:${mm}:${ss}`,
+    sessionSheetName: cleanTitle,
+    backupSheetTitle: backupTitle,
+    oldMembers: [...currentMembers],
+    newMembers: [...currentMembers],
+    gamesCount: todayGames.length
+  };
+
+  try {
+    const rawBackups = localStorage.getItem("session_migration_backups") || "[]";
+    const backups: SessionMigrationBackup[] = JSON.parse(rawBackups);
+    backups.unshift(backupRecord);
+    if (backups.length > 30) backups.length = 30;
+    localStorage.setItem("session_migration_backups", JSON.stringify(backups));
+  } catch (e) {
+    console.warn("수동 백업 로컬 기록 실패:", e);
+  }
+
+  return backupTitle;
+};
+
+/**
+ * 백업된 시트를 활성 세션 시트로 복원합니다.
+ */
+export const restoreSessionSheetFromBackup = async (
+  spreadsheetId: string,
+  backup: SessionMigrationBackup
+): Promise<void> => {
+  if (!spreadsheetId || !backup) throw new Error("스프레드시트 ID 또는 백업 정보가 없습니다.");
+
+  const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+  const sheets = resMetadata.result.sheets || [];
+
+  const backupSheet = sheets.find((s: any) => s.properties.title === backup.backupSheetTitle);
+  if (!backupSheet) {
+    throw new Error(`스프레드시트에서 백업 시트 '${backup.backupSheetTitle}'를 찾을 수 없습니다.`);
+  }
+
+  const currentSheet = sheets.find((s: any) => s.properties.title === backup.sessionSheetName);
+
+  // 1. 현재 세션 시트가 있다면 삭제
+  if (currentSheet) {
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: [
+          {
+            deleteSheet: {
+              sheetId: currentSheet.properties.sheetId
+            }
+          }
+        ]
+      }
+    });
+  }
+
+  // 2. 백업 시트 이름을 원래 세션 시트명으로 복원하고 보임 상태로 전환
+  await window.gapi.client.sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    resource: {
+      requests: [
+        {
+          updateSheetProperties: {
+            properties: {
+              sheetId: backupSheet.properties.sheetId,
+              title: backup.sessionSheetName,
+              hidden: false
+            },
+            fields: 'title,hidden'
+          }
+        }
+      ]
+    }
+  });
+
+  // 3. raw 시트의 A열 멤버 명단도 백업 당시의 멤버로 복원
+  await saveSessionMembers(spreadsheetId, backup.sessionSheetName, backup.oldMembers);
+};

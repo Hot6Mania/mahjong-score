@@ -21,10 +21,11 @@
 2. 좌측 메뉴에서 **Compute (Workers & Pages)** ➔ **Create application** ➔ **Create Worker**를 클릭합니다.
 3. 워커 이름을 지정(예: `mahjong-auth-proxy`)하고 **Deploy**를 클릭합니다.
 4. 배포 완료 후 **Edit code**를 클릭하고, 이 폴더의 `worker.js` 코드 전체를 복사하여 에디터에 붙여넣은 뒤 **Deploy**를 누릅니다.
-5. 상단 탭에서 **Settings** ➔ **Variables and Secrets**로 이동하여 다음 3개의 암호화 변수(**Secret**)를 추가합니다:
+5. 상단 탭에서 **Settings** ➔ **Variables and Secrets**로 이동하여 다음 변수(**Secret**)를 추가합니다:
    - `GOOGLE_CLIENT_ID`: 사용 중인 구글 클라이언트 ID (`1089115695270-...apps.googleusercontent.com`)
    - `GOOGLE_CLIENT_SECRET`: 1단계에서 복사한 구글 클라이언트 보안 비밀
    - `ENCRYPTION_KEY`: 32자리 임의 문자열 (예: 영문과 숫자를 섞은 32자 무작위 비밀키)
+   - `ENCRYPTED_SPREADSHEET_ID`: (공개 대시보드용) 스프레드시트 ID 암호화 토큰 (`node scripts/encrypt-spreadsheet.mjs` 로 생성)
    - `ALLOWED_ORIGIN`: (선택 사항) 특정 깃허브 주소만 허용하려면 입력 (미입력 시 `*`)
 6. 상단에 표시되는 워커 주소(`https://mahjong-auth-proxy.xxxx.workers.dev`)를 복사합니다.
 

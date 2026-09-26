@@ -84,18 +84,18 @@ defineProps<Props>()
 }
 .riichi_circle_mini{
   background-color: red;
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  margin: 3px auto 3px auto;
+  margin: 2px auto 2px auto;
 }
 .renchan_circle_mini{
   display: inline-block;
   background-color: var(--text-color);
-  width: 3px;
-  height: 3px;
+  width: 2.5px;
+  height: 2.5px;
   border-radius: 50%;
-  margin: 3px 0px auto 0px;
+  margin: 2px 0px auto 0px;
 }
 
 /* 주사위 */

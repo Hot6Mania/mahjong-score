@@ -1,6 +1,21 @@
 <script setup lang="ts">
 import { computed, ref } from "vue"
 import type { Player } from "@/types/types.d"
+import { Line as LineChart } from "vue-chartjs"
+import {
+  Chart as ChartJS,
+  Title,
+  Tooltip,
+  Legend,
+  LineElement,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  type ChartOptions
+} from "chart.js"
+import { PLAYER_COLORS } from "@/services/publicStatsService"
+
+ChartJS.register(Title, Tooltip, Legend, LineElement, CategoryScale, LinearScale, PointElement)
 
 interface Props {
   todayMembers: string[]
@@ -115,20 +130,119 @@ const formatScore = (score: number) => {
 }
 
 const isEditOrderMode = ref(false)
+const viewMode = ref<'table' | 'chart'>('table')
 
 const getGameSummaryText = (game: any) => {
   if (!game || !game.results) return ''
   const sorted = [...game.results].sort((a, b) => a.rank - b.rank)
   return sorted.map(r => `${r.name}(${r.rank}위: ${r.uma > 0 ? '+' : ''}${r.uma})`).join(', ')
 }
+
+// 회차 내 경기별 누적 우마 변동 추이 꺾은선 차트 데이터셋 계산
+const chartData = computed(() => {
+  const games = props.history || []
+  const members = allPlayers.value
+  const labels = ['시작']
+  games.forEach((_, idx) => labels.push(`${idx + 1}경기`))
+
+  const trajMap: Record<string, number[]> = {}
+  members.forEach(name => {
+    trajMap[name] = [0]
+  })
+
+  games.forEach((g, gIdx) => {
+    members.forEach(name => {
+      const prev = trajMap[name][gIdx]
+      let delta = 0
+      if (g.results) {
+        const match = g.results.find((r: any) => r.name === name)
+        if (match) delta = Number(match.uma || 0)
+      }
+      trajMap[name].push(parseFloat((prev + delta).toFixed(1)))
+    })
+  })
+
+  const datasets = members.map((name, i) => {
+    return {
+      label: name,
+      data: trajMap[name],
+      borderColor: PLAYER_COLORS[i % PLAYER_COLORS.length],
+      backgroundColor: PLAYER_COLORS[i % PLAYER_COLORS.length],
+      borderWidth: 2.2,
+      pointRadius: 4,
+      pointHoverRadius: 6,
+      tension: 0.2,
+      fill: false,
+    }
+  })
+
+  return {
+    labels,
+    datasets,
+  }
+})
+
+const chartOptions = computed<ChartOptions<'line'>>(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      position: 'top',
+      labels: {
+        font: { family: "'Noto Serif KR', serif", size: 11 },
+        usePointStyle: true,
+        boxWidth: 8,
+      },
+    },
+    tooltip: {
+      mode: 'index',
+      intersect: false,
+      callbacks: {
+        label: (context) => {
+          const val = context.parsed.y
+          return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt`
+        }
+      }
+    }
+  },
+  scales: {
+    x: {
+      grid: { color: 'rgba(0, 0, 0, 0.05)' },
+    },
+    y: {
+      grid: { color: 'rgba(0, 0, 0, 0.08)' },
+      ticks: {
+        callback: (value) => `${Number(value) > 0 ? '+' : ''}${value}`,
+      }
+    }
+  }
+}))
 </script>
 
 <template>
 <div class="container_total_uma">
-  <h3 class="title">총 우마</h3>
+  <div class="uma_header_bar">
+    <h3 class="title">총 우마</h3>
+    <div class="uma_view_toggle">
+      <button 
+        class="btn_view_mode" 
+        :class="{ active: viewMode === 'table' }" 
+        @click="viewMode = 'table'"
+      >
+        표 보기
+      </button>
+      <button 
+        class="btn_view_mode" 
+        :class="{ active: viewMode === 'chart' }" 
+        @click="viewMode = 'chart'"
+      >
+        우마 변동 그래프
+      </button>
+    </div>
+  </div>
 
-  <!-- 대국 기록 테이블 영역 (순서 편집 모드가 아닐 때만 렌더링) -->
-  <div v-if="!isEditOrderMode" class="table_wrapper">
+  <!-- 대국 기록 테이블 영역 (표 모드이고 순서 편집 모드가 아닐 때) -->
+  <div v-if="viewMode === 'table' && !isEditOrderMode" class="table_wrapper">
     <table class="uma_table">
       <thead>
         <tr>
@@ -202,6 +316,16 @@ const getGameSummaryText = (game: any) => {
     </table>
   </div>
 
+  <!-- 우마 변동 그래프 영역 -->
+  <div v-else-if="viewMode === 'chart' && !isEditOrderMode" class="uma_chart_wrapper">
+    <div v-if="history && history.length > 0" class="chart_container">
+      <LineChart :data="chartData" :options="chartOptions" />
+    </div>
+    <div v-else class="empty_chart">
+      대국 기록이 없어 차트를 표시할 수 없습니다.
+    </div>
+  </div>
+
   <!-- 순서 편집 모드 UI (모바일 터치 최적화) -->
   <div v-if="isEditOrderMode" class="edit_order_wrapper">
     <div class="edit_order_info">
@@ -272,6 +396,71 @@ const getGameSummaryText = (game: any) => {
   margin-bottom: 15px;
   text-align: center;
   font-weight: bold;
+}
+
+.uma_header_bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.uma_header_bar .title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.uma_view_toggle {
+  display: flex;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.btn_view_mode {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.btn_view_mode.active {
+  background-color: var(--color-primary);
+  color: #fff;
+  font-weight: bold;
+}
+
+.uma_chart_wrapper {
+  width: 100%;
+  height: 320px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+}
+
+.chart_container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.empty_chart {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 /* 가로 스크롤 테이블 래퍼 */

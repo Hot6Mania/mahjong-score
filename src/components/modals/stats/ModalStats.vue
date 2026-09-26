@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue"
+import { useRouter } from "vue-router"
 import type { Player, Option } from "@/types/types.d"
 
 interface Props {
@@ -10,6 +11,8 @@ interface Props {
   googleMemberStats?: any[] // 구글 스프레드시트에서 실시간 갱신된 전체 기간 스탯
 }
 const props = defineProps<Props>()
+
+const router = useRouter()
 
 // 스탯 계산 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
 const scopeTab = ref<'session' | 'backup' | 'all'>('session')
@@ -776,6 +779,13 @@ const stats = computed(() => {
       @click="scopeTab = 'all'"
     >
       전체 기간
+    </button>
+    <button 
+      class="scope_tab btn-dashboard-tab" 
+      @click="router.push('/stats')"
+      title="공개 통계 대시보드 바로가기"
+    >
+      📊 대시보드
     </button>
   </div>
 
@@ -1650,5 +1660,16 @@ html:not(.dark) .chart_center_value {
 
 html:not(.dark) .rank_bar_track {
   background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+.btn-dashboard-tab {
+  margin-left: auto;
+  background-color: var(--color-toggle-on, #3b82f6) !important;
+  color: #ffffff !important;
+  font-weight: bold;
+  border-radius: 4px;
+}
+.btn-dashboard-tab:hover {
+  filter: brightness(1.1);
 }
 </style>

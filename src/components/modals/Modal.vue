@@ -31,6 +31,8 @@ interface Props {
   googleMemberStats: any[],
   todayGamesHistory: any[],
   isGameSaved: boolean,
+  isSyncingGame?: boolean,
+  isGameSynced?: boolean,
   isSaving?: boolean,
   newlyAddedLocalMembers?: string[],
   syncProgress?: number,
@@ -60,6 +62,7 @@ type Emits = {
   (e: 'google-login'): void,
   (e: 'google-logout'): void,
   (e: 'save-game-to-sheet'): void,
+  (e: 'save-and-sync-game'): void,
   (e: 'add-new-member', name: string): void,
   (e: 'delete-member', name: string): void,
   (e: 'save-today-members', names: string[]): void,
@@ -73,6 +76,8 @@ type Emits = {
   (e: 'add-manual-game', results: any[]): void,
   (e: 'move-game', index: number, direction: 'up' | 'down'): void,
   (e: 'add-backup-game-to-current', game: any): void,
+  (e: 'restore-session-backup', backup: any): void,
+  (e: 'manual-backup-session'): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -542,37 +547,112 @@ const getSignColor = (sign: number, x: boolean) => {
           <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntLose }}</div>
         </div>
       </div>
-      <button 
-        @click.stop="isGameSaved ? null : emit('save-game-to-sheet')" 
-        :disabled="isGameSaved"
-        :class="isGameSaved ? 'saved-button' : 'record-btn'"
-        :style="{
-          margin: '0 5px',
-          padding: '8px',
-          fontSize: '16px',
-          fontWeight: 'bold',
-          border: 'none',
-          borderRadius: '4px',
-          cursor: isGameSaved ? 'default' : 'pointer',
-          transition: 'opacity 0.2s, background-color 0.2s',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '8px'
-        }"
-        onmouseover="if(!this.disabled) this.style.opacity='0.9'"
-        onmouseout="if(!this.disabled) this.style.opacity='1.0'"
-      >
-        {{ isGameSaved ? '기록 완료' : '결과 기록하기' }}
-      </button>
-      <button 
-        @click.stop="emit('start-new-game', true)"
-        style="margin: 0 5px; padding: 8px; font-size: 16px; font-weight: bold; background-color: var(--color-toggle-on); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
-        onmouseover="this.style.opacity='0.9'"
-        onmouseout="this.style.opacity='1.0'"
-      >
-        새 게임 시작하기
-      </button>
+      <!-- 구글 연동 모드일 때: 기록 + 동기화 (주), 결과 기록 (보조), 새 게임 시작 -->
+      <template v-if="googleInfo.isLoggedIn && googleInfo.syncMode === 'google'">
+        <button 
+          @click.stop="(isSyncingGame || isGameSynced) ? null : emit('save-and-sync-game')" 
+          :disabled="isSyncingGame || isGameSynced"
+          :class="isGameSynced ? 'saved-button' : 'sync-primary-btn'"
+          :style="{
+            margin: '0 5px',
+            padding: '10px 8px',
+            fontSize: '15px',
+            fontWeight: 'bold',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: (isSyncingGame || isGameSynced) ? 'default' : 'pointer',
+            transition: 'opacity 0.2s, background-color 0.2s',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }"
+        >
+          {{ isSyncingGame ? '동기화 중...' : (isGameSynced ? '동기화 완료' : '기록 + 동기화') }}
+        </button>
+        <button 
+          @click.stop="(isGameSaved || isSyncingGame) ? null : emit('save-game-to-sheet')" 
+          :disabled="isGameSaved || isSyncingGame"
+          :class="isGameSaved ? 'saved-button' : 'record-btn'"
+          :style="{
+            margin: '0 5px',
+            padding: '8px',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: (isGameSaved || isSyncingGame) ? 'default' : 'pointer',
+            transition: 'opacity 0.2s, background-color 0.2s',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }"
+        >
+          {{ isGameSaved ? '기록 완료' : '결과 기록' }}
+        </button>
+        <button 
+          @click.stop="isSyncingGame ? null : emit('start-new-game', true)"
+          :disabled="isSyncingGame"
+          class="btn-new-game-modal"
+          :style="{
+            margin: '0 5px',
+            padding: '9px 8px',
+            fontSize: '15px',
+            fontWeight: 'bold',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: isSyncingGame ? 'default' : 'pointer',
+            transition: 'opacity 0.2s',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }"
+        >
+          새 게임 시작
+        </button>
+      </template>
+
+      <!-- 로컬 모드일 때: 결과 기록, 새 게임 시작 -->
+      <template v-else>
+        <button 
+          @click.stop="isGameSaved ? null : emit('save-game-to-sheet')" 
+          :disabled="isGameSaved"
+          :class="isGameSaved ? 'saved-button' : 'record-btn'"
+          :style="{
+            margin: '0 5px',
+            padding: '8px',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: isGameSaved ? 'default' : 'pointer',
+            transition: 'opacity 0.2s, background-color 0.2s',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }"
+        >
+          {{ isGameSaved ? '기록 완료' : '결과 기록' }}
+        </button>
+        <button 
+          @click.stop="emit('start-new-game', true)"
+          class="btn-new-game-modal"
+          :style="{
+            margin: '0 5px',
+            padding: '9px 8px',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            transition: 'opacity 0.2s',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }"
+        >
+          새 게임 시작
+        </button>
+      </template>
     </div>
   </div>
   <!-- 게임 결과창(차트) -->
@@ -639,8 +719,11 @@ const getSignColor = (sign: number, x: boolean) => {
   <!-- 로컬 백업 보관소 창 -->
   <div v-else-if="modalInfo.type==='backup_archive'" class="modal_content" @click.stop>
     <ModalBackupArchive
+      :google-info="googleInfo"
       @show-modal="(type, status?) => emit('show-modal', type, status)"
       @add-backup-game-to-current="(game) => emit('add-backup-game-to-current', game)"
+      @restore-session-backup="(backup) => emit('restore-session-backup', backup)"
+      @manual-backup-session="() => emit('manual-backup-session')"
     />
   </div>
   <!-- 점수 롤백창 -->
@@ -1082,9 +1165,32 @@ const getSignColor = (sign: number, x: boolean) => {
   to { transform: rotate(360deg); }
 }
 
+/* 원클릭 기록 + 동기화 주 버튼 */
+.sync-primary-btn {
+  background-color: #10b981;
+  color: #ffffff;
+  opacity: 1.0;
+}
+.sync-primary-btn:hover:not(:disabled) {
+  background-color: #059669;
+}
+.sync-primary-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+/* 새 게임 시작 모달 버튼 */
+.btn-new-game-modal {
+  background-color: var(--color-toggle-on, #3b82f6);
+  color: #ffffff;
+}
+.btn-new-game-modal:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
 /* 결과 기록하기 (미저장) 버튼 */
 .record-btn {
-  background-color: #4285f4;
+  background-color: #64748b;
   color: #ffffff;
   opacity: 1.0;
 }

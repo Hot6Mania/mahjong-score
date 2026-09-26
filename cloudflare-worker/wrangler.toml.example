@@ -8,5 +8,7 @@ compatibility_date = "2024-01-01"
 # npx wrangler secret put GOOGLE_CLIENT_ID
 # npx wrangler secret put GOOGLE_CLIENT_SECRET
 # npx wrangler secret put ENCRYPTION_KEY
+# npx wrangler secret put ENCRYPTED_SPREADSHEET_ID
 #
+# (ENCRYPTED_SPREADSHEET_ID 는 'node scripts/encrypt-spreadsheet.mjs' 명령어로 간편 생성 가능)
 # 또는 Cloudflare 대시보드(dash.cloudflare.com) -> Workers -> Settings -> Variables 에서 직접 추가
