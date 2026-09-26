@@ -753,6 +753,16 @@ const stats = computed(() => {
     roundSuji
   }
 })
+
+const emptyScopeMessage = computed(() => {
+  if (scopeTab.value === 'backup') {
+    return `로컬 백업에 '${selectedPlayer.value}'님이 플레이한 대국 기록이 없습니다.`;
+  }
+  if (scopeTab.value === 'all') {
+    return `아직 '${selectedPlayer.value}'님이 플레이한 대국 기록이 없습니다.`;
+  }
+  return `오늘 '${selectedPlayer.value}'님이 플레이한 대국 기록이 없습니다.`;
+});
 </script>
 
 <template>
@@ -840,7 +850,7 @@ const stats = computed(() => {
       스탯을 계산할 플레이어가 지정되지 않았습니다.
     </div>
     <div v-else-if="stats && stats.totalGames === 0" class="no_data">
-      오늘 '{{ selectedPlayer }}'님이 플레이한 대국 기록이 없습니다.
+      {{ emptyScopeMessage }}
     </div>
     <div v-else-if="stats" class="stats_list">
       <!-- 기본 탭 -->

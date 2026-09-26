@@ -22,6 +22,7 @@ import {
   calculateMetricDistribution,
   type MemberStatItem,
   type SessionDetail,
+  type SessionMemberSummary,
   type StatsMatrixData,
   type DistributionData
 } from '@/services/publicStatsService';
@@ -97,19 +98,10 @@ const displayPlayerStats = computed<MemberStatItem>(() => {
 const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
 const hoveredRank = ref<number | null>(null);
 
-// 모달 상단 안내 배너 가시성 상태 (7일간 숨김)
+// 모달 상단 안내 배너 가시성 상태 (새로고침 시 다시 표시)
 const isNoticeVisible = ref(true);
-const checkNoticeVisibility = () => {
-  const hideUntil = localStorage.getItem('hide_stats_modal_notice_until');
-  if (hideUntil && Number(hideUntil) > Date.now()) {
-    isNoticeVisible.value = false;
-  } else {
-    isNoticeVisible.value = true;
-  }
-};
 const dismissNotice = () => {
   isNoticeVisible.value = false;
-  localStorage.setItem('hide_stats_modal_notice_until', String(Date.now() + 7 * 24 * 60 * 60 * 1000));
 };
 
 const getRankRate = (item: MemberStatItem, rank: 1 | 2 | 3 | 4): number => {
@@ -277,10 +269,17 @@ const getMatrixScoreClass = (score: number | null | undefined): string => {
   return score >= 0 ? 'pos' : 'neg';
 };
 
-const openPlayerByName = (name: string) => {
+// 회차별 경기 상세 뷰 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
+const sessionScopeTab = ref<'session' | 'all'>('session');
+
+// 모달 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
+const modalScopeTab = ref<'session' | 'all'>('all');
+
+const openPlayerByName = (name: string, fromSession: boolean = false) => {
   const match = allStats.value.find(m => m.name === name);
   if (match) {
     selectedPlayer.value = match;
+    modalScopeTab.value = fromSession ? 'session' : 'all';
   }
 };
 
@@ -321,6 +320,90 @@ watch(selectedSession, (newVal) => {
   if (newVal) {
     loadSessionDetail(newVal);
   }
+});
+
+// 이번 회차 참가자들의 전체 기간 통산 통계 목록
+const sessionMembersAllStats = computed(() => {
+  if (!currentSessionDetail.value || !currentSessionDetail.value.members) return [];
+  const memberNames = new Set(currentSessionDetail.value.members.map(m => m.name));
+  return allStats.value
+    .map((m, idx) => ({ ...m, overallRank: idx + 1 }))
+    .filter(m => memberNames.has(m.name));
+});
+
+// 이번 회차 참가자들의 1~4위 횟수 포함 순위 목록
+interface SessionMemberWithRanks extends SessionMemberSummary {
+  r1: number;
+  r2: number;
+  r3: number;
+  r4: number;
+  top2Rate: number;
+}
+const sessionMembersWithRanks = computed<SessionMemberWithRanks[]>(() => {
+  if (!currentSessionDetail.value) return [];
+  const members = currentSessionDetail.value.members;
+  const games = currentSessionDetail.value.games;
+
+  return members.map(m => {
+    let r1 = 0, r2 = 0, r3 = 0, r4 = 0;
+    games.forEach(g => {
+      const p = g.players.find(player => player.name === m.name);
+      if (p) {
+        if (p.rank === 1) r1++;
+        else if (p.rank === 2) r2++;
+        else if (p.rank === 3) r3++;
+        else if (p.rank === 4) r4++;
+      }
+    });
+    const top2Rate = m.totalGames > 0 ? parseFloat((((r1 + r2) / m.totalGames) * 100).toFixed(1)) : 0;
+    return {
+      ...m,
+      r1,
+      r2,
+      r3,
+      r4,
+      top2Rate
+    };
+  });
+});
+
+// 모달에서 선택된 선수의 이번 회차 성적
+const currentSessionPlayerStats = computed(() => {
+  if (!selectedPlayer.value || !currentSessionDetail.value) return null;
+  const name = selectedPlayer.value.name;
+  const member = currentSessionDetail.value.members.find(m => m.name === name);
+  const games = currentSessionDetail.value.games;
+
+  const totalGames = member ? member.totalGames : 0;
+  const totalUma = member ? member.totalUma : 0;
+  const avgRank = member ? member.avgRank : 0;
+  const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
+
+  let r1 = 0, r2 = 0, r3 = 0, r4 = 0;
+  games.forEach(g => {
+    const p = g.players.find(player => player.name === name);
+    if (p) {
+      if (p.rank === 1) r1++;
+      else if (p.rank === 2) r2++;
+      else if (p.rank === 3) r3++;
+      else if (p.rank === 4) r4++;
+    }
+  });
+
+  const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(1)) : 0;
+
+  return {
+    name,
+    totalGames,
+    totalUma,
+    avgUma,
+    avgRank,
+    top2Rate,
+    r1,
+    r2,
+    r3,
+    r4
+  };
 });
 
 // 회차 누적 우마 변동 추이 차트 데이터
@@ -464,7 +547,6 @@ const loadAllData = async () => {
 
 onMounted(() => {
   loadAllData();
-  checkNoticeVisibility();
 });
 
 // 링크 복사
@@ -957,85 +1039,178 @@ const getRankClass = (rank: number) => {
           </select>
         </div>
 
+        <!-- 회차 스코프 탭 (이번 회차 / 전체 기간) -->
+        <div class="session-scope-tabs">
+          <button 
+            class="session-scope-tab" 
+            :class="{ active: sessionScopeTab === 'session' }" 
+            @click="sessionScopeTab = 'session'"
+          >
+            이번 회차
+          </button>
+          <button 
+            class="session-scope-tab" 
+            :class="{ active: sessionScopeTab === 'all' }" 
+            @click="sessionScopeTab = 'all'"
+          >
+            전체 기간
+          </button>
+        </div>
+
         <div v-if="isLoadingSession" class="loading-session">
           <div class="spinner-small"></div>
           <span>{{ selectedSession }} 데이터를 조회하는 중...</span>
         </div>
 
         <div v-else-if="currentSessionDetail" class="session-content">
-          <!-- 회차 최종 순위표 -->
-          <div class="section-card">
-            <h3 class="card-title">{{ currentSessionDetail.sessionName }} 최종 순위</h3>
-            <div class="session-members-grid">
-              <div 
-                v-for="(m, idx) in currentSessionDetail.members" 
-                :key="m.name" 
-                class="session-member-card"
-                @click="openPlayerByName(m.name)"
-                title="상세 스탯 보기"
-              >
-                <div class="sm-rank-badge" :class="getRankClass(idx + 1)">{{ idx + 1 }}위</div>
-                <div class="sm-info">
-                  <div class="sm-name">{{ m.name }}</div>
-                  <div class="sm-sub">{{ m.totalGames }}경기 / 평균 {{ m.avgRank }}위</div>
-                </div>
-                <div class="sm-uma" :class="m.totalUma >= 0 ? 'pos' : 'neg'">
-                  {{ m.totalUma > 0 ? '+' : '' }}{{ m.totalUma }}pt
+          <!-- 1) 이번 회차 탭 내용 -->
+          <template v-if="sessionScopeTab === 'session'">
+            <!-- 회차 최종 순위표 -->
+            <div class="section-card">
+              <h3 class="card-title">{{ currentSessionDetail.sessionName }} 최종 순위</h3>
+              <div class="session-members-grid">
+                <div 
+                  v-for="(m, idx) in sessionMembersWithRanks" 
+                  :key="m.name" 
+                  class="session-member-card"
+                  @click="openPlayerByName(m.name, true)"
+                  title="상세 스탯 보기"
+                >
+                  <div class="sm-rank-badge" :class="getRankClass(idx + 1)">{{ idx + 1 }}위</div>
+                  <div class="sm-info">
+                    <div class="sm-name">{{ m.name }}</div>
+                    <div class="sm-sub">{{ m.totalGames }}경기 / 평균 {{ m.avgRank }}위 (연대 {{ m.top2Rate }}%)</div>
+                    <div class="sm-dist-badges">
+                      <span class="sm-badge r1" title="1위">1등 {{ m.r1 }}</span>
+                      <span class="sm-badge r2" title="2위">2등 {{ m.r2 }}</span>
+                      <span class="sm-badge r3" title="3위">3등 {{ m.r3 }}</span>
+                      <span class="sm-badge r4" title="4위">4등 {{ m.r4 }}</span>
+                    </div>
+                  </div>
+                  <div class="sm-uma" :class="m.totalUma >= 0 ? 'pos' : 'neg'">
+                    {{ m.totalUma > 0 ? '+' : '' }}{{ m.totalUma }}pt
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <!-- 회차 누적 우마 변동 추이 꺾은선 차트 -->
-          <div class="section-card chart-card">
-            <div class="chart-header-row">
-              <h3 class="card-title">{{ currentSessionDetail.sessionName }} 누적 우마 변동 추이</h3>
-              <span class="chart-sub-info">0국부터 각 경기 종료 시점까지의 누적 성적</span>
-            </div>
-            <div class="session-chart-wrapper">
-              <LineChart 
-                v-if="sessionChartData.datasets.length > 0" 
-                :data="sessionChartData" 
-                :options="sessionChartOptions" 
-              />
-              <div v-else class="empty-chart-text">
-                대국 기록이 없어 차트를 표시할 수 없습니다.
+            <!-- 회차 누적 우마 변동 추이 꺾은선 차트 -->
+            <div class="section-card chart-card">
+              <div class="chart-header-row">
+                <h3 class="card-title">{{ currentSessionDetail.sessionName }} 누적 우마 변동 추이</h3>
+                <span class="chart-sub-info">0국부터 각 경기 종료 시점까지의 누적 성적</span>
+              </div>
+              <div class="session-chart-wrapper">
+                <LineChart 
+                  v-if="sessionChartData.datasets.length > 0" 
+                  :data="sessionChartData" 
+                  :options="sessionChartOptions" 
+                />
+                <div v-else class="empty-chart-text">
+                  대국 기록이 없어 차트를 표시할 수 없습니다.
+                </div>
               </div>
             </div>
-          </div>
 
-          <!-- 국별/경기별 상세 카드 리스트 -->
-          <div class="section-card">
-            <h3 class="card-title">진행 경기 상세 (총 {{ currentSessionDetail.games.length }}경기)</h3>
-            <div class="games-list">
-              <div 
-                v-for="game in currentSessionDetail.games" 
-                :key="game.gameId" 
-                class="game-card"
-              >
-                <div class="game-card-header">
-                  <span class="game-index">{{ game.gameIndex }}경기</span>
-                  <span class="game-time">{{ game.time }}</span>
-                </div>
-                <div class="game-players-grid">
-                  <div 
-                    v-for="p in game.players" 
-                    :key="p.seat + p.name" 
-                    class="game-player-item"
-                    :class="'item-rank-' + p.rank"
-                  >
-                    <div class="gp-rank">{{ p.rank }}위</div>
-                    <div class="gp-seat" :class="{ 'is-east': p.seat === '東' }">{{ p.seat }}</div>
-                    <div class="gp-name">{{ p.name }}</div>
-                    <div class="gp-score">{{ p.score.toLocaleString() }}점</div>
-                    <div class="gp-uma" :class="p.uma >= 0 ? 'pos' : 'neg'">
-                      {{ p.uma > 0 ? '+' : '' }}{{ p.uma }}
+            <!-- 국별/경기별 상세 카드 리스트 -->
+            <div class="section-card">
+              <h3 class="card-title">진행 경기 상세 (총 {{ currentSessionDetail.games.length }}경기)</h3>
+              <div class="games-list">
+                <div 
+                  v-for="game in currentSessionDetail.games" 
+                  :key="game.gameId" 
+                  class="game-card"
+                >
+                  <div class="game-card-header">
+                    <span class="game-index">{{ game.gameIndex }}경기</span>
+                    <span class="game-time">{{ game.time }}</span>
+                  </div>
+                  <div class="game-players-grid">
+                    <div 
+                      v-for="p in game.players" 
+                      :key="p.seat + p.name" 
+                      class="game-player-item"
+                      :class="'item-rank-' + p.rank"
+                    >
+                      <div class="gp-rank">{{ p.rank }}위</div>
+                      <div class="gp-seat" :class="{ 'is-east': p.seat === '東' }">{{ p.seat }}</div>
+                      <div class="gp-name">{{ p.name }}</div>
+                      <div class="gp-score">{{ p.score.toLocaleString() }}점</div>
+                      <div class="gp-uma" :class="p.uma >= 0 ? 'pos' : 'neg'">
+                        {{ p.uma > 0 ? '+' : '' }}{{ p.uma }}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
+          </template>
+
+          <!-- 2) 전체 기간 탭 내용: 출전자 통산 전체 통계 -->
+          <template v-else>
+            <div class="section-card">
+              <h3 class="card-title">{{ currentSessionDetail.sessionName }} 출전자 통산 전체 통계</h3>
+              <div class="table-container">
+                <table class="stats-table">
+                  <thead>
+                    <tr>
+                      <th rowspan="2" class="col-rank">전체순위</th>
+                      <th rowspan="2" class="col-name">이름</th>
+                      <th rowspan="2" class="col-total-uma">누적 우마</th>
+                      <th rowspan="2" class="col-avg-uma">평균 우마</th>
+                      <th rowspan="2" class="col-games">대국수</th>
+                      <th rowspan="2" class="col-top2">연대율</th>
+                      <th rowspan="2" class="col-avg-rank">평균 순위</th>
+                      <th colspan="4" class="col-ranks-dist-group-th">순위 분포 &amp; 비율</th>
+                    </tr>
+                    <tr class="header-sub-row">
+                      <th class="col-rank-item-th col-rank-1"><div class="dist-badge r1 dist-header-badge">1등</div></th>
+                      <th class="col-rank-item-th col-rank-2"><div class="dist-badge r2 dist-header-badge">2등</div></th>
+                      <th class="col-rank-item-th col-rank-3"><div class="dist-badge r3 dist-header-badge">3등</div></th>
+                      <th class="col-rank-item-th col-rank-4"><div class="dist-badge r4 dist-header-badge">4등</div></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr 
+                      v-for="member in sessionMembersAllStats" 
+                      :key="member.name"
+                      class="member-row"
+                      @click="openPlayerByName(member.name, false)"
+                      title="클릭 시 상세 스탯 & 연속 히스토그램 조회"
+                    >
+                      <td class="col-rank">
+                        <span class="rank-badge" :class="getRankClass(member.overallRank)">{{ member.overallRank }}</span>
+                      </td>
+                      <td class="col-name" :title="member.name">
+                        <strong>{{ member.name }}</strong>
+                      </td>
+                      <td class="col-total-uma col-uma" :class="member.totalUma >= 0 ? 'pos' : 'neg'">
+                        {{ member.totalUma > 0 ? '+' : '' }}{{ member.totalUma.toFixed(1) }}
+                      </td>
+                      <td class="col-avg-uma" :class="member.avgUma >= 0 ? 'pos' : 'neg'">
+                        {{ member.avgUma > 0 ? '+' : '' }}{{ member.avgUma.toFixed(1) }}
+                      </td>
+                      <td class="col-games">{{ member.totalGames }}전</td>
+                      <td class="col-top2">{{ member.top2Rate.toFixed(1) }}%</td>
+                      <td class="col-avg-rank">{{ member.avgRank.toFixed(2) }}위</td>
+                      <td class="col-rank-item col-rank-1">
+                        <div class="dist-badge r1"><span class="dist-cnt">{{ member.rank1Count }}</span><span class="dist-pct">({{ getDistPct(member.rank1Count, member.totalGames) }}%)</span></div>
+                      </td>
+                      <td class="col-rank-item col-rank-2">
+                        <div class="dist-badge r2"><span class="dist-cnt">{{ member.rank2Count }}</span><span class="dist-pct">({{ getDistPct(member.rank2Count, member.totalGames) }}%)</span></div>
+                      </td>
+                      <td class="col-rank-item col-rank-3">
+                        <div class="dist-badge r3"><span class="dist-cnt">{{ member.rank3Count }}</span><span class="dist-pct">({{ getDistPct(member.rank3Count, member.totalGames) }}%)</span></div>
+                      </td>
+                      <td class="col-rank-item col-rank-4">
+                        <div class="dist-badge r4"><span class="dist-cnt">{{ member.rank4Count }}</span><span class="dist-pct">({{ getDistPct(member.rank4Count, member.totalGames) }}%)</span></div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
         </div>
       </section>
     </main>
@@ -1065,14 +1240,80 @@ const getRankClass = (rank: number) => {
               <button class="btn-close" @click="selectedPlayer = null" title="닫기">✕</button>
             </div>
 
+            <!-- 모달 스코프 탭 (이번 회차 / 전체 기간) -->
+            <div class="modal_scope_tabs" v-if="currentSessionDetail">
+              <button 
+                class="modal_scope_tab" 
+                :class="{ active: modalScopeTab === 'session' }" 
+                @click="modalScopeTab = 'session'"
+              >
+                이번 회차
+              </button>
+              <button 
+                class="modal_scope_tab" 
+                :class="{ active: modalScopeTab === 'all' }" 
+                @click="modalScopeTab = 'all'"
+              >
+                전체 기간
+              </button>
+            </div>
+
             <!-- 세부 스탯 안내 문구 -->
             <div v-if="isNoticeVisible" class="modal_notice_text">
               <div class="notice_text_content">
                 ※ 제9회부터의 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.<br />
                 ※ 종합 대국 수(세부 스탯 집계 대국 수) 형식으로 표기됩니다.
               </div>
-              <button class="notice_close_btn" @click="dismissNotice" title="당분간 숨기기">✕</button>
+              <button class="notice_close_btn" @click="dismissNotice" title="닫기">✕</button>
             </div>
+
+            <!-- 1) 이번 회차 스탯 뷰 -->
+            <div v-if="modalScopeTab === 'session'" class="session_modal_content">
+              <div v-if="!currentSessionPlayerStats || currentSessionPlayerStats.totalGames === 0" class="no_data_modal">
+                {{ currentSessionDetail?.sessionName }}에 '{{ selectedPlayer.name }}'님이 플레이한 대국 기록이 없습니다.
+              </div>
+              <div v-else class="session_modal_body">
+                <div class="stats_group">
+                  <div class="stat_row">
+                    <span class="stat_label">기록 대국 수</span>
+                    <span class="stat_value">{{ formatDualMetric(currentSessionPlayerStats.totalGames, currentSessionPlayerStats.totalGames) }}전</span>
+                  </div>
+                  <div class="stat_row">
+                    <span class="stat_label">누적 우마</span>
+                    <span class="stat_value" :class="currentSessionPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
+                      {{ formatDualMetric(currentSessionPlayerStats.totalUma, currentSessionPlayerStats.totalUma, 1, true) }}pt
+                    </span>
+                  </div>
+                  <div class="stat_row">
+                    <span class="stat_label">평균 우마</span>
+                    <span class="stat_value" :class="currentSessionPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
+                      {{ formatDualMetric(currentSessionPlayerStats.avgUma, currentSessionPlayerStats.avgUma, 1, true) }}pt
+                    </span>
+                  </div>
+                  <div class="stat_row">
+                    <span class="stat_label">평균 순위</span>
+                    <span class="stat_value">{{ formatDualMetric(currentSessionPlayerStats.avgRank, currentSessionPlayerStats.avgRank, 2) }}위</span>
+                  </div>
+                  <div class="stat_row">
+                    <span class="stat_label">연대율</span>
+                    <span class="stat_value text_positive">{{ formatDualMetric(currentSessionPlayerStats.top2Rate, currentSessionPlayerStats.top2Rate, 1) }}%</span>
+                  </div>
+                </div>
+                <!-- 이번 회차 순위 분포 -->
+                <div class="session_modal_rank_section">
+                  <div class="session_rank_title">이번 회차 순위 분포</div>
+                  <div class="session_rank_badges_row">
+                    <div class="dist-badge r1"><span class="dist-label">1등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.r1 }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.r1, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                    <div class="dist-badge r2"><span class="dist-label">2등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.r2 }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.r2, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                    <div class="dist-badge r3"><span class="dist-label">3등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.r3 }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.r3, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                    <div class="dist-badge r4"><span class="dist-label">4등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.r4 }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.r4, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2) 전체 기간 스탯 뷰 -->
+            <template v-else>
 
             <!-- 4개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 -->
             <div class="tab_menu">
@@ -1570,6 +1811,7 @@ const getRankClass = (rank: number) => {
             </div>
           </div>
         </div>
+      </template>
       </div>
     </div>
   </div>
@@ -2338,6 +2580,54 @@ html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
 /* ============================================== */
 /* TAB 3: 회차별 경기 상세 & 차트 스타일          */
 /* ============================================== */
+/* 회차 스코프 탭 (이번 회차 / 전체 기간) */
+.session-scope-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 4px;
+  border-radius: 8px;
+  width: fit-content;
+}
+.session-scope-tab {
+  padding: 7px 18px;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-dimmed, #666);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.session-scope-tab:hover {
+  color: var(--text-color, #1a1a1a);
+}
+.session-scope-tab.active {
+  background: var(--card-bg-color, #fff);
+  color: var(--color-toggle-on, #3b82f6);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+/* 회차 최종 순위 카드 내 순위분포 뱃지 */
+.sm-dist-badges {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.sm-badge {
+  font-size: 9.5px;
+  font-weight: bold;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.sm-badge.r1 { background: rgba(16, 185, 129, 0.15); color: #059669; }
+.sm-badge.r2 { background: rgba(6, 182, 212, 0.15); color: #0891b2; }
+.sm-badge.r3 { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+.sm-badge.r4 { background: rgba(239, 68, 68, 0.15); color: #dc2626; }
+
 .session-picker-bar {
   display: flex;
   align-items: center;
@@ -2940,6 +3230,72 @@ html.dark .container_stats_modal {
 }
 .metric_val {
   font-weight: bold;
+}
+/* 모달 스코프 탭 (이번 회차 / 전체 기간) */
+.modal_scope_tabs {
+  display: flex;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 3px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.modal_scope_tab {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-dimmed, #777);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+.modal_scope_tab:hover {
+  color: var(--text-color, #1a1a1a);
+}
+.modal_scope_tab.active {
+  background: var(--card-bg-color, #fff);
+  color: var(--color-toggle-on, #3b82f6);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+.session_modal_content {
+  padding: 10px 0;
+}
+.no_data_modal {
+  text-align: center;
+  padding: 30px 10px;
+  color: var(--text-dimmed, #888);
+  font-size: 13px;
+}
+.session_modal_rank_section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, #eee);
+}
+.session_rank_title {
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 8px;
+  color: var(--text-dimmed, #666);
+}
+.session_rank_badges_row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+html.dark .session-scope-tabs,
+html.dark .modal_scope_tabs {
+  background: rgba(255, 255, 255, 0.06);
+}
+html.dark .session-scope-tab.active,
+html.dark .modal_scope_tab.active {
+  background: #1e293b;
+  color: #38bdf8;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 
 .modal-fade-enter-active, .modal-fade-leave-active {
