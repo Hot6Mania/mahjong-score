@@ -610,7 +610,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
         const row = r.c;
         if (!row) return;
         const name = getCellStr(row[0]).trim();
-        if (!name || name === "이름") return;
+        if (!name || name === "이름" || name.startsWith("#")) return;
 
         const sheetUma = parseFloat(getCellNum(row[1]).toFixed(1));
         const totalUma = tonggeMap[name] !== undefined ? tonggeMap[name] : sheetUma;
@@ -668,8 +668,9 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
       });
     }
 
-    // 3) '통계' 시트의 모든 멤버가 누락 없이 포함되도록 통합
-    const allNames = Array.from(new Set([...Object.keys(tonggeMap), ...Object.keys(detailedStatsMap)]));
+    // 3) '통계' 시트의 모든 멤버가 누락 없이 포함되도록 통합 (에러 셀 및 비정상 명칭 제외)
+    const allNames = Array.from(new Set([...Object.keys(tonggeMap), ...Object.keys(detailedStatsMap)]))
+      .filter(n => n && !n.startsWith("#") && n !== "이름");
 
     const items: MemberStatItem[] = allNames.map(name => {
       const legacy = LEGACY_MEMBER_AGGREGATES[name];
@@ -997,7 +998,7 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string): Promise<St
   table.rows.forEach((r: any) => {
     if (!r.c) return;
     const name = getCellStr(r.c[0]).trim();
-    if (!name || name === "이름") return;
+    if (!name || name === "이름" || name.startsWith("#")) return;
 
     const total = parseFloat(getCellNum(r.c[1]).toFixed(1));
     const sessionUmas: Record<string, number | null> = {};

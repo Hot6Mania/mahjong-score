@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, expandSessionSheetRowsIfNeeded, type SessionMigrationBackup } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, type SessionMigrationBackup } from "@/utils/googleSheets"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
@@ -1647,6 +1647,7 @@ const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) =
       // 3. 전체 멤버별 통계 로드 (95%)
       syncProgress.value = 95;
       try {
+        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
         const stats = await fetchMemberStats(googleInfo.spreadsheetId);
         googleMemberStats.value = stats;
       } catch (statsErr) {
@@ -2563,6 +2564,13 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
         await syncSessionUmaToStatsSheet(googleInfo.spreadsheetId, sessionSheetName, googleInfo.todayMembers, todayGamesHistory.length);
       } catch (statsSyncErr) {
         console.warn("'통계' 시트 최종우마 동기화 중 오류:", statsSyncErr);
+      }
+
+      // [7] '전체 멤버별 통계' 시트 Spill Error(#REF!) 자동 복구
+      try {
+        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
+      } catch (spillErr) {
+        console.warn("'전체 멤버별 통계' 시트 Spill Error 자동 복구 중 오류:", spillErr);
       }
       syncProgress.value = 98;
       
