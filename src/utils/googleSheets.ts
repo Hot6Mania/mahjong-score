@@ -754,7 +754,21 @@ export const syncSessionUmaToStatsSheet = async (
     }
 
     // 3. 오늘 참석자 중 '통계' 시트에 없는 신규 멤버가 있으면 행 추가 (총합 수식은 ZZ열까지 여유있게 합산)
-    const newMembersToAdd = todayMembers.filter(m => m && m.trim() && !existingPlayers.has(m.trim()));
+    let activeMembers = [...todayMembers];
+    if (activeMembers.length === 0) {
+      try {
+        const rawRes = await window.gapi.client.sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `'${rawTitle}'!A2:A30`,
+        });
+        const rawRows = rawRes.result.values || [];
+        activeMembers = rawRows.map((r: any) => (r[0] || '').toString().trim()).filter(Boolean);
+      } catch (e) {
+        console.warn(`'${rawTitle}' 참가자 명단 조회 실패:`, e);
+      }
+    }
+
+    const newMembersToAdd = activeMembers.filter(m => m && m.trim() && !existingPlayers.has(m.trim()));
     if (newMembersToAdd.length > 0) {
       let nextRow = playerRows.length + 1;
       const appendRows: any[][] = [];
@@ -777,26 +791,39 @@ export const syncSessionUmaToStatsSheet = async (
       console.log(`'통계' 시트에 신규 선수 [${newMembersToAdd.join(', ')}] 행 추가 완료 (A${startRow}:B${endRow})`);
     }
 
-    // 4. 각 선수 행에 raw 시트 VLOOKUP 연동 수식 설정
+    // 4. 각 선수 행에 raw 시트 VLOOKUP 연동 수식 설정 (참가자만 수식 기입, 미참가자는 순수 빈 셀로 유지하여 내림차순 정렬 보장!)
     const totalPlayerCount = existingPlayers.size;
     if (totalPlayerCount > 0) {
       const maxRow = Math.max(...Array.from(existingPlayers.values()));
-      const formulaRows: any[][] = [];
-      for (let r = 2; r <= maxRow; r++) {
-        formulaRows.push([
-          `=IFERROR(VLOOKUP(A${r}, '${rawTitle}'!$A$2:$B$30, 2, FALSE), "")`
-        ]);
-      }
 
-      await window.gapi.client.sheets.spreadsheets.values.update({
+      // 4-1. 해당 회차 열 전체(2행 ~ maxRow)를 먼저 깨끗하게 클리어하여 미참가자 셀을 순수 빈 셀로 만듦
+      await window.gapi.client.sheets.spreadsheets.values.clear({
         spreadsheetId,
         range: `'통계'!${sessionColLetter}2:${sessionColLetter}${maxRow}`,
-        valueInputOption: 'USER_ENTERED',
-        resource: {
-          values: formulaRows
-        }
       });
-      console.log(`'통계' 시트 ${sessionColLetter}2:${sessionColLetter}${maxRow}에 '${rawTitle}' 최종우마 VLOOKUP 연동 완료`);
+
+      // 4-2. 오늘 참가한 멤버에 대해서만 VLOOKUP 수식 일괄 생성
+      const updateData = activeMembers
+        .map(name => {
+          const r = existingPlayers.get(name.trim());
+          if (!r) return null;
+          return {
+            range: `'통계'!${sessionColLetter}${r}`,
+            values: [[`=VLOOKUP(A${r}, '${rawTitle}'!$A$2:$B$30, 2, FALSE)`]],
+          };
+        })
+        .filter((item): item is { range: string; values: string[][] } => item !== null);
+
+      if (updateData.length > 0) {
+        await window.gapi.client.sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId,
+          resource: {
+            valueInputOption: 'USER_ENTERED',
+            data: updateData,
+          },
+        });
+        console.log(`'통계' 시트 ${sessionColLetter}열에 참가자(${updateData.length}명) VLOOKUP 연동 완료 (미참가자는 순수 빈 셀 유지)`);
+      }
     }
   } catch (err) {
     console.warn("'통계' 시트 최종우마 자동 연동 중 오류 (무시 가능):", err);
