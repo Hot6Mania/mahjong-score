@@ -145,17 +145,19 @@ const chartData = computed(() => {
   const labels = ['시작']
   games.forEach((_, idx) => labels.push(`${idx + 1}경기`))
 
-  const trajMap: Record<string, (number | null)[]> = {}
+  const trajMap: Record<string, number[]> = {}
   const playedMap: Record<string, boolean[]> = {}
+  const deltasMap: Record<string, (number | null)[]> = {}
   const currentUmaMap: Record<string, number> = {}
   members.forEach(name => {
     trajMap[name] = [0]
-    playedMap[name] = [false] // '시작' 지점은 경기 미참가로 처리
+    playedMap[name] = [false] // '시작' 지점
+    deltasMap[name] = [null]
     currentUmaMap[name] = 0
   })
 
   const totalGames = games.length
-  games.forEach((g, gIdx) => {
+  games.forEach((g) => {
     members.forEach(name => {
       let delta = 0
       let played = false
@@ -170,30 +172,41 @@ const chartData = computed(() => {
         currentUmaMap[name] = parseFloat((currentUmaMap[name] + delta).toFixed(1))
         trajMap[name].push(currentUmaMap[name])
         playedMap[name].push(true)
+        deltasMap[name].push(delta)
       } else {
-        if (gIdx === totalGames - 1) {
-          trajMap[name].push(currentUmaMap[name])
-          playedMap[name].push(false)
-        } else {
-          trajMap[name].push(null)
-          playedMap[name].push(false)
-        }
+        trajMap[name].push(currentUmaMap[name]) // 누적 점수 수평선 유지
+        playedMap[name].push(false)
+        deltasMap[name].push(null)
       }
     })
   })
 
   const datasets = members.map((name, i) => {
+    const data = trajMap[name]
+    const played = playedMap[name]
+    const deltas = deltasMap[name]
+
+    // 시작점(i=0), 종료점(i=totalGames), 출전 직후(played[i]), 출전 직전(played[i+1])에 점(마커) 표기
+    const hasMarker = data.map((_, idx) => {
+      const isStart = idx === 0
+      const isEnd = idx === totalGames
+      const isPlayed = played[idx]
+      const isBeforePlayed = idx + 1 <= totalGames && played[idx + 1]
+      return isStart || isEnd || isPlayed || isBeforePlayed
+    })
+
     return {
       label: name,
-      data: trajMap[name],
+      data,
       borderColor: PLAYER_COLORS[i % PLAYER_COLORS.length],
       backgroundColor: PLAYER_COLORS[i % PLAYER_COLORS.length],
       borderWidth: 2.2,
-      pointRadius: playedMap[name].map(p => (p ? 4 : 0)),
-      pointHoverRadius: playedMap[name].map(p => (p ? 6 : 0)),
-      played: playedMap[name],
+      pointRadius: hasMarker.map(m => (m ? 4 : 0)),
+      pointHoverRadius: hasMarker.map(m => (m ? 6 : 0)),
+      played,
+      deltas,
+      hasMarker,
       tension: 0,
-      spanGaps: true,
       fill: false,
     }
   })
@@ -219,14 +232,23 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
     tooltip: {
       mode: 'index',
       intersect: false,
-      filter: (item) => item.parsed.y !== null && !isNaN(item.parsed.y),
       callbacks: {
         label: (context) => {
           const val = context.parsed.y
           if (val === null || val === undefined || isNaN(val)) return ''
-          const isPlayed = (context.dataset as any).played?.[context.dataIndex]
-          const restBadge = context.dataIndex > 0 && !isPlayed ? ' (미참가)' : ''
-          return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt${restBadge}`
+          const dataset = context.dataset as any
+          const isPlayed = dataset.played?.[context.dataIndex]
+          const delta = dataset.deltas?.[context.dataIndex]
+
+          if (context.dataIndex === 0) {
+            return `${dataset.label}: 0.0pt (시작)`
+          }
+
+          if (isPlayed && delta !== null && delta !== undefined) {
+            const deltaStr = `${delta > 0 ? '+' : ''}${Number(delta).toFixed(1)}pt`
+            return `${dataset.label}: ${val > 0 ? '+' : ''}${Number(val).toFixed(1)}pt (${deltaStr})`
+          }
+          return `${dataset.label}: ${val > 0 ? '+' : ''}${Number(val).toFixed(1)}pt (미참가)`
         }
       }
     }

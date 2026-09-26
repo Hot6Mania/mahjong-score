@@ -1409,10 +1409,12 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string): Promise<St
  */
 export interface UmaTrajectoryDataset {
   name: string;
-  data: (number | null)[];
+  data: number[];
   color: string;
   finalUma: number;
   played: boolean[];
+  deltas: (number | null)[];
+  hasMarker: boolean[];
 }
 
 export interface SessionUmaTrajectory {
@@ -1433,46 +1435,58 @@ export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): Ses
   const labels = ['시작'];
   games.forEach((_, idx) => labels.push(`${idx + 1}국`));
 
-  const trajMap: Record<string, (number | null)[]> = {};
+  const trajMap: Record<string, number[]> = {};
   const playedMap: Record<string, boolean[]> = {};
+  const deltasMap: Record<string, (number | null)[]> = {};
   const currentUmaMap: Record<string, number> = {};
 
   members.forEach(name => {
     trajMap[name] = [0];
-    playedMap[name] = [false]; // '시작' 지점은 경기 미참가로 처리
+    playedMap[name] = [false]; // '시작' 지점
+    deltasMap[name] = [null];
     currentUmaMap[name] = 0;
   });
 
   const totalGames = games.length;
-  games.forEach((g, gIdx) => {
+  games.forEach((g) => {
     members.forEach(name => {
       const match = g.players.find(p => p.name === name);
       if (match) {
         currentUmaMap[name] = parseFloat((currentUmaMap[name] + match.uma).toFixed(1));
         trajMap[name].push(currentUmaMap[name]);
         playedMap[name].push(true);
+        deltasMap[name].push(match.uma);
       } else {
-        // 마지막 게임이면 최종 우마로 도달시키고(점은 안 찍음), 중간 게임이면 null로 건너뛰어 직선 연결
-        if (gIdx === totalGames - 1) {
-          trajMap[name].push(currentUmaMap[name]);
-          playedMap[name].push(false);
-        } else {
-          trajMap[name].push(null);
-          playedMap[name].push(false);
-        }
+        trajMap[name].push(currentUmaMap[name]); // 누적 점수 수평선 유지
+        playedMap[name].push(false);
+        deltasMap[name].push(null);
       }
     });
   });
 
   const datasets: UmaTrajectoryDataset[] = members.map((name, i) => {
     const data = trajMap[name];
+    const played = playedMap[name];
+    const deltas = deltasMap[name];
     const finalUma = currentUmaMap[name];
+
+    // 시작점(i=0), 종료점(i=totalGames), 출전 직후(played[i]), 출전 직전(played[i+1])에 점(마커) 표기
+    const hasMarker = data.map((_, idx) => {
+      const isStart = idx === 0;
+      const isEnd = idx === totalGames;
+      const isPlayed = played[idx];
+      const isBeforePlayed = idx + 1 <= totalGames && played[idx + 1];
+      return isStart || isEnd || isPlayed || isBeforePlayed;
+    });
+
     return {
       name,
       data,
       color: PLAYER_COLORS[i % PLAYER_COLORS.length],
       finalUma,
-      played: playedMap[name],
+      played,
+      deltas,
+      hasMarker,
     };
   });
 

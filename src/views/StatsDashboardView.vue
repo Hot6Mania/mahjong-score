@@ -557,11 +557,12 @@ const sessionChartData = computed(() => {
     borderColor: d.color,
     backgroundColor: d.color,
     borderWidth: 2.2,
-    pointRadius: d.played ? d.played.map(p => (p ? 4 : 0)) : 4,
-    pointHoverRadius: d.played ? d.played.map(p => (p ? 6 : 0)) : 6,
+    pointRadius: d.hasMarker ? d.hasMarker.map(m => (m ? 4 : 0)) : 4,
+    pointHoverRadius: d.hasMarker ? d.hasMarker.map(m => (m ? 6 : 0)) : 6,
     played: d.played,
+    deltas: d.deltas,
+    hasMarker: d.hasMarker,
     tension: 0,
-    spanGaps: true,
     fill: false,
   }));
 
@@ -586,14 +587,23 @@ const sessionChartOptions = computed<ChartOptions<'line'>>(() => ({
     tooltip: {
       mode: 'index',
       intersect: false,
-      filter: (item) => item.parsed.y !== null && !isNaN(item.parsed.y),
       callbacks: {
         label: (context) => {
           const val = context.parsed.y;
           if (val === null || val === undefined || isNaN(val)) return '';
-          const isPlayed = (context.dataset as any).played?.[context.dataIndex];
-          const restBadge = context.dataIndex > 0 && !isPlayed ? ' (미참가)' : '';
-          return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt${restBadge}`;
+          const dataset = context.dataset as any;
+          const isPlayed = dataset.played?.[context.dataIndex];
+          const delta = dataset.deltas?.[context.dataIndex];
+
+          if (context.dataIndex === 0) {
+            return `${dataset.label}: 0.0pt (시작)`;
+          }
+
+          if (isPlayed && delta !== null && delta !== undefined) {
+            const deltaStr = `${delta > 0 ? '+' : ''}${Number(delta).toFixed(1)}pt`;
+            return `${dataset.label}: ${val > 0 ? '+' : ''}${Number(val).toFixed(1)}pt (${deltaStr})`;
+          }
+          return `${dataset.label}: ${val > 0 ? '+' : ''}${Number(val).toFixed(1)}pt (미참가)`;
         }
       }
     }
