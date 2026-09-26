@@ -457,7 +457,7 @@ const stats = computed(() => {
           }
           if (isLose) {
             loseCount++
-            totalLoseScore += delta // 음수
+            totalLoseScore += (hasRiichi ? delta + 1000 : delta) // 리치 후 방총 시 리치봉 1000점 상쇄
           }
           if (isDraw) {
             drawCount++
@@ -579,7 +579,7 @@ const stats = computed(() => {
           }
           if (isLose) {
             loseCount++
-            totalLoseScore += actualRoundDelta // 음수
+            totalLoseScore += (hasRiichi ? actualRoundDelta + 1000 : actualRoundDelta) // 리치 후 방총 시 리치봉 1000점 상쇄
           }
           if (isDraw) {
             drawCount++

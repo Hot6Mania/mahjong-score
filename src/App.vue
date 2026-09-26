@@ -2169,13 +2169,21 @@ const syncLocalDataToGoogle = async () => {
           for (let w = 0; w < results.length; w++) {
             const wName = results[w].name;
             const wIdx = orderedNames.indexOf(wName);
-            if (wIdx !== -1 && records.win && records.win[r] && !records.win[r][wIdx]) {
+            if (wIdx === -1) continue;
+
+            const isWinner = records.win && records.win[r] && records.win[r][wIdx];
+            const isLoser = records.lose && records.lose[r] && records.lose[r][wIdx];
+            // 론일 경우 실제 방총자(더블/트리플론 포함)의 지불액만 합산, 쯔모일 경우 비화료자 3인의 지불액 합산
+            const isPayer = (roundStatus === 'ron') ? isLoser : !isWinner;
+
+            if (isPayer) {
               const wPrev = (r === 1) ? option.startingScore : (records.score[wIdx][2 * (r - 1)] || 0);
               const wCurr = records.score[wIdx][2 * r] || 0;
               const wDelta = wCurr - wPrev;
-              if (wDelta < 0) {
-                pureWinScore += Math.abs(wDelta);
-              }
+              // 방총자/지불자가 이번 국에 리치를 걸었다면 리치봉(1000점) 공탁분은 방총 타점에서 제외
+              const riichiCost = (records.riichi && records.riichi[r] && records.riichi[r][wIdx]) ? 1000 : 0;
+              const pureLoss = Math.max(0, Math.abs(wDelta) - riichiCost);
+              pureWinScore += pureLoss;
             }
           }
         }

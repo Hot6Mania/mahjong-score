@@ -110,7 +110,8 @@ export const fetchMemberList = async (spreadsheetId: string): Promise<string[]> 
   });
   const values = response.result.values;
   if (values && values.length > 1) {
-    return values.slice(1).map((row: any) => row[0]).filter((name: string) => name && name.trim() !== '');
+    const list = values.slice(1).map((row: any) => row[0]?.toString().trim()).filter((name: string) => name && name !== '');
+    return Array.from(new Set(list));
   }
   return [];
 };
@@ -708,7 +709,7 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
       startRowIndex: 1,
       endRowIndex: totalMembers + 1,
       startColumnIndex: 0,
-      endColumnIndex: 23 // A~W열
+      endColumnIndex: 37 // A~AK열
     };
 
     await window.gapi.client.sheets.spreadsheets.batchUpdate({
@@ -727,7 +728,7 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
         ]
       }
     });
-    console.log(`교차 색상 규칙 범위 갱신 완료: A2:W${totalMembers + 1}`);
+    console.log(`교차 색상 규칙 범위 갱신 완료: A2:AK${totalMembers + 1}`);
   } catch (err) {
     console.warn("교차 색상 범위 업데이트 중 오류 발생 (무시 가능):", err);
   }
@@ -738,34 +739,58 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
  */
 export const addNewMembersToDb = async (spreadsheetId: string, names: string[]): Promise<void> => {
   if (!spreadsheetId || names.length === 0) return;
-  const range = "'전체 멤버별 통계'!A:A";
+  const range = "'전체 멤버별 통계'!A1:A500";
   try {
     const response = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId,
       range,
     });
-    const values = response.result.values || [];
-    const existing = new Set(values.map((row: any) => row[0]?.toString().trim()));
-    const toAdd = names.filter(n => n && n.trim() !== '' && !existing.has(n.trim()));
-
-    if (toAdd.length > 0) {
-      const rows = toAdd.map(n => [n.trim()]);
-      await window.gapi.client.sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range,
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        resource: {
-          values: rows
-        }
-      });
-      console.log(`구글 시트 '전체 멤버별 통계'에 신규 임시 멤버 ${toAdd.join(', ')} 추가 완료`);
-      
-      const updatedTotal = values.length - 1 + toAdd.length;
-      await updateAlternatingColorsRange(spreadsheetId, updatedTotal);
+    const values: string[][] = response.result.values || [];
+    
+    // 1. 기존에 등록된 멤버 이름 Set 구성 (1행 헤더 제외)
+    const existing = new Set<string>();
+    for (let i = 1; i < values.length; i++) {
+      const val = values[i]?.[0]?.toString().trim();
+      if (val) existing.add(val);
     }
+
+    const toAdd = names
+      .map(n => n?.trim())
+      .filter((n): n is string => !!n && !existing.has(n));
+
+    if (toAdd.length === 0) return;
+
+    // 2. A열에서 이름이 비어있는 첫 번째 행(1-based row index) 탐색 (2행부터)
+    let targetRowIndex = -1;
+    for (let r = 2; r <= values.length; r++) {
+      const cellVal = values[r - 1]?.[0]?.toString().trim();
+      if (!cellVal) {
+        targetRowIndex = r;
+        break;
+      }
+    }
+    if (targetRowIndex === -1) {
+      targetRowIndex = values.length + 1;
+    }
+
+    // 3. values.append 대신 빈 위치에 values.update로 직접 입력
+    const endRowIndex = targetRowIndex + toAdd.length - 1;
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'전체 멤버별 통계'!A${targetRowIndex}:A${endRowIndex}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: toAdd.map(n => [n])
+      }
+    });
+
+    console.log(`구글 시트 '전체 멤버별 통계' A${targetRowIndex}행부터 신규 멤버 [${toAdd.join(', ')}] 추가 완료`);
+
+    // 4. 총 멤버 수에 맞게 교차 색상 범위 갱신
+    const totalMembers = existing.size + toAdd.length;
+    await updateAlternatingColorsRange(spreadsheetId, totalMembers);
   } catch (err) {
-    console.error("신규 임시 멤버 구글 시트 추가 실패:", err);
+    console.error("신규 멤버 구글 시트 추가 실패:", err);
   }
 };
 
