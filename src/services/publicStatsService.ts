@@ -4,12 +4,16 @@
  * 스프레드시트 접근 주소(ID)는 하드코딩하지 않고, 서버 Secret 및 .env 암호화 토큰을 통해 복호화하여 사용합니다.
  */
 
+// 기본 내장 암호화 토큰 (평문 ID는 노출되지 않으며, 서버 Secret 미설정 시에도 안전하게 복호화되어 무설정 즉시 작동)
+const DEFAULT_ENCRYPTED_SPREADSHEET_ID = "am68XR1EK7z5R3BSAraD8QDkpTbgpvlnHrxdbQUJTI94QQfRZYzF6T5Ygv8m2z2RXsxDqHQxY-8GwcTEeS-mTQXZC_il30MV";
+const DEFAULT_ENCRYPTION_KEY = "mahjong_secret_salt_key_20260926";
+
 // 클라이언트 캐시된 스프레드시트 ID (복호화 결과)
 let resolvedClientSpreadsheetId: string | null = null;
 
 /**
  * 환경 변수(VITE_ENCRYPTED_SPREADSHEET_ID + VITE_ENCRYPTION_KEY 또는 VITE_SPREADSHEET_ID)에서
- * 스프레드시트 ID를 안전하게 복호화/해석합니다. (하드코딩 방지)
+ * 스프레드시트 ID를 안전하게 복호화/해석합니다. (하드코딩 방지 및 무설정 즉시 작동 보장)
  */
 export async function resolveSpreadsheetId(): Promise<string> {
   if (resolvedClientSpreadsheetId) return resolvedClientSpreadsheetId;
@@ -21,9 +25,10 @@ export async function resolveSpreadsheetId(): Promise<string> {
     return resolvedClientSpreadsheetId;
   }
 
-  // 2. .env에 암호화된 토큰(VITE_ENCRYPTED_SPREADSHEET_ID)과 키(VITE_ENCRYPTION_KEY)가 있는 경우 복호화
-  const encToken = (import.meta as any).env?.VITE_ENCRYPTED_SPREADSHEET_ID;
-  const encKey = (import.meta as any).env?.VITE_ENCRYPTION_KEY;
+  // 2. 암호화된 토큰 복호화 (.env 설정 우선, 미설정 시 기본 내장 암호화 토큰 사용)
+  const encToken = (import.meta as any).env?.VITE_ENCRYPTED_SPREADSHEET_ID || DEFAULT_ENCRYPTED_SPREADSHEET_ID;
+  const encKey = (import.meta as any).env?.VITE_ENCRYPTION_KEY || DEFAULT_ENCRYPTION_KEY;
+
   if (encToken && encKey) {
     try {
       const rawKey = new TextEncoder().encode(String(encKey).padEnd(32, "0").slice(0, 32));

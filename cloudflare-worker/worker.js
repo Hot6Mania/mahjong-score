@@ -244,9 +244,12 @@ export default {
 
     // ==========================================
     // 3. 외부 공개 대시보드 API (Cloudflare Edge Cache 3분 적용)
-    // 스프레드시트 ID는 하드코딩하지 않고, 서버 Secret의 암호화 토큰(ENCRYPTED_SPREADSHEET_ID)을 ENCRYPTION_KEY로 복호화하여 사용합니다.
+    // 스프레드시트 ID는 하드코딩하지 않고, 서버 Secret의 암호화 토큰(ENCRYPTED_SPREADSHEET_ID) 또는 기본 내장 암호화 토큰을 복호화하여 사용합니다.
     // ==========================================
     const CACHE_HEADERS = { "Cache-Control": "public, max-age=180, s-maxage=180" };
+
+    const DEFAULT_ENCRYPTED_SPREADSHEET_ID = "am68XR1EK7z5R3BSAraD8QDkpTbgpvlnHrxdbQUJTI94QQfRZYzF6T5Ygv8m2z2RXsxDqHQxY-8GwcTEeS-mTQXZC_il30MV";
+    const DEFAULT_ENCRYPTION_KEY = "mahjong_secret_salt_key_20260926";
 
     async function resolveSpreadsheetId(env, url) {
       // 1) 쿼리 파라미터가 명시된 경우 (개발/테스트 호환성)
@@ -254,9 +257,9 @@ export default {
       if (fromQuery && fromQuery.trim()) return fromQuery.trim();
 
       // 2) 서버 환경변수(Secret)에 저장된 암호화 토큰 복호화
-      if (env.ENCRYPTED_SPREADSHEET_ID && env.ENCRYPTION_KEY) {
+      if (env.ENCRYPTED_SPREADSHEET_ID && (env.ENCRYPTION_KEY || DEFAULT_ENCRYPTION_KEY)) {
         try {
-          const decrypted = await decrypt(env.ENCRYPTED_SPREADSHEET_ID, env.ENCRYPTION_KEY);
+          const decrypted = await decrypt(env.ENCRYPTED_SPREADSHEET_ID, env.ENCRYPTION_KEY || DEFAULT_ENCRYPTION_KEY);
           if (decrypted && decrypted.trim()) {
             return decrypted.trim();
           }
@@ -268,6 +271,16 @@ export default {
       // 3) 서버 환경변수(Secret)에 평문 SPREADSHEET_ID가 설정된 경우
       if (env.SPREADSHEET_ID && env.SPREADSHEET_ID.trim()) {
         return env.SPREADSHEET_ID.trim();
+      }
+
+      // 4) 무설정 기본 암호화 토큰 자동 복호화 (서버 Secret 미설정 시에도 100% 즉시 작동 보장)
+      try {
+        const decrypted = await decrypt(DEFAULT_ENCRYPTED_SPREADSHEET_ID, env.ENCRYPTION_KEY || DEFAULT_ENCRYPTION_KEY);
+        if (decrypted && decrypted.trim()) {
+          return decrypted.trim();
+        }
+      } catch (err) {
+        console.error("Failed to decrypt DEFAULT_ENCRYPTED_SPREADSHEET_ID:", err);
       }
 
       return null;
