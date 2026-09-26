@@ -550,6 +550,27 @@ export const LEGACY_MEMBER_AGGREGATES: Record<string, { totalGames: number; tota
   'Yoha.': { totalGames: 9, totalUma: -189.8, avgUma: -21.1, avgRank: 3.33, top2Rate: 22.2, r1: 1, r2: 1, r3: 1, r4: 6 },
 };
 
+/**
+ * 9회차 이후 대국 중 최종 결과는 정상 등록되었으나 국별 상세 기록이 미작성된 대국의 선수별 집계 보정 테이블
+ * - 대국 1783913939455: 신묘(1위), 김케이(2위), 치즈나베(3위), 부진창깡곤곤래(4위)
+ * - 대국 1783914013758: 강남한(1위), 김케이(2위), 히스곤(3위), 신묘(4위)
+ */
+export const UNRECORDED_DETAILED_GAMES_AGGREGATE: Record<string, {
+  totalGames: number;
+  r1: number;
+  r2: number;
+  r3: number;
+  r4: number;
+  rankSum: number;
+}> = {
+  '신묘': { totalGames: 2, r1: 1, r2: 0, r3: 0, r4: 1, rankSum: 5 },
+  '김케이': { totalGames: 2, r1: 0, r2: 2, r3: 0, r4: 0, rankSum: 4 },
+  '치즈나베': { totalGames: 1, r1: 0, r2: 0, r3: 1, r4: 0, rankSum: 3 },
+  '부진창깡곤곤래': { totalGames: 1, r1: 0, r2: 0, r3: 0, r4: 1, rankSum: 4 },
+  '강남한': { totalGames: 1, r1: 1, r2: 0, r3: 0, r4: 0, rankSum: 1 },
+  '히스곤': { totalGames: 1, r1: 0, r2: 0, r3: 1, r4: 0, rankSum: 3 },
+};
+
 // 메모리 캐시 (세션 동안 유지)
 let cachedAllStats: MemberStatItem[] | null = null;
 let cachedSessionsDetail: Record<string, SessionDetail> = {};
@@ -674,35 +695,54 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
 
     const items: MemberStatItem[] = allNames.map(name => {
       const legacy = LEGACY_MEMBER_AGGREGATES[name];
+      const unrecorded = UNRECORDED_DETAILED_GAMES_AGGREGATE[name];
+
       if (detailedStatsMap[name]) {
         // 9회차 이후 순수 상세 통계 복사본 보존 (상세 모달 전용)
         const pureDetailed: MemberStatItem = { ...detailedStatsMap[name] };
 
-        // 종합 랭킹/스탯용 객체 (레거시 합산)
+        // 종합 랭킹/스탯용 객체 (대국 결과가 있는 모든 정식 대국 반영)
         const overallItem: MemberStatItem = { ...detailedStatsMap[name] };
 
-        if (legacy) {
-          const dGames = overallItem.totalGames || 0;
-          const lGames = legacy.totalGames || 0;
-          const newTotalGames = dGames + lGames;
+        // 상세 시트(dGames) + 미기록 대국(uGames) + 레거시 대국(lGames) 전수 합산
+        const dGames = overallItem.totalGames || 0;
+        const uGames = unrecorded ? unrecorded.totalGames : 0;
+        const lGames = legacy ? legacy.totalGames : 0;
+        const newTotalGames = dGames + uGames + lGames;
 
-          if (lGames > 0) {
-            const newR1 = (overallItem.rank1Count || 0) + legacy.r1;
-            const newR2 = (overallItem.rank2Count || 0) + legacy.r2;
-            const newR3 = (overallItem.rank3Count || 0) + legacy.r3;
-            const newR4 = (overallItem.rank4Count || 0) + legacy.r4;
-            const totalRankSum = (overallItem.avgRank * dGames) + (legacy.avgRank * lGames);
+        let totalRankSum = (overallItem.avgRank || 0) * dGames;
+        let newR1 = overallItem.rank1Count || 0;
+        let newR2 = overallItem.rank2Count || 0;
+        let newR3 = overallItem.rank3Count || 0;
+        let newR4 = overallItem.rank4Count || 0;
 
-            overallItem.totalGames = newTotalGames;
-            overallItem.rank1Count = newR1;
-            overallItem.rank2Count = newR2;
-            overallItem.rank3Count = newR3;
-            overallItem.rank4Count = newR4;
-            overallItem.avgRank = newTotalGames > 0 ? parseFloat((totalRankSum / newTotalGames).toFixed(2)) : 0;
-            overallItem.top2Rate = newTotalGames > 0 ? parseFloat((((newR1 + newR2) / newTotalGames) * 100).toFixed(1)) : 0;
-            overallItem.totalRounds = (overallItem.totalRounds || 0) + lGames;
-          }
+        if (unrecorded) {
+          newR1 += unrecorded.r1;
+          newR2 += unrecorded.r2;
+          newR3 += unrecorded.r3;
+          newR4 += unrecorded.r4;
+          totalRankSum += unrecorded.rankSum;
         }
+
+        if (legacy) {
+          newR1 += legacy.r1;
+          newR2 += legacy.r2;
+          newR3 += legacy.r3;
+          newR4 += legacy.r4;
+          totalRankSum += (legacy.avgRank * lGames);
+          overallItem.totalRounds = (overallItem.totalRounds || 0) + lGames;
+        }
+
+        if (newTotalGames > 0) {
+          overallItem.totalGames = newTotalGames;
+          overallItem.rank1Count = newR1;
+          overallItem.rank2Count = newR2;
+          overallItem.rank3Count = newR3;
+          overallItem.rank4Count = newR4;
+          overallItem.avgRank = parseFloat((totalRankSum / newTotalGames).toFixed(2));
+          overallItem.top2Rate = parseFloat((((newR1 + newR2) / newTotalGames) * 100).toFixed(1));
+        }
+
         overallItem.totalUma = tonggeMap[name] !== undefined ? tonggeMap[name] : overallItem.totalUma;
         overallItem.avgUma = overallItem.totalGames > 0 ? parseFloat((overallItem.totalUma / overallItem.totalGames).toFixed(1)) : 0;
 
@@ -710,19 +750,30 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
         overallItem.detailedStats = pureDetailed;
         return overallItem;
       }
+
+      const uGames = unrecorded ? unrecorded.totalGames : 0;
+      const lGames = legacy ? legacy.totalGames : 0;
+      const totalGames = lGames + uGames;
       const totalUma = tonggeMap[name] !== undefined ? tonggeMap[name] : (legacy ? legacy.totalUma : 0);
-      const totalGames = legacy ? legacy.totalGames : 0;
+      const r1 = (legacy ? legacy.r1 : 0) + (unrecorded ? unrecorded.r1 : 0);
+      const r2 = (legacy ? legacy.r2 : 0) + (unrecorded ? unrecorded.r2 : 0);
+      const r3 = (legacy ? legacy.r3 : 0) + (unrecorded ? unrecorded.r3 : 0);
+      const r4 = (legacy ? legacy.r4 : 0) + (unrecorded ? unrecorded.r4 : 0);
+      const totalRankSum = (legacy ? legacy.avgRank * lGames : 0) + (unrecorded ? unrecorded.rankSum : 0);
+      const avgRank = totalGames > 0 ? parseFloat((totalRankSum / totalGames).toFixed(2)) : 0;
+      const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(1)) : 0;
+
       const legacyItem: MemberStatItem = {
         name,
         totalUma,
         avgUma: totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0,
-        avgRank: legacy ? legacy.avgRank : 0,
+        avgRank,
         totalGames,
-        rank1Count: legacy ? legacy.r1 : 0,
-        rank2Count: legacy ? legacy.r2 : 0,
-        rank3Count: legacy ? legacy.r3 : 0,
-        rank4Count: legacy ? legacy.r4 : 0,
-        top2Rate: legacy ? legacy.top2Rate : 0,
+        rank1Count: r1,
+        rank2Count: r2,
+        rank3Count: r3,
+        rank4Count: r4,
+        top2Rate,
         totalRounds: legacy ? legacy.totalGames : 0,
         winRate: 0,
         dealInRate: 0,
