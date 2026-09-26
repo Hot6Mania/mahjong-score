@@ -1347,7 +1347,9 @@ const saveRound = () => {
           // 반환점수를 넘은 사람이 없으면 서입 (서1국 진입)
           changeWindsAndRounds();
           panelInfo.renchan = (status === 'normal_draw') ? panelInfo.renchan + 1 : 0;
-          panelInfo.riichi = 0;
+          if (status === 'tsumo' || status === 'ron') {
+            panelInfo.riichi = 0;
+          }
         }
       }
     } else if (curWind === '西') {
@@ -1388,7 +1390,9 @@ const saveRound = () => {
           // 다음 서국으로 진행
           changeWindsAndRounds();
           panelInfo.renchan = (status === 'normal_draw') ? panelInfo.renchan + 1 : 0;
-          panelInfo.riichi = 0;
+          if (status === 'tsumo' || status === 'ron') {
+            panelInfo.riichi = 0;
+          }
         }
       }
     } else {
