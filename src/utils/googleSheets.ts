@@ -655,22 +655,49 @@ export const syncSessionUmaToStatsSheet = async (
     });
     const headerRow: string[] = headerRes.result.values?.[0] || [];
 
-    // 회차 키워드 추출 (예: '제15회 260926' -> '제15회')
+    // 회차 키워드 및 회차 번호 정밀 추출 (예: '제15회 260926' -> roundNum=15, roundKeyword='제15회')
     const matchRound = cleanTitle.match(/제\s*(\d+)\s*(?:회차|회)/);
-    const roundKeyword = matchRound ? `제${matchRound[1]}회` : cleanTitle;
+    const roundNum = matchRound ? parseInt(matchRound[1], 10) : null;
+    const roundKeyword = roundNum !== null ? `제${roundNum}회` : cleanTitle;
+
+    // 회차 번호에 따른 표준 열 인덱스 공식:
+    // Col A(0: 이름), Col B(1: 총합), Col C(2: 제1회 = 1+1), ..., Col Q(16: 제15회 = 15+1)
+    const canonicalColIdx = roundNum !== null && roundNum >= 1 ? (roundNum + 1) : -1;
 
     let targetColIdx = -1;
-    for (let c = 0; c < headerRow.length; c++) {
+
+    // 1-1. 1행 헤더에서 해당 회차 열 탐색
+    // ★ 주의: Col A(0)과 Col B(1)은 이름 및 총합 열이므로 절대 탐색/매칭하지 않음 (c = 2부터 시작)
+    for (let c = 2; c < headerRow.length; c++) {
       const colText = (headerRow[c] || '').toString().trim();
-      if (colText.includes(roundKeyword) || roundKeyword.includes(colText) || colText.includes(cleanTitle)) {
+      if (!colText) continue; // 빈칸은 절대 매칭하지 않음! ("".includes("") 버그 원천 차단)
+
+      // 회차 번호가 일치하는지 정규식 검사
+      const colMatch = colText.match(/제\s*(\d+)\s*(?:회차|회)/);
+      if (colMatch && roundNum !== null && parseInt(colMatch[1], 10) === roundNum) {
+        targetColIdx = c;
+        break;
+      }
+      if (colText.includes(roundKeyword) || (cleanTitle && colText.includes(cleanTitle))) {
         targetColIdx = c;
         break;
       }
     }
 
-    // 만약 해당 회차 열이 없으면, 마지막 열 다음 열에 새로 배정
+    // 1-2. 헤더 탐색에서 찾지 못한 경우:
+    // 회차 번호가 있으면 표준 열(제15회 -> 16 = Q열)을 최우선 배정
     if (targetColIdx === -1) {
-      targetColIdx = Math.max(2, headerRow.length); // Col A(0), Col B(1: 총합), Col C(2: 제1회)...
+      if (canonicalColIdx >= 2) {
+        targetColIdx = canonicalColIdx;
+      } else {
+        targetColIdx = Math.max(2, headerRow.length);
+      }
+    }
+
+    // ★ 절대적 안전 가드레일: targetColIdx는 어떠한 경우에도 0(A열)이나 1(B열)이 될 수 없음!
+    if (targetColIdx < 2) {
+      console.error(`[CRITICAL] 잘못된 대상 열 인덱스(${targetColIdx}) 감지. C열(2) 이상으로 강제 조정합니다.`);
+      targetColIdx = canonicalColIdx >= 2 ? canonicalColIdx : 2;
     }
 
     // 1.5. 통계 시트의 열 개수 확인 및 26회차 이상 시 우측 열 자동 확장
@@ -721,7 +748,7 @@ export const syncSessionUmaToStatsSheet = async (
 
     for (let r = 1; r < playerRows.length; r++) { // 0행은 헤더
       const name = (playerRows[r]?.[0] || '').toString().trim();
-      if (name) {
+      if (name && !name.startsWith('=') && !name.startsWith('#') && name !== '이름') {
         existingPlayers.set(name, r + 1);
       }
     }
