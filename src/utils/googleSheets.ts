@@ -1320,99 +1320,40 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
  */
 export const addNewMembersToDb = async (spreadsheetId: string, names: string[]): Promise<void> => {
   if (!spreadsheetId || names.length === 0) return;
-  const range = "'전체 멤버별 통계'!A1:A500";
   try {
-    const response = await window.gapi.client.sheets.spreadsheets.values.get({
+    // 1. 원본 데이터 소스인 '전체 멤버목록 (데이터)'!A:A 에 신규 멤버 추가
+    const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId,
-      range,
-      valueRenderOption: 'FORMULA',
+      range: "'전체 멤버목록 (데이터)'!A:A",
     });
-    const values: string[][] = response.result.values || [];
-    
-    // 1. A2 셀이 수식인지 확인 (배열 수식이면 하위 행에 직접 입력 금지)
-    const a2Val = (values[1]?.[0] || '').toString().trim();
-    const isFormula = a2Val.startsWith('=');
-
-    if (isFormula) {
-      // 1-1. '전체 멤버목록 (데이터)' 시트에 신규 멤버 추가 (동적 배열 수식의 원본 데이터 소스)
-      try {
-        const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: "'전체 멤버목록 (데이터)'!A:A",
-        });
-        const masterValues: string[][] = masterRes.result.values || [];
-        const masterExisting = new Set<string>();
-        for (let i = 0; i < masterValues.length; i++) {
-          const val = masterValues[i]?.[0]?.toString().trim();
-          if (val) masterExisting.add(val);
-        }
-        const toAddToMaster = names
-          .map(n => n?.trim())
-          .filter((n): n is string => !!n && !masterExisting.has(n));
-
-        if (toAddToMaster.length > 0) {
-          await window.gapi.client.sheets.spreadsheets.values.append({
-            spreadsheetId,
-            range: "'전체 멤버목록 (데이터)'!A:A",
-            valueInputOption: 'USER_ENTERED',
-            insertDataOption: 'INSERT_ROWS',
-            resource: {
-              values: toAddToMaster.map(n => [n]),
-            },
-          });
-          console.log(`'전체 멤버목록 (데이터)'에 신규 멤버 [${toAddToMaster.join(', ')}] 추가 완료`);
-        }
-      } catch (masterErr) {
-        console.warn("'전체 멤버목록 (데이터)' 갱신 중 오류 (무시 가능):", masterErr);
-      }
-
-      // 1-2. 배열 수식이 깨지지 않도록 A3:A500 클리어 수행하여 수식 확장 보장
-      await repairStatsSheetSpillError(spreadsheetId);
-      console.log("'전체 멤버별 통계' A2가 배열 수식이므로 직접 입력 대신 수식 자동 연동 및 Spill 복구 수행");
-      return;
+    const masterValues: string[][] = masterRes.result.values || [];
+    const masterExisting = new Set<string>();
+    for (let i = 0; i < masterValues.length; i++) {
+      const val = masterValues[i]?.[0]?.toString().trim();
+      if (val) masterExisting.add(val);
     }
-
-    // 2. 기존에 등록된 멤버 이름 Set 구성 (1행 헤더 제외)
-    const existing = new Set<string>();
-    for (let i = 1; i < values.length; i++) {
-      const val = values[i]?.[0]?.toString().trim();
-      if (val) existing.add(val);
-    }
-
-    const toAdd = names
+    const toAddToMaster = names
       .map(n => n?.trim())
-      .filter((n): n is string => !!n && !existing.has(n));
+      .filter((n): n is string => !!n && !masterExisting.has(n));
 
-    if (toAdd.length === 0) return;
-
-    // 3. A열에서 이름이 비어있는 첫 번째 행(1-based row index) 탐색 (2행부터)
-    let targetRowIndex = -1;
-    for (let r = 2; r <= values.length; r++) {
-      const cellVal = values[r - 1]?.[0]?.toString().trim();
-      if (!cellVal) {
-        targetRowIndex = r;
-        break;
-      }
-    }
-    if (targetRowIndex === -1) {
-      targetRowIndex = values.length + 1;
+    if (toAddToMaster.length > 0) {
+      await window.gapi.client.sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: "'전체 멤버목록 (데이터)'!A:A",
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        resource: {
+          values: toAddToMaster.map(n => [n]),
+        },
+      });
+      console.log(`'전체 멤버목록 (데이터)'에 신규 멤버 [${toAddToMaster.join(', ')}] 추가 완료`);
     }
 
-    // 4. values.append 대신 빈 위치에 values.update로 직접 입력
-    const endRowIndex = targetRowIndex + toAdd.length - 1;
-    await window.gapi.client.sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `'전체 멤버별 통계'!A${targetRowIndex}:A${endRowIndex}`,
-      valueInputOption: 'USER_ENTERED',
-      resource: {
-        values: toAdd.map(n => [n])
-      }
-    });
+    // 2. '전체 멤버별 통계' 시트의 Spill 복구 (A3:A500 클리어하여 A2 배열 수식이 막힘없이 확장되도록 보장)
+    await repairStatsSheetSpillError(spreadsheetId);
 
-    console.log(`구글 시트 '전체 멤버별 통계' A${targetRowIndex}행부터 신규 멤버 [${toAdd.join(', ')}] 추가 완료`);
-
-    // 5. 총 멤버 수에 맞게 교차 색상 범위 갱신
-    const totalMembers = existing.size + toAdd.length;
+    // 3. 교차 색상 범위 갱신
+    const totalMembers = masterExisting.size + toAddToMaster.length;
     await updateAlternatingColorsRange(spreadsheetId, totalMembers);
   } catch (err) {
     console.error("신규 멤버 구글 시트 추가 실패:", err);
@@ -1420,7 +1361,9 @@ export const addNewMembersToDb = async (spreadsheetId: string, names: string[]):
 };
 
 /**
- * '전체 멤버별 통계' 시트에서 특정 멤버 이름을 찾아 삭제 처리(행 삭제)하고 교차 색상 범위를 축소합니다.
+ * '전체 멤버목록 (데이터)' 마스터 시트에서 특정 멤버 이름을 찾아 삭제 처리하고,
+ * '전체 멤버별 통계' 시트의 Spill 복구를 수행합니다.
+ * ('전체 멤버별 통계' 시트의 행을 직접 삭제하면 수식 구조가 파괴되므로 마스터 시트에서 삭제)
  */
 export const deleteMemberFromDb = async (spreadsheetId: string, name: string): Promise<void> => {
   if (!spreadsheetId || !name || !name.trim()) return;
@@ -1429,93 +1372,45 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
     const spreadsheet = await window.gapi.client.sheets.spreadsheets.get({
       spreadsheetId,
     });
-    const sheet = spreadsheet.result.sheets.find(
-      (s: any) => s.properties.title === '전체 멤버별 통계'
+    const mSheet = spreadsheet.result.sheets.find(
+      (s: any) => s.properties.title === '전체 멤버목록 (데이터)'
     );
-    if (!sheet) {
-      console.warn("'전체 멤버별 통계' 시트가 존재하지 않아 삭제가 불가능합니다.");
+    if (!mSheet) {
+      console.warn("'전체 멤버목록 (데이터)' 시트가 존재하지 않아 삭제가 불가능합니다.");
       return;
     }
-    const sheetId = sheet.properties.sheetId;
 
-    const checkResponse = await window.gapi.client.sheets.spreadsheets.values.get({
+    const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: "'전체 멤버별 통계'!A1:A500",
-      valueRenderOption: 'FORMULA',
+      range: "'전체 멤버목록 (데이터)'!A:A",
     });
-
-    const values = checkResponse.result.values || [];
-    const a2Val = (values[1]?.[0] || '').toString().trim();
-    const isFormula = a2Val.startsWith('=');
-
-    if (isFormula) {
-      // 배열 수식이면 '전체 멤버별 통계'에서 행을 직접 삭제하면 수식이 파괴되므로,
-      // 원본 데이터 시트인 '전체 멤버목록 (데이터)'에서 해당 멤버를 삭제하고 Spill 복구
-      try {
-        const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: "'전체 멤버목록 (데이터)'!A:A",
-        });
-        const masterValues: string[][] = masterRes.result.values || [];
-        const mRowIndex = masterValues.findIndex((r: any) => r[0] && r[0].toString().trim() === name.trim());
-        if (mRowIndex !== -1) {
-          const mSheet = spreadsheet.result.sheets.find((s: any) => s.properties.title === '전체 멤버목록 (데이터)');
-          if (mSheet) {
-            await window.gapi.client.sheets.spreadsheets.batchUpdate({
-              spreadsheetId,
-              resource: {
-                requests: [
-                  {
-                    deleteDimension: {
-                      range: {
-                        sheetId: mSheet.properties.sheetId,
-                        dimension: 'ROWS',
-                        startIndex: mRowIndex,
-                        endIndex: mRowIndex + 1,
-                      },
-                    },
-                  },
-                ],
-              },
-            });
-            console.log(`'전체 멤버목록 (데이터)'에서 멤버 '${name}' 삭제 완료`);
-          }
-        }
-      } catch (mErr) {
-        console.warn("'전체 멤버목록 (데이터)' 멤버 삭제 중 오류:", mErr);
-      }
-      await repairStatsSheetSpillError(spreadsheetId);
-      return;
-    }
-
-    const rowIndex = values.findIndex((row: any) => row[0] && row[0].toString().trim() === name.trim());
-
-    if (rowIndex === -1) {
-      console.log(`삭제하려는 멤버 '${name}'이 시트에 존재하지 않습니다.`);
-      return;
-    }
-
-    await window.gapi.client.sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      resource: {
-        requests: [
-          {
-            deleteDimension: {
-              range: {
-                sheetId,
-                dimension: 'ROWS',
-                startIndex: rowIndex,
-                endIndex: rowIndex + 1,
+    const masterValues: string[][] = masterRes.result.values || [];
+    const mRowIndex = masterValues.findIndex((r: any) => r[0] && r[0].toString().trim() === name.trim());
+    if (mRowIndex !== -1) {
+      await window.gapi.client.sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        resource: {
+          requests: [
+            {
+              deleteDimension: {
+                range: {
+                  sheetId: mSheet.properties.sheetId,
+                  dimension: 'ROWS',
+                  startIndex: mRowIndex,
+                  endIndex: mRowIndex + 1,
+                },
               },
             },
-          },
-        ],
-      },
-    });
-    console.log(`구글 시트에서 멤버 '${name}' 삭제 완료 (행 번호: ${rowIndex + 1})`);
-    
-    const remainingMembers = values.length - 2;
-    await updateAlternatingColorsRange(spreadsheetId, remainingMembers);
+          ],
+        },
+      });
+      console.log(`'전체 멤버목록 (데이터)'에서 멤버 '${name}' 삭제 완료`);
+    } else {
+      console.log(`삭제하려는 멤버 '${name}'이 마스터 시트에 존재하지 않습니다.`);
+    }
+
+    // Spill 복구
+    await repairStatsSheetSpillError(spreadsheetId);
   } catch (err) {
     console.error("구글 시트에서 멤버 삭제 실패:", err);
     throw err;
