@@ -111,6 +111,7 @@ export interface MemberStatItem {
   rank3Count: number;
   rank4Count: number;
   top2Rate: number; // 연대율 (%)
+  detailedStats?: MemberStatItem; // 9회차 이후 순수 상세 통계 (레거시 제외)
 }
 
 export interface SessionMemberSummary {
@@ -172,6 +173,176 @@ function getCellStr(cell: any, defaultVal: string = ""): string {
   if (!cell) return defaultVal;
   const v = cell.v !== undefined && cell.v !== null ? cell.v : cell.f;
   return v !== undefined && v !== null ? String(v) : defaultVal;
+}
+
+
+// ==========================================
+// 1~8회차 레거시 통합기록 데이터 (총 111개 대국 전수 내장)
+// ==========================================
+export const LEGACY_CONSOLIDATED_RAW = `제1회 260411\t1회전\t히스곤\t44900\t54.9\t김케이\t39000\t19\t치즈나베\t17800\t-22.2\t쑥갓\t-1700\t-51.7
+제1회 260411\t2회전\t김케이\t66800\t76.8\tDoubleBun\t28500\t8.5\t치즈나베\t13400\t-26.6\t히스곤\t-8700\t-58.7
+제1회 260411\t3회전\tDoubleBun\t35700\t45.7\t쑥갓\t24600\t4.6\t치즈나베\t20700\t-19.3\t김케이\t19000\t-31
+제1회 260411\t4회전\t히스곤\t39400\t49.4\t치즈나베\t33100\t13.1\t쑥갓\t14100\t-25.9\tDoubleBun\t13400\t-36.6
+제1회 260411\t5회전\t히스곤\t37900\t47.9\t김케이\t25600\t5.6\tDoubleBun\t25300\t-14.7\t치즈나베\t11200\t-38.8
+제1회 260411\t6회전\t김케이\t40800\t50.8\t치즈나베\t33400\t13.4\tDoubleBun\t21100\t-18.9\t히스곤\t4700\t-45.3
+제2회 260421\t1회전\t치즈나베\t37400\t47.4\tYoha.\t36300\t16.3\t김케이\t29600\t-10.4\t강남한\t-3300\t-53.3
+제2회 260421\t2회전\t김케이\t38100\t48.1\t강남한\t27400\t7.4\t치즈나베\t25100\t-14.9\tYoha.\t9400\t-40.6
+제2회 260421\t3회전\t김케이\t32000\t42\t강남한\t30900\t10.9\tYoha.\t20600\t-19.4\t치즈나베\t16500\t-33.5
+제2회 260421\t4회전\t김케이\t34000\t44\t마카롱\t32300\t12.3\t강남한\t29800\t-10.2\tYoha.\t3900\t-46.1
+제2회 260421\t5회전\t김케이\t53300\t63.3\t강남한\t27000\t7\tJJH25\t19900\t-20.1\t마카롱\t-200\t-50.2
+제2회 260421\t6회전\t강남한\t49000\t59\tJJH25\t31700\t11.7\t치즈나베\t11900\t-28.1\t김케이\t7400\t-42.6
+제2회 260421\t7회전\t강남한\t43900\t53.9\t치즈나베\t39000\t19\tJJH25\t12900\t-27.1\t마카롱\t4200\t-45.8
+제2회 260421\t8회전\t치즈나베\t70300\t80.3\t강남한\t15400\t-4.6\t마카롱\t15300\t-24.7\t김케이\t-1000\t-51
+제2회 260421\t9회전\t김케이\t38000\t48\tJJH25\t36200\t16.2\t강남한\t23400\t-16.6\tYoha.\t2400\t-47.6
+제2회 260421\t10회전\t마카롱\t40200\t50.2\t김케이\t22800\t2.8\t강남한\t21900\t-18.1\tYoha.\t15100\t-34.9
+제2회 260421\t11회전\t강남한\t69200\t79.2\t김케이\t13500\t-6.5\tJJH25\t13200\t-26.8\t치즈나베\t4100\t-45.9
+제2회 260421\t12회전\tYoha.\t49900\t59.9\t김케이\t42800\t22.8\t치즈나베\t4400\t-35.6\t강남한\t2900\t-47.1
+제2회 260421\t13회전\t김케이\t48700\t58.7\t치즈나베\t27100\t7.1\t강남한\t19300\t-20.7\tYoha.\t4900\t-45.1
+제2회 260421\t14회전\t치즈나베\t35300\t45.3\t강남한\t25400\t5.4\t김케이\t21600\t-18.4\tYoha.\t17700\t-32.3
+제3회 260504\t1회전\t김케이\t58900\t68.9\tTeNew\t23400\t3.4\t신시\t16300\t-23.7\t치즈나베\t1400\t-48.6
+제3회 260504\t2회전\t말저\t42700\t52.7\t김케이\t30100\t10.1\t신시\t19700\t-20.3\tTeNew\t7500\t-42.5
+제3회 260504\t3회전\t말저\t50900\t60.9\t치즈나베\t18500\t-1.5\t김케이\t16600\t-23.4\t신시\t14000\t-36
+제3회 260504\t4회전\t치즈나베\t75100\t85.1\tTeNew\t19000\t-1\t말저\t9100\t-30.9\t김케이\t-3200\t-53.2
+제3회 260504\t5회전\t신시\t49500\t59.5\tTeNew\t26200\t6.2\t치즈나베\t16400\t-23.6\t말저\t7900\t-42.1
+제3회 260504\t6회전\t김케이\t55800\t65.8\t말저\t25900\t5.9\t신시\t12500\t-27.5\tTeNew\t5800\t-44.2
+제3회 260504\t7회전\t치즈나베\t52100\t62.1\t김케이\t27100\t7.1\tTeNew\t25200\t-14.8\t신시\t-4400\t-54.4
+제3회 260504\t8회전\t치즈나베\t59400\t69.4\t말저\t24700\t4.7\tTeNew\t13400\t-26.6\t김케이\t2500\t-47.5
+제3회 260504\t9회전\t치즈나베\t35300\t45.3\tTeNew\t29900\t9.9\t신시\t19400\t-20.6\t김케이\t15400\t-34.6
+제4회 260510\t1회전\t부진창깡곤곤래\t38700\t48.7\t치즈나베\t30900\t10.9\tstone_ant\t27700\t-12.3\t김케이\t2700\t-47.3
+제4회 260510\t2회전\tstone_ant\t40500\t50.5\t_lime\t31500\t11.5\t김케이\t16600\t-23.4\t부진창깡곤곤래\t11400\t-38.6
+제4회 260510\t3회전\t김케이\t39000\t49\t_lime\t30500\t10.5\t치즈나베\t24200\t-15.8\tstone_ant\t6300\t-43.7
+제4회 260510\t4회전\t_lime\t37500\t47.5\t김케이\t31600\t11.6\t치즈나베\t23800\t-16.2\t부진창깡곤곤래\t7100\t-42.9
+제4회 260510\t5회전\tstone_ant\t36700\t46.7\t부진창깡곤곤래\t30600\t10.6\t_lime\t29500\t-10.5\t김케이\t3200\t-46.8
+제4회 260510\t6회전\t부진창깡곤곤래\t47300\t57.3\t치즈나베\t31600\t11.6\tstone_ant\t22200\t-17.8\t_lime\t-1100\t-51.1
+제4회 260510\t7회전\t부진창깡곤곤래\t34500\t44.5\t치즈나베\t26900\t6.9\tstone_ant\t22500\t-17.5\t김케이\t16100\t-33.9
+제4회 260510\t8회전\t부진창깡곤곤래\t30100\t40.1\t_lime\t25500\t5.5\tstone_ant\t22300\t-17.7\t김케이\t22100\t-27.9
+제4회 260510\t9회전\tstone_ant\t44700\t54.7\t_lime\t30700\t10.7\t부진창깡곤곤래\t20800\t-19.2\t치즈나베\t3800\t-46.2
+제4회 260510\t10회전\t부진창깡곤곤래\t37100\t47.1\t김케이\t29800\t9.8\t_lime\t17400\t-22.6\tstone_ant\t15700\t-34.3
+제4회 260510\t11회전\t치즈나베\t51500\t61.5\t부진창깡곤곤래\t30100\t10.1\t김케이\t13400\t-26.6\t_lime\t5000\t-45
+제4회 260510\t12회전\tstone_ant\t51200\t61.2\t치즈나베\t31600\t11.6\t부진창깡곤곤래\t15300\t-24.7\t김케이\t1900\t-48.1
+제4회 260510\t13회전\t김케이\t61600\t71.6\tstone_ant\t25900\t5.9\t부진창깡곤곤래\t13100\t-26.9\t_lime\t-600\t-50.6
+제4회 260510\t14회전\t부진창깡곤곤래\t61500\t71.5\t_lime\t33700\t13.7\t김케이\t6400\t-33.6\tstone_ant\t-1600\t-51.6
+제4회 260510\t15회전\t김케이\t69400\t79.4\tstone_ant\t14200\t-5.8\t_lime\t10400\t-29.6\t부진창깡곤곤래\t6000\t-44
+제4회 260510\t16회전\t치즈나베\t46600\t56.6\t_lime\t46200\t26.2\t김케이\t13900\t-26.1\t부진창깡곤곤래\t-6700\t-56.7
+제4회 260510\t17회전\t김케이\t64300\t74.3\t치즈나베\t17400\t-2.6\t_lime\t12000\t-28\t부진창깡곤곤래\t6300\t-43.7
+제4회 260510\t18회전\t치즈나베\t50000\t60\t_lime\t22500\t2.5\t부진창깡곤곤래\t14900\t-25.1\t김케이\t12600\t-37.4
+제4회 260510\t19회전\t치즈나베\t58400\t68.4\t_lime\t40400\t20.4\t부진창깡곤곤래\t1700\t-38.3\t김케이\t-500\t-50.5
+제4회 260510\t20회전\t김케이\t33700\t43.7\t부진창깡곤곤래\t28600\t8.6\t_lime\t20400\t-19.6\t치즈나베\t17300\t-32.7
+제5회 260516\t1회전\tstone_ant\t36100\t46.1\t치즈나베\t35900\t15.9\tpunch\t31000\t-9\t김케이\t-3000\t-53
+제5회 260516\t2회전\t치즈나베\t51400\t61.4\t크라딜\t25500\t5.5\tstone_ant\t13100\t-26.9\tpunch\t10000\t-40
+제5회 260516\t3회전\t김케이\t58900\t68.9\t크라딜\t21000\t1\tstone_ant\t20800\t-19.2\t치즈나베\t-700\t-50.7
+제5회 260516\t4회전\tpunch\t47400\t57.4\t크라딜\t42200\t22.2\tstone_ant\t6500\t-33.5\t김케이\t3900\t-46.1
+제5회 260516\t5회전\t크라딜\t43100\t53.1\t김케이\t20400\t0.4\tpunch\t20000\t-20\tstone_ant\t16500\t-33.5
+제5회 260516\t6회전\t김케이\t47700\t57.7\t크라딜\t38500\t18.5\tpunch\t16000\t-24\t치즈나베\t-2200\t-52.2
+제5회 260516\t7회전\tpunch\t47800\t57.8\t크라딜\t32300\t12.3\t김케이\t15600\t-24.4\tstone_ant\t4300\t-45.7
+제5회 260516\t8회전\tpunch\t34100\t44.1\t김케이\t33100\t13.1\t치즈나베\t22800\t-17.2\t크라딜\t10000\t-40
+제5회 260516\t9회전\t크라딜\t45900\t55.9\tpunch\t23800\t3.8\tstone_ant\t15900\t-24.1\t김케이\t14400\t-35.6
+제5회 260516\t10회전\tstone_ant\t49900\t59.9\t치즈나베\t32900\t12.9\t크라딜\t10300\t-29.7\tpunch\t6900\t-43.1
+제5회 260516\t11회전\t김케이\t36800\t46.8\tpunch\t34500\t14.5\t크라딜\t29700\t-10.3\tstone_ant\t-1000\t-51
+제6회 260530\t1회전\t물감비\t42700\t52.7\tstone_ant\t32700\t12.7\t김케이\t27700\t-12.3\tckckdud\t-3100\t-53.1
+제6회 260530\t2회전\t물감비\t29500\t39.5\tstone_ant\t27700\t7.7\tckckdud\t23300\t-16.7\t김케이\t19500\t-30.5
+제6회 260530\t3회전\tckckdud\t33700\t43.7\t물감비\t28500\t8.5\t김케이\t21100\t-18.9\tstone_ant\t16700\t-33.3
+제6회 260530\t4회전\t김케이\t48000\t58\t부진창깡곤곤래\t42600\t22.6\tckckdud\t10800\t-29.2\tstone_ant\t-1400\t-51.4
+제6회 260530\t5회전\tstone_ant\t36000\t46\t부진창깡곤곤래\t29200\t9.2\tckckdud\t18100\t-21.9\t김케이\t16700\t-33.3
+제6회 260530\t6회전\tckckdud\t42200\t52.2\t부진창깡곤곤래\t37900\t17.9\t물감비\t12700\t-27.3\tstone_ant\t7200\t-42.8
+제6회 260530\t7회전\t김케이\t59300\t69.3\t물감비\t26000\t6\tstone_ant\t25200\t-14.8\t부진창깡곤곤래\t-10500\t-60.5
+제6회 260530\t8회전\t물감비\t45500\t55.5\tckckdud\t21000\t1\t김케이\t17700\t-22.3\tstone_ant\t15800\t-34.2
+제6회 260530\t9회전\t김케이\t41900\t51.9\t부진창깡곤곤래\t29700\t9.7\t물감비\t17100\t-22.9\tstone_ant\t11300\t-38.7
+제6회 260530\t10회전\tstone_ant\t48900\t58.9\t물감비\t28800\t8.8\t김케이\t26100\t-13.9\t부진창깡곤곤래\t-3800\t-53.8
+제6회 260530\t11회전\tstone_ant\t33000\t43\t김케이\t31900\t11.9\t부진창깡곤곤래\t22700\t-17.3\t물감비\t12400\t-37.6
+제6회 260530\t12회전\t부진창깡곤곤래\t37000\t47\tstone_ant\t30700\t10.7\t김케이\t21900\t-18.1\t물감비\t10400\t-39.6
+제6회 260530\t13회전\tstone_ant\t47000\t57\t물감비\t29000\t9\t부진창깡곤곤래\t26700\t-13.3\t김케이\t-2700\t-52.7
+제6회 260530\t14회전\tstone_ant\t32400\t42.4\t김케이\t32200\t12.2\t부진창깡곤곤래\t18300\t-21.7\t물감비\t17100\t-32.9
+제6회 260530\t15회전\tstone_ant\t59000\t69\t부진창깡곤곤래\t31600\t11.6\t물감비\t6100\t-33.9\t김케이\t3300\t-46.7
+제6회 260530\t16회전\t부진창깡곤곤래\t36400\t46.4\t김케이\t28200\t8.2\tstone_ant\t26000\t-14\t물감비\t9400\t-40.6
+제6회 260530\t17회전\tstone_ant\t32000\t42\t김케이\t30800\t10.8\t부진창깡곤곤래\t25700\t-14.3\t물감비\t11500\t-38.5
+제6회 260530\t18회전\t김케이\t40500\t50.5\t물감비\t37700\t17.7\tstone_ant\t15300\t-24.7\t부진창깡곤곤래\t6500\t-43.5
+제7회 260603\t1회전\t치즈나베\t40100\t50.1\tstone_ant\t36200\t16.2\t김케이\t17900\t-22.1\t얼룩무늬민달팽이\t5800\t-44.2
+제7회 260603\t2회전\tSHM\t46600\t56.6\tstone_ant\t26400\t6.4\t김케이\t20600\t-19.4\t치즈나베\t6400\t-43.6
+제7회 260603\t3회전\tstone_ant\t54600\t64.6\t김케이\t23000\t3\tSHM\t11300\t-28.7\t얼룩무늬민달팽이\t11100\t-38.9
+제7회 260603\t4회전\t김케이\t37300\t47.3\tSHM\t26200\t6.2\tstone_ant\t19100\t-20.9\t치즈나베\t17400\t-32.6
+제7회 260603\t5회전\tSHM\t33700\t43.7\tstone_ant\t28100\t8.1\t김케이\t22700\t-17.3\t얼룩무늬민달팽이\t15500\t-34.5
+제7회 260603\t6회전\t김케이\t63000\t73\t치즈나베\t23100\t3.1\tstone_ant\t15000\t-25\tSHM\t-1100\t-51.1
+제7회 260603\t7회전\t김케이\t38500\t48.5\tstone_ant\t31600\t11.6\t치즈나베\t19300\t-20.7\t얼룩무늬민달팽이\t10600\t-39.4
+제7회 260603\t8회전\t얼룩무늬민달팽이\t39500\t49.5\t김케이\t36500\t16.5\tstone_ant\t25200\t-14.8\tSHM\t-1200\t-51.2
+제7회 260603\t9회전\t김케이\t73000\t83\tstone_ant\t25100\t5.1\t치즈나베\t24900\t-15.1\t얼룩무늬민달팽이\t-23000\t-73
+제7회 260603\t10회전\t얼룩무늬민달팽이\t35500\t45.5\t치즈나베\t30800\t10.8\tSHM\t30000\t-10\t김케이\t3700\t-46.3
+제7회 260603\t11회전\t김케이\t42000\t52\t치즈나베\t41800\t21.8\tSHM\t12400\t-27.6\tstone_ant\t3800\t-46.2
+제7회 260603\t12회전\tSHM\t50500\t60.5\t김케이\t34800\t14.8\tstone_ant\t15500\t-24.5\t치즈나베\t-800\t-50.8
+제8회 260614\t1회전\t물감비\t37500\t47.5\t치즈나베\t28000\t8\t김케이\t17300\t-22.7\tstone_ant\t17200\t-32.8
+제8회 260614\t2회전\t김케이\t39900\t49.9\t물감비\t37000\t17\tstone_ant\t25100\t-14.9\t치즈나베\t-2000\t-52
+제8회 260614\t3회전\t치즈나베\t31500\t41.5\tstone_ant\t31300\t11.3\t물감비\t30700\t-9.3\t김케이\t6500\t-43.5
+제8회 260614\t4회전\t김케이\t45700\t55.7\tstone_ant\t31400\t11.4\t치즈나베\t15400\t-24.6\t물감비\t7500\t-42.5
+제8회 260614\t5회전\t김케이\t49300\t59.3\t치즈나베\t41500\t21.5\t물감비\t12100\t-27.9\tstone_ant\t-2900\t-52.9
+제8회 260614\t6회전\tstone_ant\t38800\t48.8\t물감비\t36200\t16.2\t김케이\t18600\t-21.4\t치즈나베\t6400\t-43.6
+제8회 260614\t7회전\t물감비\t38900\t48.9\t치즈나베\t35500\t15.5\t김케이\t20000\t-20\tstone_ant\t5600\t-44.4
+제8회 260614\t8회전\t물감비\t56100\t66.1\tstone_ant\t36500\t16.5\t치즈나베\t9200\t-30.8\t김케이\t-1800\t-51.8
+제8회 260614\t9회전\t물감비\t53500\t63.5\t김케이\t20700\t0.7\t치즈나베\t13600\t-26.4\tstone_ant\t12200\t-37.8
+제8회 260614\t10회전\t치즈나베\t54300\t64.3\t김케이\t24500\t4.5\t물감비\t14800\t-25.2\tstone_ant\t6400\t-43.6
+제8회 260614\t11회전\tstone_ant\t41800\t51.8\t치킨미트\t33200\t13.2\t치즈나베\t19700\t-20.3\t김케이\t5300\t-44.7
+제8회 260614\t12회전\t김케이\t43000\t53\tstone_ant\t32000\t12\t치킨미트\t20500\t-19.5\t치즈나베\t4500\t-45.5
+제8회 260614\t13회전\tstone_ant\t45600\t55.6\t치킨미트\t33800\t13.8\t김케이\t18200\t-21.8\t치즈나베\t2400\t-47.6
+제8회 260614\t14회전\t치킨미트\t30300\t40.3\tstone_ant\t26200\t6.2\t치즈나베\t22000\t-18\t김케이\t21500\t-28.5
+제8회 260614\t15회전\tstone_ant\t42500\t52.5\t치킨미트\t33700\t13.7\t김케이\t28500\t-11.5\t치즈나베\t-4700\t-54.7
+제8회 260614\t16회전\t김케이\t41700\t51.7\t치즈나베\t26400\t6.4\t치킨미트\t20100\t-19.9\tstone_ant\t11800\t-38.2
+제8회 260614\t17회전\t치즈나베\t51000\t61\t치킨미트\t38200\t18.2\t김케이\t18300\t-21.7\tstone_ant\t-7500\t-57.5`;
+
+/**
+ * 1~8회차 내장 대국 데이터 파싱
+ */
+export function getLegacyConsolidatedSessionDetail(sessionName: string): SessionDetail | null {
+  const lines = LEGACY_CONSOLIDATED_RAW.trim().split("\n");
+  const filtered = lines.filter(l => l.startsWith(sessionName));
+  if (filtered.length === 0) return null;
+
+  const games: SessionGame[] = [];
+  const memberMap: Record<string, { totalUma: number; rankSum: number; gamesCount: number; scoresSum: number }> = {};
+  const seats = ["東", "南", "西", "北"];
+
+  filtered.forEach((line, gIdx) => {
+    const parts = line.split("\t");
+    if (parts.length < 14) return;
+    const gameLabel = parts[1].trim();
+
+    const pList: SessionGamePlayer[] = [
+      { seat: seats[0], rank: 1, name: parts[2].trim(), score: Number(parts[3]), uma: Number(parts[4]) },
+      { seat: seats[1], rank: 2, name: parts[5].trim(), score: Number(parts[6]), uma: Number(parts[7]) },
+      { seat: seats[2], rank: 3, name: parts[8].trim(), score: Number(parts[9]), uma: Number(parts[10]) },
+      { seat: seats[3], rank: 4, name: parts[11].trim(), score: Number(parts[12]), uma: Number(parts[13]) },
+    ];
+
+    pList.forEach(p => {
+      if (!p.name) return;
+      if (!memberMap[p.name]) {
+        memberMap[p.name] = { totalUma: 0, rankSum: 0, gamesCount: 0, scoresSum: 0 };
+      }
+      memberMap[p.name].totalUma += p.uma;
+      memberMap[p.name].rankSum += p.rank;
+      memberMap[p.name].gamesCount += 1;
+      memberMap[p.name].scoresSum += p.score;
+    });
+
+    games.push({
+      gameIndex: gIdx + 1,
+      gameId: `${sessionName}_${gIdx + 1}`,
+      time: gameLabel,
+      players: pList,
+    });
+  });
+
+  const members: SessionMemberSummary[] = Object.keys(memberMap).map(name => {
+    const s = memberMap[name];
+    return {
+      name,
+      totalUma: parseFloat(s.totalUma.toFixed(1)),
+      avgRank: parseFloat((s.rankSum / s.gamesCount).toFixed(2)),
+      totalGames: s.gamesCount,
+      deltaScore: s.scoresSum,
+    };
+  });
+  members.sort((a, b) => b.totalUma - a.totalUma);
+
+  return { sessionName, members, games };
 }
 
 /**
@@ -352,6 +523,33 @@ export function parseSessionSheetTable(table: any, sessionName: string): Session
   };
 }
 
+// 1~8회차 레거시 선수별 정산 스탯 테이블 (111대국 전수 집계)
+export const LEGACY_MEMBER_AGGREGATES: Record<string, { totalGames: number; totalUma: number; avgUma: number; avgRank: number; top2Rate: number; r1: number; r2: number; r3: number; r4: number }> = {
+  '김케이': { totalGames: 99, totalUma: 525.1, avgUma: 5.3, avgRank: 2.40, top2Rate: 52.5, r1: 32, r2: 20, r3: 22, r4: 25 },
+  '크라딜': { totalGames: 10, totalUma: 88.5, avgUma: 8.8, avgRank: 2.20, top2Rate: 70.0, r1: 2, r2: 5, r3: 2, r4: 1 },
+  '물감비': { totalGames: 26, totalUma: 78.7, avgUma: 3.0, avgRank: 2.42, top2Rate: 53.8, r1: 7, r2: 7, r3: 6, r4: 6 },
+  '치즈나베': { totalGames: 68, totalUma: 70.7, avgUma: 1.0, avgRank: 2.49, top2Rate: 51.5, r1: 16, r2: 19, r3: 17, r4: 16 },
+  '치킨미트': { totalGames: 7, totalUma: 59.8, avgUma: 8.5, avgRank: 2.14, top2Rate: 71.4, r1: 1, r2: 4, r3: 2, r4: 0 },
+  '강남한': { totalGames: 14, totalUma: 52.2, avgUma: 3.7, avgRank: 2.36, top2Rate: 57.1, r1: 3, r2: 5, r3: 4, r4: 2 },
+  '말저': { totalGames: 6, totalUma: 51.2, avgUma: 8.5, avgRank: 2.17, top2Rate: 66.7, r1: 2, r2: 2, r3: 1, r4: 1 },
+  '히스곤': { totalGames: 5, totalUma: 48.2, avgUma: 9.6, avgRank: 2.20, top2Rate: 60.0, r1: 3, r2: 0, r3: 0, r4: 2 },
+  'punch': { totalGames: 10, totalUma: 41.5, avgUma: 4.1, avgRank: 2.40, top2Rate: 50.0, r1: 3, r2: 2, r3: 3, r4: 2 },
+  'SHM': { totalGames: 9, totalUma: -1.6, avgUma: -0.2, avgRank: 2.44, top2Rate: 44.4, r1: 3, r2: 1, r3: 3, r4: 2 },
+  'DoubleBun': { totalGames: 5, totalUma: -16.0, avgUma: -3.2, avgRank: 2.60, top2Rate: 40.0, r1: 1, r2: 1, r3: 2, r4: 1 },
+  'ckckdud': { totalGames: 7, totalUma: -24.0, avgUma: -3.4, avgRank: 2.43, top2Rate: 42.9, r1: 2, r2: 1, r3: 3, r4: 1 },
+  'JJH25': { totalGames: 5, totalUma: -46.1, avgUma: -9.2, avgRank: 2.60, top2Rate: 40.0, r1: 0, r2: 2, r3: 3, r4: 0 },
+  'stone_ant': { totalGames: 68, totalUma: -49.5, avgUma: -0.7, avgRank: 2.53, top2Rate: 48.5, r1: 18, r2: 15, r3: 16, r4: 19 },
+  '마카롱': { totalGames: 5, totalUma: -58.2, avgUma: -11.6, avgRank: 2.80, top2Rate: 40.0, r1: 1, r2: 1, r3: 1, r4: 2 },
+  '쑥갓': { totalGames: 3, totalUma: -73.0, avgUma: -24.3, avgRank: 3.00, top2Rate: 33.3, r1: 0, r2: 1, r3: 1, r4: 1 },
+  '부진창깡곤곤래': { totalGames: 33, totalUma: -81.6, avgUma: -2.5, avgRank: 2.52, top2Rate: 48.5, r1: 8, r2: 8, r3: 9, r4: 8 },
+  '_lime': { totalGames: 17, totalUma: -108.5, avgUma: -6.4, avgRank: 2.59, top2Rate: 52.9, r1: 1, r2: 8, r3: 5, r4: 3 },
+  'TeNew': { totalGames: 8, totalUma: -109.6, avgUma: -13.7, avgRank: 2.75, top2Rate: 50.0, r1: 0, r2: 4, r3: 2, r4: 2 },
+  '신시': { totalGames: 7, totalUma: -123.0, avgUma: -17.6, avgRank: 3.00, top2Rate: 14.3, r1: 1, r2: 0, r3: 4, r4: 2 },
+  '신시★': { totalGames: 7, totalUma: -123.0, avgUma: -17.6, avgRank: 3.00, top2Rate: 14.3, r1: 1, r2: 0, r3: 4, r4: 2 },
+  '얼룩무늬민달팽이': { totalGames: 7, totalUma: -135.0, avgUma: -19.3, avgRank: 3.14, top2Rate: 28.6, r1: 2, r2: 0, r3: 0, r4: 5 },
+  'Yoha.': { totalGames: 9, totalUma: -189.8, avgUma: -21.1, avgRank: 3.33, top2Rate: 22.2, r1: 1, r2: 1, r3: 1, r4: 6 },
+};
+
 // 메모리 캐시 (세션 동안 유지)
 let cachedAllStats: MemberStatItem[] | null = null;
 let cachedSessionsDetail: Record<string, SessionDetail> = {};
@@ -474,22 +672,57 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
     const allNames = Array.from(new Set([...Object.keys(tonggeMap), ...Object.keys(detailedStatsMap)]));
 
     const items: MemberStatItem[] = allNames.map(name => {
+      const legacy = LEGACY_MEMBER_AGGREGATES[name];
       if (detailedStatsMap[name]) {
-        return detailedStatsMap[name];
+        // 9회차 이후 순수 상세 통계 복사본 보존 (상세 모달 전용)
+        const pureDetailed: MemberStatItem = { ...detailedStatsMap[name] };
+
+        // 종합 랭킹/스탯용 객체 (레거시 합산)
+        const overallItem: MemberStatItem = { ...detailedStatsMap[name] };
+
+        if (legacy) {
+          const dGames = overallItem.totalGames || 0;
+          const lGames = legacy.totalGames || 0;
+          const newTotalGames = dGames + lGames;
+
+          if (lGames > 0) {
+            const newR1 = (overallItem.rank1Count || 0) + legacy.r1;
+            const newR2 = (overallItem.rank2Count || 0) + legacy.r2;
+            const newR3 = (overallItem.rank3Count || 0) + legacy.r3;
+            const newR4 = (overallItem.rank4Count || 0) + legacy.r4;
+            const totalRankSum = (overallItem.avgRank * dGames) + (legacy.avgRank * lGames);
+
+            overallItem.totalGames = newTotalGames;
+            overallItem.rank1Count = newR1;
+            overallItem.rank2Count = newR2;
+            overallItem.rank3Count = newR3;
+            overallItem.rank4Count = newR4;
+            overallItem.avgRank = newTotalGames > 0 ? parseFloat((totalRankSum / newTotalGames).toFixed(2)) : 0;
+            overallItem.top2Rate = newTotalGames > 0 ? parseFloat((((newR1 + newR2) / newTotalGames) * 100).toFixed(1)) : 0;
+            overallItem.totalRounds = (overallItem.totalRounds || 0) + lGames;
+          }
+        }
+        overallItem.totalUma = tonggeMap[name] !== undefined ? tonggeMap[name] : overallItem.totalUma;
+        overallItem.avgUma = overallItem.totalGames > 0 ? parseFloat((overallItem.totalUma / overallItem.totalGames).toFixed(1)) : 0;
+
+        // 상세 모달창에서 사용할 9회차 순수 상세 통계 연결
+        overallItem.detailedStats = pureDetailed;
+        return overallItem;
       }
-      const totalUma = tonggeMap[name] || 0;
-      return {
+      const totalUma = tonggeMap[name] !== undefined ? tonggeMap[name] : (legacy ? legacy.totalUma : 0);
+      const totalGames = legacy ? legacy.totalGames : 0;
+      const legacyItem: MemberStatItem = {
         name,
         totalUma,
-        avgUma: 0,
-        avgRank: 0,
-        totalGames: 0,
-        rank1Count: 0,
-        rank2Count: 0,
-        rank3Count: 0,
-        rank4Count: 0,
-        top2Rate: 0,
-        totalRounds: 0,
+        avgUma: totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0,
+        avgRank: legacy ? legacy.avgRank : 0,
+        totalGames,
+        rank1Count: legacy ? legacy.r1 : 0,
+        rank2Count: legacy ? legacy.r2 : 0,
+        rank3Count: legacy ? legacy.r3 : 0,
+        rank4Count: legacy ? legacy.r4 : 0,
+        top2Rate: legacy ? legacy.top2Rate : 0,
+        totalRounds: legacy ? legacy.totalGames : 0,
         winRate: 0,
         dealInRate: 0,
         riichiRate: 0,
@@ -518,6 +751,21 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
         dealInRiichiRate: 0,
         totalScore: 0,
       };
+      // 9회차 이후 기록이 없는 레거시 전용 선수의 경우 9회차 상세 통계는 0전으로 연결
+      legacyItem.detailedStats = {
+        ...legacyItem,
+        totalUma: 0,
+        avgUma: 0,
+        avgRank: 0,
+        totalGames: 0,
+        totalRounds: 0,
+        rank1Count: 0,
+        rank2Count: 0,
+        rank3Count: 0,
+        rank4Count: 0,
+        top2Rate: 0,
+      };
+      return legacyItem;
     });
 
     // 기본 정렬: 누적 우마 내림차순
@@ -565,7 +813,7 @@ export async function fetchPublicSessions(_spreadsheetId?: string): Promise<stri
 
 /**
  * 3. 특정 회차의 상세 결과(멤버별 요약 및 대국 목록) 로드 (1~15회 전 회차 지원)
- * 9회차 이상은 `${session} (raw)` 우선 참조, 1~8회차는 `${session}` 참조
+ * 9회차 이상은 `${session} (raw)` 우선 참조, 1~8회차는 내장 정밀 데이터 및 `${session}` 참조
  */
 export async function fetchPublicSessionDetail(
   sessionName: string,
@@ -575,9 +823,19 @@ export async function fetchPublicSessionDetail(
     return cachedSessionsDetail[sessionName];
   }
 
-  const workerUrl = getWorkerUrl();
   const match = sessionName.match(/제(\d+)회/);
   const sessionNum = match ? parseInt(match[1], 10) : 0;
+
+  // 1~8회차인 경우: 내장된 111대국 전수 데이터가 있으면 가장 정밀하고 완벽하므로 우선 사용!
+  if (sessionNum >= 1 && sessionNum <= 8) {
+    const legacyDetail = getLegacyConsolidatedSessionDetail(sessionName);
+    if (legacyDetail && legacyDetail.games.length > 0) {
+      cachedSessionsDetail[sessionName] = legacyDetail;
+      return legacyDetail;
+    }
+  }
+
+  const workerUrl = getWorkerUrl();
   const isRawFormat = sessionNum >= 9;
 
   let table: any = null;
@@ -839,6 +1097,16 @@ export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): Ses
 /**
  * 6. 전체 인원 대비 스탯 분포 (연속 히스토그램 & 50% 절반 구분선) 산출
  */
+export interface HistogramBar {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  isCurrent: boolean;
+  value: number;
+  playerName: string;
+}
+
 export interface DistributionData {
   metricName: string;
   currentValue: number;
@@ -852,10 +1120,9 @@ export interface DistributionData {
   topPct: number;
   bottomPct: number;
   isUpperHalf: boolean;
-  svgPath: string;
-  svgAreaPath: string;
-  currentMarkerX: number; // 0 ~ 100 (%)
-  currentMarkerY: number; // 0 ~ 44 (SVG Y)
+  bars: HistogramBar[];
+  line30X: number; // 하위 30% X좌표
+  line70X: number; // 상위 30% X좌표
 }
 
 export function calculateMetricDistribution(
@@ -864,7 +1131,8 @@ export function calculateMetricDistribution(
   metricName: string,
   currentValue: number,
   unit: string = '%',
-  higherIsBetter: boolean = true
+  higherIsBetter: boolean = true,
+  currentPlayerName?: string
 ): DistributionData {
   const totalCount = allStats.length;
   if (totalCount === 0) {
@@ -881,17 +1149,39 @@ export function calculateMetricDistribution(
       topPct: 100,
       bottomPct: 0,
       isUpperHalf: true,
-      svgPath: '',
-      svgAreaPath: '',
-      currentMarkerX: 50,
-      currentMarkerY: 22,
+      bars: [],
+      line30X: 48,
+      line70X: 112,
     };
   }
 
-  const values: number[] = allStats
-    .map(s => Number(s[metricKey]))
-    .filter(v => !isNaN(v));
+  // 전체 멤버 중 총 대국수가 0인 비활동 멤버는 히스토그램 및 통계 분포에서 제외
+  const validMembers = allStats
+    .filter(s => (s.totalGames || 0) > 0)
+    .map(s => ({ name: s.name, val: Number(s[metricKey]) }))
+    .filter(item => !isNaN(item.val));
 
+  if (validMembers.length === 0) {
+    return {
+      metricName,
+      currentValue,
+      unit,
+      min: currentValue,
+      max: currentValue,
+      avg: currentValue,
+      rank: 1,
+      totalCount: 1,
+      percentileText: '100%',
+      topPct: 100,
+      bottomPct: 0,
+      isUpperHalf: true,
+      bars: [],
+      line30X: 48,
+      line70X: 112,
+    };
+  }
+
+  const values = validMembers.map(m => m.val);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const sum = values.reduce((acc, v) => acc + v, 0);
@@ -912,58 +1202,42 @@ export function calculateMetricDistribution(
   const isUpperHalf = rank <= Math.ceil(values.length / 2);
   const percentileText = `상위 ${topPct}% (하위 ${bottomPct}%) · ${isUpperHalf ? '상위 50% 이내' : '하위 50%'}`;
 
-  // 컴팩트한 히스토그램 빈 생성 (7구간)
-  const numBins = 7;
-  const range = max - min === 0 ? 1 : max - min;
-  const binWidth = range / numBins;
-  const binCounts = new Array(numBins).fill(0);
-
-  values.forEach(v => {
-    let b = Math.floor((v - min) / binWidth);
-    if (b >= numBins) b = numBins - 1;
-    if (b < 0) b = 0;
-    binCounts[b]++;
-  });
-
-  const maxBinCount = Math.max(...binCounts, 1);
-  const svgWidth = 160; // 좁혀진 차트 폭
+  // 사람 1명당 1개 막대의 계단형 히스토그램 (오름차순 정렬)
+  const sorted = [...validMembers].sort((a, b) => a.val - b.val);
+  const svgWidth = 160;
   const baseline = 38;
   const topY = 6;
+  const range = max - min === 0 ? 1 : max - min;
+  const n = sorted.length;
+  const stepW = svgWidth / Math.max(n, 1);
+  const barWidth = Math.max(1.8, stepW - 0.8);
 
-  // 빈 중심점 좌표 생성
-  const points: { x: number; y: number }[] = [];
-  // 시작점
-  points.push({ x: 0, y: baseline });
+  // 대상 플레이어 매칭 (이름 또는 값)
+  let matchedIndex = -1;
+  if (currentPlayerName) {
+    matchedIndex = sorted.findIndex(m => m.name === currentPlayerName);
+  }
+  if (matchedIndex === -1) {
+    matchedIndex = sorted.findIndex(m => Math.abs(m.val - currentValue) < 0.0001);
+  }
 
-  for (let i = 0; i < numBins; i++) {
-    const x = ((i + 0.5) / numBins) * svgWidth;
-    const h = (binCounts[i] / maxBinCount) * (baseline - topY);
+  const bars: HistogramBar[] = sorted.map((m, i) => {
+    const normH = ((m.val - min) / range) * (baseline - topY);
+    const h = Math.max(2.5, normH);
+    const x = i * stepW + (stepW - barWidth) / 2;
     const y = baseline - h;
-    points.push({ x, y });
-  }
-  // 끝점
-  points.push({ x: svgWidth, y: baseline });
+    const isCurrent = i === matchedIndex;
 
-  // 부드러운 Bezier SVG 패스 생성
-  let svgPath = `M ${points[0].x} ${points[0].y}`;
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1];
-    const curr = points[i];
-    const cpX = (prev.x + curr.x) / 2;
-    svgPath += ` Q ${prev.x} ${prev.y}, ${cpX} ${(prev.y + curr.y) / 2}`;
-  }
-  svgPath += ` T ${points[points.length - 1].x} ${points[points.length - 1].y}`;
-
-  // 폐곡선 영역 패스 (아래 채우기용)
-  const svgAreaPath = `${svgPath} L ${svgWidth} ${baseline} L 0 ${baseline} Z`;
-
-  // 현재 플레이어의 X 위치 (0 ~ 100%)
-  const clampedX = Math.max(3, Math.min(97, ((currentValue - min) / range) * 100));
-
-  // 현재 위치에서의 Y 높이 추정
-  const playerBin = Math.min(numBins - 1, Math.max(0, Math.floor(((currentValue - min) / range) * numBins)));
-  const playerH = (binCounts[playerBin] / maxBinCount) * (baseline - topY);
-  const currentMarkerY = baseline - playerH;
+    return {
+      x: parseFloat(x.toFixed(1)),
+      y: parseFloat(y.toFixed(1)),
+      width: parseFloat(barWidth.toFixed(1)),
+      height: parseFloat(h.toFixed(1)),
+      isCurrent,
+      value: m.val,
+      playerName: m.name,
+    };
+  });
 
   return {
     metricName,
@@ -978,9 +1252,8 @@ export function calculateMetricDistribution(
     topPct,
     bottomPct,
     isUpperHalf,
-    svgPath,
-    svgAreaPath,
-    currentMarkerX: clampedX,
-    currentMarkerY,
+    bars,
+    line30X: parseFloat((svgWidth * 0.3).toFixed(1)), // 하위 30% (48)
+    line70X: parseFloat((svgWidth * 0.7).toFixed(1)), // 상위 30% (112)
   };
 }

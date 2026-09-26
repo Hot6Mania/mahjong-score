@@ -1014,10 +1014,13 @@ const getSignColor = (sign: number, x: boolean) => {
   transform: translate(-50%, -50%);
   width: auto;
   height: auto;
+  max-width: 95vw;
+  max-width: 95dvw;
   max-height: 90%;
   max-height: 90dvh;
   overflow-y: auto;
   padding: 5px;
+  box-sizing: border-box;
   z-index: 10;
   transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
@@ -1224,5 +1227,42 @@ const getSignColor = (sign: number, x: boolean) => {
 }
 :global(.dark) .keep_login_label {
   color: #ffffff !important;
+}
+
+@media (max-width: 600px) {
+  .modal_content {
+    max-width: 96vw;
+    max-width: 96dvw;
+    max-height: 94vh;
+    max-height: 94dvh;
+    padding: 8px 6px;
+    white-space: normal;
+  }
+  .container_option {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+    grid-template-rows: auto;
+    grid-template-areas:
+      'input_name0 input_name1'
+      'input_name2 input_name3'
+      'option0 option1'
+      'option2 option3'
+      'option4 option4'
+      'option5 option6'
+      'option7 option7'
+      'option8 option8'
+      'option9 option9';
+    font-size: 15px;
+    max-height: 50vh;
+  }
+  .container_resultsheet {
+    font-size: 14px;
+    max-width: 92vw;
+    overflow-x: auto;
+  }
+  .container_resultchart {
+    width: 100% !important;
+    max-width: 92vw !important;
+    height: 200px !important;
+  }
 }
 </style>

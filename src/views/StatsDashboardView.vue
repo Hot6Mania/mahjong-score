@@ -78,6 +78,12 @@ const sortOrder = ref<'asc' | 'desc'>('desc');
 
 // 선택된 플레이어 상세 모달 상태
 const selectedPlayer = ref<MemberStatItem | null>(null);
+const displayPlayerStats = computed<MemberStatItem>(() => {
+  if (!selectedPlayer.value) {
+    return {} as MemberStatItem;
+  }
+  return selectedPlayer.value.detailedStats || selectedPlayer.value;
+});
 const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
 const hoveredRank = ref<number | null>(null);
 
@@ -118,12 +124,12 @@ const getDistPct = (count: number, total: number): string => {
   return ((count / total) * 100).toFixed(1);
 };
 
-// 모달 내 순위 비율 도넛 차트 계산
+// 모달 내 순위 비율 도넛 차트 계산 (9회차 이후 순수 통계 기준)
 const modalRankStats = computed(() => {
   if (!selectedPlayer.value) {
     return { r1: 0, r2: 0, r3: 0, r4: 0, p1: 0, p2: 0, p3: 0, p4: 0, totalGames: 0, top2Rate: '0.0%', lastAvoidRate: '0.0%' };
   }
-  const m = selectedPlayer.value;
+  const m = displayPlayerStats.value;
   const tot = m.totalGames;
   const p1 = tot > 0 ? (m.rank1Count / tot) * 100 : 0;
   const p2 = tot > 0 ? (m.rank2Count / tot) * 100 : 0;
@@ -305,23 +311,28 @@ const onHoverMetric = (
   unit = ''
 ) => {
   if (!allStats.value || allStats.value.length === 0) return;
-  const dist = calculateMetricDistribution(allStats.value, key, name, val, unit, higherIsBetter);
+  const detailedList = allStats.value.map(m => m.detailedStats || m);
+  const dist = calculateMetricDistribution(detailedList, key, name, val, unit, higherIsBetter, displayPlayerStats.value?.name);
   activeDist.value = dist;
   activeDistName.value = name;
   activeDistUnit.value = unit;
 
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const screenW = typeof window !== 'undefined' ? window.innerWidth : 360;
+  const rawX = rect.left + rect.width / 2;
+  const clampedX = Math.max(115, Math.min(screenW - 115, rawX));
+
   if (rect.top < 180) {
     isTooltipBelow.value = true;
     tooltipPos.value = {
-      x: rect.left + rect.width / 2,
+      x: clampedX,
       y: rect.bottom + 10,
       visible: true,
     };
   } else {
     isTooltipBelow.value = false;
     tooltipPos.value = {
-      x: rect.left + rect.width / 2,
+      x: clampedX,
       y: rect.top - 10,
       visible: true,
     };
@@ -425,48 +436,71 @@ const getRankClass = (rank: number) => {
         내 수치: <strong>{{ activeDist.currentValue.toLocaleString() }}{{ activeDistUnit }}</strong>
       </div>
 
-      <!-- SVG 연속 곡선 & 히스토그램 & 50% 절반 구분선 & 위치 핀 -->
+      <!-- SVG 1인 1막대 계단형 히스토그램 & 하위 30%/50%/상위 30% 구분선 -->
       <div class="dist-chart-box">
         <svg viewBox="0 0 160 44" class="dist-svg" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="distGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.45" />
-              <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.03" />
-            </linearGradient>
-          </defs>
-          <!-- 영역 (부드러운 곡선 아래 채움) -->
-          <path :d="activeDist.svgAreaPath" fill="url(#distGrad)" />
-          <!-- 연속 곡선 테두리 -->
-          <path :d="activeDist.svgPath" fill="none" stroke="#3b82f6" stroke-width="1.8" />
-          <!-- 50% 절반 구분선 (점선) -->
+          <!-- 1인 1막대 계단형 바 (대국수 > 0인 실활동 멤버만 렌더링) -->
+          <rect
+            v-for="(bar, idx) in activeDist.bars"
+            :key="idx"
+            :x="bar.x"
+            :y="bar.y"
+            :width="bar.width"
+            :height="bar.height"
+            :fill="bar.isCurrent ? '#3b82f6' : (isDark ? 'rgba(148, 163, 184, 0.45)' : 'rgba(100, 116, 139, 0.35)')"
+            :stroke="bar.isCurrent ? '#60a5fa' : 'none'"
+            :stroke-width="bar.isCurrent ? 1 : 0"
+            rx="1"
+          />
+          <!-- 현재 플레이어 위치 상단 하이라이트 핀/삼각형 마커 -->
+          <polygon
+            v-for="(bar, idx) in activeDist.bars"
+            :key="'pin-' + idx"
+            v-show="bar.isCurrent"
+            :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.5},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.5},${Math.max(0, bar.y - 5)}`"
+            fill="#3b82f6"
+          />
+
+          <!-- 하위 30% 구분선 (연한 회색 점선) -->
+          <line 
+            :x1="activeDist.line30X" 
+            y1="0" 
+            :x2="activeDist.line30X" 
+            y2="44" 
+            stroke="rgba(156, 163, 175, 0.65)" 
+            stroke-width="1.2" 
+            stroke-dasharray="2,2" 
+          />
+
+          <!-- 중앙 50% 구분선 (더 두꺼운 흰색/밝은 점선) -->
           <line 
             x1="80" 
             y1="0" 
             x2="80" 
             y2="44" 
-            stroke="rgba(255, 255, 255, 0.3)" 
+            stroke="rgba(255, 255, 255, 0.55)" 
+            stroke-width="2.0" 
+            stroke-dasharray="3,2" 
+          />
+
+          <!-- 상위 30% 구분선 (연한 회색 점선) -->
+          <line 
+            :x1="activeDist.line70X" 
+            y1="0" 
+            :x2="activeDist.line70X" 
+            y2="44" 
+            stroke="rgba(156, 163, 175, 0.65)" 
             stroke-width="1.2" 
             stroke-dasharray="2,2" 
           />
-          <text x="80" y="8" text-anchor="middle" font-size="7" fill="#94a3b8">50%</text>
-          <!-- 현재 플레이어 위치 수직선 -->
-          <line 
-            :x1="activeDist.currentMarkerX * 1.6" 
-            y1="0" 
-            :x2="activeDist.currentMarkerX * 1.6" 
-            y2="44" 
-            stroke="#ef4444" 
-            stroke-width="1.8" 
-            stroke-dasharray="2,2" 
-          />
-          <!-- 현재 위치 핀 점 -->
-          <circle 
-            :cx="activeDist.currentMarkerX * 1.6" 
-            cy="7" 
-            r="3.5" 
-            fill="#ef4444" 
-          />
         </svg>
+
+        <!-- 폰트 왜곡 방지용 HTML 레이블 오버레이 (비율 찌그러짐 원천 차단) -->
+        <div class="dist-chart-labels-overlay">
+          <span class="dist-line-tag" :style="{ left: (activeDist.line30X / 160 * 100) + '%' }">하위 30%</span>
+          <span class="dist-line-tag tag-50" style="left: 50%;">50%</span>
+          <span class="dist-line-tag" :style="{ left: (activeDist.line70X / 160 * 100) + '%' }">상위 30%</span>
+        </div>
       </div>
 
       <div class="dist-labels-row">
@@ -533,7 +567,7 @@ const getRankClass = (rank: number) => {
         :class="{ active: activeTab === 'matrix' }" 
         @click="activeTab = 'matrix'"
       >
-        역대 회차 전적 ('통계' 시트)
+        역대 회차별 전적
       </button>
       <button 
         class="tab-btn" 
@@ -709,7 +743,7 @@ const getRankClass = (rank: number) => {
       <section v-else-if="activeTab === 'matrix'" class="tab-matrix">
         <div class="matrix-controls-bar">
           <div class="matrix-info-text">
-            구글 스프레드시트 <strong>'통계'</strong> 탭의 전 회차 우마 기록입니다. 상단 회차명을 누르면 경기 상세로 이동합니다.
+            구글 스프레드시트 <strong>'통계'</strong> 탭의 전 회차 우마 기록입니다. 상단 회차명을 누르면 경기 상세로, 선수명을 누르면 개인 상세 스탯으로 이동합니다.
           </div>
           <div class="search-box">
             <svg class="search-icon-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -922,10 +956,6 @@ const getRankClass = (rank: number) => {
               </button>
             </div>
 
-            <div class="modal_hint_bar">
-              항목에 마우스를 올리면 김케이하우스 내 전체 인원 대비 연속 분포 곡선(50% 절반 구분선)이 표시됩니다
-            </div>
-
             <!-- 스탯 데이터 테이블 -->
             <div class="stats_content">
               <div class="stats_list">
@@ -933,169 +963,217 @@ const getRankClass = (rank: number) => {
                 <div v-if="modalActiveTab === 'basic'" class="stats_group">
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'totalGames', '기록 대국 수', selectedPlayer.totalGames, true, '전')" 
+                @mouseenter="onHoverMetric($event, 'totalGames', '기록 대국 수', displayPlayerStats.totalGames, true, '전')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">기록 대국 수</span>
-                <span class="stat_value">{{ selectedPlayer.totalGames }}전 ({{ selectedPlayer.totalRounds }}국)</span>
+                <span class="stat_value">{{ displayPlayerStats.totalGames }}전</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'totalUma', '누적 우마', selectedPlayer.totalUma, true, 'pt')" 
+                @mouseenter="onHoverMetric($event, 'totalUma', '누적 우마', displayPlayerStats.totalUma, true, 'pt')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">누적 우마</span>
-                <span class="stat_value" :class="selectedPlayer.totalUma >= 0 ? 'text_positive' : 'text_negative'">
-                  {{ selectedPlayer.totalUma > 0 ? '+' : '' }}{{ selectedPlayer.totalUma }}pt
+                <span class="stat_value" :class="displayPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
+                  {{ displayPlayerStats.totalUma > 0 ? '+' : '' }}{{ displayPlayerStats.totalUma }}pt
                 </span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'avgUma', '평균 우마', selectedPlayer.avgUma, true, 'pt')" 
+                @mouseenter="onHoverMetric($event, 'avgUma', '평균 우마', displayPlayerStats.avgUma, true, 'pt')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">평균 우마</span>
-                <span class="stat_value" :class="selectedPlayer.avgUma >= 0 ? 'text_positive' : 'text_negative'">
-                  {{ selectedPlayer.avgUma > 0 ? '+' : '' }}{{ selectedPlayer.avgUma }}pt
+                <span class="stat_value" :class="displayPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
+                  {{ displayPlayerStats.avgUma > 0 ? '+' : '' }}{{ displayPlayerStats.avgUma }}pt
                 </span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'avgRank', '평균 순위', selectedPlayer.avgRank, false, '위')" 
+                @mouseenter="onHoverMetric($event, 'avgRank', '평균 순위', displayPlayerStats.avgRank, false, '위')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">평균 순위</span>
-                <span class="stat_value highlight">{{ selectedPlayer.avgRank }}위</span>
+                <span class="stat_value highlight">{{ displayPlayerStats.avgRank }}위</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'top2Rate', '연대율', selectedPlayer.top2Rate, true, '%')" 
+                @mouseenter="onHoverMetric($event, 'top2Rate', '연대율', displayPlayerStats.top2Rate, true, '%')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">연대율 (1·2위)</span>
-                <span class="stat_value">{{ selectedPlayer.top2Rate }}%</span>
+                <span class="stat_value">{{ displayPlayerStats.top2Rate }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'winRate', '화료율', selectedPlayer.winRate, true, '%')" 
+                @mouseenter="onHoverMetric($event, 'winRate', '화료율', displayPlayerStats.winRate, true, '%')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">화료율</span>
-                <span class="stat_value">{{ selectedPlayer.winRate }}%</span>
+                <span class="stat_value">{{ displayPlayerStats.winRate }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'dealInRate', '방총률', selectedPlayer.dealInRate, false, '%')" 
+                @mouseenter="onHoverMetric($event, 'dealInRate', '방총률', displayPlayerStats.dealInRate, false, '%')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">방총률</span>
-                <span class="stat_value text_negative">{{ selectedPlayer.dealInRate }}%</span>
+                <span class="stat_value text_negative">{{ displayPlayerStats.dealInRate }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'tsumoRate', '쯔모율', selectedPlayer.tsumoRate, true, '%')" 
+                @mouseenter="onHoverMetric($event, 'tsumoRate', '쯔모율', displayPlayerStats.tsumoRate, true, '%')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">쯔모율</span>
-                <span class="stat_value">{{ selectedPlayer.tsumoRate }}%</span>
+                <span class="stat_value">{{ displayPlayerStats.tsumoRate }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'riichiRate', '리치율', selectedPlayer.riichiRate, true, '%')" 
+                @mouseenter="onHoverMetric($event, 'riichiRate', '리치율', displayPlayerStats.riichiRate, true, '%')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">리치율</span>
-                <span class="stat_value">{{ selectedPlayer.riichiRate }}%</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">유국률</span>
-                <span class="stat_value">{{ selectedPlayer.drawRate }}%</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">유국 텐파이율</span>
-                <span class="stat_value">{{ selectedPlayer.drawTenpaiRate }}%</span>
+                <span class="stat_value">{{ displayPlayerStats.riichiRate }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'avgWinScore', '평균 화료 점수', selectedPlayer.avgWinScore, true, '점')" 
+                @mouseenter="onHoverMetric($event, 'drawRate', '유국률', displayPlayerStats.drawRate, false, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'drawRate', '유국률', displayPlayerStats.drawRate, false, '%')"
+              >
+                <span class="stat_label">유국률</span>
+                <span class="stat_value">{{ displayPlayerStats.drawRate }}%</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'drawTenpaiRate', '유국 텐파이율', displayPlayerStats.drawTenpaiRate, true, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'drawTenpaiRate', '유국 텐파이율', displayPlayerStats.drawTenpaiRate, true, '%')"
+              >
+                <span class="stat_label">유국 텐파이율</span>
+                <span class="stat_value">{{ displayPlayerStats.drawTenpaiRate }}%</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'avgWinScore', '평균 화료 점수', displayPlayerStats.avgWinScore, true, '점')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">평균 화료 점수</span>
-                <span class="stat_value text_positive">{{ selectedPlayer.avgWinScore.toLocaleString() }}점</span>
+                <span class="stat_value text_positive">{{ displayPlayerStats.avgWinScore.toLocaleString() }}점</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'avgDealInScore', '평균 방총 점수', selectedPlayer.avgDealInScore, false, '점')" 
+                @mouseenter="onHoverMetric($event, 'avgDealInScore', '평균 방총 점수', displayPlayerStats.avgDealInScore, false, '점')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">평균 방총 점수</span>
-                <span class="stat_value text_negative">{{ selectedPlayer.avgDealInScore.toLocaleString() }}점</span>
+                <span class="stat_value text_negative">{{ displayPlayerStats.avgDealInScore.toLocaleString() }}점</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'tobiRate', '토비율', selectedPlayer.tobiRate, false, '%')" 
+                @mouseenter="onHoverMetric($event, 'tobiRate', '토비율', displayPlayerStats.tobiRate, false, '%')" 
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">토비율 (들통)</span>
-                <span class="stat_value text_negative">{{ selectedPlayer.tobiRate }}%</span>
+                <span class="stat_value text_negative">{{ displayPlayerStats.tobiRate }}%</span>
               </div>
             </div>
 
             <!-- 2. 리치 스탯 탭 -->
             <div v-else-if="modalActiveTab === 'riichi'" class="stats_group">
-              <div class="stat_row">
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'riichiRate', '리치율', displayPlayerStats.riichiRate, true, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'riichiRate', '리치율', displayPlayerStats.riichiRate, true, '%')"
+              >
                 <span class="stat_label">리치율</span>
-                <span class="stat_value">{{ selectedPlayer.riichiRate }}%</span>
+                <span class="stat_value">{{ displayPlayerStats.riichiRate }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'riichiWinRate', '리치 화료율', selectedPlayer.riichiWinRate, true, '%')" 
+                @mouseenter="onHoverMetric($event, 'riichiWinRate', '리치 화료율', displayPlayerStats.riichiWinRate, true, '%')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'riichiWinRate', '리치 화료율', displayPlayerStats.riichiWinRate, true, '%')"
               >
                 <span class="stat_label">리치 화료율</span>
-                <span class="stat_value text_positive">{{ selectedPlayer.riichiWinRate }}%</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">리치 방총율</span>
-                <span class="stat_value text_negative">{{ selectedPlayer.riichiDealInRate }}%</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">리치 유국률</span>
-                <span class="stat_value">{{ selectedPlayer.riichiDrawRate }}%</span>
+                <span class="stat_value text_positive">{{ displayPlayerStats.riichiWinRate }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'riichiEV', '리치 수지', selectedPlayer.riichiEV, true, '점')" 
+                @mouseenter="onHoverMetric($event, 'riichiDealInRate', '리치 방총율', displayPlayerStats.riichiDealInRate, false, '%')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'riichiDealInRate', '리치 방총율', displayPlayerStats.riichiDealInRate, false, '%')"
+              >
+                <span class="stat_label">리치 방총율</span>
+                <span class="stat_value text_negative">{{ displayPlayerStats.riichiDealInRate }}%</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'riichiDrawRate', '리치 유국률', displayPlayerStats.riichiDrawRate, false, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'riichiDrawRate', '리치 유국률', displayPlayerStats.riichiDrawRate, false, '%')"
+              >
+                <span class="stat_label">리치 유국률</span>
+                <span class="stat_value">{{ displayPlayerStats.riichiDrawRate }}%</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'riichiEV', '리치 수지', displayPlayerStats.riichiEV, true, '점')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'riichiEV', '리치 수지', displayPlayerStats.riichiEV, true, '점')"
               >
                 <span class="stat_label">리치 수지</span>
-                <span class="stat_value" :class="selectedPlayer.riichiEV >= 0 ? 'text_positive' : 'text_negative'">
-                  {{ selectedPlayer.riichiEV > 0 ? '+' : '' }}{{ selectedPlayer.riichiEV }}점
+                <span class="stat_value" :class="displayPlayerStats.riichiEV >= 0 ? 'text_positive' : 'text_negative'">
+                  {{ displayPlayerStats.riichiEV > 0 ? '+' : '' }}{{ displayPlayerStats.riichiEV }}점
                 </span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">리치 수입 평균</span>
-                <span class="stat_value text_positive">+{{ selectedPlayer.riichiIncomeAvg.toLocaleString() }}점</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">리치 지출 평균</span>
-                <span class="stat_value text_negative">-{{ selectedPlayer.riichiExpenseAvg.toLocaleString() }}점</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'firstRiichiRate', '선제율', selectedPlayer.firstRiichiRate, true, '%')" 
+                @mouseenter="onHoverMetric($event, 'riichiIncomeAvg', '리치 수입 평균', displayPlayerStats.riichiIncomeAvg, true, '점')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'riichiIncomeAvg', '리치 수입 평균', displayPlayerStats.riichiIncomeAvg, true, '점')"
+              >
+                <span class="stat_label">리치 수입 평균</span>
+                <span class="stat_value text_positive">+{{ displayPlayerStats.riichiIncomeAvg.toLocaleString() }}점</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'riichiExpenseAvg', '리치 지출 평균', displayPlayerStats.riichiExpenseAvg, false, '점')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'riichiExpenseAvg', '리치 지출 평균', displayPlayerStats.riichiExpenseAvg, false, '점')"
+              >
+                <span class="stat_label">리치 지출 평균</span>
+                <span class="stat_value text_negative">-{{ displayPlayerStats.riichiExpenseAvg.toLocaleString() }}점</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'firstRiichiRate', '선제율', displayPlayerStats.firstRiichiRate, true, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'firstRiichiRate', '선제율', displayPlayerStats.firstRiichiRate, true, '%')"
               >
                 <span class="stat_label">선제율</span>
-                <span class="stat_value">{{ selectedPlayer.firstRiichiRate }}%</span>
+                <span class="stat_value">{{ displayPlayerStats.firstRiichiRate }}%</span>
               </div>
-              <div class="stat_row">
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'chaseRiichiRate', '추격률', displayPlayerStats.chaseRiichiRate, true, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'chaseRiichiRate', '추격률', displayPlayerStats.chaseRiichiRate, true, '%')"
+              >
                 <span class="stat_label">추격률</span>
-                <span class="stat_value">{{ selectedPlayer.chaseRiichiRate }}%</span>
+                <span class="stat_value">{{ displayPlayerStats.chaseRiichiRate }}%</span>
               </div>
-              <div class="stat_row">
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'chasedRiichiRate', '피추격률', displayPlayerStats.chasedRiichiRate, false, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'chasedRiichiRate', '피추격률', displayPlayerStats.chasedRiichiRate, false, '%')"
+              >
                 <span class="stat_label">피추격률</span>
-                <span class="stat_value text_negative">{{ selectedPlayer.chasedRiichiRate }}%</span>
+                <span class="stat_value text_negative">{{ displayPlayerStats.chasedRiichiRate }}%</span>
               </div>
             </div>
 
@@ -1103,51 +1181,79 @@ const getRankClass = (rank: number) => {
             <div v-else-if="modalActiveTab === 'other'" class="stats_group">
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', selectedPlayer.oyaKaburiRate, false, '%')" 
+                @mouseenter="onHoverMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', displayPlayerStats.oyaKaburiRate, false, '%')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', displayPlayerStats.oyaKaburiRate, false, '%')"
               >
                 <span class="stat_label">아픈 오야카부리율</span>
-                <span class="stat_value text_negative">{{ selectedPlayer.oyaKaburiRate }}%</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">아픈 오야카부리 평균</span>
-                <span class="stat_value text_negative">{{ selectedPlayer.oyaKaburiAvg.toLocaleString() }}점</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">방총 시 리치율</span>
-                <span class="stat_value">{{ selectedPlayer.dealInRiichiRate }}%</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">화료 효율</span>
-                <span class="stat_value text_positive">+{{ selectedPlayer.winEfficiency }}</span>
-              </div>
-              <div class="stat_row">
-                <span class="stat_label">방총 손실</span>
-                <span class="stat_value text_negative">-{{ selectedPlayer.dealInLoss }}</span>
+                <span class="stat_value text_negative">{{ displayPlayerStats.oyaKaburiRate }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'netWinEfficiency', '알짜 화료 효율', selectedPlayer.netWinEfficiency, true, '')" 
+                @mouseenter="onHoverMetric($event, 'oyaKaburiAvg', '아픈 오야카부리 평균', displayPlayerStats.oyaKaburiAvg, false, '점')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'oyaKaburiAvg', '아픈 오야카부리 평균', displayPlayerStats.oyaKaburiAvg, false, '점')"
+              >
+                <span class="stat_label">아픈 오야카부리 평균</span>
+                <span class="stat_value text_negative">{{ displayPlayerStats.oyaKaburiAvg.toLocaleString() }}점</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'dealInRiichiRate', '방총 시 리치율', displayPlayerStats.dealInRiichiRate, false, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'dealInRiichiRate', '방총 시 리치율', displayPlayerStats.dealInRiichiRate, false, '%')"
+              >
+                <span class="stat_label">방총 시 리치율</span>
+                <span class="stat_value">{{ displayPlayerStats.dealInRiichiRate }}%</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'winEfficiency', '화료 효율', displayPlayerStats.winEfficiency, true, '')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'winEfficiency', '화료 효율', displayPlayerStats.winEfficiency, true, '')"
+              >
+                <span class="stat_label">화료 효율</span>
+                <span class="stat_value text_positive">+{{ displayPlayerStats.winEfficiency }}</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'dealInLoss', '방총 손실', displayPlayerStats.dealInLoss, false, '')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'dealInLoss', '방총 손실', displayPlayerStats.dealInLoss, false, '')"
+              >
+                <span class="stat_label">방총 손실</span>
+                <span class="stat_value text_negative">-{{ displayPlayerStats.dealInLoss }}</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'netWinEfficiency', '알짜 화료 효율', displayPlayerStats.netWinEfficiency, true, '')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'netWinEfficiency', '알짜 화료 효율', displayPlayerStats.netWinEfficiency, true, '')"
               >
                 <span class="stat_label">알짜 화료 효율</span>
-                <span class="stat_value" :class="selectedPlayer.netWinEfficiency >= 0 ? 'text_positive' : 'text_negative'">
-                  {{ selectedPlayer.netWinEfficiency > 0 ? '+' : '' }}{{ selectedPlayer.netWinEfficiency }}
+                <span class="stat_value" :class="displayPlayerStats.netWinEfficiency >= 0 ? 'text_positive' : 'text_negative'">
+                  {{ displayPlayerStats.netWinEfficiency > 0 ? '+' : '' }}{{ displayPlayerStats.netWinEfficiency }}
                 </span>
               </div>
               <div 
                 class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'handEV', '국수지', selectedPlayer.handEV, true, '점')" 
+                @mouseenter="onHoverMetric($event, 'handEV', '국수지', displayPlayerStats.handEV, true, '점')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'handEV', '국수지', displayPlayerStats.handEV, true, '점')"
               >
                 <span class="stat_label">국수지</span>
-                <span class="stat_value" :class="selectedPlayer.handEV >= 0 ? 'text_positive' : 'text_negative'">
-                  {{ selectedPlayer.handEV > 0 ? '+' : '' }}{{ selectedPlayer.handEV }}점
+                <span class="stat_value" :class="displayPlayerStats.handEV >= 0 ? 'text_positive' : 'text_negative'">
+                  {{ displayPlayerStats.handEV > 0 ? '+' : '' }}{{ displayPlayerStats.handEV }}점
                 </span>
               </div>
-              <div class="stat_row">
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'totalRounds', '총합 국 수', displayPlayerStats.totalRounds, true, '국')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'totalRounds', '총합 국 수', displayPlayerStats.totalRounds, true, '국')"
+              >
                 <span class="stat_label">총합 국 수</span>
-                <span class="stat_value">{{ selectedPlayer.totalRounds }}국</span>
+                <span class="stat_value">{{ displayPlayerStats.totalRounds }}국</span>
               </div>
             </div>
 
@@ -1228,7 +1334,7 @@ const getRankClass = (rank: number) => {
                     <!-- 중앙 텍스트 -->
                     <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
                     <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ modalRankStats.totalGames }}전</text>
-                    <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ selectedPlayer.avgRank }}위</text>
+                    <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ displayPlayerStats.avgRank }}위</text>
                   </svg>
                 </div>
 
@@ -1416,12 +1522,35 @@ const getRankClass = (rank: number) => {
   font-size: 12px;
 }
 .dist-chart-box {
+  position: relative;
   width: 100%;
   height: 44px;
   background: rgba(0, 0, 0, 0.25);
   border-radius: 6px;
   overflow: hidden;
   margin-bottom: 5px;
+}
+.dist-chart-labels-overlay {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  width: 100%;
+  height: 14px;
+  pointer-events: none;
+}
+.dist-line-tag {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 8px;
+  font-weight: 600;
+  color: #cbd5e1;
+  white-space: nowrap;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+.dist-line-tag.tag-50 {
+  color: #ffffff;
+  font-weight: 700;
 }
 .dist-svg {
   width: 100%;
@@ -2197,14 +2326,6 @@ html.dark .container_stats_modal {
   border-bottom-color: var(--color-toggle-on, #4caf50);
 }
 
-.modal_hint_bar {
-  font-size: 11px;
-  color: var(--color-toggle-on, #4caf50);
-  text-align: center;
-  margin-bottom: 8px;
-  opacity: 0.9;
-}
-
 /* 스탯 목록 4열 그리드 레이아웃 (ModalStats.vue 일치) */
 .stats_content {
   width: 100%;
@@ -2286,13 +2407,40 @@ html.dark .container_stats_modal {
 }
 
 @media (max-width: 600px) {
-  .stats_group {
-    grid-template-columns: repeat(3, 1fr);
+  .player-modal-overlay {
+    padding: 6px;
+    align-items: center;
   }
-}
-@media (max-width: 440px) {
+  .player-modal-card {
+    padding: 12px 8px;
+    max-height: 94vh;
+    max-height: 94dvh;
+    border-radius: 10px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .stats_content {
+    max-height: 72vh;
+    max-height: 72dvh;
+  }
   .stats_group {
     grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  .stat_row {
+    padding: 6px 8px;
+    min-height: 44px;
+  }
+  .stat_label {
+    font-size: 10px;
+  }
+  .stat_value {
+    font-size: 13px;
+  }
+}
+@media (max-width: 360px) {
+  .stats_group {
+    grid-template-columns: 1fr;
   }
 }
 

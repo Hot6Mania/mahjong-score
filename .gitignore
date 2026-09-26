@@ -29,3 +29,6 @@ dist-ssr
 # API Keys and Secrets
 .env
 .env.production
+
+# Reference documentation (private)
+docs/game_scoring_logic*

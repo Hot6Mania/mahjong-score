@@ -565,9 +565,351 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
         }
       });
       console.log(`복제 시트의 '${targetCell}' 셀에 '${rawTitle}' 데이터 연결 완료`);
+
+      // '통계' 시트(gid=0)에 해당 회차 열 개설 및 raw 시트 기반 VLOOKUP 최종 우마 수식 연결
+      await syncSessionUmaToStatsSheet(spreadsheetId, cleanTitle, todayMembers);
     } catch (dupErr) {
       console.error(`'${cleanTitle}' 공개용 시트 복제 개설 실패:`, dupErr);
     }
+  }
+};
+
+/**
+ * '통계' 시트(gid=0)에 해당 회차의 열을 확인/연동하고, 각 선수 행에 raw 시트 VLOOKUP 수식을 연결합니다.
+ * raw 시트($A$2:$B$30)를 이름 기반 VLOOKUP으로 참조하므로,
+ * 인원 변동 마이그레이션이나 10회전 단위 시트 확장(행 이동)에도 참조 무결성이 100% 안전하게 유지됩니다.
+ */
+export const syncSessionUmaToStatsSheet = async (
+  spreadsheetId: string,
+  sessionTitle: string,
+  todayMembers: string[] = [],
+  gameCount?: number
+): Promise<void> => {
+  if (!spreadsheetId || !sessionTitle) return;
+
+  const cleanTitle = sessionTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
+  const rawTitle = `${cleanTitle} (raw)`;
+
+  try {
+    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const sheets = resMetadata.result.sheets || [];
+    const statsSheet = sheets.find((s: any) => s.properties.title === '통계');
+    if (!statsSheet) {
+      console.log("'통계' 시트가 존재하지 않아 최종우마 연동을 건너뜁니다.");
+      return;
+    }
+
+    // 1. '통계' 시트 1행 헤더 조회 (어느 열이 해당 회차인지 판별)
+    const headerRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "'통계'!1:1",
+    });
+    const headerRow: string[] = headerRes.result.values?.[0] || [];
+
+    // 회차 키워드 추출 (예: '제15회 260926' -> '제15회')
+    const matchRound = cleanTitle.match(/제\s*(\d+)\s*(?:회차|회)/);
+    const roundKeyword = matchRound ? `제${matchRound[1]}회` : cleanTitle;
+
+    let targetColIdx = -1;
+    for (let c = 0; c < headerRow.length; c++) {
+      const colText = (headerRow[c] || '').toString().trim();
+      if (colText.includes(roundKeyword) || roundKeyword.includes(colText) || colText.includes(cleanTitle)) {
+        targetColIdx = c;
+        break;
+      }
+    }
+
+    // 만약 해당 회차 열이 없으면, 마지막 열 다음 열에 새로 배정
+    if (targetColIdx === -1) {
+      targetColIdx = Math.max(2, headerRow.length); // Col A(0), Col B(1: 총합), Col C(2: 제1회)...
+    }
+
+    // 1.5. 통계 시트의 열 개수 확인 및 26회차 이상 시 우측 열 자동 확장
+    const gridCols = statsSheet.properties?.gridProperties?.columnCount || 26;
+    if (targetColIdx >= gridCols) {
+      const colsToAdd = Math.max(10, targetColIdx - gridCols + 1);
+      await window.gapi.client.sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        resource: {
+          requests: [
+            {
+              appendDimension: {
+                sheetId: statsSheet.properties.sheetId,
+                dimension: 'COLUMNS',
+                length: colsToAdd,
+              },
+            },
+          ],
+        },
+      });
+      console.log(`'통계' 시트 우측 열 자동 확장 완료: ${gridCols}열 -> ${gridCols + colsToAdd}열 (신규 회차 수용)`);
+    }
+
+    const sessionColLetter = getColumnLetter(targetColIdx);
+
+    // 1.6. 회차에서 진행된 회전 수(대국수)에 따라 '제x회\ny국' 형식의 raw 텍스트로 1행 헤더 자동 갱신
+    const headerTitle = (gameCount !== undefined && gameCount > 0)
+      ? `${roundKeyword}\n${gameCount}국`
+      : (headerRow[targetColIdx] || roundKeyword);
+
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'통계'!${sessionColLetter}1`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [[headerTitle]],
+      },
+    });
+    console.log(`'통계' 시트 ${sessionColLetter}1 헤더를 '${headerTitle.replace('\n', ' ')}'으로 갱신 완료`);
+
+    // 2. '통계' 시트 선수 명단(A열) 및 총합(B열) 조회
+    const playersRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "'통계'!A1:B100",
+    });
+    const playerRows: string[][] = playersRes.result.values || [];
+    const existingPlayers = new Map<string, number>(); // name -> 1-based row index
+
+    for (let r = 1; r < playerRows.length; r++) { // 0행은 헤더
+      const name = (playerRows[r]?.[0] || '').toString().trim();
+      if (name) {
+        existingPlayers.set(name, r + 1);
+      }
+    }
+
+    // 3. 오늘 참석자 중 '통계' 시트에 없는 신규 멤버가 있으면 행 추가 (총합 수식은 ZZ열까지 여유있게 합산)
+    const newMembersToAdd = todayMembers.filter(m => m && m.trim() && !existingPlayers.has(m.trim()));
+    if (newMembersToAdd.length > 0) {
+      let nextRow = playerRows.length + 1;
+      const appendRows: any[][] = [];
+      newMembersToAdd.forEach(name => {
+        appendRows.push([name, `=SUM(C${nextRow}:ZZ${nextRow})`]);
+        existingPlayers.set(name, nextRow);
+        nextRow++;
+      });
+
+      const startRow = playerRows.length + 1;
+      const endRow = startRow + appendRows.length - 1;
+      await window.gapi.client.sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'통계'!A${startRow}:B${endRow}`,
+        valueInputOption: 'USER_ENTERED',
+        resource: {
+          values: appendRows
+        }
+      });
+      console.log(`'통계' 시트에 신규 선수 [${newMembersToAdd.join(', ')}] 행 추가 완료 (A${startRow}:B${endRow})`);
+    }
+
+    // 4. 각 선수 행에 raw 시트 VLOOKUP 연동 수식 설정
+    const totalPlayerCount = existingPlayers.size;
+    if (totalPlayerCount > 0) {
+      const maxRow = Math.max(...Array.from(existingPlayers.values()));
+      const formulaRows: any[][] = [];
+      for (let r = 2; r <= maxRow; r++) {
+        formulaRows.push([
+          `=IFERROR(VLOOKUP(A${r}, '${rawTitle}'!$A$2:$B$30, 2, FALSE), "")`
+        ]);
+      }
+
+      await window.gapi.client.sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'통계'!${sessionColLetter}2:${sessionColLetter}${maxRow}`,
+        valueInputOption: 'USER_ENTERED',
+        resource: {
+          values: formulaRows
+        }
+      });
+      console.log(`'통계' 시트 ${sessionColLetter}2:${sessionColLetter}${maxRow}에 '${rawTitle}' 최종우마 VLOOKUP 연동 완료`);
+    }
+  } catch (err) {
+    console.warn("'통계' 시트 최종우마 자동 연동 중 오류 (무시 가능):", err);
+  }
+};
+
+/**
+ * 20회전 초과 시 회차 시트를 10회전(20행) 단위로 자동 확장합니다.
+ * 20행 삽입 후 '성적' 및 '시트명' 셀의 위치 이동에 맞추어 수식 내 $B$45 -> $B$65 등으로 자동 일괄 업데이트합니다.
+ */
+export const expandSessionSheetRowsIfNeeded = async (
+  spreadsheetId: string,
+  sheetTitle: string,
+  gameCount: number
+): Promise<void> => {
+  if (!spreadsheetId || !sheetTitle || gameCount <= 20) return;
+
+  const cleanTitle = sheetTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
+
+  try {
+    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const sheets = resMetadata.result.sheets || [];
+    const sessionSheet = sheets.find((s: any) => s.properties.title === cleanTitle);
+    if (!sessionSheet) return;
+
+    const sheetId = sessionSheet.properties.sheetId;
+
+    // A열 1~120행을 스캔하여 '성적' 및 '시트명'의 현재 행 위치 탐색
+    const colARes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${cleanTitle}'!A1:B120`,
+    });
+    const colAValues: any[][] = colARes.result.values || [];
+
+    let scoreRowIdx = -1; // 1-based row index for '성적'
+    let sheetNameRowIdx = -1; // 1-based row index for '시트명'
+
+    for (let r = 0; r < colAValues.length; r++) {
+      const textA = (colAValues[r]?.[0] || '').toString().trim();
+      const textB = (colAValues[r]?.[1] || '').toString().trim();
+      if (textA === '성적') {
+        scoreRowIdx = r + 1;
+      }
+      if (textA === '시트명' || textB.includes('(raw)')) {
+        sheetNameRowIdx = r + 1;
+      }
+    }
+
+    if (scoreRowIdx === -1) {
+      scoreRowIdx = 43;
+    }
+    if (sheetNameRowIdx === -1) {
+      sheetNameRowIdx = scoreRowIdx + 2;
+    }
+
+    // 현재 수용 가능한 회전 수: 1회전이 row 2, 20회전이 row 40 -> (scoreRowIdx - 3) / 2
+    const currentMaxRounds = Math.floor((scoreRowIdx - 3) / 2);
+    if (gameCount <= currentMaxRounds) {
+      return;
+    }
+
+    // 필요한 확장 횟수 계산 (10회전 = 20행 단위)
+    const neededRounds = gameCount - currentMaxRounds;
+    const expansionSteps = Math.ceil(neededRounds / 10);
+    const rowsToInsert = expansionSteps * 20;
+    const newMaxRounds = currentMaxRounds + (expansionSteps * 10);
+
+    console.log(`'${cleanTitle}' 시트 대국 수(${gameCount}) 초과 감지: ${rowsToInsert}행(10회전 단위 ${expansionSteps}회)을 자동 확장합니다.`);
+
+    // 1. '성적' 행 윗 줄(scoreRowIdx - 2 행 다음)에 rowsToInsert개 행 삽입
+    const insertStartIndex = scoreRowIdx - 2; // 0-based index
+
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: [
+          {
+            insertDimension: {
+              range: {
+                sheetId,
+                dimension: 'ROWS',
+                startIndex: insertStartIndex,
+                endIndex: insertStartIndex + rowsToInsert,
+              },
+              inheritFromBefore: true,
+            },
+          },
+        ],
+      },
+    });
+
+    const newScoreRowIdx = scoreRowIdx + rowsToInsert;
+    const newSheetNameRowIdx = sheetNameRowIdx + rowsToInsert;
+
+    // 2. 직전 회전(2개 행)의 수식을 읽어와 새로 삽입된 모든 회전 행에 복제
+    const sampleRowStart = insertStartIndex - 1; // 1-based (직전 회전의 첫 행)
+    const sampleRowEnd = insertStartIndex;     // 1-based (직전 회전의 둘째 행)
+    let formulaTemplates: any[][] = [];
+
+    try {
+      const sampleRes = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${cleanTitle}'!B${sampleRowStart}:Z${sampleRowEnd}`,
+        valueRenderOption: 'FORMULA',
+      });
+      formulaTemplates = sampleRes.result.values || [];
+    } catch (e) {
+      console.warn("회전 수식 템플릿 읽기 실패:", e);
+    }
+
+    // 새로 삽입된 행 데이터 조립 (A열 라벨 + B~Z열 수식)
+    const newRowsValues: any[][] = [];
+    for (let rnd = currentMaxRounds + 1; rnd <= newMaxRounds; rnd++) {
+      const row1 = [`${rnd}회전`, ...(formulaTemplates[0] || [])];
+      const row2 = ['', ...(formulaTemplates[1] || [])];
+      newRowsValues.push(row1);
+      newRowsValues.push(row2);
+    }
+
+    const startInsertRow = insertStartIndex + 1;
+    const endInsertRow = startInsertRow + rowsToInsert - 1;
+    const maxColsLetter = getColumnLetter(Math.max(25, (formulaTemplates[0]?.length || 0) + 1));
+
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${cleanTitle}'!A${startInsertRow}:${maxColsLetter}${endInsertRow}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: newRowsValues,
+      },
+    });
+
+    // 3. 기존 및 신규 행의 수식들 내 raw 시트명 셀 주소($B$45 -> $B${newSheetNameRowIdx}) 일괄 치환
+    const oldSheetCellRef = `$B$${sheetNameRowIdx}`;
+    const newSheetCellRef = `$B$${newSheetNameRowIdx}`;
+
+    if (oldSheetCellRef !== newSheetCellRef) {
+      await window.gapi.client.sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        resource: {
+          requests: [
+            {
+              findReplace: {
+                find: oldSheetCellRef,
+                replacement: newSheetCellRef,
+                sheetId,
+                allSheets: false,
+                matchCase: false,
+                includeFormulas: true,
+              },
+            },
+          ],
+        },
+      });
+      console.log(`'${cleanTitle}' 시트 내 수식 참조 주소 일괄 업데이트 완료: ${oldSheetCellRef} -> ${newSheetCellRef}`);
+    }
+
+    // 4. '성적' 행의 SUM 수식 범위 갱신: =SUM(C2:C{lastGameRow})
+    const lastGameRow = newScoreRowIdx - 2;
+    const headerColsRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${cleanTitle}'!1:1`,
+    });
+    const headerCols: any[] = headerColsRes.result.values?.[0] || [];
+    const sumRowValues: string[] = ['성적'];
+
+    for (let c = 1; c < headerCols.length; c++) {
+      const colLetter = getColumnLetter(c);
+      if (c % 2 === 0) {
+        // 짝수 인덱스 열(C, E, G... 우마 열)
+        sumRowValues.push(`=SUM(${colLetter}2:${colLetter}${lastGameRow})`);
+      } else {
+        sumRowValues.push('');
+      }
+    }
+
+    const lastColLetter = getColumnLetter(sumRowValues.length - 1);
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${cleanTitle}'!A${newScoreRowIdx}:${lastColLetter}${newScoreRowIdx}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [sumRowValues],
+      },
+    });
+
+    console.log(`'${cleanTitle}' 시트 10회전 단위 확장 완료! 총 ${newMaxRounds}회전 수용 가능 (성적 행: A${newScoreRowIdx})`);
+  } catch (err) {
+    console.error(`'${cleanTitle}' 시트 10회전 단위 확장 중 오류:`, err);
   }
 };
 
@@ -1249,6 +1591,9 @@ export const migrateSessionSheetToNewMembers = async (
 
   // 7. raw 시트 A2:A20에 새 멤버 목록 반영
   await saveSessionMembers(spreadsheetId, cleanTitle, newMembers);
+
+  // 7.5. '통계' 시트(gid=0)에 새 멤버 반영 및 VLOOKUP 최종 우마 수식 재연동
+  await syncSessionUmaToStatsSheet(spreadsheetId, cleanTitle, newMembers);
 
   // 8. 로컬 스토리지에 백업 이력 저장
   const backupRecord: SessionMigrationBackup = {

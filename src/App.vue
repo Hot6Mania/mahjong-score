@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, type SessionMigrationBackup } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, expandSessionSheetRowsIfNeeded, type SessionMigrationBackup } from "@/utils/googleSheets"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
@@ -2547,7 +2547,24 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       } catch (umaErr) {
         console.warn("일괄 변동추이 적재 실패:", umaErr);
       }
-      syncProgress.value = 97;
+      syncProgress.value = 95;
+
+      // [5] 20회전 초과 시 회차 시트 10회전 단위 자동 확장 및 수식($B$45 -> $B$65 등) 일괄 갱신
+      try {
+        if (todayGamesHistory.length > 20) {
+          await expandSessionSheetRowsIfNeeded(googleInfo.spreadsheetId, sessionSheetName, todayGamesHistory.length);
+        }
+      } catch (expErr) {
+        console.warn("회차 시트 자동 확장 중 오류:", expErr);
+      }
+
+      // [6] '통계' 시트(gid=0) 최종우마 VLOOKUP 무결성 자동 연동
+      try {
+        await syncSessionUmaToStatsSheet(googleInfo.spreadsheetId, sessionSheetName, googleInfo.todayMembers, todayGamesHistory.length);
+      } catch (statsSyncErr) {
+        console.warn("'통계' 시트 최종우마 동기화 중 오류:", statsSyncErr);
+      }
+      syncProgress.value = 98;
       
       // 일괄 동기화 완료 후 구글 전체 통계 바로 새로고침
       try {
