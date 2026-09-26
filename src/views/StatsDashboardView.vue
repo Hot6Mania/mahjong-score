@@ -560,7 +560,8 @@ const sessionChartData = computed(() => {
     pointRadius: d.played ? d.played.map(p => (p ? 4 : 0)) : 4,
     pointHoverRadius: d.played ? d.played.map(p => (p ? 6 : 0)) : 6,
     played: d.played,
-    tension: 0.15,
+    tension: 0,
+    spanGaps: true,
     fill: false,
   }));
 
@@ -585,9 +586,11 @@ const sessionChartOptions = computed<ChartOptions<'line'>>(() => ({
     tooltip: {
       mode: 'index',
       intersect: false,
+      filter: (item) => item.parsed.y !== null && !isNaN(item.parsed.y),
       callbacks: {
         label: (context) => {
           const val = context.parsed.y;
+          if (val === null || val === undefined || isNaN(val)) return '';
           const isPlayed = (context.dataset as any).played?.[context.dataIndex];
           const restBadge = context.dataIndex > 0 && !isPlayed ? ' (미참가)' : '';
           return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt${restBadge}`;

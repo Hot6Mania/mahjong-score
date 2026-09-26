@@ -145,16 +145,18 @@ const chartData = computed(() => {
   const labels = ['시작']
   games.forEach((_, idx) => labels.push(`${idx + 1}경기`))
 
-  const trajMap: Record<string, number[]> = {}
+  const trajMap: Record<string, (number | null)[]> = {}
   const playedMap: Record<string, boolean[]> = {}
+  const currentUmaMap: Record<string, number> = {}
   members.forEach(name => {
     trajMap[name] = [0]
     playedMap[name] = [false] // '시작' 지점은 경기 미참가로 처리
+    currentUmaMap[name] = 0
   })
 
+  const totalGames = games.length
   games.forEach((g, gIdx) => {
     members.forEach(name => {
-      const prev = trajMap[name][gIdx]
       let delta = 0
       let played = false
       if (g.results) {
@@ -164,8 +166,19 @@ const chartData = computed(() => {
           played = true
         }
       }
-      trajMap[name].push(parseFloat((prev + delta).toFixed(1)))
-      playedMap[name].push(played)
+      if (played) {
+        currentUmaMap[name] = parseFloat((currentUmaMap[name] + delta).toFixed(1))
+        trajMap[name].push(currentUmaMap[name])
+        playedMap[name].push(true)
+      } else {
+        if (gIdx === totalGames - 1) {
+          trajMap[name].push(currentUmaMap[name])
+          playedMap[name].push(false)
+        } else {
+          trajMap[name].push(null)
+          playedMap[name].push(false)
+        }
+      }
     })
   })
 
@@ -179,7 +192,8 @@ const chartData = computed(() => {
       pointRadius: playedMap[name].map(p => (p ? 4 : 0)),
       pointHoverRadius: playedMap[name].map(p => (p ? 6 : 0)),
       played: playedMap[name],
-      tension: 0.2,
+      tension: 0,
+      spanGaps: true,
       fill: false,
     }
   })
@@ -205,9 +219,11 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
     tooltip: {
       mode: 'index',
       intersect: false,
+      filter: (item) => item.parsed.y !== null && !isNaN(item.parsed.y),
       callbacks: {
         label: (context) => {
           const val = context.parsed.y
+          if (val === null || val === undefined || isNaN(val)) return ''
           const isPlayed = (context.dataset as any).played?.[context.dataIndex]
           const restBadge = context.dataIndex > 0 && !isPlayed ? ' (미참가)' : ''
           return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt${restBadge}`

@@ -1409,7 +1409,7 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string): Promise<St
  */
 export interface UmaTrajectoryDataset {
   name: string;
-  data: number[];
+  data: (number | null)[];
   color: string;
   finalUma: number;
   played: boolean[];
@@ -1433,26 +1433,40 @@ export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): Ses
   const labels = ['시작'];
   games.forEach((_, idx) => labels.push(`${idx + 1}국`));
 
-  const trajMap: Record<string, number[]> = {};
+  const trajMap: Record<string, (number | null)[]> = {};
   const playedMap: Record<string, boolean[]> = {};
+  const currentUmaMap: Record<string, number> = {};
+
   members.forEach(name => {
     trajMap[name] = [0];
     playedMap[name] = [false]; // '시작' 지점은 경기 미참가로 처리
+    currentUmaMap[name] = 0;
   });
 
+  const totalGames = games.length;
   games.forEach((g, gIdx) => {
     members.forEach(name => {
-      const prev = trajMap[name][gIdx];
       const match = g.players.find(p => p.name === name);
-      const delta = match ? match.uma : 0;
-      trajMap[name].push(parseFloat((prev + delta).toFixed(1)));
-      playedMap[name].push(!!match);
+      if (match) {
+        currentUmaMap[name] = parseFloat((currentUmaMap[name] + match.uma).toFixed(1));
+        trajMap[name].push(currentUmaMap[name]);
+        playedMap[name].push(true);
+      } else {
+        // 마지막 게임이면 최종 우마로 도달시키고(점은 안 찍음), 중간 게임이면 null로 건너뛰어 직선 연결
+        if (gIdx === totalGames - 1) {
+          trajMap[name].push(currentUmaMap[name]);
+          playedMap[name].push(false);
+        } else {
+          trajMap[name].push(null);
+          playedMap[name].push(false);
+        }
+      }
     });
   });
 
   const datasets: UmaTrajectoryDataset[] = members.map((name, i) => {
     const data = trajMap[name];
-    const finalUma = data[data.length - 1];
+    const finalUma = currentUmaMap[name];
     return {
       name,
       data,
