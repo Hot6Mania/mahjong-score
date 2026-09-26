@@ -3584,6 +3584,20 @@ html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
   color: var(--text-dimmed, #aaa);
 }
 
+/* 화면 너비가 좁을 때 (Shallow Screen Width): 우측 고정 이름 열 제거 */
+@media (max-width: 768px) {
+  .matrix-col-sticky-name-right {
+    display: none !important;
+  }
+}
+
+/* 화면 높이가 낮을 때 (Shallow Screen Height): 하단 고정 푸터(tfoot) 제거 */
+@media (max-height: 700px) {
+  .matrix-table tfoot {
+    display: none !important;
+  }
+}
+
 /* ============================================== */
 /* TAB 3: 회차별 경기 상세 & 차트 스타일          */
 /* ============================================== */
