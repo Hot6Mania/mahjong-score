@@ -133,6 +133,22 @@ const getDistPct = (count: number, total: number): string => {
   return ((count / total) * 100).toFixed(1);
 };
 
+const formatDualMetric = (
+  overallVal: number | undefined,
+  detailedVal: number | undefined,
+  decimals: number = 0,
+  sign: boolean = false
+): string => {
+  const oNum = overallVal || 0;
+  const dNum = detailedVal || 0;
+  const oStr = (sign && oNum > 0 ? '+' : '') + oNum.toFixed(decimals);
+  const dStr = (sign && dNum > 0 ? '+' : '') + dNum.toFixed(decimals);
+  if (oStr !== dStr && selectedPlayer.value?.detailedStats) {
+    return `${oStr}(${dStr})`;
+  }
+  return oStr;
+};
+
 // 모달 내 순위 비율 도넛 차트 계산 (9회차 이후 순수 통계 기준)
 const modalRankStats = computed(() => {
   if (!selectedPlayer.value) {
@@ -695,7 +711,17 @@ const getRankClass = (rank: number) => {
                   평균 순위
                   <span class="sort-mark" v-if="sortKey === 'avgRank'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
                 </th>
-                <th>순위 분포 (1/2/3/4) & 비율</th>
+                <th class="col-ranks-dist-th">
+                  <div class="dist-th-wrapper">
+                    <span class="dist-th-title">순위 분포 &amp; 비율</span>
+                    <div class="dist-badge-wrapper dist-th-badges">
+                      <div class="dist-badge r1 dist-header-badge" title="1위 분포">1등</div>
+                      <div class="dist-badge r2 dist-header-badge" title="2위 분포">2등</div>
+                      <div class="dist-badge r3 dist-header-badge" title="3위 분포">3등</div>
+                      <div class="dist-badge r4 dist-header-badge" title="4위 분포">4등</div>
+                    </div>
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -725,22 +751,18 @@ const getRankClass = (rank: number) => {
                 <td class="col-ranks-dist">
                   <div class="dist-badge-wrapper">
                     <div class="dist-badge r1" :title="'1위 ' + member.rank1Count + '회'">
-                      <span class="dist-label">1등</span>
                       <span class="dist-cnt">{{ member.rank1Count }}</span>
                       <span class="dist-pct">({{ getDistPct(member.rank1Count, member.totalGames) }}%)</span>
                     </div>
                     <div class="dist-badge r2" :title="'2위 ' + member.rank2Count + '회'">
-                      <span class="dist-label">2등</span>
                       <span class="dist-cnt">{{ member.rank2Count }}</span>
                       <span class="dist-pct">({{ getDistPct(member.rank2Count, member.totalGames) }}%)</span>
                     </div>
                     <div class="dist-badge r3" :title="'3위 ' + member.rank3Count + '회'">
-                      <span class="dist-label">3등</span>
                       <span class="dist-cnt">{{ member.rank3Count }}</span>
                       <span class="dist-pct">({{ getDistPct(member.rank3Count, member.totalGames) }}%)</span>
                     </div>
                     <div class="dist-badge r4" :title="'4위 ' + member.rank4Count + '회'">
-                      <span class="dist-label">4등</span>
                       <span class="dist-cnt">{{ member.rank4Count }}</span>
                       <span class="dist-pct">({{ getDistPct(member.rank4Count, member.totalGames) }}%)</span>
                     </div>
@@ -962,7 +984,8 @@ const getRankClass = (rank: number) => {
 
             <!-- 세부 스탯 안내 문구 -->
             <div class="modal_notice_text">
-              ※ 제9회부터의 국별 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.
+              ※ 제9회부터의 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.<br />
+              ※ 종합 대국 수(세부 스탯 집계 대국 수) 형식으로 표기됩니다.
             </div>
 
             <!-- 4개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 -->
@@ -1008,7 +1031,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">기록 대국 수</span>
-                <span class="stat_value">{{ displayPlayerStats.totalGames }}전</span>
+                <span class="stat_value">{{ formatDualMetric(selectedPlayer?.totalGames, displayPlayerStats.totalGames) }}전</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -1016,8 +1039,8 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">누적 우마</span>
-                <span class="stat_value" :class="displayPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
-                  {{ displayPlayerStats.totalUma > 0 ? '+' : '' }}{{ displayPlayerStats.totalUma }}pt
+                <span class="stat_value" :class="(selectedPlayer?.totalUma || 0) >= 0 ? 'text_positive' : 'text_negative'">
+                  {{ formatDualMetric(selectedPlayer?.totalUma, displayPlayerStats.totalUma, 1, true) }}pt
                 </span>
               </div>
               <div 
@@ -1026,8 +1049,8 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">평균 우마</span>
-                <span class="stat_value" :class="displayPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
-                  {{ displayPlayerStats.avgUma > 0 ? '+' : '' }}{{ displayPlayerStats.avgUma }}pt
+                <span class="stat_value" :class="(selectedPlayer?.avgUma || 0) >= 0 ? 'text_positive' : 'text_negative'">
+                  {{ formatDualMetric(selectedPlayer?.avgUma, displayPlayerStats.avgUma, 1, true) }}pt
                 </span>
               </div>
               <div 
@@ -1036,7 +1059,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">평균 순위</span>
-                <span class="stat_value highlight">{{ displayPlayerStats.avgRank }}위</span>
+                <span class="stat_value highlight">{{ formatDualMetric(selectedPlayer?.avgRank, displayPlayerStats.avgRank, 2) }}위</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -1044,7 +1067,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">연대율 (1·2위)</span>
-                <span class="stat_value">{{ displayPlayerStats.top2Rate }}%</span>
+                <span class="stat_value">{{ formatDualMetric(selectedPlayer?.top2Rate, displayPlayerStats.top2Rate, 1) }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -1961,6 +1984,31 @@ const getRankClass = (rank: number) => {
 .dist-badge.r2 { background: rgba(6, 182, 212, 0.15); color: #0891b2; }
 .dist-badge.r3 { background: rgba(245, 158, 11, 0.15); color: #d97706; }
 .dist-badge.r4 { background: rgba(239, 68, 68, 0.15); color: #dc2626; }
+
+.col-ranks-dist-th {
+  vertical-align: middle;
+  padding: 6px 8px;
+}
+.dist-th-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.dist-th-title {
+  font-size: 12px;
+  font-weight: bold;
+}
+.dist-th-badges {
+  display: inline-flex;
+  gap: 5px;
+}
+.dist-header-badge {
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: bold;
+  border-radius: 4px;
+}
 
 /* ============================================== */
 /* TAB 2: 역대 회차 전적 매트릭스 스타일            */
