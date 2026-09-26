@@ -1412,6 +1412,7 @@ export interface UmaTrajectoryDataset {
   data: number[];
   color: string;
   finalUma: number;
+  played: boolean[];
 }
 
 export interface SessionUmaTrajectory {
@@ -1433,8 +1434,10 @@ export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): Ses
   games.forEach((_, idx) => labels.push(`${idx + 1}국`));
 
   const trajMap: Record<string, number[]> = {};
+  const playedMap: Record<string, boolean[]> = {};
   members.forEach(name => {
     trajMap[name] = [0];
+    playedMap[name] = [false]; // '시작' 지점은 경기 미참가로 처리
   });
 
   games.forEach((g, gIdx) => {
@@ -1443,6 +1446,7 @@ export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): Ses
       const match = g.players.find(p => p.name === name);
       const delta = match ? match.uma : 0;
       trajMap[name].push(parseFloat((prev + delta).toFixed(1)));
+      playedMap[name].push(!!match);
     });
   });
 
@@ -1454,6 +1458,7 @@ export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): Ses
       data,
       color: PLAYER_COLORS[i % PLAYER_COLORS.length],
       finalUma,
+      played: playedMap[name],
     };
   });
 

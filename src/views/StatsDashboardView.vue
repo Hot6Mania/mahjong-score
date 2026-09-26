@@ -557,8 +557,9 @@ const sessionChartData = computed(() => {
     borderColor: d.color,
     backgroundColor: d.color,
     borderWidth: 2.2,
-    pointRadius: 4,
-    pointHoverRadius: 6,
+    pointRadius: d.played ? d.played.map(p => (p ? 4 : 0)) : 4,
+    pointHoverRadius: d.played ? d.played.map(p => (p ? 6 : 0)) : 6,
+    played: d.played,
     tension: 0.15,
     fill: false,
   }));
@@ -587,7 +588,9 @@ const sessionChartOptions = computed<ChartOptions<'line'>>(() => ({
       callbacks: {
         label: (context) => {
           const val = context.parsed.y;
-          return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt`;
+          const isPlayed = (context.dataset as any).played?.[context.dataIndex];
+          const restBadge = context.dataIndex > 0 && !isPlayed ? ' (미참가)' : '';
+          return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt${restBadge}`;
         }
       }
     }

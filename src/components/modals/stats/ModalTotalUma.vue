@@ -146,19 +146,26 @@ const chartData = computed(() => {
   games.forEach((_, idx) => labels.push(`${idx + 1}경기`))
 
   const trajMap: Record<string, number[]> = {}
+  const playedMap: Record<string, boolean[]> = {}
   members.forEach(name => {
     trajMap[name] = [0]
+    playedMap[name] = [false] // '시작' 지점은 경기 미참가로 처리
   })
 
   games.forEach((g, gIdx) => {
     members.forEach(name => {
       const prev = trajMap[name][gIdx]
       let delta = 0
+      let played = false
       if (g.results) {
         const match = g.results.find((r: any) => r.name === name)
-        if (match) delta = Number(match.uma || 0)
+        if (match) {
+          delta = Number(match.uma || 0)
+          played = true
+        }
       }
       trajMap[name].push(parseFloat((prev + delta).toFixed(1)))
+      playedMap[name].push(played)
     })
   })
 
@@ -169,8 +176,9 @@ const chartData = computed(() => {
       borderColor: PLAYER_COLORS[i % PLAYER_COLORS.length],
       backgroundColor: PLAYER_COLORS[i % PLAYER_COLORS.length],
       borderWidth: 2.2,
-      pointRadius: 4,
-      pointHoverRadius: 6,
+      pointRadius: playedMap[name].map(p => (p ? 4 : 0)),
+      pointHoverRadius: playedMap[name].map(p => (p ? 6 : 0)),
+      played: playedMap[name],
       tension: 0.2,
       fill: false,
     }
@@ -200,7 +208,9 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
       callbacks: {
         label: (context) => {
           const val = context.parsed.y
-          return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt`
+          const isPlayed = (context.dataset as any).played?.[context.dataIndex]
+          const restBadge = context.dataIndex > 0 && !isPlayed ? ' (미참가)' : ''
+          return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val}pt${restBadge}`
         }
       }
     }
