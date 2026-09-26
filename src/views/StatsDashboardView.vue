@@ -582,6 +582,7 @@ const sessionChartOptions = computed<ChartOptions<'line'>>(() => ({
         font: { family: "'Noto Serif KR', serif", size: 12 },
         usePointStyle: true,
         boxWidth: 8,
+        color: isDark.value ? '#cbd5e1' : '#334155',
       },
     },
     tooltip: {
@@ -801,18 +802,18 @@ const getRankClass = (rank: number) => {
             y1="0" 
             :x2="activeDist.line30X" 
             y2="44" 
-            stroke="rgba(156, 163, 175, 0.65)" 
+            :stroke="isDark ? 'rgba(156, 163, 175, 0.65)' : 'rgba(100, 116, 139, 0.45)'" 
             stroke-width="1.2" 
             stroke-dasharray="2,2" 
           />
 
-          <!-- 중앙 50% 구분선 (더 두꺼운 흰색/밝은 점선) -->
+          <!-- 중앙 50% 구분선 (더 두꺼운 구분 점선) -->
           <line 
             x1="80" 
             y1="0" 
             x2="80" 
             y2="44" 
-            stroke="rgba(255, 255, 255, 0.55)" 
+            :stroke="isDark ? 'rgba(255, 255, 255, 0.65)' : 'rgba(15, 23, 42, 0.5)'" 
             stroke-width="2.0" 
             stroke-dasharray="3,2" 
           />
@@ -823,7 +824,7 @@ const getRankClass = (rank: number) => {
             y1="0" 
             :x2="activeDist.line70X" 
             y2="44" 
-            stroke="rgba(156, 163, 175, 0.65)" 
+            :stroke="isDark ? 'rgba(156, 163, 175, 0.65)' : 'rgba(100, 116, 139, 0.45)'" 
             stroke-width="1.2" 
             stroke-dasharray="2,2" 
           />
@@ -2544,15 +2545,21 @@ const getRankClass = (rank: number) => {
   pointer-events: none;
   z-index: 2500;
   width: 215px;
-  background: rgba(15, 23, 42, 0.97);
-  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.98);
+  color: #0f172a;
   backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid #cbd5e1;
   border-radius: 10px;
   padding: 10px 12px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
   font-family: inherit;
   transition: opacity 0.15s ease;
+}
+html.dark .dist-tooltip-popup {
+  background: rgba(15, 23, 42, 0.97);
+  color: #f8fafc;
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
 }
 .dist-tooltip-popup.below {
   transform: translate(-50%, 0);
@@ -2566,6 +2573,9 @@ const getRankClass = (rank: number) => {
 }
 .dist-title {
   font-weight: bold;
+  color: #334155;
+}
+html.dark .dist-title {
   color: #cbd5e1;
 }
 .dist-rank-chip {
@@ -2575,35 +2585,55 @@ const getRankClass = (rank: number) => {
   border-radius: 4px;
 }
 .dist-rank-chip.pos {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.12);
+}
+html.dark .dist-rank-chip.pos {
   color: #34d399;
   background: rgba(52, 211, 153, 0.15);
 }
 .dist-rank-chip.neg {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.12);
+}
+html.dark .dist-rank-chip.neg {
   color: #f87171;
   background: rgba(248, 113, 113, 0.15);
 }
 .dist-sub-rank {
   font-size: 10px;
-  color: #94a3b8;
+  color: #64748b;
   margin-bottom: 4px;
+}
+html.dark .dist-sub-rank {
+  color: #94a3b8;
 }
 .dist-my-val {
   font-size: 11px;
-  color: #94a3b8;
+  color: #64748b;
   margin-bottom: 5px;
 }
+html.dark .dist-my-val {
+  color: #94a3b8;
+}
 .dist-my-val strong {
-  color: #ffffff;
+  color: #0f172a;
   font-size: 12px;
+}
+html.dark .dist-my-val strong {
+  color: #ffffff;
 }
 .dist-chart-box {
   position: relative;
   width: 100%;
   height: 44px;
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.05);
   border-radius: 6px;
   overflow: hidden;
   margin-bottom: 5px;
+}
+html.dark .dist-chart-box {
+  background: rgba(0, 0, 0, 0.25);
 }
 .dist-chart-labels-overlay {
   position: absolute;
@@ -2618,14 +2648,20 @@ const getRankClass = (rank: number) => {
   transform: translateX(-50%);
   font-size: 8px;
   font-weight: 600;
-  color: #cbd5e1;
+  color: #64748b;
   white-space: nowrap;
   line-height: 1;
+}
+html.dark .dist-line-tag {
+  color: #cbd5e1;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
 }
 .dist-line-tag.tag-50 {
-  color: #ffffff;
+  color: #0f172a;
   font-weight: 700;
+}
+html.dark .dist-line-tag.tag-50 {
+  color: #ffffff;
 }
 .dist-svg {
   width: 100%;
@@ -2636,11 +2672,17 @@ const getRankClass = (rank: number) => {
   display: flex;
   justify-content: space-between;
   font-size: 9px;
+  color: #64748b;
+}
+html.dark .dist-labels-row {
   color: #94a3b8;
 }
 .dist-avg-val {
-  color: #38bdf8;
+  color: #2563eb;
   font-weight: bold;
+}
+html.dark .dist-avg-val {
+  color: #38bdf8;
 }
 
 /* 헤더 */
@@ -3033,6 +3075,10 @@ const getRankClass = (rank: number) => {
 .dist-badge.r2 { background: rgba(6, 182, 212, 0.15); color: #0891b2; }
 .dist-badge.r3 { background: rgba(245, 158, 11, 0.15); color: #d97706; }
 .dist-badge.r4 { background: rgba(239, 68, 68, 0.15); color: #dc2626; }
+html.dark .dist-badge.r1 { color: #34d399; }
+html.dark .dist-badge.r2 { color: #38bdf8; }
+html.dark .dist-badge.r3 { color: #fbbf24; }
+html.dark .dist-badge.r4 { color: #f87171; }
 .dist-header-badge {
   padding: 2px 7px;
   font-size: 11px;
@@ -3062,11 +3108,15 @@ const getRankClass = (rank: number) => {
 .rank-badge.rank-1 { background: #fef3c7; color: #b45309; }
 .rank-badge.rank-2 { background: #e2e8f0; color: #475569; }
 .rank-badge.rank-3 { background: #ffedd5; color: #9a3412; }
+html.dark .rank-badge { background: rgba(255, 255, 255, 0.08); }
+html.dark .rank-badge.rank-1 { background: rgba(245, 158, 11, 0.25); color: #fbbf24; }
+html.dark .rank-badge.rank-2 { background: rgba(148, 163, 184, 0.25); color: #cbd5e1; }
+html.dark .rank-badge.rank-3 { background: rgba(217, 119, 6, 0.25); color: #fdba74; }
 .col-uma {
   font-weight: bold;
 }
-.pos { color: var(--color-positive, #10b981); }
-.neg { color: var(--color-negative, #ef4444); }
+.pos { color: var(--color-positive, #16a34a); }
+.neg { color: var(--color-negative, #dc2626); }
 
 /* ============================================== */
 /* TAB 2: 역대 회차 전적 매트릭스 스타일            */
@@ -3268,7 +3318,7 @@ html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
   display: flex;
   gap: 8px;
   margin-bottom: 18px;
-  background: rgba(0, 0, 0, 0.04);
+  background: #f1f5f9;
   padding: 4px;
   border-radius: 8px;
   width: fit-content;
@@ -3280,16 +3330,16 @@ html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
   border-radius: 6px;
   border: none;
   background: transparent;
-  color: var(--text-dimmed, #666);
+  color: var(--text-dimmed, #64748b);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 .session-scope-tab:hover {
-  color: var(--text-color, #1a1a1a);
+  color: var(--text-color, #0f172a);
 }
 .session-scope-tab.active {
-  background: var(--card-bg-color, #fff);
-  color: var(--color-toggle-on, #3b82f6);
+  background: #ffffff;
+  color: var(--color-toggle-on, #2563eb);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
@@ -3310,6 +3360,10 @@ html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
 .sm-badge.r2 { background: rgba(6, 182, 212, 0.15); color: #0891b2; }
 .sm-badge.r3 { background: rgba(245, 158, 11, 0.15); color: #d97706; }
 .sm-badge.r4 { background: rgba(239, 68, 68, 0.15); color: #dc2626; }
+html.dark .sm-badge.r1 { color: #34d399; }
+html.dark .sm-badge.r2 { color: #38bdf8; }
+html.dark .sm-badge.r3 { color: #fbbf24; }
+html.dark .sm-badge.r4 { color: #f87171; }
 
 .session-picker-bar {
   display: flex;
@@ -3326,10 +3380,19 @@ html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
   font-size: 14px;
   font-weight: bold;
   border-radius: 6px;
-  border: 1px solid var(--border-color, #ccc);
+  border: 1px solid var(--border-color, #cbd5e1);
   background: var(--card-bg-color, #fff);
-  color: var(--text-color, #1a1a1a);
+  color: var(--text-color, #0f172a);
   font-family: inherit;
+  cursor: pointer;
+}
+.session-select option {
+  background: #ffffff;
+  color: #0f172a;
+}
+html.dark .session-select option {
+  background: #1e1e1e;
+  color: #e5e5e5;
 }
 .loading-session {
   display: flex;
@@ -3514,16 +3577,22 @@ html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
   padding: 16px;
 }
 .player-modal-card {
-  background: var(--bg-modal, #1e1e1e);
-  color: var(--text-color, #ffffff);
+  background: var(--bg-modal, #ffffff);
+  color: var(--text-color, #0f172a);
   border-radius: 12px;
   width: 100%;
   max-width: 740px;
   max-height: 90vh;
   overflow-y: auto;
   padding: 16px 20px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  border: 1px solid var(--border-color, #333);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .player-modal-card {
+  background: var(--bg-modal, #1e1e1e);
+  color: var(--text-color, #e5e5e5);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  border-color: var(--border-color, #334155);
 }
 
 .container_stats_modal {
@@ -3551,10 +3620,14 @@ html.dark .container_stats_modal {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
-  background-color: var(--bg-card, rgba(255, 255, 255, 0.05));
+  background-color: var(--bg-card, #f8fafc);
   padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid var(--border-color, #333);
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .modal-header {
+  background-color: var(--bg-card, #2a2a2a);
+  border-color: var(--border-color, #334155);
 }
 .modal_notice_text {
   position: relative;
@@ -3567,6 +3640,11 @@ html.dark .container_stats_modal {
   margin-bottom: 8px;
   line-height: 1.35;
 }
+html.dark .modal_notice_text {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #94a3b8;
+}
 .notice_text_content {
   word-break: keep-all;
 }
@@ -3577,7 +3655,7 @@ html.dark .container_stats_modal {
   background: none;
   border: none;
   font-size: 10px;
-  color: var(--text-dimmed, #94a3b8);
+  color: var(--text-dimmed, #64748b);
   cursor: pointer;
   padding: 2px 4px;
   line-height: 1;
@@ -3585,8 +3663,15 @@ html.dark .container_stats_modal {
   transition: color 0.15s, background 0.15s;
 }
 .notice_close_btn:hover {
-  color: var(--text-color, #333);
+  color: var(--text-color, #0f172a);
   background: rgba(0, 0, 0, 0.06);
+}
+html.dark .notice_close_btn {
+  color: var(--text-dimmed, #94a3b8);
+}
+html.dark .notice_close_btn:hover {
+  color: var(--text-color, #ffffff);
+  background: rgba(255, 255, 255, 0.1);
 }
 .player_selector_container {
   display: flex;
@@ -3604,15 +3689,24 @@ html.dark .container_stats_modal {
   font-size: 13px;
   font-weight: bold;
   border-radius: 4px;
-  border: 1px solid var(--border-color, #444);
-  background: var(--bg-modal, #1e1e1e);
-  color: var(--text-color, #fff);
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #0f172a);
   font-family: inherit;
   cursor: pointer;
 }
 .player_select option {
-  background: var(--bg-modal, #1e1e1e) !important;
-  color: var(--text-color, #fff) !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+html.dark .player_select {
+  border-color: var(--border-color, #444);
+  background: var(--card-bg-color, #1e1e1e);
+  color: var(--text-color, #e5e5e5);
+}
+html.dark .player_select option {
+  background: #1e1e1e !important;
+  color: #e5e5e5 !important;
 }
 
 .btn-close {
@@ -3631,8 +3725,11 @@ html.dark .container_stats_modal {
 /* 탭 메뉴 */
 .tab_menu {
   display: flex;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
   margin-bottom: 8px;
+}
+html.dark .tab_menu {
+  border-bottom-color: var(--border-color, #334155);
 }
 .tab_btn {
   flex: 1;
@@ -3642,20 +3739,28 @@ html.dark .container_stats_modal {
   font-size: 14px;
   font-weight: bold;
   cursor: pointer;
-  color: var(--text-color, #fff);
-  opacity: 0.6;
+  color: var(--text-dimmed, #64748b);
   border-bottom: 2px solid transparent;
   transition: all 0.2s;
   text-align: center;
   font-family: inherit;
 }
 .tab_btn:hover {
-  opacity: 0.85;
+  color: var(--text-color, #0f172a);
 }
 .tab_btn.active {
-  opacity: 1;
-  color: var(--color-toggle-on, #4caf50);
-  border-bottom-color: var(--color-toggle-on, #4caf50);
+  color: var(--color-toggle-on, #2563eb);
+  border-bottom-color: var(--color-toggle-on, #2563eb);
+}
+html.dark .tab_btn {
+  color: var(--text-dimmed, #94a3b8);
+}
+html.dark .tab_btn:hover {
+  color: var(--text-color, #e5e5e5);
+}
+html.dark .tab_btn.active {
+  color: var(--color-toggle-on, #38bdf8);
+  border-bottom-color: var(--color-toggle-on, #38bdf8);
 }
 
 /* 스탯 목록 4열 그리드 레이아웃 (ModalStats.vue 일치) */
@@ -3685,9 +3790,9 @@ html.dark .container_stats_modal {
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  background-color: var(--bg-modal, #1e1e1e);
-  border: 1px solid var(--border-color, #333);
-  border-left: 3px solid var(--color-toggle-on, #4caf50);
+  background-color: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-left: 3px solid var(--color-toggle-on, #2563eb);
   border-radius: 4px;
   padding: 6px 10px;
   min-height: 48px;
@@ -3701,14 +3806,24 @@ html.dark .container_stats_modal {
 }
 
 .stat_row.hoverable:hover {
-  background: rgba(76, 175, 80, 0.08);
-  border-color: var(--color-toggle-on, #4caf50);
+  background: rgba(37, 99, 235, 0.05);
+  border-color: var(--color-toggle-on, #2563eb);
   transform: translateY(-1px);
+}
+
+html.dark .stat_row {
+  background-color: var(--bg-card, #2a2a2a);
+  border-color: var(--border-color, #334155);
+  border-left-color: var(--color-toggle-on, #38bdf8);
+}
+html.dark .stat_row.hoverable:hover {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: var(--color-toggle-on, #38bdf8);
 }
 
 .stat_label {
   font-size: 11px;
-  opacity: 0.65;
+  color: var(--text-dimmed, #64748b);
   margin-bottom: 2px;
   font-weight: 500;
   width: 100%;
@@ -3717,25 +3832,41 @@ html.dark .container_stats_modal {
   text-overflow: ellipsis;
   text-align: left;
 }
+html.dark .stat_label {
+  color: #94a3b8;
+}
 
 .stat_value {
   font-size: 14px;
   font-weight: 700;
+  color: var(--text-color, #0f172a);
   width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: left;
 }
+html.dark .stat_value {
+  color: var(--text-color, #f8fafc);
+}
 
 .stat_value.highlight {
-  color: var(--color-toggle-on, #4caf50);
+  color: var(--color-toggle-on, #2563eb);
+}
+html.dark .stat_value.highlight {
+  color: #38bdf8;
 }
 .text_positive {
-  color: #4caf50;
+  color: #16a34a;
+}
+html.dark .text_positive {
+  color: #4ade80;
 }
 .text_negative {
-  color: #f44336;
+  color: #dc2626;
+}
+html.dark .text_negative {
+  color: #f87171;
 }
 
 @media (max-width: 600px) {
@@ -3787,6 +3918,15 @@ html.dark .container_stats_modal {
   display: flex;
   align-items: center;
   gap: 20px;
+  background-color: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 16px;
+  box-sizing: border-box;
+}
+html.dark .rank_chart_section {
+  background-color: var(--bg-modal, #1e1e1e);
+  border-color: var(--border-color, #334155);
 }
 @media (max-width: 500px) {
   .rank_chart_section {
@@ -3813,18 +3953,27 @@ html.dark .container_stats_modal {
 }
 .chart_center_label {
   font-size: 11px;
-  fill: var(--text-dimmed, #777);
+  fill: #64748b;
   font-weight: 500;
 }
 .chart_center_value {
   font-size: 16px;
-  fill: var(--text-color, #1a1a1a);
+  fill: #0f172a;
   font-weight: bold;
 }
 .chart_center_sub {
   font-size: 11px;
-  fill: var(--color-toggle-on, #3b82f6);
+  fill: #2563eb;
   font-weight: bold;
+}
+html.dark .chart_center_label {
+  fill: #94a3b8;
+}
+html.dark .chart_center_value {
+  fill: #f8fafc;
+}
+html.dark .chart_center_sub {
+  fill: #38bdf8;
 }
 
 .rank_details_list {
@@ -3837,13 +3986,21 @@ html.dark .container_stats_modal {
 .rank_detail_card {
   padding: 6px 10px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.02);
-  border: 1px solid var(--border-color, #eee);
+  background: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
   transition: all 0.2s;
 }
 .rank_detail_card.highlighted {
-  border-color: var(--color-toggle-on, #3b82f6);
-  background: rgba(59, 130, 246, 0.05);
+  border-color: var(--color-toggle-on, #2563eb);
+  background: rgba(37, 99, 235, 0.05);
+}
+html.dark .rank_detail_card {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--border-color, #334155);
+}
+html.dark .rank_detail_card.highlighted {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
 }
 .rank_card_header {
   display: flex;
@@ -3867,6 +4024,10 @@ html.dark .container_stats_modal {
 .rank_count_val {
   font-weight: bold;
   font-size: 12px;
+  color: var(--text-color, #0f172a);
+}
+html.dark .rank_count_val {
+  color: var(--text-color, #f8fafc);
 }
 .rank_percent_val {
   font-weight: bold;
@@ -3883,6 +4044,9 @@ html.dark .container_stats_modal {
   background: rgba(0, 0, 0, 0.06);
   border-radius: 3px;
   overflow: hidden;
+}
+html.dark .rank_bar_track {
+  background: rgba(255, 255, 255, 0.1);
 }
 .rank_bar_fill {
   height: 100%;
@@ -3901,24 +4065,37 @@ html.dark .container_stats_modal {
 .summary_metric_box {
   flex: 1;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
   border-radius: 6px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
 }
+html.dark .summary_metric_box {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--border-color, #334155);
+}
 .metric_label {
-  color: var(--text-dimmed, #777);
+  color: var(--text-dimmed, #64748b);
+}
+html.dark .metric_label {
+  color: #94a3b8;
 }
 .metric_val {
   font-weight: bold;
+  color: var(--text-color, #0f172a);
 }
+html.dark .metric_val {
+  color: var(--text-color, #f8fafc);
+}
+
 /* 모달 스코프 탭 (이번 회차 / 전체 기간) */
 .modal_scope_tabs {
   display: flex;
   gap: 6px;
-  background: rgba(0, 0, 0, 0.04);
+  background: #f1f5f9;
   padding: 3px;
   border-radius: 8px;
   margin-bottom: 12px;
@@ -3931,17 +4108,17 @@ html.dark .container_stats_modal {
   border-radius: 6px;
   border: none;
   background: transparent;
-  color: var(--text-dimmed, #777);
+  color: var(--text-dimmed, #64748b);
   cursor: pointer;
   transition: all 0.2s ease;
   text-align: center;
 }
 .modal_scope_tab:hover {
-  color: var(--text-color, #1a1a1a);
+  color: var(--text-color, #0f172a);
 }
 .modal_scope_tab.active {
-  background: var(--card-bg-color, #fff);
-  color: var(--color-toggle-on, #3b82f6);
+  background: #ffffff;
+  color: var(--color-toggle-on, #2563eb);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 .session_modal_content {
@@ -3954,26 +4131,37 @@ html.dark .container_stats_modal {
   font-size: 13px;
 }
 .legacy_session_banner {
-  background: var(--card-bg-subtle, rgba(0, 0, 0, 0.03));
-  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  background: #f8fafc;
+  border: 1px solid var(--border-color, #e2e8f0);
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 13px;
-  color: var(--text-dimmed, #666);
+  color: var(--text-dimmed, #64748b);
   line-height: 1.5;
   margin-bottom: 16px;
   text-align: center;
 }
+html.dark .legacy_session_banner {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
 .session_modal_rank_section {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color, #eee);
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .session_modal_rank_section {
+  border-top-color: var(--border-color, #334155);
 }
 .session_rank_title {
   font-size: 12px;
   font-weight: bold;
   margin-bottom: 8px;
-  color: var(--text-dimmed, #666);
+  color: var(--text-dimmed, #64748b);
+}
+html.dark .session_rank_title {
+  color: #94a3b8;
 }
 .session_rank_badges_row {
   display: flex;
@@ -3984,6 +4172,18 @@ html.dark .container_stats_modal {
 html.dark .session-scope-tabs,
 html.dark .modal_scope_tabs {
   background: rgba(255, 255, 255, 0.06);
+}
+html.dark .session-scope-tab {
+  color: #94a3b8;
+}
+html.dark .session-scope-tab:hover {
+  color: #f8fafc;
+}
+html.dark .modal_scope_tab {
+  color: #94a3b8;
+}
+html.dark .modal_scope_tab:hover {
+  color: #f8fafc;
 }
 html.dark .session-scope-tab.active,
 html.dark .modal_scope_tab.active {
