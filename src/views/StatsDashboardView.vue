@@ -88,13 +88,8 @@ const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
 const hoveredRank = ref<number | null>(null);
 
 const filteredStats = computed(() => {
-  let list = allStats.value;
-  if (searchQuery.value.trim()) {
-    const q = searchQuery.value.trim().toLowerCase();
-    list = list.filter(m => m.name.toLowerCase().includes(q));
-  }
-
-  return [...list].sort((a, b) => {
+  // 1) 전체 리스트를 현재 정렬 기준에 따라 정렬
+  const sorted = [...allStats.value].sort((a, b) => {
     let valA = a[sortKey.value];
     let valB = b[sortKey.value];
 
@@ -104,6 +99,20 @@ const filteredStats = computed(() => {
       return valA < valB ? 1 : -1;
     }
   });
+
+  // 2) 정렬 순서대로 전체 순위(overallRank) 부여
+  const withRank = sorted.map((item, idx) => ({
+    ...item,
+    overallRank: idx + 1
+  }));
+
+  // 3) 검색어가 있다면 필터링 (전체 순위 overallRank는 유지)
+  if (searchQuery.value.trim()) {
+    const q = searchQuery.value.trim().toLowerCase();
+    return withRank.filter(m => m.name.toLowerCase().includes(q));
+  }
+
+  return withRank;
 });
 
 const podiumTop3 = computed(() => {
@@ -680,25 +689,25 @@ const getRankClass = (rank: number) => {
                   평균 우마
                   <span class="sort-mark" v-if="sortKey === 'avgUma'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
+                <th class="col-sortable" @click="handleSort('totalGames')">대국수</th>
+                <th class="col-sortable" @click="handleSort('top2Rate')">연대율</th>
                 <th class="col-sortable" @click="handleSort('avgRank')">
                   평균 순위
                   <span class="sort-mark" v-if="sortKey === 'avgRank'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
                 </th>
-                <th class="col-sortable" @click="handleSort('totalGames')">대국수</th>
-                <th class="col-sortable" @click="handleSort('top2Rate')">연대율</th>
                 <th>순위 분포 (1/2/3/4) & 비율</th>
               </tr>
             </thead>
             <tbody>
               <tr 
-                v-for="(member, idx) in filteredStats" 
+                v-for="member in filteredStats" 
                 :key="member.name"
                 class="member-row"
                 @click="selectedPlayer = member"
                 title="클릭 시 상세 스탯 & 연속 히스토그램 조회"
               >
                 <td class="col-rank">
-                  <span class="rank-badge" :class="getRankClass(idx + 1)">{{ idx + 1 }}</span>
+                  <span class="rank-badge" :class="getRankClass(member.overallRank)">{{ member.overallRank }}</span>
                 </td>
                 <td class="col-name">
                   <strong>{{ member.name }}</strong>
@@ -709,26 +718,32 @@ const getRankClass = (rank: number) => {
                 <td :class="member.avgUma >= 0 ? 'pos' : 'neg'">
                   {{ member.avgUma > 0 ? '+' : '' }}{{ member.avgUma.toFixed(1) }}
                 </td>
-                <td>{{ member.avgRank.toFixed(2) }}위</td>
                 <td>{{ member.totalGames }}전</td>
                 <td>{{ member.top2Rate.toFixed(1) }}%</td>
+                <td>{{ member.avgRank.toFixed(2) }}위</td>
                 <!-- 순위 분포 뱃지 및 비율 작게 표시 -->
                 <td class="col-ranks-dist">
-                  <div class="dist-badge r1" :title="'1위 ' + member.rank1Count + '회'">
-                    <span class="dist-cnt">{{ member.rank1Count }}</span>
-                    <span class="dist-pct">{{ getDistPct(member.rank1Count, member.totalGames) }}%</span>
-                  </div>
-                  <div class="dist-badge r2" :title="'2위 ' + member.rank2Count + '회'">
-                    <span class="dist-cnt">{{ member.rank2Count }}</span>
-                    <span class="dist-pct">{{ getDistPct(member.rank2Count, member.totalGames) }}%</span>
-                  </div>
-                  <div class="dist-badge r3" :title="'3위 ' + member.rank3Count + '회'">
-                    <span class="dist-cnt">{{ member.rank3Count }}</span>
-                    <span class="dist-pct">{{ getDistPct(member.rank3Count, member.totalGames) }}%</span>
-                  </div>
-                  <div class="dist-badge r4" :title="'4위 ' + member.rank4Count + '회'">
-                    <span class="dist-cnt">{{ member.rank4Count }}</span>
-                    <span class="dist-pct">{{ getDistPct(member.rank4Count, member.totalGames) }}%</span>
+                  <div class="dist-badge-wrapper">
+                    <div class="dist-badge r1" :title="'1위 ' + member.rank1Count + '회'">
+                      <span class="dist-label">1등</span>
+                      <span class="dist-cnt">{{ member.rank1Count }}</span>
+                      <span class="dist-pct">({{ getDistPct(member.rank1Count, member.totalGames) }}%)</span>
+                    </div>
+                    <div class="dist-badge r2" :title="'2위 ' + member.rank2Count + '회'">
+                      <span class="dist-label">2등</span>
+                      <span class="dist-cnt">{{ member.rank2Count }}</span>
+                      <span class="dist-pct">({{ getDistPct(member.rank2Count, member.totalGames) }}%)</span>
+                    </div>
+                    <div class="dist-badge r3" :title="'3위 ' + member.rank3Count + '회'">
+                      <span class="dist-label">3등</span>
+                      <span class="dist-cnt">{{ member.rank3Count }}</span>
+                      <span class="dist-pct">({{ getDistPct(member.rank3Count, member.totalGames) }}%)</span>
+                    </div>
+                    <div class="dist-badge r4" :title="'4위 ' + member.rank4Count + '회'">
+                      <span class="dist-label">4등</span>
+                      <span class="dist-cnt">{{ member.rank4Count }}</span>
+                      <span class="dist-pct">({{ getDistPct(member.rank4Count, member.totalGames) }}%)</span>
+                    </div>
                   </div>
                 </td>
               </tr>
@@ -778,6 +793,7 @@ const getRankClass = (rank: number) => {
                   <div class="session-col-name">{{ sess }}</div>
                   <div v-if="statsMatrix.sessionLabels[sess]" class="session-col-games">{{ statsMatrix.sessionLabels[sess] }}</div>
                 </th>
+                <th class="matrix-col-sticky-name-right">이름</th>
               </tr>
             </thead>
             <tbody>
@@ -796,8 +812,28 @@ const getRankClass = (rank: number) => {
                 >
                   {{ formatMatrixScore(player.sessionUmas[sess]) }}
                 </td>
+                <td class="matrix-col-sticky-name-right" @click="openPlayerByName(player.name)" title="상세 스탯 보기">
+                  <strong>{{ player.name }}</strong>
+                </td>
               </tr>
             </tbody>
+            <tfoot>
+              <tr>
+                <th class="matrix-col-sticky-name">이름</th>
+                <th class="matrix-col-sticky-total">총합</th>
+                <th 
+                  v-for="sess in statsMatrix.sessions" 
+                  :key="'foot-' + sess"
+                  class="matrix-session-col-header"
+                  @click="navigateToSession(sess)"
+                  title="해당 회차 경기 상세 보기"
+                >
+                  <div class="session-col-name">{{ sess }}</div>
+                  <div v-if="statsMatrix.sessionLabels[sess]" class="session-col-games">{{ statsMatrix.sessionLabels[sess] }}</div>
+                </th>
+                <th class="matrix-col-sticky-name-right">이름</th>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </section>
@@ -884,7 +920,7 @@ const getRankClass = (rank: number) => {
                     :class="'item-rank-' + p.rank"
                   >
                     <div class="gp-rank">{{ p.rank }}위</div>
-                    <div class="gp-seat">{{ p.seat }}</div>
+                    <div class="gp-seat" :class="{ 'is-east': p.seat === '東' }">{{ p.seat }}</div>
                     <div class="gp-name">{{ p.name }}</div>
                     <div class="gp-score">{{ p.score.toLocaleString() }}점</div>
                     <div class="gp-uma" :class="p.uma >= 0 ? 'pos' : 'neg'">
@@ -922,6 +958,11 @@ const getRankClass = (rank: number) => {
                 </select>
               </div>
               <button class="btn-close" @click="selectedPlayer = null" title="닫기">✕</button>
+            </div>
+
+            <!-- 세부 스탯 안내 문구 -->
+            <div class="modal_notice_text">
+              ※ 제9회부터의 국별 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.
             </div>
 
             <!-- 4개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 -->
@@ -1854,6 +1895,7 @@ const getRankClass = (rank: number) => {
 .stats-table td {
   padding: 10px 8px;
   border-bottom: 1px solid var(--border-color, #eee);
+  vertical-align: middle;
 }
 .member-row {
   cursor: pointer;
@@ -1883,24 +1925,35 @@ const getRankClass = (rank: number) => {
 .neg { color: var(--color-negative, #ef4444); }
 
 .col-ranks-dist {
-  display: flex;
+  text-align: center;
+  vertical-align: middle;
+}
+.dist-badge-wrapper {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
   gap: 5px;
 }
 .dist-badge {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 3px;
   font-size: 11px;
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: bold;
+  white-space: nowrap;
+}
+.dist-badge .dist-label {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.9;
 }
 .dist-badge .dist-cnt {
   font-weight: bold;
 }
 .dist-badge .dist-pct {
-  font-size: 9px;
+  font-size: 9.5px;
   opacity: 0.85;
   font-weight: normal;
 }
@@ -1930,26 +1983,48 @@ const getRankClass = (rank: number) => {
   color: var(--text-dimmed, #888);
 }
 .matrix-table-container {
-  overflow-x: auto;
+  max-height: 70vh;
+  overflow: auto;
   border-radius: 8px;
   border: 1px solid var(--border-color, #eee);
   background: var(--card-bg-color, #fff);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.5) rgba(0, 0, 0, 0.03);
+}
+.matrix-table-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.matrix-table-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 4px;
+}
+.matrix-table-container::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 4px;
+}
+.matrix-table-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.6);
 }
 .matrix-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 12px;
   text-align: center;
   white-space: nowrap;
 }
-.matrix-table th {
-  background: rgba(0, 0, 0, 0.03);
+.matrix-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card-bg-color, #fff);
   padding: 8px 10px;
   font-weight: bold;
   border-bottom: 2px solid var(--border-color, #eee);
   border-right: 1px solid var(--border-color, #eee);
+  z-index: 15;
 }
 .matrix-col-sticky-name {
   position: sticky;
@@ -1972,9 +2047,41 @@ const getRankClass = (rank: number) => {
   font-weight: bold;
   padding: 8px 10px;
 }
+.matrix-col-sticky-name-right {
+  position: sticky;
+  right: 0;
+  background-color: var(--card-bg-color, #fff);
+  z-index: 10;
+  border-left: 2px solid var(--border-color, #eee);
+  min-width: 90px;
+  text-align: center;
+  cursor: pointer;
+  padding: 8px 10px;
+}
+.matrix-table thead th.matrix-col-sticky-name,
+.matrix-table thead th.matrix-col-sticky-total,
+.matrix-table thead th.matrix-col-sticky-name-right {
+  z-index: 25;
+}
 .matrix-player-row:hover .matrix-col-sticky-name,
-.matrix-player-row:hover .matrix-col-sticky-total {
+.matrix-player-row:hover .matrix-col-sticky-total,
+.matrix-player-row:hover .matrix-col-sticky-name-right {
   background-color: rgba(59, 130, 246, 0.05);
+}
+.matrix-table tfoot th {
+  position: sticky;
+  bottom: 0;
+  background: var(--card-bg-color, #fff);
+  padding: 8px 10px;
+  font-weight: bold;
+  border-top: 2px solid var(--border-color, #eee);
+  border-right: 1px solid var(--border-color, #eee);
+  z-index: 15;
+}
+.matrix-table tfoot th.matrix-col-sticky-name,
+.matrix-table tfoot th.matrix-col-sticky-total,
+.matrix-table tfoot th.matrix-col-sticky-name-right {
+  z-index: 25;
 }
 .matrix-session-col-header {
   cursor: pointer;
@@ -2181,7 +2288,10 @@ const getRankClass = (rank: number) => {
 .gp-seat {
   font-size: 11px;
   font-weight: bold;
-  color: #c2410c;
+  color: var(--text-dimmed, #64748b);
+}
+.gp-seat.is-east {
+  color: #ef4444;
 }
 .gp-name {
   font-weight: bold;
@@ -2255,6 +2365,16 @@ html.dark .container_stats_modal {
   padding: 6px 12px;
   border-radius: 6px;
   border: 1px solid var(--border-color, #333);
+}
+.modal_notice_text {
+  font-size: 11.5px;
+  color: var(--text-dimmed, #64748b);
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px dashed var(--border-color, #cbd5e1);
+  padding: 7px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  line-height: 1.45;
 }
 .player_selector_container {
   display: flex;
