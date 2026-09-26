@@ -19,11 +19,14 @@ import {
   fetchPublicSessionDetail,
   fetchSessionDetailedStats,
   fetchPublicStatsMatrix,
+  fetchSessionGameDetail,
   calculateSessionUmaTrajectory,
   calculateMetricDistribution,
   type MemberStatItem,
   type SessionDetail,
   type SessionMemberSummary,
+  type SessionGame,
+  type GameDetailRecord,
   type StatsMatrixData,
   type DistributionData
 } from '@/services/publicStatsService';
@@ -623,6 +626,135 @@ const sessionChartOptions = computed<ChartOptions<'line'>>(() => ({
     }
   }
 }));
+
+// ==========================================
+// 3-1. 회차 대국별 상세 모달 (결과 표 & 점수 변동 차트)
+// ==========================================
+const selectedGameDetail = ref<GameDetailRecord | null>(null);
+const gameModalMode = ref<'sheet' | 'chart'>('sheet');
+const isLoadingGameDetail = ref(false);
+
+const openGameDetailModal = async (game: SessionGame) => {
+  if (!game) return;
+  isLoadingGameDetail.value = true;
+  gameModalMode.value = 'sheet';
+
+  const seatOrder = ["東", "南", "西", "北"];
+  const sortedPlayers = [...game.players].sort((a, b) => {
+    return seatOrder.indexOf(a.seat) - seatOrder.indexOf(b.seat);
+  });
+
+  // 초기 점수 정보로 즉시 모달 표시 (지연 없는 빠른 인터랙션 제공)
+  selectedGameDetail.value = {
+    gameId: game.gameId,
+    gameIndex: game.gameIndex,
+    time: game.time,
+    hasRoundDetails: false,
+    playerStats: sortedPlayers.map((p, idx) => ({
+      seat: p.seat || seatOrder[idx],
+      name: p.name,
+      rank: p.rank,
+      score: p.score,
+      uma: p.uma,
+      cntRiichi: 0,
+      cntRon: 0,
+      cntTsumo: 0,
+      cntLose: 0,
+    })),
+    chartData: { labels: [], datasets: [] }
+  };
+
+  try {
+    const detail = await fetchSessionGameDetail(selectedSession.value, game);
+    if (selectedGameDetail.value && 
+        selectedGameDetail.value.gameIndex === game.gameIndex && 
+        (selectedGameDetail.value.gameId === game.gameId || !game.gameId)) {
+      selectedGameDetail.value = detail;
+    }
+  } catch (e) {
+    console.warn("fetchSessionGameDetail failed:", e);
+  } finally {
+    isLoadingGameDetail.value = false;
+  }
+};
+
+const gameChartOptions = computed<ChartOptions<'line'>>(() => {
+  const textColor = isDark.value ? '#e5e5e5' : '#1a1a1a';
+  const gridColor = isDark.value ? '#444444' : '#e8e8e8';
+
+  const datasets = selectedGameDetail.value?.chartData?.datasets || [];
+  const allScores = datasets.flatMap(d => d.data);
+  const minScore = allScores.length > 0 ? Math.min(...allScores, 25000) : 20000;
+  const maxScore = allScores.length > 0 ? Math.max(...allScores, 25000) : 30000;
+  const pad = Math.max(3000, Math.round((maxScore - minScore) * 0.1));
+
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: {
+      duration: 650,
+      easing: 'easeOutQuart',
+    },
+    animations: {
+      y: {
+        type: 'number',
+        duration: 650,
+        easing: 'easeOutQuart',
+        from: (ctx: any) => {
+          if (ctx.type === 'data') {
+            const yScale = ctx.chart?.scales?.y;
+            return yScale ? yScale.getPixelForValue(25000) : undefined;
+          }
+          return undefined;
+        }
+      }
+    },
+    interaction: {
+      mode: 'index',
+      intersect: false,
+    },
+    scales: {
+      x: {
+        ticks: {
+          autoSkip: false,
+          color: textColor,
+        },
+        grid: {
+          color: gridColor,
+        }
+      },
+      y: {
+        suggestedMin: Math.floor((minScore - pad) / 1000) * 1000,
+        suggestedMax: Math.ceil((maxScore + pad) / 1000) * 1000,
+        ticks: {
+          color: textColor,
+          callback: (value) => Number(value).toLocaleString() + '점',
+        },
+        grid: {
+          color: gridColor,
+        }
+      }
+    },
+    plugins: {
+      legend: {
+        position: 'top',
+        labels: {
+          usePointStyle: true,
+          pointStyle: 'rectRounded',
+          color: textColor,
+        }
+      },
+      tooltip: {
+        callbacks: {
+          label: (context) => {
+            const val = context.parsed.y;
+            return `${context.dataset.label}: ${Number(val).toLocaleString()}점`;
+          }
+        }
+      }
+    }
+  };
+});
 
 // ==========================================
 // 4. 개인 스탯 연속 히스토그램 팝오버 상태
@@ -1290,11 +1422,14 @@ const getRankClass = (rank: number) => {
               <div class="games-list">
                 <div 
                   v-for="game in currentSessionDetail.games" 
-                  :key="game.gameId" 
-                  class="game-card"
+                  :key="game.gameId || game.gameIndex" 
+                  class="game-card clickable-game-card"
+                  @click="openGameDetailModal(game)"
+                  title="클릭하여 대국 결과 표 및 점수 변동 그래프 보기"
                 >
                   <div class="game-card-header">
                     <span class="game-index">{{ game.gameIndex }}경기</span>
+                    <span class="game-card-action-hint">상세 결과 / 차트 보기 &gt;</span>
                     <span class="game-time">{{ game.time }}</span>
                   </div>
                   <div class="game-players-grid">
@@ -2496,11 +2631,150 @@ const getRankClass = (rank: number) => {
           </div>
         </div>
       </template>
+          </div>
+        </div>
       </div>
-    </div>
+    </Transition>
+
+    <!-- ============================================== -->
+    <!-- 회차 대국 상세 모달 (결과 표 & 점수 변동 그래프)   -->
+    <!-- ============================================== -->
+    <Transition name="modal-fade">
+      <div 
+        v-if="selectedGameDetail" 
+        class="game-detail-modal-overlay" 
+        @click.self="selectedGameDetail = null"
+      >
+        <div class="game-detail-modal-card">
+          <!-- 모달 헤더 -->
+          <div class="gdm-header">
+            <div class="gdm-title-box">
+              <span class="gdm-session-badge">{{ currentSessionDetail?.sessionName || selectedSession }}</span>
+              <h3 class="gdm-title">{{ selectedGameDetail.gameIndex }}경기 결과</h3>
+              <span class="gdm-time" v-if="selectedGameDetail.time">({{ selectedGameDetail.time }})</span>
+            </div>
+            <div class="gdm-actions">
+              <div class="gdm-tabs" v-if="selectedGameDetail.hasRoundDetails">
+                <button 
+                  class="gdm-tab-btn" 
+                  :class="{ active: gameModalMode === 'sheet' }"
+                  @click="gameModalMode = 'sheet'"
+                >
+                  결과 표
+                </button>
+                <button 
+                  class="gdm-tab-btn" 
+                  :class="{ active: gameModalMode === 'chart' }"
+                  @click="gameModalMode = 'chart'"
+                >
+                  점수 변동 그래프
+                </button>
+              </div>
+              <button class="gdm-close-btn" @click="selectedGameDetail = null" title="닫기">✕</button>
+            </div>
+          </div>
+
+          <!-- 로딩 표시 (상세 데이터 백그라운드 수집 중) -->
+          <div v-if="isLoadingGameDetail" class="gdm-loading-badge">
+            <span class="gdm-spinner"></span> 국별 세부 데이터 조회 중...
+          </div>
+
+          <!-- 1) 결과 표 (Sheet) 뷰 -->
+          <div v-show="gameModalMode === 'sheet'">
+            <div 
+              class="gdm-resultsheet" 
+              :class="{ 'clickable-view': selectedGameDetail.hasRoundDetails }"
+              @click="selectedGameDetail.hasRoundDetails ? (gameModalMode = 'chart') : null"
+              :title="selectedGameDetail.hasRoundDetails ? '클릭 시 점수 변동 그래프로 전환' : undefined"
+            >
+              <div class="gdm-header-cell wind">바람</div>
+              <div class="gdm-header-cell name">이름</div>
+              <div class="gdm-header-cell score">점수 (우마)</div>
+              <div class="gdm-header-cell riichi">리치</div>
+              <div class="gdm-header-cell ron">론</div>
+              <div class="gdm-header-cell tsumo">쯔모</div>
+              <div class="gdm-header-cell lose">방총</div>
+
+              <div class="gdm-content-col wind_contents">
+                <div 
+                  v-for="p in selectedGameDetail.playerStats" 
+                  :key="'wind-' + p.seat + p.name"
+                  :class="{ 'is-east': p.seat === '東' }"
+                >
+                  {{ p.seat }}
+                </div>
+              </div>
+              <div class="gdm-content-col name_contents">
+                <div v-for="p in selectedGameDetail.playerStats" :key="'name-' + p.seat + p.name">
+                  {{ p.name }}
+                </div>
+              </div>
+              <div class="gdm-content-col score_contents">
+                <div v-for="p in selectedGameDetail.playerStats" :key="'score-' + p.seat + p.name">
+                  {{ p.score.toLocaleString() }}
+                  (<span :class="p.uma >= 0 ? 'text_pos' : 'text_neg'"><span v-if="p.uma > 0">+</span>{{ p.uma }}</span>)
+                </div>
+              </div>
+              <div class="gdm-content-col riichi_contents">
+                <div v-for="p in selectedGameDetail.playerStats" :key="'riichi-' + p.seat + p.name">
+                  {{ selectedGameDetail.hasRoundDetails ? p.cntRiichi : '-' }}
+                </div>
+              </div>
+              <div class="gdm-content-col ron_contents">
+                <div v-for="p in selectedGameDetail.playerStats" :key="'ron-' + p.seat + p.name">
+                  {{ selectedGameDetail.hasRoundDetails ? p.cntRon : '-' }}
+                </div>
+              </div>
+              <div class="gdm-content-col tsumo_contents">
+                <div v-for="p in selectedGameDetail.playerStats" :key="'tsumo-' + p.seat + p.name">
+                  {{ selectedGameDetail.hasRoundDetails ? p.cntTsumo : '-' }}
+                </div>
+              </div>
+              <div class="gdm-content-col lose_contents">
+                <div v-for="p in selectedGameDetail.playerStats" :key="'lose-' + p.seat + p.name">
+                  {{ selectedGameDetail.hasRoundDetails ? p.cntLose : '-' }}
+                </div>
+              </div>
+            </div>
+
+            <div 
+              v-if="selectedGameDetail.hasRoundDetails" 
+              class="gdm-hint" 
+              @click="gameModalMode = 'chart'"
+            >
+              💡 표를 클릭하면 국별 점수 변동 그래프를 볼 수 있습니다.
+            </div>
+            <div v-else-if="!isLoadingGameDetail" class="gdm-legacy-notice">
+              ℹ️ 해당 대국은 국별 상세 기록(리치/론/쯔모/방총 및 국별 점수 변동)이 제공되지 않아 최종 점수와 우마만 표시됩니다.
+            </div>
+          </div>
+
+          <!-- 2) 점수 변동 그래프 (Chart) 뷰 -->
+          <div v-show="gameModalMode === 'chart'">
+            <div 
+              class="gdm-chart-box clickable-view"
+              @click="gameModalMode = 'sheet'"
+              title="클릭 시 결과 표로 전환"
+            >
+              <LineChart
+                v-if="selectedGameDetail.chartData && selectedGameDetail.chartData.datasets.length > 0"
+                :key="`gdm-line-chart-${selectedGameDetail.gameId}-${selectedGameDetail.gameIndex}`"
+                :data="selectedGameDetail.chartData"
+                :options="gameChartOptions"
+              />
+              <div v-else class="gdm-empty-chart">
+                점수 변동 그래프 데이터가 없습니다.
+              </div>
+            </div>
+
+            <div class="gdm-hint" @click="gameModalMode = 'sheet'">
+              💡 차트를 클릭하면 국별 결과 표로 돌아갑니다.
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
-</Transition>
-</div>
 </template>
 
 <style scoped>
@@ -4197,5 +4471,357 @@ html.dark .modal_scope_tab.active {
 }
 .modal-fade-enter-from, .modal-fade-leave-to {
   opacity: 0;
+}
+
+/* ============================================== */
+/* 회차 대국 상세 모달 (결과 표 & 점수 변동 차트)    */
+/* ============================================== */
+.clickable-game-card {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.clickable-game-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  border-color: var(--color-toggle-on, #3b82f6);
+}
+.game-card-action-hint {
+  font-size: 11px;
+  color: var(--color-toggle-on, #3b82f6);
+  font-weight: 600;
+  margin-left: auto;
+  margin-right: 10px;
+  opacity: 0.9;
+}
+.clickable-game-card:hover .game-card-action-hint {
+  text-decoration: underline;
+  opacity: 1;
+}
+
+.game-detail-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2100;
+  padding: 16px;
+}
+.game-detail-modal-card {
+  background: var(--bg-modal, #ffffff);
+  color: var(--text-color, #0f172a);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 580px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 16px 20px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .game-detail-modal-card {
+  background: var(--bg-modal, #1e1e1e);
+  color: var(--text-color, #e5e5e5);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  border-color: var(--border-color, #334155);
+}
+
+.gdm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  gap: 8px;
+}
+.gdm-title-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gdm-session-badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 600;
+  background: #e0f2fe;
+  color: #0369a1;
+}
+html.dark .gdm-session-badge {
+  background: #0c4a6e;
+  color: #7dd3fc;
+}
+.gdm-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+}
+.gdm-time {
+  font-size: 12px;
+  color: var(--text-dimmed, #64748b);
+}
+.gdm-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gdm-tabs {
+  display: inline-flex;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  padding: 2px;
+}
+html.dark .gdm-tabs {
+  background: rgba(255, 255, 255, 0.08);
+}
+.gdm-tab-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-dimmed, #64748b);
+  transition: all 0.15s ease;
+}
+html.dark .gdm-tab-btn {
+  color: #94a3b8;
+}
+.gdm-tab-btn.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+html.dark .gdm-tab-btn.active {
+  background: #334155;
+  color: #f8fafc;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.gdm-close-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--text-dimmed, #64748b);
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+.gdm-close-btn:hover {
+  color: var(--text-color, #0f172a);
+}
+html.dark .gdm-close-btn:hover {
+  color: #ffffff;
+}
+
+.gdm-loading-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #0284c7;
+  background: rgba(2, 132, 199, 0.08);
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+html.dark .gdm-loading-badge {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+}
+.gdm-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: gdmSpin 0.7s linear infinite;
+  display: inline-block;
+}
+@keyframes gdmSpin {
+  to { transform: rotate(360deg); }
+}
+
+.gdm-resultsheet {
+  display: grid;
+  grid-template-rows: auto auto;
+  grid-template-columns: 48px minmax(70px, 1.2fr) minmax(120px, 1.8fr) repeat(4, 44px);
+  grid-template-areas:
+    'wind name score riichi ron tsumo lose'
+    'wind_contents name_contents score_contents riichi_contents ron_contents tsumo_contents lose_contents';
+  text-align: center;
+  font-size: 15px;
+  margin: 6px 0;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-card, #f8fafc);
+  user-select: none;
+}
+html.dark .gdm-resultsheet {
+  background: #18181b;
+  border-color: #334155;
+}
+.gdm-resultsheet.clickable-view {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.gdm-resultsheet.clickable-view:hover {
+  border-color: var(--color-toggle-on, #3b82f6);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+.gdm-header-cell {
+  font-weight: 700;
+  padding: 8px 2px;
+  font-size: 12.5px;
+  color: var(--text-dimmed, #64748b);
+  background: rgba(0, 0, 0, 0.03);
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .gdm-header-cell {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: #334155;
+  color: #94a3b8;
+}
+.gdm-content-col > div {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  font-size: 14px;
+  white-space: nowrap;
+}
+html.dark .gdm-content-col > div {
+  border-color: #27272a;
+}
+.gdm-content-col > div:last-child {
+  border-bottom: none;
+}
+.gdm-content-col.wind_contents > div.is-east {
+  color: #ef4444;
+  font-weight: 700;
+}
+.gdm-content-col.name_contents > div {
+  font-weight: 600;
+  padding: 0 4px;
+}
+.gdm-content-col.score_contents > div {
+  font-size: 13px;
+  font-weight: 500;
+}
+.text_pos {
+  color: #16a34a;
+  font-weight: 600;
+}
+html.dark .text_pos {
+  color: #4ade80;
+}
+.text_neg {
+  color: #dc2626;
+  font-weight: 600;
+}
+html.dark .text_neg {
+  color: #f87171;
+}
+
+.gdm-chart-box {
+  width: 100%;
+  max-width: 520px;
+  height: 270px;
+  margin: 6px auto;
+  position: relative;
+  box-sizing: border-box;
+  background: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 8px;
+}
+html.dark .gdm-chart-box {
+  background: #18181b;
+  border-color: #334155;
+}
+.gdm-chart-box.clickable-view {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.gdm-chart-box.clickable-view:hover {
+  border-color: var(--color-toggle-on, #3b82f6);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+.gdm-empty-chart {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-dimmed, #64748b);
+  font-size: 13px;
+}
+
+.gdm-hint {
+  font-size: 12px;
+  color: var(--color-toggle-on, #3b82f6);
+  text-align: center;
+  margin-top: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+}
+.gdm-hint:hover {
+  text-decoration: underline;
+}
+.gdm-legacy-notice {
+  font-size: 11.5px;
+  color: var(--text-dimmed, #64748b);
+  text-align: center;
+  margin-top: 8px;
+  line-height: 1.4;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 6px;
+}
+html.dark .gdm-legacy-notice {
+  background: rgba(255, 255, 255, 0.03);
+  color: #94a3b8;
+}
+
+@media (max-width: 600px) {
+  .game-detail-modal-card {
+    padding: 12px 10px;
+    max-width: 96vw;
+  }
+  .gdm-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .gdm-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .gdm-resultsheet {
+    grid-template-columns: 34px minmax(50px, 1fr) minmax(90px, 1.4fr) repeat(4, 30px);
+    font-size: 12px;
+  }
+  .gdm-header-cell {
+    font-size: 11px;
+    padding: 5px 1px;
+  }
+  .gdm-content-col > div {
+    height: 34px;
+    font-size: 11.5px;
+  }
+  .gdm-content-col.score_contents > div {
+    font-size: 10.5px;
+  }
+  .gdm-chart-box {
+    height: 220px;
+  }
 }
 </style>

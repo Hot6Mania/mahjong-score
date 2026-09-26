@@ -1665,3 +1665,319 @@ export function calculateMetricDistribution(
     line70X: parseFloat((svgWidth * 0.7).toFixed(1)), // 상위 30% (112)
   };
 }
+
+// ==========================================
+// 회차 대국 상세 결과 및 국별 점수변동/스탯 집계
+// ==========================================
+export interface GamePlayerResultStat {
+  seat: string; // 東, 南, 西, 北
+  name: string;
+  rank: number;
+  score: number;
+  uma: number;
+  cntRiichi: number;
+  cntRon: number;
+  cntTsumo: number;
+  cntLose: number;
+}
+
+export interface GameScoreChartData {
+  labels: string[];
+  datasets: {
+    label: string;
+    data: number[];
+    borderColor: string;
+    backgroundColor: string;
+    pointRadius: number;
+  }[];
+}
+
+export interface GameDetailRecord {
+  gameId: string;
+  gameIndex: number;
+  time: string;
+  hasRoundDetails: boolean;
+  playerStats: GamePlayerResultStat[];
+  chartData: GameScoreChartData;
+}
+
+function buildGameDetailFromLocalRecords(game: SessionGame, records: any, playerNames?: string[]): GameDetailRecord {
+  const pNames = playerNames && playerNames.length === 4 ? playerNames : game.players.map(p => p.name);
+  const seatOrder = ["東", "南", "西", "北"];
+  const sortedGamePlayers = [...game.players].sort((a, b) => {
+    return seatOrder.indexOf(a.seat) - seatOrder.indexOf(b.seat);
+  });
+
+  const playerStats: GamePlayerResultStat[] = sortedGamePlayers.map((p, idx) => {
+    const pIdx = pNames.indexOf(p.name) !== -1 ? pNames.indexOf(p.name) : idx;
+    let cntRiichi = 0, cntRon = 0, cntTsumo = 0, cntLose = 0;
+    if (records.riichi && Array.isArray(records.riichi)) {
+      for (let r = 0; r < records.riichi.length; r++) {
+        if (records.riichi[r]?.[pIdx]) cntRiichi++;
+        if (records.win?.[r]?.[pIdx]) {
+          const status = records.status?.[r];
+          if (status === 'tsumo') cntTsumo++;
+          else cntRon++;
+        }
+        if (records.lose?.[r]?.[pIdx]) cntLose++;
+      }
+    }
+    return {
+      seat: p.seat || seatOrder[idx],
+      name: p.name,
+      rank: p.rank,
+      score: p.score,
+      uma: p.uma,
+      cntRiichi,
+      cntRon,
+      cntTsumo,
+      cntLose
+    };
+  });
+
+  const rawTimes = records.time || [];
+  const labels: string[] = ['시작'];
+  for (let i = 1; i < rawTimes.length; i += 2) {
+    labels.push(rawTimes[i] || `${Math.floor(i / 2) + 1}국`);
+  }
+
+  const colors = ['#ff6384', '#4bc0c0', '#36a2eb', '#ffce56'];
+  const datasets = sortedGamePlayers.map((p, idx) => {
+    const pIdx = pNames.indexOf(p.name) !== -1 ? pNames.indexOf(p.name) : idx;
+    const rawScores = records.score?.[pIdx] || [];
+    const restoredData: number[] = [25000];
+    let curScore = 25000;
+    for (let i = 1; i < rawScores.length; i += 2) {
+      curScore += Number(rawScores[i] || 0);
+      restoredData.push(curScore);
+    }
+    return {
+      label: p.name,
+      data: restoredData,
+      borderColor: colors[idx % 4],
+      backgroundColor: colors[idx % 4],
+      pointRadius: 3,
+    };
+  });
+
+  return {
+    gameId: game.gameId,
+    gameIndex: game.gameIndex,
+    time: game.time,
+    hasRoundDetails: true,
+    playerStats,
+    chartData: { labels, datasets }
+  };
+}
+
+/**
+ * 특정 대국의 리치/론/쯔모/방총 횟수 및 국별 점수변동 궤적 로드
+ */
+export async function fetchSessionGameDetail(
+  sessionName: string,
+  game: SessionGame,
+  spreadsheetId?: string
+): Promise<GameDetailRecord> {
+  const seatOrder = ["東", "南", "西", "北"];
+  const sortedGamePlayers = [...game.players].sort((a, b) => {
+    return seatOrder.indexOf(a.seat) - seatOrder.indexOf(b.seat);
+  });
+
+  // 1. 로컬 스토리지 확인
+  try {
+    const rawHistory = localStorage.getItem("today_games_history");
+    if (rawHistory) {
+      const historyList = JSON.parse(rawHistory);
+      const found = historyList.find((g: any) =>
+        (g.timestamp && game.gameId && String(g.timestamp) === String(game.gameId)) ||
+        (g.id && String(g.id) === String(game.gameId)) ||
+        (g.gameId && String(g.gameId) === String(game.gameId)) ||
+        (g.gameIndex && g.gameIndex === game.gameIndex && g.results?.length === 4)
+      );
+      if (found && found.records && Array.isArray(found.records.score) && found.records.score.length >= 4) {
+        return buildGameDetailFromLocalRecords(game, found.records, found.playerNames || found.results?.map((r: any) => r.name));
+      }
+    }
+  } catch (e) {
+    console.warn("localStorage check for gameDetail failed:", e);
+  }
+
+  // 2. 9회차 이상인 경우 '전체 국별기록 (데이터)' 시트에서 실시간 조회
+  const match = sessionName.match(/제(\d+)회/);
+  const sessionNum = match ? parseInt(match[1], 10) : 0;
+
+  if (sessionNum >= 9) {
+    const sId = spreadsheetId || await resolveSpreadsheetId();
+    if (sId) {
+      if (!cachedAllRoundsTable) {
+        try {
+          const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
+          const res = await fetch(gvizUrl);
+          if (res.ok) {
+            const text = await res.text();
+            const json = parseGVizResponse(text);
+            if (json && json.table) {
+              cachedAllRoundsTable = json.table;
+            }
+          }
+        } catch (e) {
+          console.warn("fetch cachedAllRoundsTable for gameDetail failed:", e);
+        }
+      }
+
+      if (cachedAllRoundsTable && cachedAllRoundsTable.rows) {
+        const cleanGId = game.gameId ? game.gameId.trim() : "";
+        let gameRows: any[] = [];
+
+        // gameId 일치 행 검색
+        if (cleanGId) {
+          gameRows = cachedAllRoundsTable.rows.filter((r: any) => {
+            if (!r.c) return false;
+            const rowGId = getCellStr(r.c[1]).trim();
+            return rowGId === cleanGId || rowGId.includes(cleanGId) || cleanGId.includes(rowGId);
+          });
+        }
+
+        // gameId가 완전 일치하지 않을 경우 세션명 + 선수 4인 일치 행 검색
+        if (gameRows.length === 0 && game.players && game.players.length === 4) {
+          const sessTargetMatch = sessionName.match(/제\d+회/);
+          const sessPrefix = sessTargetMatch ? sessTargetMatch[0] : sessionName;
+          const gamePlayerNames = new Set(game.players.map(p => p.name.trim()));
+
+          const sessionRowsByGame: Record<string, any[]> = {};
+          cachedAllRoundsTable.rows.forEach((r: any) => {
+            if (!r.c) return;
+            const rowSess = getCellStr(r.c[15]);
+            if (!rowSess.includes(sessPrefix) && !sessPrefix.includes(rowSess)) return;
+            const gid = getCellStr(r.c[1]).trim();
+            if (!gid) return;
+            if (!sessionRowsByGame[gid]) sessionRowsByGame[gid] = [];
+            sessionRowsByGame[gid].push(r);
+          });
+
+          for (const gid of Object.keys(sessionRowsByGame)) {
+            const rows = sessionRowsByGame[gid];
+            const pSet = new Set(rows.map(r => getCellStr(r.c[5]).trim()));
+            let allMatched = true;
+            for (const name of gamePlayerNames) {
+              if (!pSet.has(name)) { allMatched = false; break; }
+            }
+            if (allMatched && rows.length >= 4) {
+              gameRows = rows;
+              break;
+            }
+          }
+        }
+
+        if (gameRows.length > 0) {
+          // 국별 행 매핑
+          const roundsMap: Record<number, {
+            roundName: string;
+            roundStatus: string;
+            players: Record<string, { deltaScore: number; isRiichi: boolean; isWin: boolean; isLose: boolean }>;
+          }> = {};
+
+          gameRows.forEach((row: any) => {
+            const r = getCellNum(row.c[3], 0);
+            if (!roundsMap[r]) {
+              roundsMap[r] = {
+                roundName: getCellStr(row.c[2]),
+                roundStatus: getCellStr(row.c[4]).toLowerCase(),
+                players: {}
+              };
+            }
+            const pName = getCellStr(row.c[5]).trim();
+            roundsMap[r].players[pName] = {
+              deltaScore: getCellNum(row.c[7]),
+              isRiichi: row.c[9]?.v === true || row.c[9]?.v === "TRUE" || row.c[9]?.v === 1,
+              isWin: row.c[10]?.v === true || row.c[10]?.v === "TRUE" || row.c[10]?.v === 1,
+              isLose: row.c[11]?.v === true || row.c[11]?.v === "TRUE" || row.c[11]?.v === 1,
+            };
+          });
+
+          const roundNums = Object.keys(roundsMap).map(Number).sort((a, b) => a - b);
+
+          const playerStats: GamePlayerResultStat[] = sortedGamePlayers.map((p, idx) => {
+            let cntRiichi = 0, cntRon = 0, cntTsumo = 0, cntLose = 0;
+            roundNums.forEach(r => {
+              const rd = roundsMap[r];
+              const pData = rd.players[p.name];
+              if (pData) {
+                if (pData.isRiichi) cntRiichi++;
+                if (pData.isWin) {
+                  if (rd.roundStatus.includes("tsumo")) cntTsumo++;
+                  else cntRon++;
+                }
+                if (pData.isLose) cntLose++;
+              }
+            });
+            return {
+              seat: p.seat || seatOrder[idx],
+              name: p.name,
+              rank: p.rank,
+              score: p.score,
+              uma: p.uma,
+              cntRiichi,
+              cntRon,
+              cntTsumo,
+              cntLose,
+            };
+          });
+
+          const labels: string[] = ["시작"];
+          roundNums.forEach(r => {
+            labels.push(roundsMap[r].roundName || `${r}국`);
+          });
+
+          const colors = ["#ff6384", "#4bc0c0", "#36a2eb", "#ffce56"];
+          const datasets = sortedGamePlayers.map((p, idx) => {
+            let curScore = 25000;
+            const dataPoints: number[] = [curScore];
+            roundNums.forEach(r => {
+              const pData = roundsMap[r].players[p.name];
+              const delta = pData ? pData.deltaScore : 0;
+              curScore += delta;
+              dataPoints.push(curScore);
+            });
+            return {
+              label: p.name,
+              data: dataPoints,
+              borderColor: colors[idx % 4],
+              backgroundColor: colors[idx % 4],
+              pointRadius: 3,
+            };
+          });
+
+          return {
+            gameId: game.gameId,
+            gameIndex: game.gameIndex,
+            time: game.time,
+            hasRoundDetails: true,
+            playerStats,
+            chartData: { labels, datasets }
+          };
+        }
+      }
+    }
+  }
+
+  // 3. 레거시(1~8회차)이거나 세부 국별 기록이 없는 경우
+  return {
+    gameId: game.gameId,
+    gameIndex: game.gameIndex,
+    time: game.time,
+    hasRoundDetails: false,
+    playerStats: sortedGamePlayers.map((p, idx) => ({
+      seat: p.seat || seatOrder[idx],
+      name: p.name,
+      rank: p.rank,
+      score: p.score,
+      uma: p.uma,
+      cntRiichi: 0,
+      cntRon: 0,
+      cntTsumo: 0,
+      cntLose: 0,
+    })),
+    chartData: { labels: [], datasets: [] }
+  };
+}

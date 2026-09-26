@@ -275,16 +275,35 @@ const scoreChartInfo = computed(() => {
     labels: times,
     datasets: datasets
   };
+  const allScores = datasets.flatMap(d => d.data);
+  const minScore = allScores.length > 0 ? Math.min(...allScores, commonStartScore) : 20000;
+  const maxScore = allScores.length > 0 ? Math.max(...allScores, commonStartScore) : 30000;
+  const pad = Math.max(3000, Math.round((maxScore - minScore) * 0.1));
+
   let options: ChartOptions<'line'> = {
     responsive: true, // 반응형
     maintainAspectRatio: false, // 크기조절
+    animation: {
+      duration: 650,
+      easing: 'easeOutQuart',
+    },
     animations: {
       y: {
-        from: (ctx) => {
-          const yScale = ctx.chart.scales.y;
-          return yScale.getPixelForValue(25000); // 애니메이션 시작점 25000
+        type: 'number',
+        duration: 650,
+        easing: 'easeOutQuart',
+        from: (ctx: any) => {
+          if (ctx.type === 'data') {
+            const yScale = ctx.chart?.scales?.y;
+            return yScale ? yScale.getPixelForValue(commonStartScore) : undefined;
+          }
+          return undefined;
         }
       },
+    },
+    interaction: {
+      mode: 'index',
+      intersect: false,
     },
     scales: {
       x: {
@@ -297,8 +316,11 @@ const scoreChartInfo = computed(() => {
         }
       },
       y: {
+        suggestedMin: Math.floor((minScore - pad) / 1000) * 1000,
+        suggestedMax: Math.ceil((maxScore + pad) / 1000) * 1000,
         ticks: {
           color: textColor,
+          callback: (value) => Number(value).toLocaleString() + '점',
         },
         grid: {
           color: gridColor,
@@ -1095,9 +1117,12 @@ const getSignColor = (sign: number, x: boolean) => {
 
 /* 게임 결과창(차트)*/
 .container_resultchart{
-  width: 490px;
-  height: 240px;
-  margin: 5px;
+  width: 100%;
+  max-width: 500px;
+  height: 260px;
+  margin: 5px auto;
+  position: relative;
+  box-sizing: border-box;
 }
 
 /* 구글 연동창 */
