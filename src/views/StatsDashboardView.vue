@@ -188,9 +188,14 @@ const handleSort = (key: SortKey) => {
   }
 };
 
+const formatPct = (val: number | undefined): string => {
+  if (val === undefined || val === null || isNaN(val)) return '0.00%';
+  return Number(val).toFixed(2) + '%';
+};
+
 const getDistPct = (count: number, total: number): string => {
-  if (total <= 0) return '0.0';
-  return ((count / total) * 100).toFixed(1);
+  if (total <= 0) return '0.00';
+  return ((count / total) * 100).toFixed(2);
 };
 
 const formatDualMetric = (
@@ -212,7 +217,7 @@ const formatDualMetric = (
 // 모달 내 순위 비율 도넛 차트 계산 (9회차 이후 순수 통계 기준)
 const modalRankStats = computed(() => {
   if (!selectedPlayer.value) {
-    return { r1: 0, r2: 0, r3: 0, r4: 0, p1: 0, p2: 0, p3: 0, p4: 0, totalGames: 0, top2Rate: '0.0%', lastAvoidRate: '0.0%' };
+    return { r1: 0, r2: 0, r3: 0, r4: 0, p1: 0, p2: 0, p3: 0, p4: 0, totalGames: 0, top2Rate: '0.00%', lastAvoidRate: '0.00%' };
   }
   const m = displayPlayerStats.value;
   const tot = m.totalGames;
@@ -220,8 +225,8 @@ const modalRankStats = computed(() => {
   const p2 = tot > 0 ? (m.rank2Count / tot) * 100 : 0;
   const p3 = tot > 0 ? (m.rank3Count / tot) * 100 : 0;
   const p4 = tot > 0 ? (m.rank4Count / tot) * 100 : 0;
-  const top2Rate = tot > 0 ? (((m.rank1Count + m.rank2Count) / tot) * 100).toFixed(1) + '%' : '0.0%';
-  const lastAvoidRate = tot > 0 ? (((m.rank1Count + m.rank2Count + m.rank3Count) / tot) * 100).toFixed(1) + '%' : '0.0%';
+  const top2Rate = tot > 0 ? (((m.rank1Count + m.rank2Count) / tot) * 100).toFixed(2) + '%' : '0.00%';
+  const lastAvoidRate = tot > 0 ? (((m.rank1Count + m.rank2Count + m.rank3Count) / tot) * 100).toFixed(2) + '%' : '0.00%';
 
   return {
     r1: m.rank1Count,
@@ -374,7 +379,7 @@ const sessionMembersWithRanks = computed<SessionMemberWithRanks[]>(() => {
         else if (p.rank === 4) r4++;
       }
     });
-    const top2Rate = m.totalGames > 0 ? parseFloat((((r1 + r2) / m.totalGames) * 100).toFixed(1)) : 0;
+    const top2Rate = m.totalGames > 0 ? parseFloat((((r1 + r2) / m.totalGames) * 100).toFixed(2)) : 0;
     const avgUma = m.totalGames > 0 ? parseFloat((m.totalUma / m.totalGames).toFixed(1)) : 0;
     return {
       ...m,
@@ -422,7 +427,7 @@ const currentSessionPlayerStats = computed<MemberStatItem | null>(() => {
     }
   });
 
-  const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(1)) : 0;
+  const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(2)) : 0;
 
   return {
     name,
@@ -469,7 +474,7 @@ const currentSessionPlayerStats = computed<MemberStatItem | null>(() => {
 // 회차 모달 내 순위 비율 도넛 차트 계산
 const currentSessionRankStats = computed(() => {
   if (!currentSessionPlayerStats.value) {
-    return { r1: 0, r2: 0, r3: 0, r4: 0, p1: 0, p2: 0, p3: 0, p4: 0, totalGames: 0, top2Rate: '0.0%', lastAvoidRate: '0.0%' };
+    return { r1: 0, r2: 0, r3: 0, r4: 0, p1: 0, p2: 0, p3: 0, p4: 0, totalGames: 0, top2Rate: '0.00%', lastAvoidRate: '0.00%' };
   }
   const s = currentSessionPlayerStats.value;
   const tot = s.totalGames;
@@ -487,8 +492,8 @@ const currentSessionRankStats = computed(() => {
     p3,
     p4,
     totalGames: tot,
-    top2Rate: (p1 + p2).toFixed(1) + '%',
-    lastAvoidRate: (100 - p4).toFixed(1) + '%',
+    top2Rate: (p1 + p2).toFixed(2) + '%',
+    lastAvoidRate: (100 - p4).toFixed(2) + '%',
   };
 });
 
@@ -735,14 +740,18 @@ const getRankClass = (rank: number) => {
       <div class="dist-tooltip-header">
         <span class="dist-title">{{ activeDistName }} 전체 분포</span>
         <span class="dist-rank-chip" :class="activeDist.isUpperHalf ? 'pos' : 'neg'">
-          {{ activeDist.isUpperHalf ? '상위' : '하위' }} {{ activeDist.topPct }}%
+          {{ activeDist.isUpperHalf ? '상위' : '하위' }} {{ activeDist.topPct.toFixed(2) }}%
         </span>
       </div>
       <div class="dist-sub-rank">
         {{ activeDist.percentileText }} ({{ activeDist.rank }}위 / {{ activeDist.totalCount }}명)
       </div>
       <div class="dist-my-val">
-        내 수치: <strong>{{ activeDist.currentValue.toLocaleString() }}{{ activeDistUnit }}</strong>
+        내 수치: <strong>
+          <template v-if="activeDistName === '평균 순위'">{{ activeDist.currentValue.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistUnit === '%'">{{ activeDist.currentValue.toFixed(2) }}{{ activeDistUnit }}</template>
+          <template v-else>{{ activeDist.currentValue.toLocaleString() }}{{ activeDistUnit }}</template>
+        </strong>
       </div>
 
       <!-- SVG 1인 1막대 계단형 히스토그램 & 하위 30%/50%/상위 30% 구분선 -->
@@ -813,9 +822,21 @@ const getRankClass = (rank: number) => {
       </div>
 
       <div class="dist-labels-row">
-        <span>최소 {{ activeDist.min.toLocaleString() }}{{ activeDistUnit }}</span>
-        <span class="dist-avg-val">평균 {{ activeDist.avg.toLocaleString() }}{{ activeDistUnit }}</span>
-        <span>최대 {{ activeDist.max.toLocaleString() }}{{ activeDistUnit }}</span>
+        <span>최소 
+          <template v-if="activeDistName === '평균 순위'">{{ activeDist.min.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistUnit === '%'">{{ activeDist.min.toFixed(2) }}{{ activeDistUnit }}</template>
+          <template v-else>{{ activeDist.min.toLocaleString() }}{{ activeDistUnit }}</template>
+        </span>
+        <span class="dist-avg-val">평균 
+          <template v-if="activeDistName === '평균 순위'">{{ activeDist.avg.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistUnit === '%'">{{ activeDist.avg.toFixed(2) }}{{ activeDistUnit }}</template>
+          <template v-else>{{ activeDist.avg.toLocaleString() }}{{ activeDistUnit }}</template>
+        </span>
+        <span>최대 
+          <template v-if="activeDistName === '평균 순위'">{{ activeDist.max.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistUnit === '%'">{{ activeDist.max.toFixed(2) }}{{ activeDistUnit }}</template>
+          <template v-else>{{ activeDist.max.toLocaleString() }}{{ activeDistUnit }}</template>
+        </span>
       </div>
     </div>
 
@@ -916,7 +937,7 @@ const getRankClass = (rank: number) => {
             </div>
             <div class="podium-sub">
               <span>평균우마 {{ podiumTop3[1].avgUma > 0 ? '+' : '' }}{{ podiumTop3[1].avgUma }}pt</span>
-              <span>평균 {{ podiumTop3[1].avgRank }}위 · {{ podiumTop3[1].totalGames }}전 ({{ podiumTop3[1].top2Rate }}%)</span>
+              <span>평균 {{ podiumTop3[1].avgRank.toFixed(3) }}위 · {{ podiumTop3[1].totalGames }}전 ({{ formatPct(podiumTop3[1].top2Rate) }})</span>
             </div>
           </div>
 
@@ -929,7 +950,7 @@ const getRankClass = (rank: number) => {
             </div>
             <div class="podium-sub">
               <span>평균우마 {{ podiumTop3[0].avgUma > 0 ? '+' : '' }}{{ podiumTop3[0].avgUma }}pt</span>
-              <span>평균 {{ podiumTop3[0].avgRank }}위 · {{ podiumTop3[0].totalGames }}전 ({{ podiumTop3[0].top2Rate }}%)</span>
+              <span>평균 {{ podiumTop3[0].avgRank.toFixed(3) }}위 · {{ podiumTop3[0].totalGames }}전 ({{ formatPct(podiumTop3[0].top2Rate) }})</span>
             </div>
           </div>
 
@@ -942,7 +963,7 @@ const getRankClass = (rank: number) => {
             </div>
             <div class="podium-sub">
               <span>평균우마 {{ podiumTop3[2].avgUma > 0 ? '+' : '' }}{{ podiumTop3[2].avgUma }}pt</span>
-              <span>평균 {{ podiumTop3[2].avgRank }}위 · {{ podiumTop3[2].totalGames }}전 ({{ podiumTop3[2].top2Rate }}%)</span>
+              <span>평균 {{ podiumTop3[2].avgRank.toFixed(3) }}위 · {{ podiumTop3[2].totalGames }}전 ({{ formatPct(podiumTop3[2].top2Rate) }})</span>
             </div>
           </div>
         </div>
@@ -1040,8 +1061,8 @@ const getRankClass = (rank: number) => {
                   {{ member.avgUma > 0 ? '+' : '' }}{{ member.avgUma.toFixed(1) }}
                 </td>
                 <td class="col-games">{{ member.totalGames }}전</td>
-                <td class="col-top2">{{ member.top2Rate.toFixed(1) }}%</td>
-                <td class="col-avg-rank">{{ member.avgRank.toFixed(2) }}위</td>
+                <td class="col-top2">{{ formatPct(member.top2Rate) }}</td>
+                <td class="col-avg-rank">{{ member.avgRank.toFixed(3) }}위</td>
                 <!-- 1등, 2등, 3등, 4등 독립 열 -->
                 <td class="col-rank-item col-rank-1">
                   <div class="dist-badge r1" :title="'1위 ' + member.rank1Count + '회'">
@@ -1213,7 +1234,7 @@ const getRankClass = (rank: number) => {
                   <div class="sm-rank-badge" :class="getRankClass(idx + 1)">{{ idx + 1 }}위</div>
                   <div class="sm-info">
                     <div class="sm-name">{{ m.name }}</div>
-                    <div class="sm-sub">{{ m.totalGames }}경기 / 평균 {{ m.avgRank }}위 (연대 {{ m.top2Rate }}%)</div>
+                    <div class="sm-sub">{{ m.totalGames }}경기 / 평균 {{ m.avgRank.toFixed(3) }}위 (연대 {{ formatPct(m.top2Rate) }})</div>
                     <div class="sm-dist-badges">
                       <span class="sm-badge r1" title="1위">1등 {{ m.r1 }}</span>
                       <span class="sm-badge r2" title="2위">2등 {{ m.r2 }}</span>
@@ -1325,8 +1346,8 @@ const getRankClass = (rank: number) => {
                         {{ member.avgUma > 0 ? '+' : '' }}{{ member.avgUma.toFixed(1) }}
                       </td>
                       <td class="col-games">{{ member.totalGames }}전</td>
-                      <td class="col-top2">{{ member.top2Rate.toFixed(1) }}%</td>
-                      <td class="col-avg-rank">{{ member.avgRank.toFixed(2) }}위</td>
+                      <td class="col-top2">{{ formatPct(member.top2Rate) }}</td>
+                      <td class="col-avg-rank">{{ member.avgRank.toFixed(3) }}위</td>
                       <td class="col-rank-item col-rank-1">
                         <div class="dist-badge r1"><span class="dist-cnt">{{ member.rank1Count }}</span><span class="dist-pct">({{ getDistPct(member.rank1Count, member.totalGames) }}%)</span></div>
                       </td>
@@ -1396,7 +1417,7 @@ const getRankClass = (rank: number) => {
             <div v-if="isNoticeVisible" class="modal_notice_text">
               <div class="notice_text_content">
                 ※ 제9회부터의 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.<br />
-                ※ 종합 대국 수(세부 스탯이 집계된 대국 수) 형식으로 표기됩니다.
+                ※ 일부 스탯들은 종합 대국 통계(세부 스탯이 집계된 대국 통계) 형식으로 표기됩니다.
               </div>
               <button class="notice_close_btn" @click="dismissNotice" title="닫기">✕</button>
             </div>
@@ -1479,7 +1500,7 @@ const getRankClass = (rank: number) => {
                           @mouseleave="onLeaveMetric"
                         >
                           <span class="stat_label">평균 순위</span>
-                          <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 2) }}위</span>
+                          <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 3) }}위</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1487,7 +1508,7 @@ const getRankClass = (rank: number) => {
                           @mouseleave="onLeaveMetric"
                         >
                           <span class="stat_label">연대율 (1·2위)</span>
-                          <span class="stat_value">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 1) }}%</span>
+                          <span class="stat_value">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 2) }}%</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1495,7 +1516,7 @@ const getRankClass = (rank: number) => {
                           @mouseleave="onLeaveMetric"
                         >
                           <span class="stat_label">화료율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.winRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.winRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1503,7 +1524,7 @@ const getRankClass = (rank: number) => {
                           @mouseleave="onLeaveMetric"
                         >
                           <span class="stat_label">방총률</span>
-                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.dealInRate }}%</span>
+                          <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.dealInRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1511,7 +1532,7 @@ const getRankClass = (rank: number) => {
                           @mouseleave="onLeaveMetric"
                         >
                           <span class="stat_label">쯔모율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.tsumoRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.tsumoRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1519,7 +1540,7 @@ const getRankClass = (rank: number) => {
                           @mouseleave="onLeaveMetric"
                         >
                           <span class="stat_label">리치율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.riichiRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.riichiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1528,7 +1549,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'drawRate', '유국률', currentSessionPlayerStats.drawRate, false, '%')"
                         >
                           <span class="stat_label">유국률</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.drawRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.drawRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1537,7 +1558,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'drawTenpaiRate', '유국 텐파이율', currentSessionPlayerStats.drawTenpaiRate, true, '%')"
                         >
                           <span class="stat_label">유국 텐파이율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.drawTenpaiRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.drawTenpaiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1561,7 +1582,7 @@ const getRankClass = (rank: number) => {
                           @mouseleave="onLeaveMetric"
                         >
                           <span class="stat_label">토비율 (들통)</span>
-                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.tobiRate }}%</span>
+                          <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.tobiRate) }}</span>
                         </div>
                       </div>
 
@@ -1574,7 +1595,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'riichiRate', '리치율', currentSessionPlayerStats.riichiRate, true, '%')"
                         >
                           <span class="stat_label">리치율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.riichiRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.riichiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1583,7 +1604,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'riichiWinRate', '리치 화료율', currentSessionPlayerStats.riichiWinRate, true, '%')"
                         >
                           <span class="stat_label">리치 화료율</span>
-                          <span class="stat_value text_positive">{{ currentSessionPlayerStats.riichiWinRate }}%</span>
+                          <span class="stat_value text_positive">{{ formatPct(currentSessionPlayerStats.riichiWinRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1592,7 +1613,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'riichiDealInRate', '리치 방총율', currentSessionPlayerStats.riichiDealInRate, false, '%')"
                         >
                           <span class="stat_label">리치 방총율</span>
-                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.riichiDealInRate }}%</span>
+                          <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.riichiDealInRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1601,7 +1622,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'riichiDrawRate', '리치 유국율', currentSessionPlayerStats.riichiDrawRate, false, '%')"
                         >
                           <span class="stat_label">리치 유국율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.riichiDrawRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.riichiDrawRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1639,7 +1660,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'firstRiichiRate', '선제 리치율', currentSessionPlayerStats.firstRiichiRate, true, '%')"
                         >
                           <span class="stat_label">선제 리치율</span>
-                          <span class="stat_value text_positive">{{ currentSessionPlayerStats.firstRiichiRate }}%</span>
+                          <span class="stat_value text_positive">{{ formatPct(currentSessionPlayerStats.firstRiichiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1648,7 +1669,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'chaseRiichiRate', '추격 리치율', currentSessionPlayerStats.chaseRiichiRate, true, '%')"
                         >
                           <span class="stat_label">추격 리치율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.chaseRiichiRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.chaseRiichiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1657,7 +1678,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격 리치율', currentSessionPlayerStats.chasedRiichiRate, false, '%')"
                         >
                           <span class="stat_label">피추격 리치율</span>
-                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.chasedRiichiRate }}%</span>
+                          <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.chasedRiichiRate) }}</span>
                         </div>
                       </div>
 
@@ -1670,7 +1691,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'tenpaiRate', '텐파이율', currentSessionPlayerStats.tenpaiRate, true, '%')"
                         >
                           <span class="stat_label">텐파이율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.tenpaiRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.tenpaiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1679,7 +1700,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', currentSessionPlayerStats.oyaKaburiRate, false, '%')"
                         >
                           <span class="stat_label">아픈 오야카부리율</span>
-                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.oyaKaburiRate }}%</span>
+                          <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.oyaKaburiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1697,7 +1718,7 @@ const getRankClass = (rank: number) => {
                           @click.stop="onHoverSessionMetric($event, 'dealInRiichiRate', '방총 시 리치율', currentSessionPlayerStats.dealInRiichiRate, false, '%')"
                         >
                           <span class="stat_label">방총 시 리치율</span>
-                          <span class="stat_value">{{ currentSessionPlayerStats.dealInRiichiRate }}%</span>
+                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.dealInRiichiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -1825,7 +1846,7 @@ const getRankClass = (rank: number) => {
                               <!-- 중앙 텍스트 -->
                               <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
                               <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ currentSessionRankStats.totalGames }}전</text>
-                              <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ currentSessionPlayerStats.avgRank }}위</text>
+                              <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ (currentSessionPlayerStats.avgRank ?? 0).toFixed(3) }}위</text>
                             </svg>
                           </div>
 
@@ -1840,7 +1861,7 @@ const getRankClass = (rank: number) => {
                               <div class="rank_card_header">
                                 <span class="rank_badge badge_1">1위</span>
                                 <span class="rank_count_val">{{ currentSessionRankStats.r1 }}회</span>
-                                <span class="rank_percent_val text_rank_1">{{ currentSessionRankStats.p1.toFixed(1) }}%</span>
+                                <span class="rank_percent_val text_rank_1">{{ currentSessionRankStats.p1.toFixed(2) }}%</span>
                               </div>
                               <div class="rank_bar_track">
                                 <div class="rank_bar_fill bar_1" :style="{ width: currentSessionRankStats.p1 + '%' }"></div>
@@ -1856,7 +1877,7 @@ const getRankClass = (rank: number) => {
                               <div class="rank_card_header">
                                 <span class="rank_badge badge_2">2위</span>
                                 <span class="rank_count_val">{{ currentSessionRankStats.r2 }}회</span>
-                                <span class="rank_percent_val text_rank_2">{{ currentSessionRankStats.p2.toFixed(1) }}%</span>
+                                <span class="rank_percent_val text_rank_2">{{ currentSessionRankStats.p2.toFixed(2) }}%</span>
                               </div>
                               <div class="rank_bar_track">
                                 <div class="rank_bar_fill bar_2" :style="{ width: currentSessionRankStats.p2 + '%' }"></div>
@@ -1872,7 +1893,7 @@ const getRankClass = (rank: number) => {
                               <div class="rank_card_header">
                                 <span class="rank_badge badge_3">3위</span>
                                 <span class="rank_count_val">{{ currentSessionRankStats.r3 }}회</span>
-                                <span class="rank_percent_val text_rank_3">{{ currentSessionRankStats.p3.toFixed(1) }}%</span>
+                                <span class="rank_percent_val text_rank_3">{{ currentSessionRankStats.p3.toFixed(2) }}%</span>
                               </div>
                               <div class="rank_bar_track">
                                 <div class="rank_bar_fill bar_3" :style="{ width: currentSessionRankStats.p3 + '%' }"></div>
@@ -1888,7 +1909,7 @@ const getRankClass = (rank: number) => {
                               <div class="rank_card_header">
                                 <span class="rank_badge badge_4">4위</span>
                                 <span class="rank_count_val">{{ currentSessionRankStats.r4 }}회</span>
-                                <span class="rank_percent_val text_rank_4">{{ currentSessionRankStats.p4.toFixed(1) }}%</span>
+                                <span class="rank_percent_val text_rank_4">{{ currentSessionRankStats.p4.toFixed(2) }}%</span>
                               </div>
                               <div class="rank_bar_track">
                                 <div class="rank_bar_fill bar_4" :style="{ width: currentSessionRankStats.p4 + '%' }"></div>
@@ -1937,11 +1958,11 @@ const getRankClass = (rank: number) => {
                     </div>
                     <div class="stat_row">
                       <span class="stat_label">평균 순위</span>
-                      <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 2) }}위</span>
+                      <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 3) }}위</span>
                     </div>
                     <div class="stat_row">
                       <span class="stat_label">연대율 (1·2위)</span>
-                      <span class="stat_value text_positive">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 1) }}%</span>
+                      <span class="stat_value text_positive">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 2) }}%</span>
                     </div>
                   </div>
                   <!-- 레거시 순위 분포 -->
@@ -2032,7 +2053,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">평균 순위</span>
-                <span class="stat_value highlight">{{ formatDualMetric(selectedPlayer?.avgRank, displayPlayerStats.avgRank, 2) }}위</span>
+                <span class="stat_value highlight">{{ formatDualMetric(selectedPlayer?.avgRank, displayPlayerStats.avgRank, 3) }}위</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2040,7 +2061,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">연대율 (1·2위)</span>
-                <span class="stat_value">{{ formatDualMetric(selectedPlayer?.top2Rate, displayPlayerStats.top2Rate, 1) }}%</span>
+                <span class="stat_value">{{ formatDualMetric(selectedPlayer?.top2Rate, displayPlayerStats.top2Rate, 2) }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2048,7 +2069,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">화료율</span>
-                <span class="stat_value">{{ displayPlayerStats.winRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.winRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2056,7 +2077,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">방총률</span>
-                <span class="stat_value text_negative">{{ displayPlayerStats.dealInRate }}%</span>
+                <span class="stat_value text_negative">{{ formatPct(displayPlayerStats.dealInRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2064,7 +2085,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">쯔모율</span>
-                <span class="stat_value">{{ displayPlayerStats.tsumoRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.tsumoRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2072,7 +2093,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">리치율</span>
-                <span class="stat_value">{{ displayPlayerStats.riichiRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.riichiRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2081,7 +2102,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'drawRate', '유국률', displayPlayerStats.drawRate, false, '%')"
               >
                 <span class="stat_label">유국률</span>
-                <span class="stat_value">{{ displayPlayerStats.drawRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.drawRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2090,7 +2111,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'drawTenpaiRate', '유국 텐파이율', displayPlayerStats.drawTenpaiRate, true, '%')"
               >
                 <span class="stat_label">유국 텐파이율</span>
-                <span class="stat_value">{{ displayPlayerStats.drawTenpaiRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.drawTenpaiRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2114,7 +2135,7 @@ const getRankClass = (rank: number) => {
                 @mouseleave="onLeaveMetric"
               >
                 <span class="stat_label">토비율 (들통)</span>
-                <span class="stat_value text_negative">{{ displayPlayerStats.tobiRate }}%</span>
+                <span class="stat_value text_negative">{{ formatPct(displayPlayerStats.tobiRate) }}</span>
               </div>
             </div>
 
@@ -2127,7 +2148,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'riichiRate', '리치율', displayPlayerStats.riichiRate, true, '%')"
               >
                 <span class="stat_label">리치율</span>
-                <span class="stat_value">{{ displayPlayerStats.riichiRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.riichiRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2136,7 +2157,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'riichiWinRate', '리치 화료율', displayPlayerStats.riichiWinRate, true, '%')"
               >
                 <span class="stat_label">리치 화료율</span>
-                <span class="stat_value text_positive">{{ displayPlayerStats.riichiWinRate }}%</span>
+                <span class="stat_value text_positive">{{ formatPct(displayPlayerStats.riichiWinRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2145,7 +2166,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'riichiDealInRate', '리치 방총율', displayPlayerStats.riichiDealInRate, false, '%')"
               >
                 <span class="stat_label">리치 방총율</span>
-                <span class="stat_value text_negative">{{ displayPlayerStats.riichiDealInRate }}%</span>
+                <span class="stat_value text_negative">{{ formatPct(displayPlayerStats.riichiDealInRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2154,7 +2175,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'riichiDrawRate', '리치 유국률', displayPlayerStats.riichiDrawRate, false, '%')"
               >
                 <span class="stat_label">리치 유국률</span>
-                <span class="stat_value">{{ displayPlayerStats.riichiDrawRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.riichiDrawRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2192,7 +2213,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'firstRiichiRate', '선제율', displayPlayerStats.firstRiichiRate, true, '%')"
               >
                 <span class="stat_label">선제율</span>
-                <span class="stat_value">{{ displayPlayerStats.firstRiichiRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.firstRiichiRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2201,7 +2222,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'chaseRiichiRate', '추격률', displayPlayerStats.chaseRiichiRate, true, '%')"
               >
                 <span class="stat_label">추격률</span>
-                <span class="stat_value">{{ displayPlayerStats.chaseRiichiRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.chaseRiichiRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2210,7 +2231,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'chasedRiichiRate', '피추격률', displayPlayerStats.chasedRiichiRate, false, '%')"
               >
                 <span class="stat_label">피추격률</span>
-                <span class="stat_value text_negative">{{ displayPlayerStats.chasedRiichiRate }}%</span>
+                <span class="stat_value text_negative">{{ formatPct(displayPlayerStats.chasedRiichiRate) }}</span>
               </div>
             </div>
 
@@ -2223,7 +2244,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', displayPlayerStats.oyaKaburiRate, false, '%')"
               >
                 <span class="stat_label">아픈 오야카부리율</span>
-                <span class="stat_value text_negative">{{ displayPlayerStats.oyaKaburiRate }}%</span>
+                <span class="stat_value text_negative">{{ formatPct(displayPlayerStats.oyaKaburiRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2241,7 +2262,7 @@ const getRankClass = (rank: number) => {
                 @click.stop="onHoverMetric($event, 'dealInRiichiRate', '방총 시 리치율', displayPlayerStats.dealInRiichiRate, false, '%')"
               >
                 <span class="stat_label">방총 시 리치율</span>
-                <span class="stat_value">{{ displayPlayerStats.dealInRiichiRate }}%</span>
+                <span class="stat_value">{{ formatPct(displayPlayerStats.dealInRiichiRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2371,7 +2392,7 @@ const getRankClass = (rank: number) => {
                     <!-- 중앙 텍스트 -->
                     <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
                     <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ modalRankStats.totalGames }}전</text>
-                    <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ displayPlayerStats.avgRank }}위</text>
+                    <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ (displayPlayerStats.avgRank ?? 0).toFixed(3) }}위</text>
                   </svg>
                 </div>
 
@@ -2386,7 +2407,7 @@ const getRankClass = (rank: number) => {
                     <div class="rank_card_header">
                       <span class="rank_badge badge_1">1위</span>
                       <span class="rank_count_val">{{ modalRankStats.r1 }}회</span>
-                      <span class="rank_percent_val text_rank_1">{{ modalRankStats.p1.toFixed(1) }}%</span>
+                      <span class="rank_percent_val text_rank_1">{{ modalRankStats.p1.toFixed(2) }}%</span>
                     </div>
                     <div class="rank_bar_track">
                       <div class="rank_bar_fill bar_1" :style="{ width: modalRankStats.p1 + '%' }"></div>
@@ -2402,7 +2423,7 @@ const getRankClass = (rank: number) => {
                     <div class="rank_card_header">
                       <span class="rank_badge badge_2">2위</span>
                       <span class="rank_count_val">{{ modalRankStats.r2 }}회</span>
-                      <span class="rank_percent_val text_rank_2">{{ modalRankStats.p2.toFixed(1) }}%</span>
+                      <span class="rank_percent_val text_rank_2">{{ modalRankStats.p2.toFixed(2) }}%</span>
                     </div>
                     <div class="rank_bar_track">
                       <div class="rank_bar_fill bar_2" :style="{ width: modalRankStats.p2 + '%' }"></div>
@@ -2418,7 +2439,7 @@ const getRankClass = (rank: number) => {
                     <div class="rank_card_header">
                       <span class="rank_badge badge_3">3위</span>
                       <span class="rank_count_val">{{ modalRankStats.r3 }}회</span>
-                      <span class="rank_percent_val text_rank_3">{{ modalRankStats.p3.toFixed(1) }}%</span>
+                      <span class="rank_percent_val text_rank_3">{{ modalRankStats.p3.toFixed(2) }}%</span>
                     </div>
                     <div class="rank_bar_track">
                       <div class="rank_bar_fill bar_3" :style="{ width: modalRankStats.p3 + '%' }"></div>
@@ -2434,7 +2455,7 @@ const getRankClass = (rank: number) => {
                     <div class="rank_card_header">
                       <span class="rank_badge badge_4">4위</span>
                       <span class="rank_count_val">{{ modalRankStats.r4 }}회</span>
-                      <span class="rank_percent_val text_rank_4">{{ modalRankStats.p4.toFixed(1) }}%</span>
+                      <span class="rank_percent_val text_rank_4">{{ modalRankStats.p4.toFixed(2) }}%</span>
                     </div>
                     <div class="rank_bar_track">
                       <div class="rank_bar_fill bar_4" :style="{ width: modalRankStats.p4 + '%' }"></div>
@@ -2930,14 +2951,14 @@ const getRankClass = (rank: number) => {
   max-width: 62px;
 }
 .col-top2 {
-  width: 72px;
-  min-width: 72px;
-  max-width: 72px;
-}
-.col-avg-rank {
   width: 78px;
   min-width: 78px;
   max-width: 78px;
+}
+.col-avg-rank {
+  width: 82px;
+  min-width: 82px;
+  max-width: 82px;
 }
 .col-ranks-dist-group-th {
   width: 304px;

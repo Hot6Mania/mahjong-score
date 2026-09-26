@@ -177,7 +177,7 @@ const rankStats = computed(() => {
 
   const top2Rate = totalGames > 0 ? ((r1 + r2) / totalGames * 100).toFixed(2) + '%' : '-'
   const lastAvoidRate = totalGames > 0 ? ((r1 + r2 + r3) / totalGames * 100).toFixed(2) + '%' : '-'
-  const avgRankVal = totalGames > 0 ? ((r1 * 1 + r2 * 2 + r3 * 3 + r4 * 4) / totalGames).toFixed(2) + '위' : '-'
+  const avgRankVal = totalGames > 0 ? ((r1 * 1 + r2 * 2 + r3 * 3 + r4 * 4) / totalGames).toFixed(3) + '위' : '-'
 
   return {
     totalGames,
@@ -292,7 +292,7 @@ const stats = computed(() => {
     const riichiLoseRate = hasRiichi ? (item.riichiLoseRate * 100).toFixed(2) + '%' : '-';
     const riichiDrawRate = hasRiichi ? (item.riichiDrawRate * 100).toFixed(2) + '%' : '-';
 
-    const avgRank = item.games > 0 ? item.rank.toFixed(2) + '위' : '-';
+    const avgRank = item.games > 0 ? item.rank.toFixed(3) + '위' : '-';
     const expectedScoreVal = item.games > 0 ? (item.uma / item.games) : 0;
     const expectedScore = item.games > 0
       ? (expectedScoreVal > 0 ? '+' : '') + expectedScoreVal.toFixed(1)
@@ -683,7 +683,7 @@ const stats = computed(() => {
   
   const avgWinScore = formatVal(totalWinScore, winCount)
   const avgLoseScore = formatVal(Math.abs(totalLoseScore), loseCount)
-  const avgRank = totalGames > 0 ? (totalRanks / totalGames).toFixed(2) + '위' : '-'
+  const avgRank = totalGames > 0 ? (totalRanks / totalGames).toFixed(3) + '위' : '-'
   const tobiRate = formatRate(tobiCount, totalGames)
 
   const expectedScoreVal = totalGames > 0 ? totalUma / totalGames : 0
@@ -1085,7 +1085,7 @@ const emptyScopeMessage = computed(() => {
               <div class="rank_card_header">
                 <span class="rank_badge badge_1">1위</span>
                 <span class="rank_count_val">{{ rankStats.r1 }}회</span>
-                <span class="rank_percent_val text_rank_1">{{ rankStats.p1.toFixed(1) }}%</span>
+                <span class="rank_percent_val text_rank_1">{{ rankStats.p1.toFixed(2) }}%</span>
               </div>
               <div class="rank_bar_track">
                 <div class="rank_bar_fill bar_1" :style="{ width: rankStats.p1 + '%' }"></div>
@@ -1101,7 +1101,7 @@ const emptyScopeMessage = computed(() => {
               <div class="rank_card_header">
                 <span class="rank_badge badge_2">2위</span>
                 <span class="rank_count_val">{{ rankStats.r2 }}회</span>
-                <span class="rank_percent_val text_rank_2">{{ rankStats.p2.toFixed(1) }}%</span>
+                <span class="rank_percent_val text_rank_2">{{ rankStats.p2.toFixed(2) }}%</span>
               </div>
               <div class="rank_bar_track">
                 <div class="rank_bar_fill bar_2" :style="{ width: rankStats.p2 + '%' }"></div>
@@ -1117,7 +1117,7 @@ const emptyScopeMessage = computed(() => {
               <div class="rank_card_header">
                 <span class="rank_badge badge_3">3위</span>
                 <span class="rank_count_val">{{ rankStats.r3 }}회</span>
-                <span class="rank_percent_val text_rank_3">{{ rankStats.p3.toFixed(1) }}%</span>
+                <span class="rank_percent_val text_rank_3">{{ rankStats.p3.toFixed(2) }}%</span>
               </div>
               <div class="rank_bar_track">
                 <div class="rank_bar_fill bar_3" :style="{ width: rankStats.p3 + '%' }"></div>
@@ -1133,7 +1133,7 @@ const emptyScopeMessage = computed(() => {
               <div class="rank_card_header">
                 <span class="rank_badge badge_4">4위</span>
                 <span class="rank_count_val">{{ rankStats.r4 }}회</span>
-                <span class="rank_percent_val text_rank_4">{{ rankStats.p4.toFixed(1) }}%</span>
+                <span class="rank_percent_val text_rank_4">{{ rankStats.p4.toFixed(2) }}%</span>
               </div>
               <div class="rank_bar_track">
                 <div class="rank_bar_fill bar_4" :style="{ width: rankStats.p4 + '%' }"></div>

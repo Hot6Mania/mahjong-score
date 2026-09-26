@@ -335,7 +335,7 @@ export function getLegacyConsolidatedSessionDetail(sessionName: string): Session
     return {
       name,
       totalUma: parseFloat(s.totalUma.toFixed(1)),
-      avgRank: parseFloat((s.rankSum / s.gamesCount).toFixed(2)),
+      avgRank: parseFloat((s.rankSum / s.gamesCount).toFixed(3)),
       totalGames: s.gamesCount,
       deltaScore: s.scoresSum,
     };
@@ -365,7 +365,7 @@ export function parseRawSessionSheet(table: any, sessionName: string): SessionDe
       members.push({
         name,
         totalUma: parseFloat(getCellNum(r.c[1]).toFixed(1)),
-        avgRank: parseFloat(getCellNum(r.c[2]).toFixed(2)),
+        avgRank: parseFloat(getCellNum(r.c[2]).toFixed(3)),
         totalGames: getCellNum(r.c[3]),
         deltaScore: getCellNum(r.c[4]),
       });
@@ -508,7 +508,7 @@ export function parseSessionSheetTable(table: any, sessionName: string): Session
       return {
         name: p.name,
         totalUma: parseFloat(s.totalUma.toFixed(1)),
-        avgRank: s.gamesCount > 0 ? parseFloat((s.rankSum / s.gamesCount).toFixed(2)) : 0,
+        avgRank: s.gamesCount > 0 ? parseFloat((s.rankSum / s.gamesCount).toFixed(3)) : 0,
         totalGames: s.gamesCount,
         deltaScore: s.scoresSum,
       };
@@ -525,29 +525,29 @@ export function parseSessionSheetTable(table: any, sessionName: string): Session
 
 // 1~8회차 레거시 선수별 정산 스탯 테이블 (111대국 전수 집계)
 export const LEGACY_MEMBER_AGGREGATES: Record<string, { totalGames: number; totalUma: number; avgUma: number; avgRank: number; top2Rate: number; r1: number; r2: number; r3: number; r4: number }> = {
-  '김케이': { totalGames: 99, totalUma: 525.1, avgUma: 5.3, avgRank: 2.40, top2Rate: 52.5, r1: 32, r2: 20, r3: 22, r4: 25 },
-  '크라딜': { totalGames: 10, totalUma: 88.5, avgUma: 8.8, avgRank: 2.20, top2Rate: 70.0, r1: 2, r2: 5, r3: 2, r4: 1 },
-  '물감비': { totalGames: 26, totalUma: 78.7, avgUma: 3.0, avgRank: 2.42, top2Rate: 53.8, r1: 7, r2: 7, r3: 6, r4: 6 },
-  '치즈나베': { totalGames: 68, totalUma: 70.7, avgUma: 1.0, avgRank: 2.49, top2Rate: 51.5, r1: 16, r2: 19, r3: 17, r4: 16 },
-  '치킨미트': { totalGames: 7, totalUma: 59.8, avgUma: 8.5, avgRank: 2.14, top2Rate: 71.4, r1: 1, r2: 4, r3: 2, r4: 0 },
-  '강남한': { totalGames: 14, totalUma: 52.2, avgUma: 3.7, avgRank: 2.36, top2Rate: 57.1, r1: 3, r2: 5, r3: 4, r4: 2 },
-  '말저': { totalGames: 6, totalUma: 51.2, avgUma: 8.5, avgRank: 2.17, top2Rate: 66.7, r1: 2, r2: 2, r3: 1, r4: 1 },
-  '히스곤': { totalGames: 5, totalUma: 48.2, avgUma: 9.6, avgRank: 2.20, top2Rate: 60.0, r1: 3, r2: 0, r3: 0, r4: 2 },
-  'punch': { totalGames: 10, totalUma: 41.5, avgUma: 4.1, avgRank: 2.40, top2Rate: 50.0, r1: 3, r2: 2, r3: 3, r4: 2 },
-  'SHM': { totalGames: 9, totalUma: -1.6, avgUma: -0.2, avgRank: 2.44, top2Rate: 44.4, r1: 3, r2: 1, r3: 3, r4: 2 },
-  'DoubleBun': { totalGames: 5, totalUma: -16.0, avgUma: -3.2, avgRank: 2.60, top2Rate: 40.0, r1: 1, r2: 1, r3: 2, r4: 1 },
-  'ckckdud': { totalGames: 7, totalUma: -24.0, avgUma: -3.4, avgRank: 2.43, top2Rate: 42.9, r1: 2, r2: 1, r3: 3, r4: 1 },
-  'JJH25': { totalGames: 5, totalUma: -46.1, avgUma: -9.2, avgRank: 2.60, top2Rate: 40.0, r1: 0, r2: 2, r3: 3, r4: 0 },
-  'stone_ant': { totalGames: 68, totalUma: -49.5, avgUma: -0.7, avgRank: 2.53, top2Rate: 48.5, r1: 18, r2: 15, r3: 16, r4: 19 },
-  '마카롱': { totalGames: 5, totalUma: -58.2, avgUma: -11.6, avgRank: 2.80, top2Rate: 40.0, r1: 1, r2: 1, r3: 1, r4: 2 },
-  '쑥갓': { totalGames: 3, totalUma: -73.0, avgUma: -24.3, avgRank: 3.00, top2Rate: 33.3, r1: 0, r2: 1, r3: 1, r4: 1 },
-  '부진창깡곤곤래': { totalGames: 33, totalUma: -81.6, avgUma: -2.5, avgRank: 2.52, top2Rate: 48.5, r1: 8, r2: 8, r3: 9, r4: 8 },
-  '_lime': { totalGames: 17, totalUma: -108.5, avgUma: -6.4, avgRank: 2.59, top2Rate: 52.9, r1: 1, r2: 8, r3: 5, r4: 3 },
-  'TeNew': { totalGames: 8, totalUma: -109.6, avgUma: -13.7, avgRank: 2.75, top2Rate: 50.0, r1: 0, r2: 4, r3: 2, r4: 2 },
-  '신시': { totalGames: 7, totalUma: -123.0, avgUma: -17.6, avgRank: 3.00, top2Rate: 14.3, r1: 1, r2: 0, r3: 4, r4: 2 },
-  '신시★': { totalGames: 7, totalUma: -123.0, avgUma: -17.6, avgRank: 3.00, top2Rate: 14.3, r1: 1, r2: 0, r3: 4, r4: 2 },
-  '얼룩무늬민달팽이': { totalGames: 7, totalUma: -135.0, avgUma: -19.3, avgRank: 3.14, top2Rate: 28.6, r1: 2, r2: 0, r3: 0, r4: 5 },
-  'Yoha.': { totalGames: 9, totalUma: -189.8, avgUma: -21.1, avgRank: 3.33, top2Rate: 22.2, r1: 1, r2: 1, r3: 1, r4: 6 },
+  '김케이': { totalGames: 99, totalUma: 525.1, avgUma: 5.3, avgRank: 2.404, top2Rate: 52.53, r1: 32, r2: 20, r3: 22, r4: 25 },
+  '크라딜': { totalGames: 10, totalUma: 88.5, avgUma: 8.8, avgRank: 2.200, top2Rate: 70.00, r1: 2, r2: 5, r3: 2, r4: 1 },
+  '물감비': { totalGames: 26, totalUma: 78.7, avgUma: 3.0, avgRank: 2.423, top2Rate: 53.85, r1: 7, r2: 7, r3: 6, r4: 6 },
+  '치즈나베': { totalGames: 68, totalUma: 70.7, avgUma: 1.0, avgRank: 2.485, top2Rate: 51.47, r1: 16, r2: 19, r3: 17, r4: 16 },
+  '치킨미트': { totalGames: 7, totalUma: 59.8, avgUma: 8.5, avgRank: 2.143, top2Rate: 71.43, r1: 1, r2: 4, r3: 2, r4: 0 },
+  '강남한': { totalGames: 14, totalUma: 52.2, avgUma: 3.7, avgRank: 2.357, top2Rate: 57.14, r1: 3, r2: 5, r3: 4, r4: 2 },
+  '말저': { totalGames: 6, totalUma: 51.2, avgUma: 8.5, avgRank: 2.167, top2Rate: 66.67, r1: 2, r2: 2, r3: 1, r4: 1 },
+  '히스곤': { totalGames: 5, totalUma: 48.2, avgUma: 9.6, avgRank: 2.200, top2Rate: 60.00, r1: 3, r2: 0, r3: 0, r4: 2 },
+  'punch': { totalGames: 10, totalUma: 41.5, avgUma: 4.1, avgRank: 2.400, top2Rate: 50.00, r1: 3, r2: 2, r3: 3, r4: 2 },
+  'SHM': { totalGames: 9, totalUma: -1.6, avgUma: -0.2, avgRank: 2.444, top2Rate: 44.44, r1: 3, r2: 1, r3: 3, r4: 2 },
+  'DoubleBun': { totalGames: 5, totalUma: -16.0, avgUma: -3.2, avgRank: 2.600, top2Rate: 40.00, r1: 1, r2: 1, r3: 2, r4: 1 },
+  'ckckdud': { totalGames: 7, totalUma: -24.0, avgUma: -3.4, avgRank: 2.429, top2Rate: 42.86, r1: 2, r2: 1, r3: 3, r4: 1 },
+  'JJH25': { totalGames: 5, totalUma: -46.1, avgUma: -9.2, avgRank: 2.600, top2Rate: 40.00, r1: 0, r2: 2, r3: 3, r4: 0 },
+  'stone_ant': { totalGames: 68, totalUma: -49.5, avgUma: -0.7, avgRank: 2.529, top2Rate: 48.53, r1: 18, r2: 15, r3: 16, r4: 19 },
+  '마카롱': { totalGames: 5, totalUma: -58.2, avgUma: -11.6, avgRank: 2.800, top2Rate: 40.00, r1: 1, r2: 1, r3: 1, r4: 2 },
+  '쑥갓': { totalGames: 3, totalUma: -73.0, avgUma: -24.3, avgRank: 3.000, top2Rate: 33.33, r1: 0, r2: 1, r3: 1, r4: 1 },
+  '부진창깡곤곤래': { totalGames: 33, totalUma: -81.6, avgUma: -2.5, avgRank: 2.515, top2Rate: 48.48, r1: 8, r2: 8, r3: 9, r4: 8 },
+  '_lime': { totalGames: 17, totalUma: -108.5, avgUma: -6.4, avgRank: 2.588, top2Rate: 52.94, r1: 1, r2: 8, r3: 5, r4: 3 },
+  'TeNew': { totalGames: 8, totalUma: -109.6, avgUma: -13.7, avgRank: 2.750, top2Rate: 50.00, r1: 0, r2: 4, r3: 2, r4: 2 },
+  '신시': { totalGames: 7, totalUma: -123.0, avgUma: -17.6, avgRank: 3.000, top2Rate: 14.29, r1: 1, r2: 0, r3: 4, r4: 2 },
+  '신시★': { totalGames: 7, totalUma: -123.0, avgUma: -17.6, avgRank: 3.000, top2Rate: 14.29, r1: 1, r2: 0, r3: 4, r4: 2 },
+  '얼룩무늬민달팽이': { totalGames: 7, totalUma: -135.0, avgUma: -19.3, avgRank: 3.143, top2Rate: 28.57, r1: 2, r2: 0, r3: 0, r4: 5 },
+  'Yoha.': { totalGames: 9, totalUma: -189.8, avgUma: -21.1, avgRank: 3.333, top2Rate: 22.22, r1: 1, r2: 1, r3: 1, r4: 6 },
 };
 
 /**
@@ -637,7 +637,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
 
         const sheetUma = parseFloat(getCellNum(row[1]).toFixed(1));
         const totalUma = tonggeMap[name] !== undefined ? tonggeMap[name] : sheetUma;
-        const avgRank = parseFloat(getCellNum(row[2]).toFixed(2));
+        const avgRank = parseFloat(getCellNum(row[2]).toFixed(3));
         const totalGames = getCellNum(row[3]);
         const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
         let rank1Count = getCellNum(row[33]);
@@ -661,7 +661,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
         if (name === 'stone_ant' && riichiEV === 0) riichiEV = 3410;
 
         const top2Rate = totalGames > 0
-          ? parseFloat((((rank1Count + rank2Count) / totalGames) * 100).toFixed(1))
+          ? parseFloat((((rank1Count + rank2Count) / totalGames) * 100).toFixed(2))
           : 0;
 
         detailedStatsMap[name] = {
@@ -676,32 +676,32 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
           rank4Count,
           top2Rate,
           totalRounds: getCellNum(row[4]),
-          winRate: parseFloat((getCellNum(row[5]) * 100).toFixed(1)),
-          dealInRate: parseFloat((getCellNum(row[6]) * 100).toFixed(1)),
-          riichiRate: parseFloat((getCellNum(row[7]) * 100).toFixed(1)),
-          tenpaiRate: parseFloat((getCellNum(row[8]) * 100).toFixed(1)),
+          winRate: parseFloat((getCellNum(row[5]) * 100).toFixed(2)),
+          dealInRate: parseFloat((getCellNum(row[6]) * 100).toFixed(2)),
+          riichiRate: parseFloat((getCellNum(row[7]) * 100).toFixed(2)),
+          tenpaiRate: parseFloat((getCellNum(row[8]) * 100).toFixed(2)),
           avgWinScore: Math.round(getCellNum(row[9])),
           avgDealInScore: Math.round(getCellNum(row[10])),
           handEV: Math.round(getCellNum(row[11])),
           winEfficiency: Math.round(getCellNum(row[12])),
           dealInLoss: Math.round(getCellNum(row[13])),
           netWinEfficiency: Math.round(getCellNum(row[14])),
-          tsumoRate: parseFloat((getCellNum(row[15]) * 100).toFixed(1)),
-          drawRate: parseFloat((getCellNum(row[16]) * 100).toFixed(1)),
-          drawTenpaiRate: parseFloat((getCellNum(row[17]) * 100).toFixed(1)),
-          tobiRate: parseFloat((getCellNum(row[18]) * 100).toFixed(1)),
-          riichiWinRate: parseFloat((getCellNum(row[20]) * 100).toFixed(1)),
-          riichiDealInRate: parseFloat((getCellNum(row[21]) * 100).toFixed(1)),
-          riichiDrawRate: parseFloat((getCellNum(row[22]) * 100).toFixed(1)),
+          tsumoRate: parseFloat((getCellNum(row[15]) * 100).toFixed(2)),
+          drawRate: parseFloat((getCellNum(row[16]) * 100).toFixed(2)),
+          drawTenpaiRate: parseFloat((getCellNum(row[17]) * 100).toFixed(2)),
+          tobiRate: parseFloat((getCellNum(row[18]) * 100).toFixed(2)),
+          riichiWinRate: parseFloat((getCellNum(row[20]) * 100).toFixed(2)),
+          riichiDealInRate: parseFloat((getCellNum(row[21]) * 100).toFixed(2)),
+          riichiDrawRate: parseFloat((getCellNum(row[22]) * 100).toFixed(2)),
           riichiEV: Math.round(getCellNum(row[23])),
           riichiIncomeAvg: Math.round(getCellNum(row[24])),
           riichiExpenseAvg: Math.round(getCellNum(row[25])),
-          firstRiichiRate: parseFloat((getCellNum(row[26]) * 100).toFixed(1)),
-          chaseRiichiRate: parseFloat((getCellNum(row[27]) * 100).toFixed(1)),
-          chasedRiichiRate: parseFloat((getCellNum(row[28]) * 100).toFixed(1)),
-          oyaKaburiRate: parseFloat((getCellNum(row[29]) * 100).toFixed(1)),
+          firstRiichiRate: parseFloat((getCellNum(row[26]) * 100).toFixed(2)),
+          chaseRiichiRate: parseFloat((getCellNum(row[27]) * 100).toFixed(2)),
+          chasedRiichiRate: parseFloat((getCellNum(row[28]) * 100).toFixed(2)),
+          oyaKaburiRate: parseFloat((getCellNum(row[29]) * 100).toFixed(2)),
           oyaKaburiAvg: Math.round(getCellNum(row[30])),
-          dealInRiichiRate: parseFloat((getCellNum(row[31]) * 100).toFixed(1)),
+          dealInRiichiRate: parseFloat((getCellNum(row[31]) * 100).toFixed(2)),
           totalScore: getCellNum(row[32]),
         };
       });
@@ -757,8 +757,8 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
           overallItem.rank2Count = newR2;
           overallItem.rank3Count = newR3;
           overallItem.rank4Count = newR4;
-          overallItem.avgRank = parseFloat((totalRankSum / newTotalGames).toFixed(2));
-          overallItem.top2Rate = parseFloat((((newR1 + newR2) / newTotalGames) * 100).toFixed(1));
+          overallItem.avgRank = parseFloat((totalRankSum / newTotalGames).toFixed(3));
+          overallItem.top2Rate = parseFloat((((newR1 + newR2) / newTotalGames) * 100).toFixed(2));
         }
 
         overallItem.totalUma = tonggeMap[name] !== undefined ? tonggeMap[name] : overallItem.totalUma;
@@ -778,8 +778,8 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
       const r3 = (legacy ? legacy.r3 : 0) + (unrecorded ? unrecorded.r3 : 0);
       const r4 = (legacy ? legacy.r4 : 0) + (unrecorded ? unrecorded.r4 : 0);
       const totalRankSum = (legacy ? legacy.avgRank * lGames : 0) + (unrecorded ? unrecorded.rankSum : 0);
-      const avgRank = totalGames > 0 ? parseFloat((totalRankSum / totalGames).toFixed(2)) : 0;
-      const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(1)) : 0;
+      const avgRank = totalGames > 0 ? parseFloat((totalRankSum / totalGames).toFixed(3)) : 0;
+      const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(2)) : 0;
 
       const legacyItem: MemberStatItem = {
         name,
@@ -1014,84 +1014,7 @@ export async function fetchSessionDetailedStats(
   const sId = spreadsheetId || await resolveSpreadsheetId();
   if (!sId) return {};
 
-  // 1. 스프레드시트에 `${sessionName} 통계` 시트가 있는지 우선 확인
-  try {
-    const statsSheetName = `${sessionName} 통계`;
-    const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(statsSheetName)}`;
-    const res = await fetch(gvizUrl);
-    if (res.ok) {
-      const text = await res.text();
-      if (!text.includes("error") && text.includes("{")) {
-        const json = parseGVizResponse(text);
-        if (json && json.table && json.table.rows && json.table.rows.length > 0) {
-          const map: Record<string, MemberStatItem> = {};
-          json.table.rows.forEach((r: any) => {
-            if (!r.c || !r.c[0]) return;
-            const name = getCellStr(r.c[0]).trim();
-            if (!name || name === "이름" || name.startsWith("#")) return;
-            const totalGames = getCellNum(r.c[3]);
-            const totalUma = parseFloat(getCellNum(r.c[1]).toFixed(1));
-            const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
-            const avgRank = parseFloat(getCellNum(r.c[2]).toFixed(2));
-            const rank1Count = getCellNum(r.c[33]);
-            const rank2Count = getCellNum(r.c[34]);
-            const rank3Count = getCellNum(r.c[35]);
-            const rank4Count = getCellNum(r.c[36]);
-            const top2Rate = totalGames > 0 ? parseFloat((((rank1Count + rank2Count) / totalGames) * 100).toFixed(1)) : 0;
-
-            map[name] = {
-              name,
-              totalUma,
-              avgUma,
-              avgRank,
-              totalGames,
-              rank1Count,
-              rank2Count,
-              rank3Count,
-              rank4Count,
-              top2Rate,
-              totalRounds: getCellNum(r.c[4]),
-              winRate: parseFloat((getCellNum(r.c[5]) * 100).toFixed(1)),
-              dealInRate: parseFloat((getCellNum(r.c[6]) * 100).toFixed(1)),
-              riichiRate: parseFloat((getCellNum(r.c[7]) * 100).toFixed(1)),
-              tenpaiRate: parseFloat((getCellNum(r.c[8]) * 100).toFixed(1)),
-              avgWinScore: Math.round(getCellNum(r.c[9])),
-              avgDealInScore: Math.round(getCellNum(r.c[10])),
-              handEV: Math.round(getCellNum(r.c[11])),
-              winEfficiency: Math.round(getCellNum(r.c[12])),
-              dealInLoss: Math.round(getCellNum(r.c[13])),
-              netWinEfficiency: Math.round(getCellNum(r.c[14])),
-              tsumoRate: parseFloat((getCellNum(r.c[15]) * 100).toFixed(1)),
-              drawRate: parseFloat((getCellNum(r.c[16]) * 100).toFixed(1)),
-              drawTenpaiRate: parseFloat((getCellNum(r.c[17]) * 100).toFixed(1)),
-              tobiRate: parseFloat((getCellNum(r.c[18]) * 100).toFixed(1)),
-              riichiWinRate: parseFloat((getCellNum(r.c[20]) * 100).toFixed(1)),
-              riichiDealInRate: parseFloat((getCellNum(r.c[21]) * 100).toFixed(1)),
-              riichiDrawRate: parseFloat((getCellNum(r.c[22]) * 100).toFixed(1)),
-              riichiEV: Math.round(getCellNum(r.c[23])),
-              riichiIncomeAvg: Math.round(getCellNum(r.c[24])),
-              riichiExpenseAvg: Math.round(getCellNum(r.c[25])),
-              firstRiichiRate: parseFloat((getCellNum(r.c[26]) * 100).toFixed(1)),
-              chaseRiichiRate: parseFloat((getCellNum(r.c[27]) * 100).toFixed(1)),
-              chasedRiichiRate: parseFloat((getCellNum(r.c[28]) * 100).toFixed(1)),
-              oyaKaburiRate: parseFloat((getCellNum(r.c[29]) * 100).toFixed(1)),
-              oyaKaburiAvg: Math.round(getCellNum(r.c[30])),
-              dealInRiichiRate: parseFloat((getCellNum(r.c[31]) * 100).toFixed(1)),
-              totalScore: getCellNum(r.c[32]),
-            };
-          });
-          if (Object.keys(map).length > 0) {
-            cachedSessionDetailedStats[sessionName] = map;
-            return map;
-          }
-        }
-      }
-    }
-  } catch (e) {
-    // 회차별 통계 시트가 없으면 폴백으로 진행
-  }
-
-  // 2. '전체 국별기록 (데이터)' 시트에서 실시간 전수 집계
+  // '전체 국별기록 (데이터)' 시트에서 실시간 전수 직접 집계
   try {
     if (!cachedAllRoundsTable) {
       const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
@@ -1282,40 +1205,40 @@ export async function fetchSessionDetailedStats(
       const totalRounds = p.totalRounds;
       if (totalRounds === 0) continue;
 
-      const winRate = parseFloat(((p.winCount / totalRounds) * 100).toFixed(1));
-      const dealInRate = parseFloat(((p.loseCount / totalRounds) * 100).toFixed(1));
-      const riichiRate = parseFloat(((p.riichiCount / totalRounds) * 100).toFixed(1));
-      const tenpaiRate = parseFloat(((p.tenpaiCount / totalRounds) * 100).toFixed(1));
+      const winRate = parseFloat(((p.winCount / totalRounds) * 100).toFixed(2));
+      const dealInRate = parseFloat(((p.loseCount / totalRounds) * 100).toFixed(2));
+      const riichiRate = parseFloat(((p.riichiCount / totalRounds) * 100).toFixed(2));
+      const tenpaiRate = parseFloat(((p.tenpaiCount / totalRounds) * 100).toFixed(2));
       const avgWinScore = p.winCount > 0 ? Math.round(p.totalWinScore / p.winCount) : 0;
       const avgDealInScore = p.loseCount > 0 ? Math.round(p.totalLoseScore / p.loseCount) : 0;
       const handEV = Math.round(p.roundSujiSum / totalRounds);
       const winEfficiency = Math.round((winRate / 100) * avgWinScore);
       const dealInLoss = Math.round((dealInRate / 100) * avgDealInScore);
       const netWinEfficiency = winEfficiency - dealInLoss;
-      const tsumoRate = p.winCount > 0 ? parseFloat(((p.tsumoWinCount / p.winCount) * 100).toFixed(1)) : 0;
-      const drawRate = parseFloat(((p.drawCount / totalRounds) * 100).toFixed(1));
-      const drawTenpaiRate = p.drawCount > 0 ? parseFloat(((p.drawTenpaiCount / p.drawCount) * 100).toFixed(1)) : 0;
-      const tobiRate = totalGames > 0 ? parseFloat(((p.tobiCount / totalGames) * 100).toFixed(1)) : 0;
+      const tsumoRate = p.winCount > 0 ? parseFloat(((p.tsumoWinCount / p.winCount) * 100).toFixed(2)) : 0;
+      const drawRate = parseFloat(((p.drawCount / totalRounds) * 100).toFixed(2));
+      const drawTenpaiRate = p.drawCount > 0 ? parseFloat(((p.drawTenpaiCount / p.drawCount) * 100).toFixed(2)) : 0;
+      const tobiRate = totalGames > 0 ? parseFloat(((p.tobiCount / totalGames) * 100).toFixed(2)) : 0;
 
-      const riichiWinRate = p.riichiCount > 0 ? parseFloat(((p.riichiWinCount / p.riichiCount) * 100).toFixed(1)) : 0;
-      const riichiDealInRate = p.riichiCount > 0 ? parseFloat(((p.riichiLoseCount / p.riichiCount) * 100).toFixed(1)) : 0;
-      const riichiDrawRate = p.riichiCount > 0 ? parseFloat(((p.riichiDrawCount / p.riichiCount) * 100).toFixed(1)) : 0;
+      const riichiWinRate = p.riichiCount > 0 ? parseFloat(((p.riichiWinCount / p.riichiCount) * 100).toFixed(2)) : 0;
+      const riichiDealInRate = p.riichiCount > 0 ? parseFloat(((p.riichiLoseCount / p.riichiCount) * 100).toFixed(2)) : 0;
+      const riichiDrawRate = p.riichiCount > 0 ? parseFloat(((p.riichiDrawCount / p.riichiCount) * 100).toFixed(2)) : 0;
       const riichiEV = p.riichiCount > 0 ? Math.round(p.riichiDeltaSum / p.riichiCount) : 0;
       const riichiIncomeAvg = p.riichiWinCount > 0 ? Math.round(p.riichiWinScoreSum / p.riichiWinCount) : 0;
       const riichiExpenseAvg = p.riichiLoseCount > 0 ? Math.round(p.riichiLoseScoreSum / p.riichiLoseCount) : 0;
-      const firstRiichiRate = p.riichiCount > 0 ? parseFloat(((p.firstRiichiCount / p.riichiCount) * 100).toFixed(1)) : 0;
-      const chaseRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chaseRiichiCount / p.riichiCount) * 100).toFixed(1)) : 0;
-      const chasedRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chasedRiichiCount / p.riichiCount) * 100).toFixed(1)) : 0;
-      const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(1)) : 0;
+      const firstRiichiRate = p.riichiCount > 0 ? parseFloat(((p.firstRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
+      const chaseRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chaseRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
+      const chasedRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chasedRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
+      const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(2)) : 0;
       const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
-      const dealInRiichiRate = p.loseCount > 0 ? parseFloat(((p.loseWithRiichiCount / p.loseCount) * 100).toFixed(1)) : 0;
+      const dealInRiichiRate = p.loseCount > 0 ? parseFloat(((p.loseWithRiichiCount / p.loseCount) * 100).toFixed(2)) : 0;
 
       const r1 = p.ranks[1] || 0;
       const r2 = p.ranks[2] || 0;
       const r3 = p.ranks[3] || 0;
       const r4 = p.ranks[4] || 0;
-      const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(1)) : 0;
-      const avgRank = totalGames > 0 ? parseFloat((p.rankSum / totalGames).toFixed(2)) : 0;
+      const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(2)) : 0;
+      const avgRank = totalGames > 0 ? parseFloat((p.rankSum / totalGames).toFixed(3)) : 0;
       const totalUma = parseFloat(p.totalUmaSum.toFixed(1));
       const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
 
@@ -1633,7 +1556,11 @@ export function calculateMetricDistribution(
   const min = Math.min(...values);
   const max = Math.max(...values);
   const sum = values.reduce((acc, v) => acc + v, 0);
-  const avg = parseFloat((sum / values.length).toFixed(1));
+  const avg = metricKey === 'avgRank'
+    ? parseFloat((sum / values.length).toFixed(3))
+    : unit === '%'
+      ? parseFloat((sum / values.length).toFixed(2))
+      : parseFloat((sum / values.length).toFixed(1));
 
   // 순위 및 백분위 계산
   let rank = 1;
@@ -1645,10 +1572,10 @@ export function calculateMetricDistribution(
     }
   });
 
-  const topPct = parseFloat(((rank / values.length) * 100).toFixed(1));
-  const bottomPct = parseFloat((100 - topPct).toFixed(1));
+  const topPct = parseFloat(((rank / values.length) * 100).toFixed(2));
+  const bottomPct = parseFloat((100 - topPct).toFixed(2));
   const isUpperHalf = rank <= Math.ceil(values.length / 2);
-  const percentileText = `상위 ${topPct}% (하위 ${bottomPct}%) · ${isUpperHalf ? '상위 50% 이내' : '하위 50%'}`;
+  const percentileText = `상위 ${topPct.toFixed(2)}% (하위 ${bottomPct.toFixed(2)}%) · ${isUpperHalf ? '상위 50% 이내' : '하위 50%'}`;
 
   // 사람 1명당 1개 막대의 계단형 히스토그램 (오름차순 정렬)
   const sorted = [...validMembers].sort((a, b) => a.val - b.val);
