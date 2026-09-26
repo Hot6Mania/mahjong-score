@@ -607,7 +607,6 @@ const getRankClass = (rank: number) => {
     <header class="dashboard-header">
       <div class="header-left">
         <h1 class="header-title">김케이 하우스 대시보드</h1>
-        <p class="header-desc">공개 총순위 · 역대 전적 · 경기별 결과</p>
       </div>
 
       <div class="header-actions">
@@ -766,17 +765,17 @@ const getRankClass = (rank: number) => {
               <tr>
                 <th rowspan="2" class="col-rank">순위</th>
                 <th rowspan="2" class="col-name">이름</th>
-                <th rowspan="2" class="col-sortable" @click="handleSort('totalUma')">
+                <th rowspan="2" class="col-sortable col-total-uma" @click="handleSort('totalUma')">
                   누적 우마
                   <span class="sort-mark" v-if="sortKey === 'totalUma'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
-                <th rowspan="2" class="col-sortable" @click="handleSort('avgUma')">
+                <th rowspan="2" class="col-sortable col-avg-uma" @click="handleSort('avgUma')">
                   평균 우마
                   <span class="sort-mark" v-if="sortKey === 'avgUma'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
-                <th rowspan="2" class="col-sortable" @click="handleSort('totalGames')">대국수</th>
-                <th rowspan="2" class="col-sortable" @click="handleSort('top2Rate')">연대율</th>
-                <th rowspan="2" class="col-sortable" @click="handleSort('avgRank')">
+                <th rowspan="2" class="col-sortable col-games" @click="handleSort('totalGames')">대국수</th>
+                <th rowspan="2" class="col-sortable col-top2" @click="handleSort('top2Rate')">연대율</th>
+                <th rowspan="2" class="col-sortable col-avg-rank" @click="handleSort('avgRank')">
                   평균 순위
                   <span class="sort-mark" v-if="sortKey === 'avgRank'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
                 </th>
@@ -786,19 +785,19 @@ const getRankClass = (rank: number) => {
                 </th>
               </tr>
               <tr class="header-sub-row">
-                <th class="col-sortable col-rank-item-th" @click="handleSort('rankDist')" title="1위 비율순 정렬 (동률 시 2>3>4위)">
+                <th class="col-sortable col-rank-item-th col-rank-1" @click="handleSort('rankDist')" title="1위 비율순 정렬 (동률 시 2>3>4위)">
                   <div class="dist-badge r1 dist-header-badge">1등</div>
                   <span class="sort-mark" v-if="sortKey === 'rankDist' || sortKey === 'rank1Rate'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
-                <th class="col-sortable col-rank-item-th" @click="handleSort('rank2Rate')" title="2위 비율순 정렬">
+                <th class="col-sortable col-rank-item-th col-rank-2" @click="handleSort('rank2Rate')" title="2위 비율순 정렬">
                   <div class="dist-badge r2 dist-header-badge">2등</div>
                   <span class="sort-mark" v-if="sortKey === 'rank2Rate'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
-                <th class="col-sortable col-rank-item-th" @click="handleSort('rank3Rate')" title="3위 비율순 정렬">
+                <th class="col-sortable col-rank-item-th col-rank-3" @click="handleSort('rank3Rate')" title="3위 비율순 정렬">
                   <div class="dist-badge r3 dist-header-badge">3등</div>
                   <span class="sort-mark" v-if="sortKey === 'rank3Rate'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
-                <th class="col-sortable col-rank-item-th" @click="handleSort('rank4Rate')" title="4위 비율순 정렬">
+                <th class="col-sortable col-rank-item-th col-rank-4" @click="handleSort('rank4Rate')" title="4위 비율순 정렬">
                   <div class="dist-badge r4 dist-header-badge">4등</div>
                   <span class="sort-mark" v-if="sortKey === 'rank4Rate'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
                 </th>
@@ -815,38 +814,38 @@ const getRankClass = (rank: number) => {
                 <td class="col-rank">
                   <span class="rank-badge" :class="getRankClass(member.overallRank)">{{ member.overallRank }}</span>
                 </td>
-                <td class="col-name">
+                <td class="col-name" :title="member.name">
                   <strong>{{ member.name }}</strong>
                 </td>
-                <td class="col-uma" :class="member.totalUma >= 0 ? 'pos' : 'neg'">
+                <td class="col-total-uma col-uma" :class="member.totalUma >= 0 ? 'pos' : 'neg'">
                   {{ member.totalUma > 0 ? '+' : '' }}{{ member.totalUma.toFixed(1) }}
                 </td>
-                <td :class="member.avgUma >= 0 ? 'pos' : 'neg'">
+                <td class="col-avg-uma" :class="member.avgUma >= 0 ? 'pos' : 'neg'">
                   {{ member.avgUma > 0 ? '+' : '' }}{{ member.avgUma.toFixed(1) }}
                 </td>
-                <td>{{ member.totalGames }}전</td>
-                <td>{{ member.top2Rate.toFixed(1) }}%</td>
-                <td>{{ member.avgRank.toFixed(2) }}위</td>
+                <td class="col-games">{{ member.totalGames }}전</td>
+                <td class="col-top2">{{ member.top2Rate.toFixed(1) }}%</td>
+                <td class="col-avg-rank">{{ member.avgRank.toFixed(2) }}위</td>
                 <!-- 1등, 2등, 3등, 4등 독립 열 -->
-                <td class="col-rank-item">
+                <td class="col-rank-item col-rank-1">
                   <div class="dist-badge r1" :title="'1위 ' + member.rank1Count + '회'">
                     <span class="dist-cnt">{{ member.rank1Count }}</span>
                     <span class="dist-pct">({{ getDistPct(member.rank1Count, member.totalGames) }}%)</span>
                   </div>
                 </td>
-                <td class="col-rank-item">
+                <td class="col-rank-item col-rank-2">
                   <div class="dist-badge r2" :title="'2위 ' + member.rank2Count + '회'">
                     <span class="dist-cnt">{{ member.rank2Count }}</span>
                     <span class="dist-pct">({{ getDistPct(member.rank2Count, member.totalGames) }}%)</span>
                   </div>
                 </td>
-                <td class="col-rank-item">
+                <td class="col-rank-item col-rank-3">
                   <div class="dist-badge r3" :title="'3위 ' + member.rank3Count + '회'">
                     <span class="dist-cnt">{{ member.rank3Count }}</span>
                     <span class="dist-pct">({{ getDistPct(member.rank3Count, member.totalGames) }}%)</span>
                   </div>
                 </td>
-                <td class="col-rank-item">
+                <td class="col-rank-item col-rank-4">
                   <div class="dist-badge r4" :title="'4위 ' + member.rank4Count + '회'">
                     <span class="dist-cnt">{{ member.rank4Count }}</span>
                     <span class="dist-pct">({{ getDistPct(member.rank4Count, member.totalGames) }}%)</span>
@@ -1987,9 +1986,10 @@ const getRankClass = (rank: number) => {
 }
 .stats-table th {
   background: rgba(0, 0, 0, 0.03);
-  padding: 10px 8px;
+  padding: 10px 6px;
   font-weight: bold;
   border-bottom: 2px solid var(--border-color, #eee);
+  box-sizing: border-box;
 }
 .col-sortable {
   cursor: pointer;
@@ -1999,44 +1999,81 @@ const getRankClass = (rank: number) => {
   background: rgba(0, 0, 0, 0.06);
 }
 .sort-mark {
+  display: inline-block;
+  width: 11px;
   font-size: 10px;
   margin-left: 2px;
+  text-align: center;
 }
 .stats-table td {
-  padding: 10px 8px;
+  padding: 10px 6px;
   border-bottom: 1px solid var(--border-color, #eee);
   vertical-align: middle;
+  box-sizing: border-box;
 }
-.member-row {
-  cursor: pointer;
-  transition: background 0.15s;
+
+/* 종합 랭킹 고정 컬럼 너비 (정렬 시 열 흔들림 방지) */
+.col-rank {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
 }
-.member-row:hover {
-  background: rgba(59, 130, 246, 0.05);
+.col-name {
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.rank-badge {
-  display: inline-block;
-  width: 22px;
-  height: 22px;
-  line-height: 22px;
-  border-radius: 50%;
+.col-total-uma {
+  width: 82px;
+  min-width: 82px;
+  max-width: 82px;
+}
+.col-avg-uma {
+  width: 78px;
+  min-width: 78px;
+  max-width: 78px;
+}
+.col-games {
+  width: 62px;
+  min-width: 62px;
+  max-width: 62px;
+}
+.col-top2 {
+  width: 72px;
+  min-width: 72px;
+  max-width: 72px;
+}
+.col-avg-rank {
+  width: 78px;
+  min-width: 78px;
+  max-width: 78px;
+}
+.col-ranks-dist-group-th {
+  width: 304px;
+  min-width: 304px;
+  max-width: 304px;
+  vertical-align: middle;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: bold;
+  border-bottom: 1px solid var(--border-color, #eee) !important;
+}
+.header-sub-row th {
+  padding: 4px 4px;
+  border-bottom: 2px solid var(--border-color, #eee);
   font-size: 11px;
-  font-weight: bold;
-  background: rgba(0, 0, 0, 0.06);
 }
-.rank-badge.rank-1 { background: #fef3c7; color: #b45309; }
-.rank-badge.rank-2 { background: #e2e8f0; color: #475569; }
-.rank-badge.rank-3 { background: #ffedd5; color: #9a3412; }
-
-.col-uma {
-  font-weight: bold;
-}
-.pos { color: var(--color-positive, #10b981); }
-.neg { color: var(--color-negative, #ef4444); }
-
-.col-ranks-dist {
+.col-rank-item-th,
+.col-rank-item {
+  width: 76px;
+  min-width: 76px;
+  max-width: 76px;
   text-align: center;
   vertical-align: middle;
+  padding: 6px 4px;
 }
 .dist-badge-wrapper {
   display: inline-flex;
@@ -2071,29 +2108,6 @@ const getRankClass = (rank: number) => {
 .dist-badge.r2 { background: rgba(6, 182, 212, 0.15); color: #0891b2; }
 .dist-badge.r3 { background: rgba(245, 158, 11, 0.15); color: #d97706; }
 .dist-badge.r4 { background: rgba(239, 68, 68, 0.15); color: #dc2626; }
-
-.col-ranks-dist-group-th {
-  vertical-align: middle;
-  padding: 6px 8px;
-  font-size: 12px;
-  font-weight: bold;
-  border-bottom: 1px solid var(--border-color, #eee) !important;
-}
-.header-sub-row th {
-  padding: 4px 6px;
-  border-bottom: 2px solid var(--border-color, #eee);
-  font-size: 11px;
-}
-.col-rank-item-th {
-  min-width: 68px;
-  text-align: center;
-  vertical-align: middle;
-}
-.col-rank-item {
-  text-align: center;
-  vertical-align: middle;
-  padding: 6px 4px;
-}
 .dist-header-badge {
   padding: 2px 7px;
   font-size: 11px;
@@ -2103,6 +2117,31 @@ const getRankClass = (rank: number) => {
   align-items: center;
   justify-content: center;
 }
+.member-row {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.member-row:hover {
+  background: rgba(59, 130, 246, 0.05);
+}
+.rank-badge {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: bold;
+  background: rgba(0, 0, 0, 0.06);
+}
+.rank-badge.rank-1 { background: #fef3c7; color: #b45309; }
+.rank-badge.rank-2 { background: #e2e8f0; color: #475569; }
+.rank-badge.rank-3 { background: #ffedd5; color: #9a3412; }
+.col-uma {
+  font-weight: bold;
+}
+.pos { color: var(--color-positive, #10b981); }
+.neg { color: var(--color-negative, #ef4444); }
 
 /* ============================================== */
 /* TAB 2: 역대 회차 전적 매트릭스 스타일            */
@@ -2171,42 +2210,60 @@ const getRankClass = (rank: number) => {
 .matrix-col-sticky-name {
   position: sticky;
   left: 0;
+  width: 100px;
+  min-width: 100px;
+  max-width: 100px;
+  box-sizing: border-box;
   background-color: var(--card-bg-color, #fff);
   opacity: 1;
-  z-index: 10;
-  border-right: 2px solid var(--border-color, #eee);
-  min-width: 90px;
+  z-index: 12;
+  border-right: 1px solid var(--border-color, #eee);
   text-align: center;
   cursor: pointer;
-  padding: 8px 10px;
+  padding: 8px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .matrix-col-sticky-total {
   position: sticky;
-  left: 90px;
+  left: 100px;
+  width: 75px;
+  min-width: 75px;
+  max-width: 75px;
+  box-sizing: border-box;
   background-color: var(--card-bg-color, #fff);
   opacity: 1;
-  z-index: 10;
-  border-right: 2px solid var(--border-color, #eee);
-  min-width: 75px;
+  z-index: 11;
+  border-right: 2px solid var(--border-color, #cbd5e1);
   font-weight: bold;
-  padding: 8px 10px;
+  padding: 8px 6px;
+  text-align: center;
 }
 .matrix-col-sticky-name-right {
   position: sticky;
   right: 0;
+  width: 100px;
+  min-width: 100px;
+  max-width: 100px;
+  box-sizing: border-box;
   background-color: var(--card-bg-color, #fff);
   opacity: 1;
-  z-index: 10;
-  border-left: 2px solid var(--border-color, #eee);
-  min-width: 90px;
+  z-index: 11;
+  border-left: 2px solid var(--border-color, #cbd5e1);
   text-align: center;
   cursor: pointer;
-  padding: 8px 10px;
+  padding: 8px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.matrix-table thead th.matrix-col-sticky-name,
+.matrix-table thead th.matrix-col-sticky-name {
+  z-index: 27;
+}
 .matrix-table thead th.matrix-col-sticky-total,
 .matrix-table thead th.matrix-col-sticky-name-right {
-  z-index: 25;
+  z-index: 26;
 }
 .matrix-player-row:hover td {
   background-color: #f1f5f9;
@@ -2236,10 +2293,12 @@ html.dark .matrix-player-row:hover .matrix-col-sticky-name-right {
   border-right: 1px solid var(--border-color, #eee);
   z-index: 15;
 }
-.matrix-table tfoot th.matrix-col-sticky-name,
+.matrix-table tfoot th.matrix-col-sticky-name {
+  z-index: 27;
+}
 .matrix-table tfoot th.matrix-col-sticky-total,
 .matrix-table tfoot th.matrix-col-sticky-name-right {
-  z-index: 25;
+  z-index: 26;
 }
 .matrix-session-col-header {
   cursor: pointer;
