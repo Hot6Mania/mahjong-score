@@ -272,14 +272,22 @@ const getMatrixScoreClass = (score: number | null | undefined): string => {
 // 회차별 경기 상세 뷰 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
 const sessionScopeTab = ref<'session' | 'all'>('session');
 
+// 모달 진입 맥락 (회차 상세에서 열렸는지 여부)
+const isModalFromSession = ref(false);
+
 // 모달 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
 const modalScopeTab = ref<'session' | 'all'>('all');
+
+const openPlayerModal = (player: MemberStatItem, fromSession: boolean = false) => {
+  selectedPlayer.value = player;
+  isModalFromSession.value = fromSession;
+  modalScopeTab.value = fromSession ? 'session' : 'all';
+};
 
 const openPlayerByName = (name: string, fromSession: boolean = false) => {
   const match = allStats.value.find(m => m.name === name);
   if (match) {
-    selectedPlayer.value = match;
-    modalScopeTab.value = fromSession ? 'session' : 'all';
+    openPlayerModal(match, fromSession);
   }
 };
 
@@ -774,7 +782,7 @@ const getRankClass = (rank: number) => {
         <!-- 포디움 (Top 3 하이라이트) -->
         <div v-if="podiumTop3.length >= 3 && !searchQuery" class="podium-section">
           <!-- 2위 (은) -->
-          <div class="podium-card silver" @click="selectedPlayer = podiumTop3[1]">
+          <div class="podium-card silver" @click="openPlayerModal(podiumTop3[1], false)">
             <div class="podium-badge">2위</div>
             <div class="podium-name">{{ podiumTop3[1].name }}</div>
             <div class="podium-uma" :class="podiumTop3[1].totalUma >= 0 ? 'pos' : 'neg'">
@@ -787,7 +795,7 @@ const getRankClass = (rank: number) => {
           </div>
 
           <!-- 1위 (금) -->
-          <div class="podium-card gold" @click="selectedPlayer = podiumTop3[0]">
+          <div class="podium-card gold" @click="openPlayerModal(podiumTop3[0], false)">
             <div class="podium-badge gold-badge">1위</div>
             <div class="podium-name">{{ podiumTop3[0].name }}</div>
             <div class="podium-uma" :class="podiumTop3[0].totalUma >= 0 ? 'pos' : 'neg'">
@@ -800,7 +808,7 @@ const getRankClass = (rank: number) => {
           </div>
 
           <!-- 3위 (동) -->
-          <div class="podium-card bronze" @click="selectedPlayer = podiumTop3[2]">
+          <div class="podium-card bronze" @click="openPlayerModal(podiumTop3[2], false)">
             <div class="podium-badge">3위</div>
             <div class="podium-name">{{ podiumTop3[2].name }}</div>
             <div class="podium-uma" :class="podiumTop3[2].totalUma >= 0 ? 'pos' : 'neg'">
@@ -890,7 +898,7 @@ const getRankClass = (rank: number) => {
                 v-for="member in filteredStats" 
                 :key="member.name"
                 class="member-row"
-                @click="selectedPlayer = member"
+                @click="openPlayerModal(member, false)"
                 title="클릭 시 상세 스탯 & 연속 히스토그램 조회"
               >
                 <td class="col-rank">
@@ -1175,7 +1183,7 @@ const getRankClass = (rank: number) => {
                       v-for="member in sessionMembersAllStats" 
                       :key="member.name"
                       class="member-row"
-                      @click="openPlayerByName(member.name, false)"
+                      @click="openPlayerByName(member.name, true)"
                       title="클릭 시 상세 스탯 & 연속 히스토그램 조회"
                     >
                       <td class="col-rank">
@@ -1240,8 +1248,8 @@ const getRankClass = (rank: number) => {
               <button class="btn-close" @click="selectedPlayer = null" title="닫기">✕</button>
             </div>
 
-            <!-- 모달 스코프 탭 (이번 회차 / 전체 기간) -->
-            <div class="modal_scope_tabs" v-if="currentSessionDetail">
+            <!-- 모달 스코프 탭 (회차 상세에서 진입했을 때만 노출) -->
+            <div class="modal_scope_tabs" v-if="isModalFromSession && currentSessionDetail">
               <button 
                 class="modal_scope_tab" 
                 :class="{ active: modalScopeTab === 'session' }" 
@@ -1268,7 +1276,7 @@ const getRankClass = (rank: number) => {
             </div>
 
             <!-- 1) 이번 회차 스탯 뷰 -->
-            <div v-if="modalScopeTab === 'session'" class="session_modal_content">
+            <div v-if="isModalFromSession && modalScopeTab === 'session'" class="session_modal_content">
               <div v-if="!currentSessionPlayerStats || currentSessionPlayerStats.totalGames === 0" class="no_data_modal">
                 {{ currentSessionDetail?.sessionName }}에 '{{ selectedPlayer.name }}'님이 플레이한 대국 기록이 없습니다.
               </div>
