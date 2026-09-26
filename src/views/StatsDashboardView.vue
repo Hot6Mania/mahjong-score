@@ -17,6 +17,7 @@ import {
   fetchPublicAllStats,
   fetchPublicSessions,
   fetchPublicSessionDetail,
+  fetchSessionDetailedStats,
   fetchPublicStatsMatrix,
   calculateSessionUmaTrajectory,
   calculateMetricDistribution,
@@ -278,16 +279,20 @@ const isModalFromSession = ref(false);
 // 모달 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
 const modalScopeTab = ref<'session' | 'all'>('all');
 
-const openPlayerModal = (player: MemberStatItem, fromSession: boolean = false) => {
+const openPlayerModal = (player: MemberStatItem, fromSession: boolean = false, keepScopeTab: boolean = false) => {
   selectedPlayer.value = player;
   isModalFromSession.value = fromSession;
-  modalScopeTab.value = fromSession ? 'session' : 'all';
+  if (!keepScopeTab) {
+    modalScopeTab.value = fromSession ? 'session' : 'all';
+  }
+  sessionModalActiveTab.value = 'basic';
+  modalActiveTab.value = 'basic';
 };
 
-const openPlayerByName = (name: string, fromSession: boolean = false) => {
+const openPlayerByName = (name: string, fromSession: boolean = false, keepScopeTab: boolean = false) => {
   const match = allStats.value.find(m => m.name === name);
   if (match) {
-    openPlayerModal(match, fromSession);
+    openPlayerModal(match, fromSession, keepScopeTab);
   }
 };
 
@@ -311,12 +316,17 @@ const loadSessionsList = async () => {
   }
 };
 
+const currentSessionDetailedStatsMap = ref<Record<string, MemberStatItem>>({});
+const sessionModalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
+
 const loadSessionDetail = async (sessionName: string) => {
   if (!sessionName) return;
   isLoadingSession.value = true;
   try {
     const detail = await fetchPublicSessionDetail(sessionName);
     currentSessionDetail.value = detail;
+    const detailedMap = await fetchSessionDetailedStats(sessionName);
+    currentSessionDetailedStatsMap.value = detailedMap;
   } catch (err: any) {
     console.error("회차 상세 로드 실패:", err);
   } finally {
@@ -346,6 +356,7 @@ interface SessionMemberWithRanks extends SessionMemberSummary {
   r3: number;
   r4: number;
   top2Rate: number;
+  avgUma: number;
 }
 const sessionMembersWithRanks = computed<SessionMemberWithRanks[]>(() => {
   if (!currentSessionDetail.value) return [];
@@ -364,21 +375,34 @@ const sessionMembersWithRanks = computed<SessionMemberWithRanks[]>(() => {
       }
     });
     const top2Rate = m.totalGames > 0 ? parseFloat((((r1 + r2) / m.totalGames) * 100).toFixed(1)) : 0;
+    const avgUma = m.totalGames > 0 ? parseFloat((m.totalUma / m.totalGames).toFixed(1)) : 0;
     return {
       ...m,
       r1,
       r2,
       r3,
       r4,
-      top2Rate
+      top2Rate,
+      avgUma,
     };
   });
 });
 
-// 모달에서 선택된 선수의 이번 회차 성적
-const currentSessionPlayerStats = computed(() => {
+// 모달에서 선택된 선수의 이번 회차 기본 멤버 정보
+const sessionMember = computed(() => {
+  if (!selectedPlayer.value) return null;
+  return sessionMembersWithRanks.value.find(m => m.name === selectedPlayer.value!.name) || null;
+});
+
+// 모달에서 선택된 선수의 이번 회차 성적 (9회차 이후는 전체 세부스탯 객체 반환)
+const currentSessionPlayerStats = computed<MemberStatItem | null>(() => {
   if (!selectedPlayer.value || !currentSessionDetail.value) return null;
   const name = selectedPlayer.value.name;
+
+  if (currentSessionDetailedStatsMap.value && currentSessionDetailedStatsMap.value[name]) {
+    return currentSessionDetailedStatsMap.value[name];
+  }
+
   const member = currentSessionDetail.value.members.find(m => m.name === name);
   const games = currentSessionDetail.value.games;
 
@@ -407,12 +431,114 @@ const currentSessionPlayerStats = computed(() => {
     avgUma,
     avgRank,
     top2Rate,
-    r1,
-    r2,
-    r3,
-    r4
+    rank1Count: r1,
+    rank2Count: r2,
+    rank3Count: r3,
+    rank4Count: r4,
+    totalRounds: 0,
+    winRate: 0,
+    dealInRate: 0,
+    riichiRate: 0,
+    tenpaiRate: 0,
+    avgWinScore: 0,
+    avgDealInScore: 0,
+    handEV: 0,
+    winEfficiency: 0,
+    dealInLoss: 0,
+    netWinEfficiency: 0,
+    tsumoRate: 0,
+    drawRate: 0,
+    drawTenpaiRate: 0,
+    tobiRate: 0,
+    riichiWinRate: 0,
+    riichiDealInRate: 0,
+    riichiDrawRate: 0,
+    riichiEV: 0,
+    riichiIncomeAvg: 0,
+    riichiExpenseAvg: 0,
+    firstRiichiRate: 0,
+    chaseRiichiRate: 0,
+    chasedRiichiRate: 0,
+    oyaKaburiRate: 0,
+    oyaKaburiAvg: 0,
+    dealInRiichiRate: 0,
+    totalScore: 0,
   };
 });
+
+// 회차 모달 내 순위 비율 도넛 차트 계산
+const currentSessionRankStats = computed(() => {
+  if (!currentSessionPlayerStats.value) {
+    return { r1: 0, r2: 0, r3: 0, r4: 0, p1: 0, p2: 0, p3: 0, p4: 0, totalGames: 0, top2Rate: '0.0%', lastAvoidRate: '0.0%' };
+  }
+  const s = currentSessionPlayerStats.value;
+  const tot = s.totalGames;
+  const p1 = tot > 0 ? (s.rank1Count / tot) * 100 : 0;
+  const p2 = tot > 0 ? (s.rank2Count / tot) * 100 : 0;
+  const p3 = tot > 0 ? (s.rank3Count / tot) * 100 : 0;
+  const p4 = tot > 0 ? (s.rank4Count / tot) * 100 : 0;
+  return {
+    r1: s.rank1Count,
+    r2: s.rank2Count,
+    r3: s.rank3Count,
+    r4: s.rank4Count,
+    p1,
+    p2,
+    p3,
+    p4,
+    totalGames: tot,
+    top2Rate: (p1 + p2).toFixed(1) + '%',
+    lastAvoidRate: (100 - p4).toFixed(1) + '%',
+  };
+});
+
+// 회차 세부 스탯 호버 툴팁 백분위 카드
+const onHoverSessionMetric = (
+  event: MouseEvent,
+  metricKey: keyof MemberStatItem,
+  metricName: string,
+  currentValue: number,
+  higherIsBetter: boolean = true,
+  unit: string = ''
+) => {
+  if (!currentSessionPlayerStats.value) return;
+  const sessionMembers = Object.values(currentSessionDetailedStatsMap.value);
+  if (sessionMembers.length === 0) return;
+
+  const dist = calculateMetricDistribution(
+    sessionMembers,
+    metricKey,
+    metricName,
+    currentValue,
+    unit,
+    higherIsBetter,
+    currentSessionPlayerStats.value.name
+  );
+  activeDist.value = dist;
+  activeDistName.value = metricName;
+  activeDistUnit.value = unit;
+
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const screenW = typeof window !== 'undefined' ? window.innerWidth : 360;
+  const rawX = rect.left + rect.width / 2;
+  const clampedX = Math.max(115, Math.min(screenW - 115, rawX));
+
+  if (rect.top < 180) {
+    isTooltipBelow.value = true;
+    tooltipPos.value = {
+      x: clampedX,
+      y: rect.bottom + 10,
+      visible: true,
+    };
+  } else {
+    isTooltipBelow.value = false;
+    tooltipPos.value = {
+      x: clampedX,
+      y: rect.top - 10,
+      visible: true,
+    };
+  }
+};
 
 // 회차 누적 우마 변동 추이 차트 데이터
 const sessionChartData = computed(() => {
@@ -1237,7 +1363,7 @@ const getRankClass = (rank: number) => {
                 <select 
                   id="modalPlayerSelect" 
                   :value="selectedPlayer.name" 
-                  @change="openPlayerByName(($event.target as HTMLSelectElement).value)"
+                  @change="openPlayerByName(($event.target as HTMLSelectElement).value, isModalFromSession, true)"
                   class="player_select"
                 >
                   <option v-for="m in allStats" :key="m.name" :value="m.name">
@@ -1270,7 +1396,7 @@ const getRankClass = (rank: number) => {
             <div v-if="isNoticeVisible" class="modal_notice_text">
               <div class="notice_text_content">
                 ※ 제9회부터의 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.<br />
-                ※ 종합 대국 수(세부 스탯 집계 대국 수) 형식으로 표기됩니다.
+                ※ 종합 대국 수(세부 스탯이 집계된 대국 수) 형식으로 표기됩니다.
               </div>
               <button class="notice_close_btn" @click="dismissNotice" title="닫기">✕</button>
             </div>
@@ -1281,40 +1407,552 @@ const getRankClass = (rank: number) => {
                 {{ currentSessionDetail?.sessionName }}에 '{{ selectedPlayer.name }}'님이 플레이한 대국 기록이 없습니다.
               </div>
               <div v-else class="session_modal_body">
-                <div class="stats_group">
-                  <div class="stat_row">
-                    <span class="stat_label">기록 대국 수</span>
-                    <span class="stat_value">{{ formatDualMetric(currentSessionPlayerStats.totalGames, currentSessionPlayerStats.totalGames) }}전</span>
+                <template v-if="currentSessionPlayerStats.totalRounds > 0">
+                  <!-- 4개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 -->
+                  <div class="tab_menu">
+                    <button 
+                      class="tab_btn" 
+                      :class="{ active: sessionModalActiveTab === 'basic' }" 
+                      @click="sessionModalActiveTab = 'basic'"
+                    >
+                      기본
+                    </button>
+                    <button 
+                      class="tab_btn" 
+                      :class="{ active: sessionModalActiveTab === 'riichi' }" 
+                      @click="sessionModalActiveTab = 'riichi'"
+                    >
+                      리치 스탯
+                    </button>
+                    <button 
+                      class="tab_btn" 
+                      :class="{ active: sessionModalActiveTab === 'other' }" 
+                      @click="sessionModalActiveTab = 'other'"
+                    >
+                      그 외
+                    </button>
+                    <button 
+                      class="tab_btn" 
+                      :class="{ active: sessionModalActiveTab === 'rank' }" 
+                      @click="sessionModalActiveTab = 'rank'"
+                    >
+                      순위 비율
+                    </button>
                   </div>
-                  <div class="stat_row">
-                    <span class="stat_label">누적 우마</span>
-                    <span class="stat_value" :class="currentSessionPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
-                      {{ formatDualMetric(currentSessionPlayerStats.totalUma, currentSessionPlayerStats.totalUma, 1, true) }}pt
-                    </span>
+
+                  <!-- 스탯 데이터 테이블 -->
+                  <div class="stats_content">
+                    <div class="stats_list">
+                      <!-- 1. 기본 탭 (4열 그리드) -->
+                      <div v-if="sessionModalActiveTab === 'basic'" class="stats_group">
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'totalGames', '기록 대국 수', currentSessionPlayerStats.totalGames, true, '전')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">기록 대국 수</span>
+                          <span class="stat_value">{{ formatDualMetric(sessionMember?.totalGames, currentSessionPlayerStats.totalGames) }}전</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'totalUma', '누적 우마', currentSessionPlayerStats.totalUma, true, 'pt')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">누적 우마</span>
+                          <span class="stat_value" :class="currentSessionPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
+                            {{ formatDualMetric(sessionMember?.totalUma, currentSessionPlayerStats.totalUma, 1, true) }}pt
+                          </span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'avgUma', '평균 우마', currentSessionPlayerStats.avgUma, true, 'pt')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">평균 우마</span>
+                          <span class="stat_value" :class="currentSessionPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
+                            {{ formatDualMetric(sessionMember?.avgUma, currentSessionPlayerStats.avgUma, 1, true) }}pt
+                          </span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'avgRank', '평균 순위', currentSessionPlayerStats.avgRank, false, '위')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">평균 순위</span>
+                          <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 2) }}위</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'top2Rate', '연대율', currentSessionPlayerStats.top2Rate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">연대율 (1·2위)</span>
+                          <span class="stat_value">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 1) }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'winRate', '화료율', currentSessionPlayerStats.winRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">화료율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.winRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'dealInRate', '방총률', currentSessionPlayerStats.dealInRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">방총률</span>
+                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.dealInRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'tsumoRate', '쯔모율', currentSessionPlayerStats.tsumoRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">쯔모율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.tsumoRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiRate', '리치율', currentSessionPlayerStats.riichiRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">리치율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.riichiRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'drawRate', '유국률', currentSessionPlayerStats.drawRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'drawRate', '유국률', currentSessionPlayerStats.drawRate, false, '%')"
+                        >
+                          <span class="stat_label">유국률</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.drawRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'drawTenpaiRate', '유국 텐파이율', currentSessionPlayerStats.drawTenpaiRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'drawTenpaiRate', '유국 텐파이율', currentSessionPlayerStats.drawTenpaiRate, true, '%')"
+                        >
+                          <span class="stat_label">유국 텐파이율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.drawTenpaiRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'avgWinScore', '평균 화료 점수', currentSessionPlayerStats.avgWinScore, true, '점')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">평균 화료 점수</span>
+                          <span class="stat_value text_positive">{{ currentSessionPlayerStats.avgWinScore.toLocaleString() }}점</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'avgDealInScore', '평균 방총 점수', currentSessionPlayerStats.avgDealInScore, false, '점')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">평균 방총 점수</span>
+                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.avgDealInScore.toLocaleString() }}점</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'tobiRate', '토비율', currentSessionPlayerStats.tobiRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                        >
+                          <span class="stat_label">토비율 (들통)</span>
+                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.tobiRate }}%</span>
+                        </div>
+                      </div>
+
+                      <!-- 2. 리치 스탯 탭 -->
+                      <div v-else-if="sessionModalActiveTab === 'riichi'" class="stats_group">
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiRate', '리치율', currentSessionPlayerStats.riichiRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'riichiRate', '리치율', currentSessionPlayerStats.riichiRate, true, '%')"
+                        >
+                          <span class="stat_label">리치율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.riichiRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiWinRate', '리치 화료율', currentSessionPlayerStats.riichiWinRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'riichiWinRate', '리치 화료율', currentSessionPlayerStats.riichiWinRate, true, '%')"
+                        >
+                          <span class="stat_label">리치 화료율</span>
+                          <span class="stat_value text_positive">{{ currentSessionPlayerStats.riichiWinRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiDealInRate', '리치 방총율', currentSessionPlayerStats.riichiDealInRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'riichiDealInRate', '리치 방총율', currentSessionPlayerStats.riichiDealInRate, false, '%')"
+                        >
+                          <span class="stat_label">리치 방총율</span>
+                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.riichiDealInRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiDrawRate', '리치 유국율', currentSessionPlayerStats.riichiDrawRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'riichiDrawRate', '리치 유국율', currentSessionPlayerStats.riichiDrawRate, false, '%')"
+                        >
+                          <span class="stat_label">리치 유국율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.riichiDrawRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiEV', '리치 수지', currentSessionPlayerStats.riichiEV, true, '점')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'riichiEV', '리치 수지', currentSessionPlayerStats.riichiEV, true, '점')"
+                        >
+                          <span class="stat_label">리치 수지</span>
+                          <span class="stat_value" :class="currentSessionPlayerStats.riichiEV >= 0 ? 'text_positive' : 'text_negative'">
+                            {{ currentSessionPlayerStats.riichiEV > 0 ? '+' : '' }}{{ currentSessionPlayerStats.riichiEV.toLocaleString() }}점
+                          </span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiIncomeAvg', '리치 시 평균 수입', currentSessionPlayerStats.riichiIncomeAvg, true, '점')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'riichiIncomeAvg', '리치 시 평균 수입', currentSessionPlayerStats.riichiIncomeAvg, true, '점')"
+                        >
+                          <span class="stat_label">리치 시 평균 수입</span>
+                          <span class="stat_value text_positive">{{ currentSessionPlayerStats.riichiIncomeAvg.toLocaleString() }}점</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiExpenseAvg', '리치 방총 시 평균 지출', currentSessionPlayerStats.riichiExpenseAvg, false, '점')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'riichiExpenseAvg', '리치 방총 시 평균 지출', currentSessionPlayerStats.riichiExpenseAvg, false, '점')"
+                        >
+                          <span class="stat_label">리치 방총 시 평균 지출</span>
+                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.riichiExpenseAvg.toLocaleString() }}점</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'firstRiichiRate', '선제 리치율', currentSessionPlayerStats.firstRiichiRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'firstRiichiRate', '선제 리치율', currentSessionPlayerStats.firstRiichiRate, true, '%')"
+                        >
+                          <span class="stat_label">선제 리치율</span>
+                          <span class="stat_value text_positive">{{ currentSessionPlayerStats.firstRiichiRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'chaseRiichiRate', '추격 리치율', currentSessionPlayerStats.chaseRiichiRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'chaseRiichiRate', '추격 리치율', currentSessionPlayerStats.chaseRiichiRate, true, '%')"
+                        >
+                          <span class="stat_label">추격 리치율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.chaseRiichiRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격 리치율', currentSessionPlayerStats.chasedRiichiRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격 리치율', currentSessionPlayerStats.chasedRiichiRate, false, '%')"
+                        >
+                          <span class="stat_label">피추격 리치율</span>
+                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.chasedRiichiRate }}%</span>
+                        </div>
+                      </div>
+
+                      <!-- 3. 그 외 탭 -->
+                      <div v-else-if="sessionModalActiveTab === 'other'" class="stats_group">
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'tenpaiRate', '텐파이율', currentSessionPlayerStats.tenpaiRate, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'tenpaiRate', '텐파이율', currentSessionPlayerStats.tenpaiRate, true, '%')"
+                        >
+                          <span class="stat_label">텐파이율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.tenpaiRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', currentSessionPlayerStats.oyaKaburiRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', currentSessionPlayerStats.oyaKaburiRate, false, '%')"
+                        >
+                          <span class="stat_label">아픈 오야카부리율</span>
+                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.oyaKaburiRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'oyaKaburiAvg', '아픈 오야카부리 평균', currentSessionPlayerStats.oyaKaburiAvg, false, '점')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'oyaKaburiAvg', '아픈 오야카부리 평균', currentSessionPlayerStats.oyaKaburiAvg, false, '점')"
+                        >
+                          <span class="stat_label">아픈 오야카부리 평균</span>
+                          <span class="stat_value text_negative">{{ currentSessionPlayerStats.oyaKaburiAvg.toLocaleString() }}점</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'dealInRiichiRate', '방총 시 리치율', currentSessionPlayerStats.dealInRiichiRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'dealInRiichiRate', '방총 시 리치율', currentSessionPlayerStats.dealInRiichiRate, false, '%')"
+                        >
+                          <span class="stat_label">방총 시 리치율</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.dealInRiichiRate }}%</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'winEfficiency', '화료 효율', currentSessionPlayerStats.winEfficiency, true, '')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'winEfficiency', '화료 효율', currentSessionPlayerStats.winEfficiency, true, '')"
+                        >
+                          <span class="stat_label">화료 효율</span>
+                          <span class="stat_value text_positive">+{{ currentSessionPlayerStats.winEfficiency }}</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'dealInLoss', '방총 손실', currentSessionPlayerStats.dealInLoss, false, '')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'dealInLoss', '방총 손실', currentSessionPlayerStats.dealInLoss, false, '')"
+                        >
+                          <span class="stat_label">방총 손실</span>
+                          <span class="stat_value text_negative">-{{ currentSessionPlayerStats.dealInLoss }}</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'netWinEfficiency', '알짜 화료 효율', currentSessionPlayerStats.netWinEfficiency, true, '')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'netWinEfficiency', '알짜 화료 효율', currentSessionPlayerStats.netWinEfficiency, true, '')"
+                        >
+                          <span class="stat_label">알짜 화료 효율</span>
+                          <span class="stat_value" :class="currentSessionPlayerStats.netWinEfficiency >= 0 ? 'text_positive' : 'text_negative'">
+                            {{ currentSessionPlayerStats.netWinEfficiency > 0 ? '+' : '' }}{{ currentSessionPlayerStats.netWinEfficiency }}
+                          </span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'handEV', '국수지', currentSessionPlayerStats.handEV, true, '점')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'handEV', '국수지', currentSessionPlayerStats.handEV, true, '점')"
+                        >
+                          <span class="stat_label">국수지</span>
+                          <span class="stat_value" :class="currentSessionPlayerStats.handEV >= 0 ? 'text_positive' : 'text_negative'">
+                            {{ currentSessionPlayerStats.handEV > 0 ? '+' : '' }}{{ currentSessionPlayerStats.handEV }}점
+                          </span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'totalRounds', '총합 국 수', currentSessionPlayerStats.totalRounds, true, '국')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'totalRounds', '총합 국 수', currentSessionPlayerStats.totalRounds, true, '국')"
+                        >
+                          <span class="stat_label">총합 국 수</span>
+                          <span class="stat_value">{{ currentSessionPlayerStats.totalRounds }}국</span>
+                        </div>
+                      </div>
+
+                      <!-- 4. 순위 비율 탭 -->
+                      <div v-else-if="sessionModalActiveTab === 'rank'" class="rank_tab_wrapper">
+                        <div class="rank_chart_section">
+                          <!-- SVG 도넛 차트 -->
+                          <div class="chart_box">
+                            <svg viewBox="0 0 200 200" class="donut_svg">
+                              <circle 
+                                cx="100" 
+                                cy="100" 
+                                r="60" 
+                                fill="none" 
+                                stroke="var(--border-color, rgba(0,0,0,0.08))" 
+                                stroke-width="20" 
+                              />
+                              <g transform="rotate(-90 100 100)">
+                                <!-- 4위 (빨강) -->
+                                <circle 
+                                  v-if="currentSessionRankStats.p4 > 0"
+                                  cx="100" cy="100" r="60" 
+                                  fill="none" 
+                                  stroke="#ef4444" 
+                                  stroke-width="20" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p4 / 100) * 376.9911} 376.9911`"
+                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2 + currentSessionRankStats.p3) / 100) * 376.9911}`"
+                                  class="donut_segment"
+                                  :class="{ active: hoveredRank === 4 }"
+                                  @mouseenter="hoveredRank = 4"
+                                  @mouseleave="hoveredRank = null"
+                                />
+                                <!-- 3위 (노랑/앰버) -->
+                                <circle 
+                                  v-if="currentSessionRankStats.p3 > 0"
+                                  cx="100" cy="100" r="60" 
+                                  fill="none" 
+                                  stroke="#f59e0b" 
+                                  stroke-width="20" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p3 / 100) * 376.9911} 376.9911`"
+                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2) / 100) * 376.9911}`"
+                                  class="donut_segment"
+                                  :class="{ active: hoveredRank === 3 }"
+                                  @mouseenter="hoveredRank = 3"
+                                  @mouseleave="hoveredRank = null"
+                                />
+                                <!-- 2위 (청록) -->
+                                <circle 
+                                  v-if="currentSessionRankStats.p2 > 0"
+                                  cx="100" cy="100" r="60" 
+                                  fill="none" 
+                                  stroke="#06b6d4" 
+                                  stroke-width="20" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p2 / 100) * 376.9911} 376.9911`"
+                                  :stroke-dashoffset="`-${(currentSessionRankStats.p1 / 100) * 376.9911}`"
+                                  class="donut_segment"
+                                  :class="{ active: hoveredRank === 2 }"
+                                  @mouseenter="hoveredRank = 2"
+                                  @mouseleave="hoveredRank = null"
+                                />
+                                <!-- 1위 (초록) -->
+                                <circle 
+                                  v-if="currentSessionRankStats.p1 > 0"
+                                  cx="100" cy="100" r="60" 
+                                  fill="none" 
+                                  stroke="#10b981" 
+                                  stroke-width="20" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p1 / 100) * 376.9911} 376.9911`"
+                                  stroke-dashoffset="0"
+                                  class="donut_segment"
+                                  :class="{ active: hoveredRank === 1 }"
+                                  @mouseenter="hoveredRank = 1"
+                                  @mouseleave="hoveredRank = null"
+                                />
+                              </g>
+                              <!-- 중앙 텍스트 -->
+                              <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
+                              <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ currentSessionRankStats.totalGames }}전</text>
+                              <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ currentSessionPlayerStats.avgRank }}위</text>
+                            </svg>
+                          </div>
+
+                          <!-- 순위별 상세 수치 카드 목록 -->
+                          <div class="rank_details_list">
+                            <div 
+                              class="rank_detail_card" 
+                              :class="{ highlighted: hoveredRank === 1 }"
+                              @mouseenter="hoveredRank = 1"
+                              @mouseleave="hoveredRank = null"
+                            >
+                              <div class="rank_card_header">
+                                <span class="rank_badge badge_1">1위</span>
+                                <span class="rank_count_val">{{ currentSessionRankStats.r1 }}회</span>
+                                <span class="rank_percent_val text_rank_1">{{ currentSessionRankStats.p1.toFixed(1) }}%</span>
+                              </div>
+                              <div class="rank_bar_track">
+                                <div class="rank_bar_fill bar_1" :style="{ width: currentSessionRankStats.p1 + '%' }"></div>
+                              </div>
+                            </div>
+
+                            <div 
+                              class="rank_detail_card" 
+                              :class="{ highlighted: hoveredRank === 2 }"
+                              @mouseenter="hoveredRank = 2"
+                              @mouseleave="hoveredRank = null"
+                            >
+                              <div class="rank_card_header">
+                                <span class="rank_badge badge_2">2위</span>
+                                <span class="rank_count_val">{{ currentSessionRankStats.r2 }}회</span>
+                                <span class="rank_percent_val text_rank_2">{{ currentSessionRankStats.p2.toFixed(1) }}%</span>
+                              </div>
+                              <div class="rank_bar_track">
+                                <div class="rank_bar_fill bar_2" :style="{ width: currentSessionRankStats.p2 + '%' }"></div>
+                              </div>
+                            </div>
+
+                            <div 
+                              class="rank_detail_card" 
+                              :class="{ highlighted: hoveredRank === 3 }"
+                              @mouseenter="hoveredRank = 3"
+                              @mouseleave="hoveredRank = null"
+                            >
+                              <div class="rank_card_header">
+                                <span class="rank_badge badge_3">3위</span>
+                                <span class="rank_count_val">{{ currentSessionRankStats.r3 }}회</span>
+                                <span class="rank_percent_val text_rank_3">{{ currentSessionRankStats.p3.toFixed(1) }}%</span>
+                              </div>
+                              <div class="rank_bar_track">
+                                <div class="rank_bar_fill bar_3" :style="{ width: currentSessionRankStats.p3 + '%' }"></div>
+                              </div>
+                            </div>
+
+                            <div 
+                              class="rank_detail_card" 
+                              :class="{ highlighted: hoveredRank === 4 }"
+                              @mouseenter="hoveredRank = 4"
+                              @mouseleave="hoveredRank = null"
+                            >
+                              <div class="rank_card_header">
+                                <span class="rank_badge badge_4">4위</span>
+                                <span class="rank_count_val">{{ currentSessionRankStats.r4 }}회</span>
+                                <span class="rank_percent_val text_rank_4">{{ currentSessionRankStats.p4.toFixed(1) }}%</span>
+                              </div>
+                              <div class="rank_bar_track">
+                                <div class="rank_bar_fill bar_4" :style="{ width: currentSessionRankStats.p4 + '%' }"></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <!-- 연대율 & 라스 회피율 요약 바 -->
+                        <div class="rank_summary_metrics">
+                          <div class="summary_metric_box">
+                            <span class="metric_label">연대율 (1·2위)</span>
+                            <span class="metric_val text_positive">{{ currentSessionRankStats.top2Rate }}</span>
+                          </div>
+                          <div class="summary_metric_box">
+                            <span class="metric_label">라스 회피율</span>
+                            <span class="metric_val text_positive">{{ currentSessionRankStats.lastAvoidRate }}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div class="stat_row">
-                    <span class="stat_label">평균 우마</span>
-                    <span class="stat_value" :class="currentSessionPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
-                      {{ formatDualMetric(currentSessionPlayerStats.avgUma, currentSessionPlayerStats.avgUma, 1, true) }}pt
-                    </span>
+                </template>
+
+                <!-- 레거시 회차 (국별 세부 데이터 없음) -->
+                <div v-else class="session_legacy_view">
+                  <div class="legacy_session_banner">
+                    ※ 해당 회차(제1~8회)는 국별 세부 데이터가 기록되지 않은 레거시 회차로, 기본 성적과 순위 분포만 표시됩니다.
                   </div>
-                  <div class="stat_row">
-                    <span class="stat_label">평균 순위</span>
-                    <span class="stat_value">{{ formatDualMetric(currentSessionPlayerStats.avgRank, currentSessionPlayerStats.avgRank, 2) }}위</span>
+                  <div class="stats_group">
+                    <div class="stat_row">
+                      <span class="stat_label">기록 대국 수</span>
+                      <span class="stat_value">{{ formatDualMetric(sessionMember?.totalGames, currentSessionPlayerStats.totalGames) }}전</span>
+                    </div>
+                    <div class="stat_row">
+                      <span class="stat_label">누적 우마</span>
+                      <span class="stat_value" :class="currentSessionPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
+                        {{ formatDualMetric(sessionMember?.totalUma, currentSessionPlayerStats.totalUma, 1, true) }}pt
+                      </span>
+                    </div>
+                    <div class="stat_row">
+                      <span class="stat_label">평균 우마</span>
+                      <span class="stat_value" :class="currentSessionPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
+                        {{ formatDualMetric(sessionMember?.avgUma, currentSessionPlayerStats.avgUma, 1, true) }}pt
+                      </span>
+                    </div>
+                    <div class="stat_row">
+                      <span class="stat_label">평균 순위</span>
+                      <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 2) }}위</span>
+                    </div>
+                    <div class="stat_row">
+                      <span class="stat_label">연대율 (1·2위)</span>
+                      <span class="stat_value text_positive">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 1) }}%</span>
+                    </div>
                   </div>
-                  <div class="stat_row">
-                    <span class="stat_label">연대율</span>
-                    <span class="stat_value text_positive">{{ formatDualMetric(currentSessionPlayerStats.top2Rate, currentSessionPlayerStats.top2Rate, 1) }}%</span>
-                  </div>
-                </div>
-                <!-- 이번 회차 순위 분포 -->
-                <div class="session_modal_rank_section">
-                  <div class="session_rank_title">이번 회차 순위 분포</div>
-                  <div class="session_rank_badges_row">
-                    <div class="dist-badge r1"><span class="dist-label">1등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.r1 }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.r1, currentSessionPlayerStats.totalGames) }}%)</span></div>
-                    <div class="dist-badge r2"><span class="dist-label">2등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.r2 }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.r2, currentSessionPlayerStats.totalGames) }}%)</span></div>
-                    <div class="dist-badge r3"><span class="dist-label">3등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.r3 }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.r3, currentSessionPlayerStats.totalGames) }}%)</span></div>
-                    <div class="dist-badge r4"><span class="dist-label">4등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.r4 }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.r4, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                  <!-- 레거시 순위 분포 -->
+                  <div class="session_modal_rank_section">
+                    <div class="session_rank_title">이번 회차 순위 분포</div>
+                    <div class="session_rank_badges_row">
+                      <div class="dist-badge r1"><span class="dist-label">1등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank1Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank1Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                      <div class="dist-badge r2"><span class="dist-label">2등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank2Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank2Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                      <div class="dist-badge r3"><span class="dist-label">3등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank3Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank3Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                      <div class="dist-badge r4"><span class="dist-label">4등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank4Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank4Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3277,6 +3915,17 @@ html.dark .container_stats_modal {
   padding: 30px 10px;
   color: var(--text-dimmed, #888);
   font-size: 13px;
+}
+.legacy_session_banner {
+  background: var(--card-bg-subtle, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-dimmed, #666);
+  line-height: 1.5;
+  margin-bottom: 16px;
+  text-align: center;
 }
 .session_modal_rank_section {
   margin-top: 14px;

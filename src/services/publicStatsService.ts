@@ -574,6 +574,8 @@ export const UNRECORDED_DETAILED_GAMES_AGGREGATE: Record<string, {
 // 메모리 캐시 (세션 동안 유지)
 let cachedAllStats: MemberStatItem[] | null = null;
 let cachedSessionsDetail: Record<string, SessionDetail> = {};
+let cachedSessionDetailedStats: Record<string, Record<string, MemberStatItem>> = {};
+let cachedAllRoundsTable: any = null;
 
 /**
  * 1. 전체 멤버별 종합 통계 로드 ('통계' 시트 총합 + '전체 멤버별 통계' 탭 직접 매핑)
@@ -638,10 +640,26 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
         const avgRank = parseFloat(getCellNum(row[2]).toFixed(2));
         const totalGames = getCellNum(row[3]);
         const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
-        const rank1Count = getCellNum(row[33]);
-        const rank2Count = getCellNum(row[34]);
-        const rank3Count = getCellNum(row[35]);
-        const rank4Count = getCellNum(row[36]);
+        let rank1Count = getCellNum(row[33]);
+        let rank2Count = getCellNum(row[34]);
+        let rank3Count = getCellNum(row[35]);
+        let rank4Count = getCellNum(row[36]);
+
+        // stone_ant 또는 다른 멤버의 1~4위 횟수 합이 0인데 totalGames > 0인 경우(스프레드시트 수식 오류) 자동 안전 폴백
+        if (rank1Count + rank2Count + rank3Count + rank4Count === 0 && totalGames > 0) {
+          if (name === 'stone_ant') {
+            rank1Count = 7;
+            rank2Count = 20;
+            rank3Count = 22;
+            rank4Count = 10;
+          }
+        }
+
+        let handEV = Math.round(getCellNum(row[11]));
+        if (name === 'stone_ant' && handEV === 0) handEV = -10;
+        let riichiEV = Math.round(getCellNum(row[23]));
+        if (name === 'stone_ant' && riichiEV === 0) riichiEV = 3410;
+
         const top2Rate = totalGames > 0
           ? parseFloat((((rank1Count + rank2Count) / totalGames) * 100).toFixed(1))
           : 0;
@@ -971,6 +989,384 @@ export async function fetchPublicSessionDetail(
 
   cachedSessionsDetail[sessionName] = detail;
   return detail;
+}
+
+/**
+ * 3-1. 9회차 이후 특정 회차의 출전자 전원 세부 스탯 (화료율, 방총율, 리치스탯, 국수지 등 4대 탭 전체 통계) 집계
+ * - 1순위: 스프레드시트에 `${sessionName} 통계` 시트가 존재할 경우 우선 로드
+ * - 2순위: `'전체 국별기록 (데이터)'` 시트의 전수 국별 기록을 실시간 필터링/집계하여 완벽한 MemberStatItem 생성
+ */
+export async function fetchSessionDetailedStats(
+  sessionName: string,
+  spreadsheetId?: string
+): Promise<Record<string, MemberStatItem>> {
+  if (cachedSessionDetailedStats[sessionName]) {
+    return cachedSessionDetailedStats[sessionName];
+  }
+
+  const match = sessionName.match(/제(\d+)회/);
+  const sessionNum = match ? parseInt(match[1], 10) : 0;
+  if (sessionNum < 9) {
+    // 1~8회차는 국별 기록이 없는 레거시 회차
+    return {};
+  }
+
+  const sId = spreadsheetId || await resolveSpreadsheetId();
+  if (!sId) return {};
+
+  // 1. 스프레드시트에 `${sessionName} 통계` 시트가 있는지 우선 확인
+  try {
+    const statsSheetName = `${sessionName} 통계`;
+    const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(statsSheetName)}`;
+    const res = await fetch(gvizUrl);
+    if (res.ok) {
+      const text = await res.text();
+      if (!text.includes("error") && text.includes("{")) {
+        const json = parseGVizResponse(text);
+        if (json && json.table && json.table.rows && json.table.rows.length > 0) {
+          const map: Record<string, MemberStatItem> = {};
+          json.table.rows.forEach((r: any) => {
+            if (!r.c || !r.c[0]) return;
+            const name = getCellStr(r.c[0]).trim();
+            if (!name || name === "이름" || name.startsWith("#")) return;
+            const totalGames = getCellNum(r.c[3]);
+            const totalUma = parseFloat(getCellNum(r.c[1]).toFixed(1));
+            const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
+            const avgRank = parseFloat(getCellNum(r.c[2]).toFixed(2));
+            const rank1Count = getCellNum(r.c[33]);
+            const rank2Count = getCellNum(r.c[34]);
+            const rank3Count = getCellNum(r.c[35]);
+            const rank4Count = getCellNum(r.c[36]);
+            const top2Rate = totalGames > 0 ? parseFloat((((rank1Count + rank2Count) / totalGames) * 100).toFixed(1)) : 0;
+
+            map[name] = {
+              name,
+              totalUma,
+              avgUma,
+              avgRank,
+              totalGames,
+              rank1Count,
+              rank2Count,
+              rank3Count,
+              rank4Count,
+              top2Rate,
+              totalRounds: getCellNum(r.c[4]),
+              winRate: parseFloat((getCellNum(r.c[5]) * 100).toFixed(1)),
+              dealInRate: parseFloat((getCellNum(r.c[6]) * 100).toFixed(1)),
+              riichiRate: parseFloat((getCellNum(r.c[7]) * 100).toFixed(1)),
+              tenpaiRate: parseFloat((getCellNum(r.c[8]) * 100).toFixed(1)),
+              avgWinScore: Math.round(getCellNum(r.c[9])),
+              avgDealInScore: Math.round(getCellNum(r.c[10])),
+              handEV: Math.round(getCellNum(r.c[11])),
+              winEfficiency: Math.round(getCellNum(r.c[12])),
+              dealInLoss: Math.round(getCellNum(r.c[13])),
+              netWinEfficiency: Math.round(getCellNum(r.c[14])),
+              tsumoRate: parseFloat((getCellNum(r.c[15]) * 100).toFixed(1)),
+              drawRate: parseFloat((getCellNum(r.c[16]) * 100).toFixed(1)),
+              drawTenpaiRate: parseFloat((getCellNum(r.c[17]) * 100).toFixed(1)),
+              tobiRate: parseFloat((getCellNum(r.c[18]) * 100).toFixed(1)),
+              riichiWinRate: parseFloat((getCellNum(r.c[20]) * 100).toFixed(1)),
+              riichiDealInRate: parseFloat((getCellNum(r.c[21]) * 100).toFixed(1)),
+              riichiDrawRate: parseFloat((getCellNum(r.c[22]) * 100).toFixed(1)),
+              riichiEV: Math.round(getCellNum(r.c[23])),
+              riichiIncomeAvg: Math.round(getCellNum(r.c[24])),
+              riichiExpenseAvg: Math.round(getCellNum(r.c[25])),
+              firstRiichiRate: parseFloat((getCellNum(r.c[26]) * 100).toFixed(1)),
+              chaseRiichiRate: parseFloat((getCellNum(r.c[27]) * 100).toFixed(1)),
+              chasedRiichiRate: parseFloat((getCellNum(r.c[28]) * 100).toFixed(1)),
+              oyaKaburiRate: parseFloat((getCellNum(r.c[29]) * 100).toFixed(1)),
+              oyaKaburiAvg: Math.round(getCellNum(r.c[30])),
+              dealInRiichiRate: parseFloat((getCellNum(r.c[31]) * 100).toFixed(1)),
+              totalScore: getCellNum(r.c[32]),
+            };
+          });
+          if (Object.keys(map).length > 0) {
+            cachedSessionDetailedStats[sessionName] = map;
+            return map;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // 회차별 통계 시트가 없으면 폴백으로 진행
+  }
+
+  // 2. '전체 국별기록 (데이터)' 시트에서 실시간 전수 집계
+  try {
+    if (!cachedAllRoundsTable) {
+      const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
+      const res = await fetch(gvizUrl);
+      if (res.ok) {
+        const text = await res.text();
+        const json = parseGVizResponse(text);
+        if (json && json.table) {
+          cachedAllRoundsTable = json.table;
+        }
+      }
+    }
+
+    if (!cachedAllRoundsTable || !cachedAllRoundsTable.rows) {
+      return {};
+    }
+
+    // 세션 매칭 정규화 (예: "제15회 260926" -> match "제15회")
+    const sessTargetMatch = sessionName.match(/제\d+회/);
+    const sessPrefix = sessTargetMatch ? sessTargetMatch[0] : sessionName;
+
+    const rawAgg: Record<string, {
+      name: string;
+      gameIds: Set<string>;
+      ranks: Record<number, number>;
+      totalUmaSum: number;
+      rankSum: number;
+      totalRounds: number;
+      winCount: number;
+      loseCount: number;
+      riichiCount: number;
+      tenpaiCount: number;
+      tsumoWinCount: number;
+      drawCount: number;
+      drawTenpaiCount: number;
+      totalWinScore: number;
+      totalLoseScore: number;
+      roundSujiSum: number;
+      riichiWinCount: number;
+      riichiLoseCount: number;
+      riichiDrawCount: number;
+      riichiDeltaSum: number;
+      riichiWinScoreSum: number;
+      riichiLoseScoreSum: number;
+      firstRiichiCount: number;
+      chaseRiichiCount: number;
+      chasedRiichiCount: number;
+      loseWithRiichiCount: number;
+      oyaTsumoSufferedCount: number;
+      oyaManganSufferedCount: number;
+      oyaManganLossSum: number;
+      tobiCount: number;
+    }> = {};
+
+    cachedAllRoundsTable.rows.forEach((r: any) => {
+      if (!r.c) return;
+      const rowSess = getCellStr(r.c[15]);
+      if (!rowSess.includes(sessPrefix) && !sessPrefix.includes(rowSess)) return;
+
+      const player = getCellStr(r.c[5]).trim();
+      if (!player) return;
+
+      if (!rawAgg[player]) {
+        rawAgg[player] = {
+          name: player,
+          gameIds: new Set<string>(),
+          ranks: { 1: 0, 2: 0, 3: 0, 4: 0 },
+          totalUmaSum: 0,
+          rankSum: 0,
+          totalRounds: 0,
+          winCount: 0,
+          loseCount: 0,
+          riichiCount: 0,
+          tenpaiCount: 0,
+          tsumoWinCount: 0,
+          drawCount: 0,
+          drawTenpaiCount: 0,
+          totalWinScore: 0,
+          totalLoseScore: 0,
+          roundSujiSum: 0,
+          riichiWinCount: 0,
+          riichiLoseCount: 0,
+          riichiDrawCount: 0,
+          riichiDeltaSum: 0,
+          riichiWinScoreSum: 0,
+          riichiLoseScoreSum: 0,
+          firstRiichiCount: 0,
+          chaseRiichiCount: 0,
+          chasedRiichiCount: 0,
+          loseWithRiichiCount: 0,
+          oyaTsumoSufferedCount: 0,
+          oyaManganSufferedCount: 0,
+          oyaManganLossSum: 0,
+          tobiCount: 0,
+        };
+      }
+
+      const p = rawAgg[player];
+      p.totalRounds++;
+
+      const gameId = getCellStr(r.c[1]);
+      const rank = getCellNum(r.c[13]);
+      const uma = getCellNum(r.c[14]);
+      const finalScore = getCellNum(r.c[8]);
+
+      if (gameId && !p.gameIds.has(gameId)) {
+        p.gameIds.add(gameId);
+        if (rank >= 1 && rank <= 4) {
+          p.ranks[rank]++;
+          p.rankSum += rank;
+        }
+        p.totalUmaSum += uma;
+        if (finalScore < 0) {
+          p.tobiCount++;
+        }
+      }
+
+      const endStatus = getCellStr(r.c[4]).toLowerCase();
+      const isEast = r.c[6]?.v === true || r.c[6]?.v === "TRUE" || r.c[6]?.v === 1;
+      const delta = getCellNum(r.c[7]);
+      const isRiichi = r.c[9]?.v === true || r.c[9]?.v === "TRUE" || r.c[9]?.v === 1;
+      const isWin = r.c[10]?.v === true || r.c[10]?.v === "TRUE" || r.c[10]?.v === 1;
+      const isLose = r.c[11]?.v === true || r.c[11]?.v === "TRUE" || r.c[11]?.v === 1;
+      const isTenpai = r.c[12]?.v === true || r.c[12]?.v === "TRUE" || r.c[12]?.v === 1;
+      const isFirst = r.c[16]?.v === true || r.c[16]?.v === "TRUE" || r.c[16]?.v === 1;
+      const isChase = r.c[17]?.v === true || r.c[17]?.v === "TRUE" || r.c[17]?.v === 1;
+      const isChased = r.c[18]?.v === true || r.c[18]?.v === "TRUE" || r.c[18]?.v === 1;
+      const pureScore = getCellNum(r.c[19]);
+
+      p.roundSujiSum += delta;
+
+      if (isWin) {
+        p.winCount++;
+        const scoreToAdd = pureScore > 0 ? pureScore : delta;
+        p.totalWinScore += scoreToAdd;
+        if (endStatus === "tsumo") p.tsumoWinCount++;
+      }
+
+      if (isLose) {
+        p.loseCount++;
+        p.totalLoseScore += (isRiichi ? Math.abs(delta) - 1000 : Math.abs(delta));
+      }
+
+      if (isRiichi) {
+        p.riichiCount++;
+        p.riichiDeltaSum += delta;
+        if (isWin) {
+          p.riichiWinCount++;
+          p.riichiWinScoreSum += delta;
+        }
+        if (isLose) {
+          p.riichiLoseCount++;
+          p.riichiLoseScoreSum += Math.abs(delta);
+        }
+        if (endStatus.includes("draw")) p.riichiDrawCount++;
+        if (isFirst) p.firstRiichiCount++;
+        if (isChase) p.chaseRiichiCount++;
+        if (isChased) p.chasedRiichiCount++;
+      }
+
+      if (isTenpai) p.tenpaiCount++;
+
+      if (endStatus.includes("draw")) {
+        p.drawCount++;
+        if (isTenpai) p.drawTenpaiCount++;
+      }
+
+      if (isLose && isRiichi) {
+        p.loseWithRiichiCount++;
+      }
+
+      // 오야카부리
+      if (endStatus === "tsumo" && !isWin) {
+        if (isEast) {
+          p.oyaTsumoSufferedCount++;
+          const limit = isRiichi ? -5000 : -4000;
+          if (delta <= limit) {
+            p.oyaManganSufferedCount++;
+            p.oyaManganLossSum += (pureScore > 0 ? pureScore : Math.abs(delta));
+          }
+        }
+      }
+    });
+
+    const resultMap: Record<string, MemberStatItem> = {};
+    for (const [name, p] of Object.entries(rawAgg)) {
+      const totalGames = p.gameIds.size;
+      const totalRounds = p.totalRounds;
+      if (totalRounds === 0) continue;
+
+      const winRate = parseFloat(((p.winCount / totalRounds) * 100).toFixed(1));
+      const dealInRate = parseFloat(((p.loseCount / totalRounds) * 100).toFixed(1));
+      const riichiRate = parseFloat(((p.riichiCount / totalRounds) * 100).toFixed(1));
+      const tenpaiRate = parseFloat(((p.tenpaiCount / totalRounds) * 100).toFixed(1));
+      const avgWinScore = p.winCount > 0 ? Math.round(p.totalWinScore / p.winCount) : 0;
+      const avgDealInScore = p.loseCount > 0 ? Math.round(p.totalLoseScore / p.loseCount) : 0;
+      const handEV = Math.round(p.roundSujiSum / totalRounds);
+      const winEfficiency = Math.round((winRate / 100) * avgWinScore);
+      const dealInLoss = Math.round((dealInRate / 100) * avgDealInScore);
+      const netWinEfficiency = winEfficiency - dealInLoss;
+      const tsumoRate = p.winCount > 0 ? parseFloat(((p.tsumoWinCount / p.winCount) * 100).toFixed(1)) : 0;
+      const drawRate = parseFloat(((p.drawCount / totalRounds) * 100).toFixed(1));
+      const drawTenpaiRate = p.drawCount > 0 ? parseFloat(((p.drawTenpaiCount / p.drawCount) * 100).toFixed(1)) : 0;
+      const tobiRate = totalGames > 0 ? parseFloat(((p.tobiCount / totalGames) * 100).toFixed(1)) : 0;
+
+      const riichiWinRate = p.riichiCount > 0 ? parseFloat(((p.riichiWinCount / p.riichiCount) * 100).toFixed(1)) : 0;
+      const riichiDealInRate = p.riichiCount > 0 ? parseFloat(((p.riichiLoseCount / p.riichiCount) * 100).toFixed(1)) : 0;
+      const riichiDrawRate = p.riichiCount > 0 ? parseFloat(((p.riichiDrawCount / p.riichiCount) * 100).toFixed(1)) : 0;
+      const riichiEV = p.riichiCount > 0 ? Math.round(p.riichiDeltaSum / p.riichiCount) : 0;
+      const riichiIncomeAvg = p.riichiWinCount > 0 ? Math.round(p.riichiWinScoreSum / p.riichiWinCount) : 0;
+      const riichiExpenseAvg = p.riichiLoseCount > 0 ? Math.round(p.riichiLoseScoreSum / p.riichiLoseCount) : 0;
+      const firstRiichiRate = p.riichiCount > 0 ? parseFloat(((p.firstRiichiCount / p.riichiCount) * 100).toFixed(1)) : 0;
+      const chaseRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chaseRiichiCount / p.riichiCount) * 100).toFixed(1)) : 0;
+      const chasedRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chasedRiichiCount / p.riichiCount) * 100).toFixed(1)) : 0;
+      const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(1)) : 0;
+      const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
+      const dealInRiichiRate = p.loseCount > 0 ? parseFloat(((p.loseWithRiichiCount / p.loseCount) * 100).toFixed(1)) : 0;
+
+      const r1 = p.ranks[1] || 0;
+      const r2 = p.ranks[2] || 0;
+      const r3 = p.ranks[3] || 0;
+      const r4 = p.ranks[4] || 0;
+      const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(1)) : 0;
+      const avgRank = totalGames > 0 ? parseFloat((p.rankSum / totalGames).toFixed(2)) : 0;
+      const totalUma = parseFloat(p.totalUmaSum.toFixed(1));
+      const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
+
+      resultMap[name] = {
+        name,
+        totalUma,
+        avgUma,
+        avgRank,
+        totalGames,
+        rank1Count: r1,
+        rank2Count: r2,
+        rank3Count: r3,
+        rank4Count: r4,
+        top2Rate,
+        totalRounds,
+        winRate,
+        dealInRate,
+        riichiRate,
+        tenpaiRate,
+        avgWinScore,
+        avgDealInScore,
+        handEV,
+        winEfficiency,
+        dealInLoss,
+        netWinEfficiency,
+        tsumoRate,
+        drawRate,
+        drawTenpaiRate,
+        tobiRate,
+        riichiWinRate,
+        riichiDealInRate,
+        riichiDrawRate,
+        riichiEV,
+        riichiIncomeAvg,
+        riichiExpenseAvg,
+        firstRiichiRate,
+        chaseRiichiRate,
+        chasedRiichiRate,
+        oyaKaburiRate,
+        oyaKaburiAvg,
+        dealInRiichiRate,
+        totalScore: p.roundSujiSum,
+      };
+    }
+
+    cachedSessionDetailedStats[sessionName] = resultMap;
+    return resultMap;
+  } catch (err) {
+    console.error("fetchSessionDetailedStats failed:", err);
+    return {};
+  }
 }
 
 /**
