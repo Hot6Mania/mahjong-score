@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   Chart as ChartJS,
@@ -39,10 +39,25 @@ const emit = defineEmits<{
 
 const router = useRouter();
 
-// 테마 상태
-const isDark = ref(false);
+// 테마 상태 실시간 감지
+const isDark = ref(typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : false);
+let themeObserver: MutationObserver | null = null;
+
 onMounted(() => {
-  isDark.value = document.documentElement.classList.contains('dark');
+  if (typeof document !== 'undefined') {
+    isDark.value = document.documentElement.classList.contains('dark');
+    themeObserver = new MutationObserver(() => {
+      isDark.value = document.documentElement.classList.contains('dark');
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  }
+});
+
+onUnmounted(() => {
+  if (themeObserver) {
+    themeObserver.disconnect();
+    themeObserver = null;
+  }
 });
 
 const toggleTheme = () => {
@@ -679,8 +694,9 @@ const openGameDetailModal = async (game: SessionGame) => {
 };
 
 const gameChartOptions = computed<ChartOptions<'line'>>(() => {
-  const textColor = isDark.value ? '#e5e5e5' : '#1a1a1a';
-  const gridColor = isDark.value ? '#444444' : '#e8e8e8';
+  const textColor = isDark.value ? '#f1f5f9' : '#1e293b';
+  const tickColor = isDark.value ? '#94a3b8' : '#64748b';
+  const gridColor = isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
 
   const datasets = selectedGameDetail.value?.chartData?.datasets || [];
   const allScores = datasets.flatMap(d => d.data);
@@ -717,7 +733,8 @@ const gameChartOptions = computed<ChartOptions<'line'>>(() => {
       x: {
         ticks: {
           autoSkip: false,
-          color: textColor,
+          color: tickColor,
+          font: { family: "'Noto Serif KR', serif" },
         },
         grid: {
           color: gridColor,
@@ -727,7 +744,8 @@ const gameChartOptions = computed<ChartOptions<'line'>>(() => {
         suggestedMin: Math.floor((minScore - pad) / 1000) * 1000,
         suggestedMax: Math.ceil((maxScore + pad) / 1000) * 1000,
         ticks: {
-          color: textColor,
+          color: tickColor,
+          font: { family: "'Noto Serif KR', serif" },
           callback: (value) => Number(value).toLocaleString() + '점',
         },
         grid: {
@@ -742,9 +760,15 @@ const gameChartOptions = computed<ChartOptions<'line'>>(() => {
           usePointStyle: true,
           pointStyle: 'rectRounded',
           color: textColor,
+          font: { family: "'Noto Serif KR', serif", size: 12 },
         }
       },
       tooltip: {
+        backgroundColor: isDark.value ? '#1e293b' : '#ffffff',
+        titleColor: isDark.value ? '#f8fafc' : '#0f172a',
+        bodyColor: isDark.value ? '#e2e8f0' : '#334155',
+        borderColor: isDark.value ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
+        borderWidth: 1,
         callbacks: {
           label: (context) => {
             const val = context.parsed.y;
@@ -1407,6 +1431,7 @@ const getRankClass = (rank: number) => {
               <div class="session-chart-wrapper">
                 <LineChart 
                   v-if="sessionChartData.datasets.length > 0" 
+                  :key="`session-chart-${selectedSession}-${isDark ? 'dark' : 'light'}`"
                   :data="sessionChartData" 
                   :options="sessionChartOptions" 
                 />
@@ -2758,7 +2783,7 @@ const getRankClass = (rank: number) => {
             >
               <LineChart
                 v-if="selectedGameDetail.chartData && selectedGameDetail.chartData.datasets.length > 0"
-                :key="`gdm-line-chart-${selectedGameDetail.gameId}-${selectedGameDetail.gameIndex}`"
+                :key="`gdm-line-chart-${selectedGameDetail.gameId}-${selectedGameDetail.gameIndex}-${isDark ? 'dark' : 'light'}`"
                 :data="selectedGameDetail.chartData"
                 :options="gameChartOptions"
               />
@@ -4777,6 +4802,9 @@ html.dark .gdm-chart-box {
   color: var(--text-dimmed, #64748b);
   font-size: 13px;
 }
+html.dark .gdm-empty-chart {
+  color: #94a3b8;
+}
 
 .gdm-hint {
   font-size: 12px;
@@ -4789,6 +4817,9 @@ html.dark .gdm-chart-box {
 }
 .gdm-hint:hover {
   text-decoration: underline;
+}
+html.dark .gdm-hint {
+  color: #60a5fa;
 }
 .gdm-legacy-notice {
   font-size: 11.5px;

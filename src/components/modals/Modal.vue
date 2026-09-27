@@ -4,7 +4,7 @@ import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
 import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputManual, ModalBackupArchive } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
-import { computed, ref, watch } from "vue"
+import { computed, ref, watch, onMounted, onUnmounted } from "vue"
 import { useI18n } from "vue-i18n"
 import { Line as LineChart } from "vue-chartjs"
 import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, CategoryScale, LinearScale, PointElement, type ChartOptions } from "chart.js"
@@ -16,6 +16,26 @@ const { t } = useI18n()
 ChartJS.register(Title, Tooltip, Legend, LineElement, CategoryScale, LinearScale, PointElement)
 ChartJS.defaults.font.family = "'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif" // 폰트 설정
 
+/**테마 상태 실시간 감지*/
+const isDark = ref(typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : false)
+let themeObserver: MutationObserver | null = null
+
+onMounted(() => {
+  if (typeof document !== 'undefined') {
+    isDark.value = document.documentElement.classList.contains('dark')
+    themeObserver = new MutationObserver(() => {
+      isDark.value = document.documentElement.classList.contains('dark')
+    })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+  }
+})
+
+onUnmounted(() => {
+  if (themeObserver) {
+    themeObserver.disconnect()
+    themeObserver = null
+  }
+})
 
 /**props 정의*/
 interface Props {
@@ -225,9 +245,9 @@ const scoreSheetInfo = computed(() => {
 
 /**점수차트 정보 계산*/
 const scoreChartInfo = computed(() => {
-  const isDarkTheme = document.documentElement.classList.contains('dark');
-  const textColor = isDarkTheme ? '#e5e5e5' : '#1a1a1a';
-  const gridColor = isDarkTheme ? '#444444' : '#e8e8e8';
+  const textColor = isDark.value ? '#f1f5f9' : '#1e293b';
+  const tickColor = isDark.value ? '#94a3b8' : '#64748b';
+  const gridColor = isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
 
   const sourcePlayers = (props.chartPlayers && props.chartPlayers.length > 0) ? props.chartPlayers : props.players;
   const sourceRecords = (props.chartRecords && props.chartRecords.score && props.chartRecords.score.length > 0) ? props.chartRecords : props.records;
@@ -309,7 +329,8 @@ const scoreChartInfo = computed(() => {
       x: {
         ticks: {
           autoSkip: false, // 모든 라벨 표시
-          color: textColor,
+          color: tickColor,
+          font: { family: "'Noto Serif KR', 'Noto Serif JP', serif" },
         },
         grid: {
           color: gridColor,
@@ -319,7 +340,8 @@ const scoreChartInfo = computed(() => {
         suggestedMin: Math.floor((minScore - pad) / 1000) * 1000,
         suggestedMax: Math.ceil((maxScore + pad) / 1000) * 1000,
         ticks: {
-          color: textColor,
+          color: tickColor,
+          font: { family: "'Noto Serif KR', 'Noto Serif JP', serif" },
           callback: (value) => Number(value).toLocaleString() + '점',
         },
         grid: {
@@ -334,7 +356,15 @@ const scoreChartInfo = computed(() => {
           usePointStyle: true, // 범례 모양 변경
           pointStyle: 'rectRounded',
           color: textColor,
+          font: { family: "'Noto Serif KR', 'Noto Serif JP', serif", size: 12 },
         }
+      },
+      tooltip: {
+        backgroundColor: isDark.value ? '#1e293b' : '#ffffff',
+        titleColor: isDark.value ? '#f8fafc' : '#0f172a',
+        bodyColor: isDark.value ? '#e2e8f0' : '#334155',
+        borderColor: isDark.value ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
+        borderWidth: 1,
       },
     },
   };
@@ -681,7 +711,7 @@ const getSignColor = (sign: number, x: boolean) => {
   <div v-else-if="modalInfo.type==='result_chart'" class="modal_content" @click.stop>
     <div class="container_resultchart" @click.stop="emit('show-modal', 'result_sheet')">
       <LineChart 
-        :key="`result-chart-${records?.time?.length || 0}-${players?.[0]?.name || ''}`"
+        :key="`result-chart-${records?.time?.length || 0}-${players?.[0]?.name || ''}-${isDark ? 'dark' : 'light'}`"
         :data="scoreChartInfo.data" 
         :options="scoreChartInfo.options"
       />
@@ -691,7 +721,7 @@ const getSignColor = (sign: number, x: boolean) => {
   <div v-else-if="modalInfo.type==='history_chart'" class="modal_content" @click.stop>
     <div class="container_resultchart" @click.stop="emit('show-modal', 'total_uma')">
       <LineChart 
-        :key="`history-chart-${chartRecords?.time?.length || 0}-${chartPlayers?.[0]?.name || ''}`"
+        :key="`history-chart-${chartRecords?.time?.length || 0}-${chartPlayers?.[0]?.name || ''}-${isDark ? 'dark' : 'light'}`"
         :data="scoreChartInfo.data" 
         :options="scoreChartInfo.options"
       />
