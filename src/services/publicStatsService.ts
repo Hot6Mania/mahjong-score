@@ -4,67 +4,21 @@
  * 스프레드시트 접근 주소(ID)는 하드코딩하지 않고, 서버 Secret 및 .env 암호화 토큰을 통해 복호화하여 사용합니다.
  */
 
-// 기본 내장 암호화 토큰 (평문 ID는 노출되지 않으며, 서버 Secret 미설정 시에도 안전하게 복호화되어 무설정 즉시 작동)
-const DEFAULT_ENCRYPTED_SPREADSHEET_ID = "am68XR1EK7z5R3BSAraD8QDkpTbgpvlnHrxdbQUJTI94QQfRZYzF6T5Ygv8m2z2RXsxDqHQxY-8GwcTEeS-mTQXZC_il30MV";
-const DEFAULT_ENCRYPTION_KEY = "mahjong_secret_salt_key_20260926";
-
-// 클라이언트 캐시된 스프레드시트 ID (복호화 결과)
+// 클라이언트 캐시된 스프레드시트 ID
 let resolvedClientSpreadsheetId: string | null = null;
 
 /**
- * 환경 변수(VITE_ENCRYPTED_SPREADSHEET_ID + VITE_ENCRYPTION_KEY 또는 VITE_SPREADSHEET_ID)에서
- * 스프레드시트 ID를 안전하게 복호화/해석합니다. (하드코딩 방지 및 무설정 즉시 작동 보장)
+ * 환경 변수(VITE_SPREADSHEET_ID)에서 스프레드시트 ID를 해석합니다.
+ * (보안을 위해 프로덕션 클라이언트에는 시트 ID가 노출되지 않으며, Cloudflare Worker를 통해 통신합니다)
  */
 export async function resolveSpreadsheetId(): Promise<string> {
   if (resolvedClientSpreadsheetId) return resolvedClientSpreadsheetId;
 
-  // 1. .env에 평문 VITE_SPREADSHEET_ID가 설정되어 있는 경우
+  // .env에 평문 VITE_SPREADSHEET_ID가 설정되어 있는 경우 (로컬 개발용)
   const plain = (import.meta as any).env?.VITE_SPREADSHEET_ID;
   if (plain && String(plain).trim()) {
     resolvedClientSpreadsheetId = String(plain).trim();
     return resolvedClientSpreadsheetId;
-  }
-
-  // 2. 암호화된 토큰 복호화 (.env 설정 우선, 미설정 시 기본 내장 암호화 토큰 사용)
-  const encToken = (import.meta as any).env?.VITE_ENCRYPTED_SPREADSHEET_ID || DEFAULT_ENCRYPTED_SPREADSHEET_ID;
-  const encKey = (import.meta as any).env?.VITE_ENCRYPTION_KEY || DEFAULT_ENCRYPTION_KEY;
-
-  if (encToken && encKey) {
-    try {
-      const rawKey = new TextEncoder().encode(String(encKey).padEnd(32, "0").slice(0, 32));
-      const cryptoKey = await crypto.subtle.importKey(
-        "raw",
-        rawKey,
-        { name: "AES-GCM" },
-        false,
-        ["decrypt"]
-      );
-
-      // Base64URL 디코딩 (브라우저 표준 atob 활용)
-      const base64 = String(encToken).replace(/-/g, "+").replace(/_/g, "/");
-      const binaryStr = atob(base64);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-
-      const iv = bytes.subarray(0, 12);
-      const ciphertext = bytes.subarray(12);
-
-      const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv },
-        cryptoKey,
-        ciphertext
-      );
-
-      const id = new TextDecoder().decode(decrypted);
-      if (id && id.trim()) {
-        resolvedClientSpreadsheetId = id.trim();
-        return resolvedClientSpreadsheetId;
-      }
-    } catch (e) {
-      console.warn("Failed to decrypt VITE_ENCRYPTED_SPREADSHEET_ID on client:", e);
-    }
   }
 
   return "";
@@ -148,7 +102,8 @@ function getWorkerUrl(): string {
   const envWorkerUrl = import.meta.env.VITE_GOOGLE_AUTH_WORKER_URL;
   if (envWorkerUrl) return envWorkerUrl.trim().replace(/\/+$/, '');
   const saved = localStorage.getItem("google_auth_worker_url");
-  return saved ? saved.trim().replace(/\/+$/, '') : '';
+  if (saved) return saved.trim().replace(/\/+$/, '');
+  return "https://mahjong-score.cnabe.workers.dev";
 }
 
 // 헬퍼: GViz 응답 문자열 파싱
@@ -1011,19 +966,35 @@ export async function fetchSessionDetailedStats(
     return {};
   }
 
+  const workerUrl = getWorkerUrl();
   const sId = spreadsheetId || await resolveSpreadsheetId();
-  if (!sId) return {};
+  if (!workerUrl && !sId) return {};
 
   // '전체 국별기록 (데이터)' 시트에서 실시간 전수 직접 집계
   try {
     if (!cachedAllRoundsTable) {
-      const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
-      const res = await fetch(gvizUrl);
-      if (res.ok) {
-        const text = await res.text();
-        const json = parseGVizResponse(text);
-        if (json && json.table) {
-          cachedAllRoundsTable = json.table;
+      if (workerUrl) {
+        try {
+          const res = await fetch(`${workerUrl}/api/public/rounds`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.table) {
+              cachedAllRoundsTable = data.table;
+            }
+          }
+        } catch (e) {
+          console.warn("fetch cachedAllRoundsTable from worker failed:", e);
+        }
+      }
+      if (!cachedAllRoundsTable && sId) {
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
+        const res = await fetch(gvizUrl);
+        if (res.ok) {
+          const text = await res.text();
+          const json = parseGVizResponse(text);
+          if (json && json.table) {
+            cachedAllRoundsTable = json.table;
+          }
         }
       }
     }
@@ -1807,9 +1778,23 @@ export async function fetchSessionGameDetail(
   const sessionNum = match ? parseInt(match[1], 10) : 0;
 
   if (sessionNum >= 9) {
+    const workerUrl = getWorkerUrl();
     const sId = spreadsheetId || await resolveSpreadsheetId();
-    if (sId) {
-      if (!cachedAllRoundsTable) {
+    if (!cachedAllRoundsTable) {
+      if (workerUrl) {
+        try {
+          const res = await fetch(`${workerUrl}/api/public/rounds`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.table) {
+              cachedAllRoundsTable = data.table;
+            }
+          }
+        } catch (e) {
+          console.warn("fetch cachedAllRoundsTable for gameDetail from worker failed:", e);
+        }
+      }
+      if (!cachedAllRoundsTable && sId) {
         try {
           const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
           const res = await fetch(gvizUrl);
@@ -1824,6 +1809,7 @@ export async function fetchSessionGameDetail(
           console.warn("fetch cachedAllRoundsTable for gameDetail failed:", e);
         }
       }
+    }
 
       if (cachedAllRoundsTable && cachedAllRoundsTable.rows) {
         const cleanGId = game.gameId ? game.gameId.trim() : "";
@@ -1959,7 +1945,6 @@ export async function fetchSessionGameDetail(
         }
       }
     }
-  }
 
   // 3. 레거시(1~8회차)이거나 세부 국별 기록이 없는 경우
   return {
