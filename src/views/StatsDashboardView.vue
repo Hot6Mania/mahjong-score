@@ -883,6 +883,7 @@ const loadAllData = async () => {
     statsMatrix.value = matrix;
     if (timeline) {
       ratingTimeline.value = timeline;
+      filterRatingTopN(5);
     }
     if (selectedSession.value) {
       await loadSessionDetail(selectedSession.value);
@@ -899,10 +900,12 @@ const loadAllData = async () => {
 // 레이팅 타임라인 및 인터랙티브 차트 상태
 // ==========================================
 const ratingTimeline = ref<AllPlayersRatingTrajectory | null>(null);
-const ratingChartRef = ref<any>(null);
+const ratingEmbeddedChartRef = ref<any>(null);
+const ratingModalChartRef = ref<any>(null);
 const isRatingTimelineModalOpen = ref(false);
 const selectedRatingSessionFilter = ref('');
 const hiddenRatingPlayerNames = ref<Set<string>>(new Set());
+const activeRatingPreset = ref<'top5' | 'top10' | 'all' | 'none' | 'session'>('top5');
 
 // 수식 KaTeX 렌더러
 const renderKatex = (latex: string) => {
@@ -918,34 +921,36 @@ const renderKatex = (latex: string) => {
 
 // 줌 배율 초기화
 const resetRatingChartZoom = () => {
-  if (ratingChartRef.value?.chart) {
-    ratingChartRef.value.chart.resetZoom();
+  if (ratingEmbeddedChartRef.value?.chart) {
+    ratingEmbeddedChartRef.value.chart.resetZoom();
+  }
+  if (ratingModalChartRef.value?.chart) {
+    ratingModalChartRef.value.chart.resetZoom();
   }
 };
 
 // 상위 N명 필터
 const filterRatingTopN = (n: number) => {
-  hiddenRatingPlayerNames.value.clear();
+  activeRatingPreset.value = n === 5 ? 'top5' : (n === 10 ? 'top10' : 'none');
+  selectedRatingSessionFilter.value = '';
+  const newSet = new Set<string>();
   const datasets = ratingTimeline.value?.datasets || [];
   datasets.forEach((ds, idx) => {
     if (idx >= n) {
-      hiddenRatingPlayerNames.value.add(ds.name);
+      newSet.add(ds.name);
     }
   });
-  if (ratingChartRef.value?.chart) {
-    ratingChartRef.value.chart.update();
-  }
+  hiddenRatingPlayerNames.value = newSet;
 };
 
 // 전체 선택 / 전체 해제
 const filterRatingAll = (showAll: boolean) => {
+  activeRatingPreset.value = showAll ? 'all' : 'none';
+  selectedRatingSessionFilter.value = '';
   if (showAll) {
-    hiddenRatingPlayerNames.value.clear();
+    hiddenRatingPlayerNames.value = new Set();
   } else {
     hiddenRatingPlayerNames.value = new Set(ratingTimeline.value?.datasets.map(d => d.name) || []);
-  }
-  if (ratingChartRef.value?.chart) {
-    ratingChartRef.value.chart.update();
   }
 };
 
@@ -962,9 +967,10 @@ const availableRatingSessions = computed(() => {
 // 특정 회차 참가자 필터링 감시
 watch(selectedRatingSessionFilter, (sessName) => {
   if (!sessName) {
-    filterRatingTopN(8);
+    filterRatingTopN(5);
     return;
   }
+  activeRatingPreset.value = 'session';
   const rows = statsMatrix.value?.rows || [];
   const participantNames = new Set(
     rows
@@ -972,15 +978,13 @@ watch(selectedRatingSessionFilter, (sessName) => {
       .map((r: StatsMatrixRow) => r.name)
   );
 
-  hiddenRatingPlayerNames.value.clear();
+  const newSet = new Set<string>();
   ratingTimeline.value?.datasets.forEach(ds => {
     if (!participantNames.has(ds.name)) {
-      hiddenRatingPlayerNames.value.add(ds.name);
+      newSet.add(ds.name);
     }
   });
-  if (ratingChartRef.value?.chart) {
-    ratingChartRef.value.chart.update();
-  }
+  hiddenRatingPlayerNames.value = newSet;
 });
 
 const ratingChartData = computed(() => {
@@ -992,11 +996,18 @@ const ratingChartData = computed(() => {
     data: d.data,
     borderColor: d.color,
     backgroundColor: d.color,
-    borderWidth: 1.6,
-    pointRadius: 0,
-    pointHoverRadius: 5,
+    borderWidth: 1.8,
+    pointRadius: (ctx: any) => {
+      const idx = ctx.dataIndex;
+      if (idx === 0) return 3;
+      if (idx === d.data.length - 1) return 3.5;
+      return d.played?.[idx] ? 2.2 : 0;
+    },
+    pointHoverRadius: 6,
+    pointHitRadius: 8,
     played: d.played,
     deltas: d.deltas,
+    umas: d.umas,
     ranks: d.ranks,
     hasMarker: d.hasMarker,
     tension: 0.15,
@@ -1022,19 +1033,20 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
         boxWidth: 8,
         color: isDark.value ? '#cbd5e1' : '#334155',
       },
-      onClick: (_e, legendItem, legend) => {
-        const chart = legend.chart;
+      onClick: (_e, legendItem) => {
         const index = legendItem.datasetIndex;
         if (index !== undefined) {
-          const ds = chart.data.datasets[index] as any;
+          const ds = ratingChartData.value.datasets[index] as any;
+          if (!ds) return;
           const name = ds.label;
-          if (hiddenRatingPlayerNames.value.has(name)) {
-            hiddenRatingPlayerNames.value.delete(name);
+          const newSet = new Set(hiddenRatingPlayerNames.value);
+          if (newSet.has(name)) {
+            newSet.delete(name);
           } else {
-            hiddenRatingPlayerNames.value.add(name);
+            newSet.add(name);
           }
-          chart.setDatasetVisibility(index, !hiddenRatingPlayerNames.value.has(name));
-          chart.update();
+          hiddenRatingPlayerNames.value = newSet;
+          activeRatingPreset.value = 'none';
         }
       }
     },
@@ -1049,6 +1061,7 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
           const isPlayed = dataset.played?.[context.dataIndex];
           const delta = dataset.deltas?.[context.dataIndex];
           const rank = dataset.ranks?.[context.dataIndex];
+          const uma = dataset.umas?.[context.dataIndex];
 
           if (context.dataIndex === 0) {
             return `${dataset.label}: R${val} (시작)`;
@@ -1057,7 +1070,8 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
           if (isPlayed && delta !== null && delta !== undefined) {
             const dStr = delta >= 0 ? `+${delta}` : `${delta}`;
             const rStr = rank ? ` [${rank}위]` : '';
-            return `${dataset.label}: R${val} (${dStr}pt)${rStr}`;
+            const umaStr = (uma !== null && uma !== undefined) ? ` (우마: ${uma > 0 ? '+' : ''}${uma})` : '';
+            return `${dataset.label}: R${val} (${dStr}pt)${rStr}${umaStr}`;
           }
           return `${dataset.label}: R${val} (미참가)`;
         }
@@ -1090,11 +1104,14 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
       }
     },
     y: {
+      suggestedMin: 1200,
+      suggestedMax: 1700,
       grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
       ticks: {
         font: { family: "'Noto Serif KR', serif", size: 11 },
         color: isDark.value ? '#94a3b8' : '#64748b',
-        callback: (value) => `R${value}`
+        callback: (value) => `R${value}`,
+        stepSize: 50
       }
     }
   }
@@ -1111,6 +1128,27 @@ const modalPlayerRatingHistory = computed(() => {
   if (selectedPlayer.value.ratingHistory && selectedPlayer.value.ratingHistory.length > 0) {
     return selectedPlayer.value.ratingHistory;
   }
+  const pName = selectedPlayer.value.name;
+  if (pName && ratingTimeline.value) {
+    const ds = ratingTimeline.value.datasets.find(d => d.name === pName);
+    if (ds && ds.data) {
+      const records: any[] = [];
+      const labels = ratingTimeline.value.labels;
+      ds.data.forEach((ord, idx) => {
+        if (idx === 0) return;
+        if (ds.played && ds.played[idx]) {
+          records.push({
+            gameIndex: records.length + 1,
+            ordinal: ord,
+            delta: ds.deltas?.[idx] ?? 0,
+            sessionLabel: labels[idx] || `${records.length + 1}국`,
+            rank: ds.ranks?.[idx]
+          });
+        }
+      });
+      return records;
+    }
+  }
   return [];
 });
 
@@ -1118,13 +1156,12 @@ const modalPlayerRatingSummary = computed(() => {
   const hist = modalPlayerRatingHistory.value;
   const current = selectedPlayer.value?.rating ?? 1320;
   if (!hist || hist.length === 0) {
-    return { current, peak: current, lowest: current, totalGames: 0 };
+    return { current, peak: current, totalGames: 0 };
   }
   const ordinals = hist.map(h => h.ordinal);
   return {
     current: ordinals[ordinals.length - 1],
     peak: Math.max(...ordinals),
-    lowest: Math.min(...ordinals),
     totalGames: hist.length
   };
 });
@@ -1619,27 +1656,99 @@ const getRankClass = (rank: number) => {
       <!-- TAB 2: 레이팅 & 추이                            -->
       <!-- ============================================== -->
       <section v-else-if="activeTab === 'rating'" class="tab-rating">
-        <!-- 1. 전체 플레이어 레이팅 변동 추이 모달 진입 카드 -->
-        <div class="rating-chart-entry-card">
-          <div class="rating-entry-info">
-            <h2 class="rating-section-title">전체 플레이어 레이팅 변동 추이</h2>
-            <span class="rating-section-desc">역대 모든 대국의 플레이어별 레이팅 변화 추이를 전용 인터랙티브 차트 모달로 확인합니다.</span>
+        <!-- 1. 전체 플레이어 레이팅 변동 추이 인라인 차트 카드 -->
+        <div class="rating-chart-card">
+          <div class="rating-chart-header">
+            <div class="rating-chart-title-group">
+              <h2 class="rating-section-title">전체 플레이어 레이팅 변동 추이</h2>
+              <span class="rating-section-desc">마우스 휠 스크롤 / 핀치 줌으로 확대하고 좌우 드래그로 타임라인을 탐색할 수 있습니다.</span>
+            </div>
+            <button type="button" class="btn-open-rating-modal" @click="isRatingTimelineModalOpen = true" title="전체화면 큰 화면으로 확대합니다">
+              <svg class="dashboard-icon-svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <polyline points="9 21 3 21 3 15"></polyline>
+                <line x1="21" y1="3" x2="14" y2="10"></line>
+                <line x1="3" y1="21" x2="10" y2="14"></line>
+              </svg>
+              전체화면 확대
+            </button>
           </div>
-          <button type="button" class="btn-open-rating-modal" @click="isRatingTimelineModalOpen = true">
-            <svg class="dashboard-icon-svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="20" x2="18" y2="10"></line>
-              <line x1="12" y1="20" x2="12" y2="4"></line>
-              <line x1="6" y1="20" x2="6" y2="14"></line>
-            </svg>
-            전체화면 그래프 열기
-          </button>
+
+          <!-- 툴바: 퀵 필터 버튼 + 회차별 필터 + 줌 리셋 -->
+          <div class="rating-chart-toolbar">
+            <div class="toolbar-left">
+              <span class="toolbar-label">선택:</span>
+              <button 
+                type="button" 
+                class="btn-rating-filter" 
+                :class="{ active: activeRatingPreset === 'top5' }" 
+                @click="filterRatingTopN(5)"
+              >
+                상위 5명
+              </button>
+              <button 
+                type="button" 
+                class="btn-rating-filter" 
+                :class="{ active: activeRatingPreset === 'top10' }" 
+                @click="filterRatingTopN(10)"
+              >
+                상위 10명
+              </button>
+              <button 
+                type="button" 
+                class="btn-rating-filter" 
+                :class="{ active: activeRatingPreset === 'all' }" 
+                @click="filterRatingAll(true)"
+              >
+                전체 선택
+              </button>
+              <button 
+                type="button" 
+                class="btn-rating-filter" 
+                :class="{ active: activeRatingPreset === 'none' }" 
+                @click="filterRatingAll(false)"
+              >
+                전체 해제
+              </button>
+            </div>
+
+            <div class="toolbar-right">
+              <div class="session-filter-group">
+                <span class="toolbar-label">회차 필터:</span>
+                <select v-model="selectedRatingSessionFilter" class="session-filter-select">
+                  <option value="">전체 회차</option>
+                  <option v-for="s in availableRatingSessions" :key="s" :value="s">
+                    {{ s }}
+                  </option>
+                </select>
+              </div>
+
+              <button type="button" class="btn-zoom-reset" @click="resetRatingChartZoom" title="확대/축소 배율을 초기화합니다">
+                줌 리셋
+              </button>
+            </div>
+          </div>
+
+          <!-- 차트 캔버스 영역 -->
+          <div class="rating-inline-chart-wrapper">
+            <div v-if="ratingChartData.datasets.length > 0" class="rating-inline-chart-inner">
+              <LineChart 
+                ref="ratingEmbeddedChartRef" 
+                :data="ratingChartData" 
+                :options="ratingChartOptions" 
+              />
+            </div>
+            <div v-else class="rating-chart-empty">
+              레이팅 변동 이력 데이터를 불러오는 중이거나 기록이 없습니다.
+            </div>
+          </div>
         </div>
 
         <!-- 2. 레이팅 순위표 -->
         <div class="rating-leaderboard-card">
           <div class="leaderboard-header">
             <h2 class="rating-section-title">레이팅 순위 및 현황</h2>
-            <span class="rating-section-desc">OpenSkill 알고리즘으로 산출된 보수적 레이팅(R) 기준 랭킹입니다.</span>
+            <span class="rating-section-desc">OpenSkill 알고리즘으로 산출된 레이팅(R) 기준 랭킹입니다.</span>
           </div>
 
           <div class="table-container">
@@ -1648,9 +1757,8 @@ const getRankClass = (rank: number) => {
                 <tr>
                   <th style="width: 50px; text-align: center;">순위</th>
                   <th style="min-width: 100px;">이름</th>
-                  <th style="min-width: 90px; text-align: center;">표기 레이팅 (R)</th>
+                  <th style="min-width: 90px; text-align: center;">레이팅 (R)</th>
                   <th style="min-width: 80px; text-align: center;">역대 최고</th>
-                  <th style="min-width: 80px; text-align: center;">역대 최저</th>
                   <th style="min-width: 70px; text-align: center;">대국 수</th>
                   <th style="min-width: 70px; text-align: center;">평균 (μ)</th>
                   <th style="min-width: 70px; text-align: center;">불확실도 (σ)</th>
@@ -1683,9 +1791,6 @@ const getRankClass = (rank: number) => {
                   </td>
                   <td style="text-align: center; color: #16a34a; font-weight: 600;">
                     R{{ player.ratingPeak ?? (player.ratingHistory && player.ratingHistory.length > 0 ? Math.max(...player.ratingHistory.map(h => h.ordinal)) : (player.rating ?? 1320)) }}
-                  </td>
-                  <td style="text-align: center; color: #dc2626; font-weight: 600;">
-                    R{{ player.ratingLowest ?? (player.ratingHistory && player.ratingHistory.length > 0 ? Math.min(...player.ratingHistory.map(h => h.ordinal)) : (player.rating ?? 1320)) }}
                   </td>
                   <td style="text-align: center;">
                     {{ player.totalGames }}전
@@ -1723,7 +1828,7 @@ const getRankClass = (rank: number) => {
             </div>
 
             <div class="formula-box">
-              <div class="formula-tag">3. 보수적 표기 레이팅 (Conservative Rating)</div>
+              <div class="formula-tag">3. OpenSkill 레이팅 산출 (Display Rating)</div>
               <div class="formula-latex" v-html="renderKatex('R = \\mathrm{round}(\\mu - 1.5 \\times \\sigma)')"></div>
               <p class="formula-explanation">불확실도를 차감하여 대국 수가 적은 상태에서의 랭킹 과대평가를 완충합니다.</p>
             </div>
@@ -1752,7 +1857,7 @@ const getRankClass = (rank: number) => {
                 <tr>
                   <td><code v-html="renderKatex('R_0')"></code></td>
                   <td>1320</td>
-                  <td>시작 표기 레이팅 (\mu_0 - 1.5 \times \sigma_0)</td>
+                  <td>시작 레이팅 (\mu_0 - 1.5 \times \sigma_0)</td>
                 </tr>
                 <tr>
                   <td><code v-html="renderKatex('\\beta')"></code></td>
@@ -3258,10 +3363,6 @@ const getRankClass = (rank: number) => {
                   <span class="summary_value text_positive">R{{ modalPlayerRatingSummary.peak }}</span>
                 </div>
                 <div class="summary_stat_box">
-                  <span class="summary_label">역대 최저</span>
-                  <span class="summary_value text_negative">R{{ modalPlayerRatingSummary.lowest }}</span>
-                </div>
-                <div class="summary_stat_box">
                   <span class="summary_label">기록 대국 수</span>
                   <span class="summary_value">{{ modalPlayerRatingSummary.totalGames }}전</span>
                 </div>
@@ -3446,10 +3547,38 @@ const getRankClass = (rank: number) => {
           <div class="rating-modal-toolbar">
             <div class="toolbar-left">
               <span class="toolbar-label">선택:</span>
-              <button type="button" class="btn-rating-filter" @click="filterRatingTopN(5)">상위 5명</button>
-              <button type="button" class="btn-rating-filter" @click="filterRatingTopN(10)">상위 10명</button>
-              <button type="button" class="btn-rating-filter" @click="filterRatingAll(true)">전체 선택</button>
-              <button type="button" class="btn-rating-filter" @click="filterRatingAll(false)">전체 해제</button>
+              <button 
+                type="button" 
+                class="btn-rating-filter" 
+                :class="{ active: activeRatingPreset === 'top5' }" 
+                @click="filterRatingTopN(5)"
+              >
+                상위 5명
+              </button>
+              <button 
+                type="button" 
+                class="btn-rating-filter" 
+                :class="{ active: activeRatingPreset === 'top10' }" 
+                @click="filterRatingTopN(10)"
+              >
+                상위 10명
+              </button>
+              <button 
+                type="button" 
+                class="btn-rating-filter" 
+                :class="{ active: activeRatingPreset === 'all' }" 
+                @click="filterRatingAll(true)"
+              >
+                전체 선택
+              </button>
+              <button 
+                type="button" 
+                class="btn-rating-filter" 
+                :class="{ active: activeRatingPreset === 'none' }" 
+                @click="filterRatingAll(false)"
+              >
+                전체 해제
+              </button>
             </div>
 
             <div class="toolbar-right">
@@ -3473,7 +3602,7 @@ const getRankClass = (rank: number) => {
           <div class="rating-modal-chart-wrapper">
             <div v-if="ratingChartData.datasets.length > 0" class="rating-modal-chart-inner">
               <LineChart 
-                ref="ratingChartRef" 
+                ref="ratingModalChartRef" 
                 :data="ratingChartData" 
                 :options="ratingChartOptions" 
               />
@@ -5692,6 +5821,30 @@ html.dark .gdm-legacy-notice {
   border-color: #3b82f6;
 }
 
+.btn-rating-filter.active {
+  background: #3b82f6 !important;
+  color: #ffffff !important;
+  border-color: #2563eb !important;
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.35);
+}
+
+html.dark .btn-rating-filter {
+  background: #27272a;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+html.dark .btn-rating-filter:hover {
+  background: #3b82f6;
+  color: #ffffff;
+  border-color: #60a5fa;
+}
+html.dark .btn-rating-filter.active {
+  background: #3b82f6 !important;
+  color: #ffffff !important;
+  border-color: #60a5fa !important;
+}
+
 .rating-chart-wrapper {
   position: relative;
   width: 100%;
@@ -5837,13 +5990,13 @@ html.dark .formula-latex {
 
 .rating_summary_grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
 @media (max-width: 600px) {
   .rating_summary_grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 
@@ -5862,32 +6015,60 @@ html.dark .formula-latex {
   font-size: 13px;
 }
 
-/* 레이팅 진입 카드 */
-.rating-chart-entry-card {
+/* 레이팅 인라인 차트 카드 */
+.rating-chart-card {
+  background-color: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.rating-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 14px;
+  gap: 12px;
+}
+.rating-chart-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rating-chart-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  background-color: var(--card-bg-color, #ffffff);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 16px 20px;
-  margin-bottom: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+.rating-inline-chart-wrapper {
+  width: 100%;
+  height: 440px;
+  position: relative;
+  overflow: hidden;
 }
 @media (max-width: 640px) {
-  .rating-chart-entry-card {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
+  .rating-inline-chart-wrapper {
+    height: 340px;
   }
 }
+.rating-inline-chart-inner {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
 .btn-open-rating-modal {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 16px;
-  font-size: 13px;
+  padding: 7px 14px;
+  font-size: 12.5px;
   font-weight: 700;
   color: #ffffff !important;
   background-color: #4f46e5;

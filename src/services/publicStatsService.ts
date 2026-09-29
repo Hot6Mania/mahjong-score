@@ -919,6 +919,16 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
         const text = await res.text();
         const data = parseGVizResponse(text);
         if (data && data.table && data.table.rows && data.table.rows.length > 0) {
+          // '레이팅' 시트가 없을 경우 GViz가 첫 번째 시트(통계 등)를 반환하므로 헤더를 검증
+          const isRatingSheet = data.table.cols && data.table.cols.some((c: any) => c && (c.label === '순위' || c.label === '레이팅'));
+          const isRatingRow0 = data.table.rows[0] && data.table.rows[0].c && data.table.rows[0].c.some((c: any) => {
+            const s = getCellStr(c).trim();
+            return s === '순위' || s === '레이팅' || s === 'μ (실력)';
+          });
+          if (!isRatingSheet && !isRatingRow0) {
+            throw new Error("'레이팅' 시트가 존재하지 않아 기본 시트가 반환되었습니다.");
+          }
+
           const map: Record<string, PlayerRating> = {};
           data.table.rows.forEach((r: any) => {
             if (!r.c) return;
@@ -1635,6 +1645,7 @@ export interface RatingTrajectoryDataset {
   color: string;
   data: number[];
   deltas: (number | null)[];
+  umas?: (number | null)[];
   ranks: (number | null)[];
   played: boolean[];
   hasMarker: boolean[];
@@ -1668,6 +1679,7 @@ export function calculateAllPlayersRatingTrajectory(
   const trajMap: Record<string, number[]> = {};
   const playedMap: Record<string, boolean[]> = {};
   const deltasMap: Record<string, (number | null)[]> = {};
+  const umasMap: Record<string, (number | null)[]> = {};
   const ranksMap: Record<string, (number | null)[]> = {};
   const currentRatingMap: Record<string, number> = {};
 
@@ -1675,6 +1687,7 @@ export function calculateAllPlayersRatingTrajectory(
     trajMap[name] = [initialRating];
     playedMap[name] = [false];
     deltasMap[name] = [null];
+    umasMap[name] = [null];
     ranksMap[name] = [null];
     currentRatingMap[name] = initialRating;
   });
@@ -1688,11 +1701,13 @@ export function calculateAllPlayersRatingTrajectory(
         trajMap[name].push(match.ordinal);
         playedMap[name].push(true);
         deltasMap[name].push(match.delta);
+        umasMap[name].push(match.uma ?? null);
         ranksMap[name].push(match.rank);
       } else {
         trajMap[name].push(currentRatingMap[name]); // 이전 점수 유지
         playedMap[name].push(false);
         deltasMap[name].push(null);
+        umasMap[name].push(null);
         ranksMap[name].push(null);
       }
     });
@@ -1702,6 +1717,7 @@ export function calculateAllPlayersRatingTrajectory(
     const data = trajMap[name];
     const played = playedMap[name];
     const deltas = deltasMap[name];
+    const umas = umasMap[name];
     const ranks = ranksMap[name];
     const finalRating = currentRatingMap[name];
 
@@ -1720,6 +1736,7 @@ export function calculateAllPlayersRatingTrajectory(
       finalRating,
       played,
       deltas,
+      umas,
       ranks,
       hasMarker
     };
@@ -1750,6 +1767,16 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise
         const text = await res.text();
         const data = parseGVizResponse(text);
         if (data && data.table && data.table.rows && data.table.rows.length > 0) {
+          // '레이팅 이력' 시트가 없을 경우 GViz가 첫 번째 시트를 반환하므로 헤더를 검증
+          const isHistorySheet = data.table.cols && data.table.cols.some((c: any) => c && (c.label === '대국 번호' || c.label === '1위 이름' || c.label === '1위 점수' || c.label === '1위'));
+          const isHistoryRow0 = data.table.rows[0] && data.table.rows[0].c && data.table.rows[0].c.some((c: any) => {
+            const s = getCellStr(c).trim();
+            return s === '대국 번호' || s === '1위 이름' || s === '1위 점수' || s === '1위';
+          });
+          if (!isHistorySheet && !isHistoryRow0) {
+            throw new Error("'레이팅 이력' 시트가 존재하지 않아 기본 시트가 반환되었습니다.");
+          }
+
           const historyRecords: GameRatingHistoryRecord[] = [];
           data.table.rows.forEach((r: any) => {
             if (!r.c) return;
@@ -1758,18 +1785,32 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise
             const dateStr = getCellStr(r.c[2]).trim();
             if (!sessLabel || sessLabel === '회차') return;
 
+            // 5열(우마 포함) 또는 4열(점수만) 규격 자동 판별
+            const is5Col = r.c.length >= 23 || (r.c[5] && typeof r.c[5].v === 'number' && Math.abs(Number(r.c[5].v)) <= 150 && r.c[6] && Number(r.c[6].v) > 800);
+            const stride = is5Col ? 5 : 4;
+
             const pList: any[] = [];
             for (let i = 0; i < 4; i++) {
-              const baseCol = 3 + i * 4;
+              const baseCol = 3 + i * stride;
               const pName = getCellStr(r.c[baseCol]).trim();
               if (pName) {
                 const pScore = Number(getCellNum(r.c[baseCol + 1])) || 0;
-                const pOrd = Number(getCellNum(r.c[baseCol + 2])) || 1320;
-                const pDelta = Number(String(getCellStr(r.c[baseCol + 3]) || '').replace('+', '')) || 0;
+                let pUma = 0;
+                let pOrd = 1320;
+                let pDelta = 0;
+                if (is5Col) {
+                  pUma = Number(getCellNum(r.c[baseCol + 2])) || 0;
+                  pOrd = Number(getCellNum(r.c[baseCol + 3])) || 1320;
+                  pDelta = Number(String(getCellStr(r.c[baseCol + 4]) || '').replace('+', '')) || 0;
+                } else {
+                  pOrd = Number(getCellNum(r.c[baseCol + 2])) || 1320;
+                  pDelta = Number(String(getCellStr(r.c[baseCol + 3]) || '').replace('+', '')) || 0;
+                }
                 pList.push({
                   name: pName,
                   rank: i + 1,
                   score: pScore,
+                  uma: pUma,
                   ordinal: pOrd,
                   delta: pDelta
                 });

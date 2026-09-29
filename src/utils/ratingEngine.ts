@@ -52,13 +52,14 @@ export interface GameRatingHistoryRecord {
     name: string;
     rank: number;
     score: number;
+    uma: number;
     ordinal: number;
     delta: number;
   }[];
 }
 
 /**
- * 표시 레이팅(보수적 랭킹 지표) 계산: μ - 1.5σ (정수 반올림)
+ * 표시 레이팅 계산: μ - 1.5σ (정수 반올림)
  * 초기값(mu=1500, sigma=120)일 때 약 1320점
  */
 export function computeOrdinal(mu: number, sigma: number): number {
@@ -118,11 +119,13 @@ export function calculateMatchRatings(
 
   // 2. 각 플레이어별 순수 우마(Uma) 직접 반영 갱신
   playerStates.forEach(({ input: p, prev }) => {
-    // 순수 우마 (미제공 시 점수 기반 폴백: (score - 30000)/1000)
+    // 순수 우마 (기록된 우마 직접 사용, 미기재 시 표준 마작 반환점/오카/우마 규칙 기반 폴백)
     let rawUma = p.uma;
     if (rawUma === undefined || isNaN(rawUma)) {
       if (p.score !== undefined && !isNaN(p.score)) {
-        rawUma = (p.score - 30000) / 1000;
+        const rankUma = p.rank === 1 ? 20 : (p.rank === 2 ? 10 : (p.rank === 3 ? -10 : -20));
+        const oka = p.rank === 1 ? 20 : 0;
+        rawUma = parseFloat((((p.score - 30000) / 1000) + rankUma + oka).toFixed(1));
       } else {
         rawUma = p.rank === 1 ? 50 : (p.rank === 2 ? 10 : (p.rank === 3 ? -15 : -45));
       }
@@ -259,6 +262,7 @@ export function replayAllHistoricalGames(
           name: p.name,
           rank: p.rank,
           score: p.score || 0,
+          uma: p.uma ?? 0,
           ordinal: updatedRatings[p.name]?.ordinal ?? computeOrdinal(DEFAULT_MU, DEFAULT_SIGMA),
           delta: matchDeltas[p.name]?.delta ?? 0
         }))
@@ -312,6 +316,7 @@ export function replayAllHistoricalGames(
           name: p.name,
           rank: p.rank,
           score: p.score || 0,
+          uma: p.uma ?? 0,
           ordinal: updatedRatings[p.name]?.ordinal ?? computeOrdinal(DEFAULT_MU, DEFAULT_SIGMA),
           delta: matchDeltas[p.name]?.delta ?? 0
         }))

@@ -1921,7 +1921,7 @@ export const ensureRatingHistorySheetExists = async (spreadsheetId: string): Pro
                 title: RATING_HISTORY_SHEET_TITLE,
                 gridProperties: {
                   rowCount: 500,
-                  columnCount: 22,
+                  columnCount: 25,
                   frozenRowCount: 1
                 }
               }
@@ -1933,14 +1933,14 @@ export const ensureRatingHistorySheetExists = async (spreadsheetId: string): Pro
 
     const headers = [
       '대국 번호', '회차', '일시',
-      '1위 이름', '1위 점수', '1위 R', '1위 Δ',
-      '2위 이름', '2위 점수', '2위 R', '2위 Δ',
-      '3위 이름', '3위 점수', '3위 R', '3위 Δ',
-      '4위 이름', '4위 점수', '4위 R', '4위 Δ'
+      '1위 이름', '1위 점수', '1위 우마', '1위 R', '1위 Δ',
+      '2위 이름', '2위 점수', '2위 우마', '2위 R', '2위 Δ',
+      '3위 이름', '3위 점수', '3위 우마', '3위 R', '3위 Δ',
+      '4위 이름', '4위 점수', '4위 우마', '4위 R', '4위 Δ'
     ];
     await window.gapi.client.sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:S1`,
+      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:W1`,
       valueInputOption: 'USER_ENTERED',
       resource: {
         values: [headers]
@@ -1987,11 +1987,11 @@ export const ensureRatingSheetExists = async (spreadsheetId: string): Promise<bo
     });
 
     const headers = [
-      '순위', '이름', '레이팅', 'μ (실력)', 'σ (불확실성)', '대국수', '최고 레이팅', '최저 레이팅', '최근 등락 (Δ)', '최종 갱신'
+      '순위', '이름', '레이팅', 'μ (실력)', 'σ (불확실성)', '대국수', '최고 레이팅', '최근 등락 (Δ)', '최종 갱신'
     ];
     await window.gapi.client.sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `'${RATING_SHEET_TITLE}'!A1:J1`,
+      range: `'${RATING_SHEET_TITLE}'!A1:I1`,
       valueInputOption: 'USER_ENTERED',
       resource: {
         values: [headers]
@@ -2014,21 +2014,36 @@ export const fetchRatingsFromSheet = async (spreadsheetId: string): Promise<Reco
   try {
     const res = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `'${RATING_SHEET_TITLE}'!A2:J100`
+      range: `'${RATING_SHEET_TITLE}'!A1:J100`
     });
-    const rows = res.result.values || [];
-    rows.forEach((r: any) => {
+    const allRows = res.result.values || [];
+    if (allRows.length === 0) return result;
+
+    const headerRow = allRows[0] || [];
+    const hasLowestCol = headerRow.includes('최저 레이팅');
+    const dataRows = allRows.slice(1);
+
+    dataRows.forEach((r: any) => {
       const name = r[1] ? String(r[1]).trim() : '';
       if (!name || name === '이름') return;
 
-      const ordinal = Number(r[2]) || 1167;
+      const ordinal = Number(r[2]) || 1320;
       const mu = Number(r[3]) || 1500;
-      const sigma = Number(r[4]) || 166.67;
+      const sigma = Number(r[4]) || 120;
       const games = Number(r[5]) || 0;
       const peak = Number(r[6]) || ordinal;
-      const lowest = Number(r[7]) || ordinal;
-      const recentDelta = Number(String(r[8] || '').replace('+', '')) || 0;
-      const lastUpdated = r[9] ? String(r[9]).trim() : '';
+      let lowest = ordinal;
+      let recentDelta = 0;
+      let lastUpdated = '';
+
+      if (hasLowestCol) {
+        lowest = Number(r[7]) || ordinal;
+        recentDelta = Number(String(r[8] || '').replace('+', '')) || 0;
+        lastUpdated = r[9] ? String(r[9]).trim() : '';
+      } else {
+        recentDelta = Number(String(r[7] || '').replace('+', '')) || 0;
+        lastUpdated = r[8] ? String(r[8]).trim() : '';
+      }
 
       result[name] = {
         name,
@@ -2067,17 +2082,16 @@ export const batchSaveAllRatingsToSheet = async (
     parseFloat(p.sigma.toFixed(1)),
     p.games,
     p.peakOrdinal,
-    p.lowestOrdinal,
     p.recentDelta >= 0 ? `+${p.recentDelta}` : `${p.recentDelta}`,
     p.lastUpdated || ''
   ]);
 
   if (rows.length === 0) return;
 
-  // 1. 데이터 영역 업데이트 (A2:J...)
+  // 1. 데이터 영역 업데이트 (A2:I...)
   await window.gapi.client.sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `'${RATING_SHEET_TITLE}'!A2:J${1 + rows.length}`,
+    range: `'${RATING_SHEET_TITLE}'!A2:I${1 + rows.length}`,
     valueInputOption: 'USER_ENTERED',
     resource: {
       values: rows
@@ -2109,10 +2123,10 @@ export const batchSaveRatingHistoryToSheet = async (
 
     const headers = [
       '대국 번호', '회차', '일시',
-      '1위 이름', '1위 점수', '1위 R', '1위 Δ',
-      '2위 이름', '2위 점수', '2위 R', '2위 Δ',
-      '3위 이름', '3위 점수', '3위 R', '3위 Δ',
-      '4위 이름', '4위 점수', '4위 R', '4위 Δ'
+      '1위 이름', '1위 점수', '1위 우마', '1위 R', '1위 Δ',
+      '2위 이름', '2위 점수', '2위 우마', '2위 R', '2위 Δ',
+      '3위 이름', '3위 점수', '3위 우마', '3위 R', '3위 Δ',
+      '4위 이름', '4위 점수', '4위 우마', '4위 R', '4위 Δ'
     ];
 
     const rows: (string | number)[][] = [headers];
@@ -2128,9 +2142,9 @@ export const batchSaveRatingHistoryToSheet = async (
       for (let i = 0; i < 4; i++) {
         const p = sorted[i];
         if (p) {
-          row.push(p.name, p.score, p.ordinal, (p.delta >= 0 ? `+${p.delta}` : `${p.delta}`));
+          row.push(p.name, p.score, p.uma ?? 0, p.ordinal, (p.delta >= 0 ? `+${p.delta}` : `${p.delta}`));
         } else {
-          row.push('', '', '', '');
+          row.push('', '', '', '', '');
         }
       }
       rows.push(row);
@@ -2138,12 +2152,12 @@ export const batchSaveRatingHistoryToSheet = async (
 
     await window.gapi.client.sheets.spreadsheets.values.clear({
       spreadsheetId,
-      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:S1000`
+      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:W1000`
     });
 
     await window.gapi.client.sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:S${rows.length}`,
+      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:W${rows.length}`,
       valueInputOption: 'USER_ENTERED',
       resource: {
         values: rows
@@ -2176,15 +2190,15 @@ export const appendRatingHistoryToSheet = async (
     for (let i = 0; i < 4; i++) {
       const p = sorted[i];
       if (p) {
-        row.push(p.name, p.score, p.ordinal, (p.delta >= 0 ? `+${p.delta}` : `${p.delta}`));
+        row.push(p.name, p.score, p.uma ?? 0, p.ordinal, (p.delta >= 0 ? `+${p.delta}` : `${p.delta}`));
       } else {
-        row.push('', '', '', '');
+        row.push('', '', '', '', '');
       }
     }
 
     await window.gapi.client.sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `'${RATING_HISTORY_SHEET_TITLE}'!A:S`,
+      range: `'${RATING_HISTORY_SHEET_TITLE}'!A:W`,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       resource: {
@@ -2236,6 +2250,7 @@ export const updateMatchRatingsInSheet = async (
         name: p.name,
         rank: p.rank,
         score: p.score || 0,
+        uma: p.uma ?? 0,
         ordinal: updatedRatings[p.name]?.ordinal ?? 1320,
         delta: matchDeltas[p.name]?.delta ?? 0
       }))
@@ -2294,10 +2309,10 @@ export const recalculateAndSyncAllRatings = async (
 
         const time = r[1] ? String(r[1]).trim() : '';
         const pList = [
-          { name: r[2] ? String(r[2]).trim() : '', rank: Number(r[3]) || 1, score: Number(r[4]) || 0, uma: Number(r[5]) || 0 },
-          { name: r[6] ? String(r[6]).trim() : '', rank: Number(r[7]) || 2, score: Number(r[8]) || 0, uma: Number(r[9]) || 0 },
-          { name: r[10] ? String(r[10]).trim() : '', rank: Number(r[11]) || 3, score: Number(r[12]) || 0, uma: Number(r[13]) || 0 },
-          { name: r[14] ? String(r[14]).trim() : '', rank: Number(r[15]) || 4, score: Number(r[16]) || 0, uma: Number(r[17]) || 0 }
+          { name: r[2] ? String(r[2]).trim() : '', rank: Number(r[3]) || 1, score: Number(r[4]) || 0, uma: parseFloat(String(r[5] || '').replace(/,/g, '')) || 0 },
+          { name: r[6] ? String(r[6]).trim() : '', rank: Number(r[7]) || 2, score: Number(r[8]) || 0, uma: parseFloat(String(r[9] || '').replace(/,/g, '')) || 0 },
+          { name: r[10] ? String(r[10]).trim() : '', rank: Number(r[11]) || 3, score: Number(r[12]) || 0, uma: parseFloat(String(r[13] || '').replace(/,/g, '')) || 0 },
+          { name: r[14] ? String(r[14]).trim() : '', rank: Number(r[15]) || 4, score: Number(r[16]) || 0, uma: parseFloat(String(r[17] || '').replace(/,/g, '')) || 0 }
         ];
 
         if (pList.some(p => !p.name)) return;

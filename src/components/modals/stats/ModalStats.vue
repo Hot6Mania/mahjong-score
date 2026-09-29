@@ -311,7 +311,6 @@ const playerRatingSummary = computed(() => {
     return {
       current,
       peak: current,
-      lowest: current,
       totalGames: 0
     }
   }
@@ -319,7 +318,6 @@ const playerRatingSummary = computed(() => {
   return {
     current: ordinals[ordinals.length - 1],
     peak: Math.max(...ordinals),
-    lowest: Math.min(...ordinals),
     totalGames: hist.length
   }
 })
@@ -1392,10 +1390,6 @@ const emptyScopeMessage = computed(() => {
             <span class="summary_value text_positive">R{{ playerRatingSummary.peak }}</span>
           </div>
           <div class="summary_stat_box">
-            <span class="summary_label">역대 최저</span>
-            <span class="summary_value text_negative">R{{ playerRatingSummary.lowest }}</span>
-          </div>
-          <div class="summary_stat_box">
             <span class="summary_label">기록 대국 수</span>
             <span class="summary_value">{{ playerRatingSummary.totalGames }}전</span>
           </div>
@@ -1959,13 +1953,13 @@ html:not(.dark) .rank_bar_track {
 
 .rating_summary_grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
 @media (max-width: 600px) {
   .rating_summary_grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 
