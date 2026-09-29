@@ -1,6 +1,7 @@
 import {
   type PlayerRating,
   type MatchPlayerInput,
+  type GameRatingHistoryRecord,
   calculateMatchRatings,
   sortRatingsDesc,
   replayAllHistoricalGames
@@ -1895,6 +1896,62 @@ export const compareSessionDesc = (a: string, b: string): number => {
 // ==========================================
 
 export const RATING_SHEET_TITLE = '레이팅';
+export const RATING_HISTORY_SHEET_TITLE = '레이팅 이력';
+
+/**
+ * '레이팅 이력' 시트가 존재하는지 확인하고, 없으면 신규 생성 후 헤더를 초기화합니다.
+ */
+export const ensureRatingHistorySheetExists = async (spreadsheetId: string): Promise<boolean> => {
+  if (!spreadsheetId) return false;
+  try {
+    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const existingSheets = resMetadata.result.sheets.map((s: any) => s.properties.title);
+    if (existingSheets.includes(RATING_HISTORY_SHEET_TITLE)) {
+      return true;
+    }
+
+    console.log(`'${RATING_HISTORY_SHEET_TITLE}' 시트가 없어 신규 생성합니다.`);
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: RATING_HISTORY_SHEET_TITLE,
+                gridProperties: {
+                  rowCount: 500,
+                  columnCount: 22,
+                  frozenRowCount: 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    });
+
+    const headers = [
+      '대국 번호', '회차', '일시',
+      '1위 이름', '1위 점수', '1위 R', '1위 Δ',
+      '2위 이름', '2위 점수', '2위 R', '2위 Δ',
+      '3위 이름', '3위 점수', '3위 R', '3위 Δ',
+      '4위 이름', '4위 점수', '4위 R', '4위 Δ'
+    ];
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:S1`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [headers]
+      }
+    });
+    return true;
+  } catch (err) {
+    console.error(`'${RATING_HISTORY_SHEET_TITLE}' 시트 확인/생성 실패:`, err);
+    return false;
+  }
+};
 
 /**
  * '레이팅' 시트가 존재하는지 확인하고, 없으면 신규 생성 후 헤더를 초기화합니다.
@@ -2040,21 +2097,126 @@ export const batchSaveAllRatingsToSheet = async (
 };
 
 /**
- * 단일 대국 결과(4인)를 바탕으로 '레이팅' 시트를 즉시 실시간 업데이트
+ * 모든 경기별 레이팅 변화 이력을 '레이팅 이력' 시트에 일괄 기입합니다.
+ */
+export const batchSaveRatingHistoryToSheet = async (
+  spreadsheetId: string,
+  history: GameRatingHistoryRecord[]
+): Promise<boolean> => {
+  if (!spreadsheetId || !window.gapi?.client?.sheets) return false;
+  try {
+    await ensureRatingHistorySheetExists(spreadsheetId);
+
+    const headers = [
+      '대국 번호', '회차', '일시',
+      '1위 이름', '1위 점수', '1위 R', '1위 Δ',
+      '2위 이름', '2위 점수', '2위 R', '2위 Δ',
+      '3위 이름', '3위 점수', '3위 R', '3위 Δ',
+      '4위 이름', '4위 점수', '4위 R', '4위 Δ'
+    ];
+
+    const rows: (string | number)[][] = [headers];
+
+    history.forEach(game => {
+      const sorted = [...game.players].sort((a, b) => a.rank - b.rank);
+      const row: (string | number)[] = [
+        game.gameIndex,
+        game.sessionLabel,
+        game.date
+      ];
+
+      for (let i = 0; i < 4; i++) {
+        const p = sorted[i];
+        if (p) {
+          row.push(p.name, p.score, p.ordinal, (p.delta >= 0 ? `+${p.delta}` : `${p.delta}`));
+        } else {
+          row.push('', '', '', '');
+        }
+      }
+      rows.push(row);
+    });
+
+    await window.gapi.client.sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:S1000`
+    });
+
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:S${rows.length}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: rows
+      }
+    });
+
+    return true;
+  } catch (err) {
+    console.error(`'${RATING_HISTORY_SHEET_TITLE}' 시트 일괄 저장 실패:`, err);
+    return false;
+  }
+};
+
+/**
+ * 단일 대국 결과를 '레이팅 이력' 시트에 1행 추가합니다.
+ */
+export const appendRatingHistoryToSheet = async (
+  spreadsheetId: string,
+  gameRecord: GameRatingHistoryRecord
+): Promise<boolean> => {
+  if (!spreadsheetId || !window.gapi?.client?.sheets) return false;
+  try {
+    await ensureRatingHistorySheetExists(spreadsheetId);
+    const sorted = [...gameRecord.players].sort((a, b) => a.rank - b.rank);
+    const row: (string | number)[] = [
+      gameRecord.gameIndex,
+      gameRecord.sessionLabel,
+      gameRecord.date
+    ];
+    for (let i = 0; i < 4; i++) {
+      const p = sorted[i];
+      if (p) {
+        row.push(p.name, p.score, p.ordinal, (p.delta >= 0 ? `+${p.delta}` : `${p.delta}`));
+      } else {
+        row.push('', '', '', '');
+      }
+    }
+
+    await window.gapi.client.sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `'${RATING_HISTORY_SHEET_TITLE}'!A:S`,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      resource: {
+        values: [row]
+      }
+    });
+    return true;
+  } catch (err) {
+    console.warn(`'${RATING_HISTORY_SHEET_TITLE}' 단일 대국 추가 실패:`, err);
+    return false;
+  }
+};
+
+/**
+ * 단일 대국 결과(4인)를 바탕으로 '레이팅' 및 '레이팅 이력' 시트를 즉시 실시간 업데이트
  */
 export const updateMatchRatingsInSheet = async (
   spreadsheetId: string,
   matchPlayers: MatchPlayerInput[],
-  sessionLabel: string
+  sessionLabel: string,
+  gameIndex?: number
 ): Promise<{ updatedRatings: Record<string, PlayerRating>; matchDeltas: Record<string, any> }> => {
   // 1. 현재 '레이팅' 시트의 전체 데이터 로드
   await ensureRatingSheetExists(spreadsheetId);
   const currentRatings = await fetchRatingsFromSheet(spreadsheetId);
 
   // 2. 4명에 대해 OpenSkill 레이팅 계산
+  const todayStr = new Date().toLocaleDateString('ko-KR');
   const { updatedRatings, matchDeltas } = calculateMatchRatings(matchPlayers, currentRatings, {
     sessionLabel,
-    date: new Date().toLocaleDateString('ko-KR')
+    date: todayStr,
+    gameIndex
   });
 
   // 3. 기존 맵에 4명의 갱신 결과 병합
@@ -2063,12 +2225,32 @@ export const updateMatchRatingsInSheet = async (
   // 4. 전원 순위 재정렬 후 시트에 일괄 갱신
   await batchSaveAllRatingsToSheet(spreadsheetId, mergedMap);
 
+  // 5. '레이팅 이력' 시트에 1행 추가
+  try {
+    const sorted = [...matchPlayers].sort((a, b) => a.rank - b.rank);
+    const historyRecord: GameRatingHistoryRecord = {
+      gameIndex: gameIndex || 1,
+      sessionLabel,
+      date: todayStr,
+      players: sorted.map(p => ({
+        name: p.name,
+        rank: p.rank,
+        score: p.score || 0,
+        ordinal: updatedRatings[p.name]?.ordinal ?? 1320,
+        delta: matchDeltas[p.name]?.delta ?? 0
+      }))
+    };
+    await appendRatingHistoryToSheet(spreadsheetId, historyRecord);
+  } catch (e) {
+    console.warn("'레이팅 이력' 실시간 행 추가 실패 (무시 가능):", e);
+  }
+
   return { updatedRatings, matchDeltas };
 };
 
 /**
  * 1~8회차 레거시 및 스프레드시트의 9~15회차 raw 시트를 전수 수집하여
- * 시간순으로 OpenSkill 리플레이를 수행하고 '레이팅' 시트를 완전 초기화/동기화합니다.
+ * 시간순으로 OpenSkill 리플레이를 수행하고 '레이팅' 및 '레이팅 이력' 시트를 완전 초기화/동기화합니다.
  */
 export const recalculateAndSyncAllRatings = async (
   spreadsheetId: string
@@ -2135,10 +2317,13 @@ export const recalculateAndSyncAllRatings = async (
     }
 
     // 3. 1~8회차 레거시 및 9~15회차 raw 대국 전수 순차 리플레이
-    const { finalRatings, totalReplayedGames } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, sessionRawGamesList);
+    const { finalRatings, totalReplayedGames, matchHistory } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, sessionRawGamesList);
 
     // 4. '레이팅' 시트에 전체 갱신 결과 일괄 기입
     await batchSaveAllRatingsToSheet(spreadsheetId, finalRatings);
+
+    // 5. '레이팅 이력' 시트에 전체 경기별 변화 이력 일괄 기입
+    await batchSaveRatingHistoryToSheet(spreadsheetId, matchHistory);
 
     const playerCount = Object.keys(finalRatings).length;
     return {

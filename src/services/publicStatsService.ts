@@ -3,7 +3,14 @@
  * Cloudflare Worker 엣지 캐시(3분)를 우선 호출하고, 미설정 또는 장애 시 Google GViz 공용 API로 자동 폴백합니다.
  * 스프레드시트 접근 주소(ID)는 하드코딩하지 않고, 서버 Secret 및 .env 암호화 토큰을 통해 복호화하여 사용합니다.
  */
-import { type PlayerRating, replayAllHistoricalGames } from '@/utils/ratingEngine';
+import {
+  type PlayerRating,
+  type GameRatingHistoryRecord,
+  replayAllHistoricalGames,
+  DEFAULT_MU,
+  DEFAULT_SIGMA,
+  computeOrdinal
+} from '@/utils/ratingEngine';
 
 // 기본 내장 암호화 토큰 (평문 ID는 노출되지 않으며, 서버 Secret 미설정 시에도 안전하게 복호화되어 무설정 즉시 작동)
 const DEFAULT_ENCRYPTED_SPREADSHEET_ID = "am68XR1EK7z5R3BSAraD8QDkpTbgpvlnHrxdbQUJTI94QQfRZYzF6T5Ygv8m2z2RXsxDqHQxY-8GwcTEeS-mTQXZC_il30MV";
@@ -114,13 +121,22 @@ export interface MemberStatItem {
   top2Rate: number; // 연대율 (%)
   detailedStats?: MemberStatItem; // 9회차 이후 순수 상세 통계 (레거시 제외)
   // 레이팅 (OpenSkill) 필드
-  rating?: number; // Ordinal = round(μ - 2σ)
+  rating?: number; // Ordinal = round(μ - 1.5σ)
   ratingMu?: number;
   ratingSigma?: number;
   ratingPeak?: number;
   ratingLowest?: number;
   ratingDelta?: number;
   ratingLastUpdated?: string;
+  ratingHistory?: {
+    gameIndex: number;
+    gameId?: string;
+    ordinal: number;
+    delta: number;
+    sessionLabel?: string;
+    date?: string;
+    rank?: number;
+  }[];
 }
 
 export interface SessionMemberSummary {
@@ -863,10 +879,12 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
           item.ratingLowest = r.lowestOrdinal;
           item.ratingDelta = r.recentDelta;
           item.ratingLastUpdated = r.lastUpdated;
+          item.ratingHistory = r.history || [];
         } else {
-          item.rating = 1167;
+          item.rating = 1320;
           item.ratingMu = 1500;
-          item.ratingSigma = 166.67;
+          item.ratingSigma = 120;
+          item.ratingHistory = [];
         }
       });
     } catch (rErr) {
@@ -907,9 +925,9 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
             const name = getCellStr(r.c[1]).trim();
             if (!name || name === '이름') return;
 
-            const ordinal = Number(getCellNum(r.c[2])) || 1167;
+            const ordinal = Number(getCellNum(r.c[2])) || 1320;
             const mu = Number(getCellNum(r.c[3])) || 1500;
-            const sigma = Number(getCellNum(r.c[4])) || 166.67;
+            const sigma = Number(getCellNum(r.c[4])) || 120;
             const games = Number(getCellNum(r.c[5])) || 0;
             const peak = Number(getCellNum(r.c[6])) || ordinal;
             const lowest = Number(getCellNum(r.c[7])) || ordinal;
@@ -1610,6 +1628,181 @@ export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): Ses
     labels,
     datasets,
   };
+}
+
+export interface RatingTrajectoryDataset {
+  name: string;
+  color: string;
+  data: number[];
+  deltas: (number | null)[];
+  ranks: (number | null)[];
+  played: boolean[];
+  hasMarker: boolean[];
+  finalRating: number;
+}
+
+export interface AllPlayersRatingTrajectory {
+  labels: string[];
+  datasets: RatingTrajectoryDataset[];
+}
+
+/**
+ * 5-1. 역대 경기별 전체 플레이어 레이팅 궤적 산출
+ */
+export function calculateAllPlayersRatingTrajectory(
+  history: GameRatingHistoryRecord[],
+  playerList?: string[]
+): AllPlayersRatingTrajectory {
+  const initialRating = computeOrdinal(DEFAULT_MU, DEFAULT_SIGMA); // 1320
+  const labels = ['시작'];
+  history.forEach(g => {
+    labels.push(g.sessionLabel || `${g.gameIndex}국`);
+  });
+
+  const playerSet = new Set<string>(playerList || []);
+  history.forEach(g => {
+    g.players.forEach(p => playerSet.add(p.name));
+  });
+  const members = Array.from(playerSet);
+
+  const trajMap: Record<string, number[]> = {};
+  const playedMap: Record<string, boolean[]> = {};
+  const deltasMap: Record<string, (number | null)[]> = {};
+  const ranksMap: Record<string, (number | null)[]> = {};
+  const currentRatingMap: Record<string, number> = {};
+
+  members.forEach(name => {
+    trajMap[name] = [initialRating];
+    playedMap[name] = [false];
+    deltasMap[name] = [null];
+    ranksMap[name] = [null];
+    currentRatingMap[name] = initialRating;
+  });
+
+  const totalGames = history.length;
+  history.forEach(g => {
+    members.forEach(name => {
+      const match = g.players.find(p => p.name === name);
+      if (match) {
+        currentRatingMap[name] = match.ordinal;
+        trajMap[name].push(match.ordinal);
+        playedMap[name].push(true);
+        deltasMap[name].push(match.delta);
+        ranksMap[name].push(match.rank);
+      } else {
+        trajMap[name].push(currentRatingMap[name]); // 이전 점수 유지
+        playedMap[name].push(false);
+        deltasMap[name].push(null);
+        ranksMap[name].push(null);
+      }
+    });
+  });
+
+  const datasets: RatingTrajectoryDataset[] = members.map((name, i) => {
+    const data = trajMap[name];
+    const played = playedMap[name];
+    const deltas = deltasMap[name];
+    const ranks = ranksMap[name];
+    const finalRating = currentRatingMap[name];
+
+    const hasMarker = data.map((_, idx) => {
+      const isStart = idx === 0;
+      const isEnd = idx === totalGames;
+      const isPlayed = played[idx];
+      const isBeforePlayed = idx + 1 <= totalGames && played[idx + 1];
+      return isStart || isEnd || isPlayed || isBeforePlayed;
+    });
+
+    return {
+      name,
+      data,
+      color: PLAYER_COLORS[i % PLAYER_COLORS.length],
+      finalRating,
+      played,
+      deltas,
+      ranks,
+      hasMarker
+    };
+  });
+
+  datasets.sort((a, b) => b.finalRating - a.finalRating);
+
+  return {
+    labels,
+    datasets
+  };
+}
+
+let cachedRatingTrajectory: AllPlayersRatingTrajectory | null = null;
+
+/**
+ * 5-2. '레이팅 이력' 시트 또는 온디맨드 리플레이를 통해 전체 플레이어 레이팅 타임라인 조회
+ */
+export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise<AllPlayersRatingTrajectory> {
+  if (cachedRatingTrajectory) return cachedRatingTrajectory;
+
+  const sId = spreadsheetId || await resolveSpreadsheetId();
+  if (sId) {
+    try {
+      const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('레이팅 이력')}`;
+      const res = await fetch(gvizUrl);
+      if (res.ok) {
+        const text = await res.text();
+        const data = parseGVizResponse(text);
+        if (data && data.table && data.table.rows && data.table.rows.length > 0) {
+          const historyRecords: GameRatingHistoryRecord[] = [];
+          data.table.rows.forEach((r: any) => {
+            if (!r.c) return;
+            const gameIdx = Number(getCellNum(r.c[0])) || 0;
+            const sessLabel = getCellStr(r.c[1]).trim();
+            const dateStr = getCellStr(r.c[2]).trim();
+            if (!sessLabel || sessLabel === '회차') return;
+
+            const pList: any[] = [];
+            for (let i = 0; i < 4; i++) {
+              const baseCol = 3 + i * 4;
+              const pName = getCellStr(r.c[baseCol]).trim();
+              if (pName) {
+                const pScore = Number(getCellNum(r.c[baseCol + 1])) || 0;
+                const pOrd = Number(getCellNum(r.c[baseCol + 2])) || 1320;
+                const pDelta = Number(String(getCellStr(r.c[baseCol + 3]) || '').replace('+', '')) || 0;
+                pList.push({
+                  name: pName,
+                  rank: i + 1,
+                  score: pScore,
+                  ordinal: pOrd,
+                  delta: pDelta
+                });
+              }
+            }
+
+            if (pList.length === 4) {
+              historyRecords.push({
+                gameIndex: gameIdx || (historyRecords.length + 1),
+                sessionLabel: sessLabel,
+                date: dateStr,
+                players: pList
+              });
+            }
+          });
+
+          if (historyRecords.length > 0) {
+            const traj = calculateAllPlayersRatingTrajectory(historyRecords);
+            cachedRatingTrajectory = traj;
+            return traj;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("'레이팅 이력' 시트 조회 실패, 온디맨드 리플레이 폴백 사용:", e);
+    }
+  }
+
+  // 폴백: 내장 레거시 데이터 리플레이
+  const { matchHistory } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, []);
+  const traj = calculateAllPlayersRatingTrajectory(matchHistory);
+  cachedRatingTrajectory = traj;
+  return traj;
 }
 
 /**

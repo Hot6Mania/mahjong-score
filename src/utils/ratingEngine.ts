@@ -4,14 +4,14 @@ import { rating, rate } from 'openskill';
  * OpenSkill 마작 레이팅 기본 상수
  */
 export const DEFAULT_MU = 1500;
-export const DEFAULT_SIGMA = 500 / 3; // 약 166.6667
-export const BETA = 100; // 마작의 운(패산/배패) 변동성 완충 계수
+export const DEFAULT_SIGMA = 120; // 초기 불확실도
+export const BETA = 60; // 마작의 운(패산/배패) 변동성 완충 계수
 
 export interface PlayerRating {
   name: string;
   mu: number;
   sigma: number;
-  ordinal: number; // Math.round(mu - 2 * sigma)
+  ordinal: number; // Math.round(mu - 1.5 * sigma)
   games: number;
   peakOrdinal: number;
   lowestOrdinal: number;
@@ -25,6 +25,7 @@ export interface PlayerRating {
     delta: number;
     sessionLabel?: string;
     date?: string;
+    rank?: number;
   }[];
 }
 
@@ -45,12 +46,25 @@ export interface MatchDeltaResult {
   newSigma: number;
 }
 
+export interface GameRatingHistoryRecord {
+  gameIndex: number;
+  sessionLabel: string;
+  date: string;
+  players: {
+    name: string;
+    rank: number;
+    score: number;
+    ordinal: number;
+    delta: number;
+  }[];
+}
+
 /**
- * 표시 레이팅(보수적 랭킹 지표) 계산: μ - 2σ (정수 반올림)
- * 초기값(mu=1500, sigma=166.67)일 때 약 1167점
+ * 표시 레이팅(보수적 랭킹 지표) 계산: μ - 1.5σ (정수 반올림)
+ * 초기값(mu=1500, sigma=120)일 때 약 1320점
  */
 export function computeOrdinal(mu: number, sigma: number): number {
-  return Math.round(mu - 2 * sigma);
+  return Math.round(mu - 1.5 * sigma);
 }
 
 /**
@@ -172,8 +186,10 @@ export function replayAllHistoricalGames(
 ): {
   finalRatings: Record<string, PlayerRating>;
   totalReplayedGames: number;
+  matchHistory: GameRatingHistoryRecord[];
 } {
   const ratings: Record<string, PlayerRating> = {};
+  const matchHistory: GameRatingHistoryRecord[] = [];
   let totalReplayedGames = 0;
 
   function ensurePlayer(name: string): PlayerRating {
@@ -213,10 +229,26 @@ export function replayAllHistoricalGames(
         { name: p4Name, rank: 4, score: Number(parts[12]) || 0, uma: Number(parts[13]) || 0 }
       ];
 
-      const { updatedRatings } = calculateMatchRatings(matchPlayers, ratings, {
+      const fullSessionLabel = `${sessLabel} ${roundLabel}`;
+      const dateStr = sessLabel.split(' ')[1] || '';
+
+      const { updatedRatings, matchDeltas } = calculateMatchRatings(matchPlayers, ratings, {
         gameIndex: totalReplayedGames,
-        sessionLabel: `${sessLabel} ${roundLabel}`,
-        date: sessLabel.split(' ')[1] || ''
+        sessionLabel: fullSessionLabel,
+        date: dateStr
+      });
+
+      matchHistory.push({
+        gameIndex: totalReplayedGames,
+        sessionLabel: fullSessionLabel,
+        date: dateStr,
+        players: matchPlayers.map(p => ({
+          name: p.name,
+          rank: p.rank,
+          score: p.score || 0,
+          ordinal: updatedRatings[p.name]?.ordinal ?? computeOrdinal(DEFAULT_MU, DEFAULT_SIGMA),
+          delta: matchDeltas[p.name]?.delta ?? 0
+        }))
       });
 
       Object.assign(ratings, updatedRatings);
@@ -249,18 +281,34 @@ export function replayAllHistoricalGames(
       // rank 순 정렬 보장
       matchPlayers.sort((a, b) => a.rank - b.rank);
 
-      const { updatedRatings } = calculateMatchRatings(matchPlayers, ratings, {
+      const fullSessionLabel = `${sessName} ${g.gameId || ''}`.trim();
+      const dateStr = g.time || '';
+
+      const { updatedRatings, matchDeltas } = calculateMatchRatings(matchPlayers, ratings, {
         gameIndex: totalReplayedGames,
         gameId: g.gameId,
-        sessionLabel: `${sessName} ${g.gameId || ''}`,
-        date: g.time || ''
+        sessionLabel: fullSessionLabel,
+        date: dateStr
+      });
+
+      matchHistory.push({
+        gameIndex: totalReplayedGames,
+        sessionLabel: fullSessionLabel,
+        date: dateStr,
+        players: matchPlayers.map(p => ({
+          name: p.name,
+          rank: p.rank,
+          score: p.score || 0,
+          ordinal: updatedRatings[p.name]?.ordinal ?? computeOrdinal(DEFAULT_MU, DEFAULT_SIGMA),
+          delta: matchDeltas[p.name]?.delta ?? 0
+        }))
       });
 
       Object.assign(ratings, updatedRatings);
     }
   }
 
-  return { finalRatings: ratings, totalReplayedGames };
+  return { finalRatings: ratings, totalReplayedGames, matchHistory };
 }
 
 /**

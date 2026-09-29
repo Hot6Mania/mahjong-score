@@ -395,6 +395,10 @@ const toggleButtonStyle = (status: string) => {
     return {color: props.option.alwaysShowRank===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='sekiorder') // 동점 석순 옵션
     return {color: props.option.sekiOrder===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
+  else if (status==='powersaving') // 절전 모드 옵션
+    return {color: props.option.powerSaving===true ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
+  else if (status==='ratingdisplay') // 레이팅 표기 옵션
+    return {color: props.option.ratingDisplayMode !== 'off' ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)'};
   else if (status==='isonline') // 싱크 온/오프라인
     return {color: props.googleInfo.isLoggedIn===true ? 'var(--color-online)' : 'var(--color-offline)'};
 }
@@ -891,6 +895,14 @@ const getSignColor = (sign: number, x: boolean) => {
             <span v-show="option.powerSaving===false">X</span>
           </span>
         </div>
+        <div style="grid-area: option10;" @click.stop="emit('set-toggle-button', 'ratingdisplay')">
+          {{ t('option.ratingDisplay') }}<br>
+          <span :style="toggleButtonStyle('ratingdisplay')">
+            <span v-show="option.ratingDisplayMode==='side'">{{ t('option.ratingDisplaySide') }}</span>
+            <span v-show="option.ratingDisplayMode==='top'">{{ t('option.ratingDisplayTop') }}</span>
+            <span v-show="option.ratingDisplayMode==='off'">{{ t('option.ratingDisplayOff') }}</span>
+          </span>
+        </div>
       </div>
       <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 -->
       <div style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
@@ -1035,7 +1047,7 @@ const getSignColor = (sign: number, x: boolean) => {
           class="btn-sync-ratings"
           title="역대 모든 경기(1~8회 레거시 + 9회 이후 전체)를 순차 재계산하여 '레이팅' 시트에 전체 동기화합니다"
         >
-          📊 레이팅 전수 동기화
+          레이팅 전수 동기화
         </button>
         <!-- 로그인 유지 체크박스 -->
         <div v-if="!googleInfo.isLoggedIn" class="keep_login_wrapper">
@@ -1103,6 +1115,17 @@ const getSignColor = (sign: number, x: boolean) => {
   transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
+.modal_content,
+.modal_content input,
+.modal_content select,
+.modal_content button,
+.container_google_sync,
+.container_google_sync input,
+.container_google_sync select,
+.container_google_sync button {
+  font-family: inherit;
+}
+
 /* 메시지 팝업창 */
 .modal_text{
   font-size: 20px;
@@ -1118,7 +1141,7 @@ const getSignColor = (sign: number, x: boolean) => {
   'option0 option1 option2 option3'
   'option4 option4 option5 option6'
   'option7 option7 option8 option8'
-  'option9 option9 . .';
+  'option9 option9 option10 option10';
   text-align: center;
   font-size: 20px;
   gap: 10px;
@@ -1368,28 +1391,33 @@ const getSignColor = (sign: number, x: boolean) => {
   padding: 9px 8px;
   font-size: 13px;
   font-weight: bold;
-  border: 1px solid rgba(99, 102, 241, 0.4);
-  background: rgba(99, 102, 241, 0.08);
-  color: #4f46e5;
+  border: 1px solid #4338ca;
+  background-color: #4f46e5;
+  color: #ffffff !important;
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.2s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  font-family: inherit;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 .btn-sync-ratings:hover {
-  background: rgba(99, 102, 241, 0.18);
-  border-color: rgba(99, 102, 241, 0.6);
+  background-color: #4338ca;
+  border-color: #3730a3;
+  color: #ffffff !important;
 }
 :global(.dark) .btn-sync-ratings {
-  background: rgba(129, 140, 248, 0.12);
-  color: #c7d2fe;
-  border-color: rgba(129, 140, 248, 0.35);
+  background-color: #4f46e5;
+  border-color: #6366f1;
+  color: #ffffff !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 :global(.dark) .btn-sync-ratings:hover {
-  background: rgba(129, 140, 248, 0.22);
-  border-color: rgba(129, 140, 248, 0.55);
+  background-color: #6366f1;
+  border-color: #818cf8;
+  color: #ffffff !important;
 }
 
 .btn_g_login, .btn_g_logout {
@@ -1507,7 +1535,8 @@ const getSignColor = (sign: number, x: boolean) => {
       'option5 option6'
       'option7 option7'
       'option8 option8'
-      'option9 option9';
+      'option9 option9'
+      'option10 option10';
     font-size: 15px;
     max-height: 50vh;
   }

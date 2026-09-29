@@ -22,6 +22,8 @@ import {
   fetchSessionGameDetail,
   calculateSessionUmaTrajectory,
   calculateMetricDistribution,
+  fetchPublicRatingTimeline,
+  type AllPlayersRatingTrajectory,
   type MemberStatItem,
   type SessionDetail,
   type SessionMemberSummary,
@@ -71,8 +73,8 @@ const toggleTheme = () => {
   }
 };
 
-// 탭 상태 ('ranking' | 'matrix' | 'sessions')
-const activeTab = ref<'ranking' | 'matrix' | 'sessions'>('ranking');
+// 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions')
+const activeTab = ref<'ranking' | 'rating' | 'matrix' | 'sessions'>('ranking');
 
 // 로딩 및 에러 상태
 const isLoading = ref(true);
@@ -115,7 +117,7 @@ const displayPlayerStats = computed<MemberStatItem>(() => {
   }
   return selectedPlayer.value.detailedStats || selectedPlayer.value;
 });
-const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
+const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank' | 'rating'>('basic');
 const hoveredRank = ref<number | null>(null);
 
 // 모달 상단 안내 배너 가시성 상태 (새로고침 시 다시 표시)
@@ -861,16 +863,23 @@ const loadAllData = async () => {
   isLoading.value = true;
   errorMessage.value = '';
   try {
-    const [stats, matrix] = await Promise.all([
+    const [stats, matrix, timeline] = await Promise.all([
       fetchPublicAllStats(),
       fetchPublicStatsMatrix().catch(e => {
         console.warn("통계 매트릭스 로드 실패:", e);
+        return null;
+      }),
+      fetchPublicRatingTimeline().catch(e => {
+        console.warn("레이팅 타임라인 로드 실패:", e);
         return null;
       }),
       loadSessionsList()
     ]);
     allStats.value = stats;
     statsMatrix.value = matrix;
+    if (timeline) {
+      ratingTimeline.value = timeline;
+    }
     if (selectedSession.value) {
       await loadSessionDetail(selectedSession.value);
     }
@@ -880,6 +889,199 @@ const loadAllData = async () => {
   } finally {
     isLoading.value = false;
   }
+};
+
+// ==========================================
+// 레이팅 타임라인 및 인터랙티브 차트 상태
+// ==========================================
+const ratingTimeline = ref<AllPlayersRatingTrajectory | null>(null);
+const ratingChartRef = ref<any>(null);
+
+const filterRatingTopN = (n: number) => {
+  if (!ratingChartData.value.datasets) return;
+  ratingChartData.value.datasets.forEach((ds: any, idx: number) => {
+    ds.hidden = idx >= n;
+  });
+  if (ratingChartRef.value?.chart) {
+    ratingChartRef.value.chart.update();
+  }
+};
+
+const filterRatingAll = (showAll: boolean) => {
+  if (!ratingChartData.value.datasets) return;
+  ratingChartData.value.datasets.forEach((ds: any) => {
+    ds.hidden = !showAll;
+  });
+  if (ratingChartRef.value?.chart) {
+    ratingChartRef.value.chart.update();
+  }
+};
+
+const ratingChartData = computed(() => {
+  if (!ratingTimeline.value) {
+    return { labels: [], datasets: [] };
+  }
+  const datasets = ratingTimeline.value.datasets.map((d, idx) => ({
+    label: d.name,
+    data: d.data,
+    borderColor: d.color,
+    backgroundColor: d.color,
+    borderWidth: 2.2,
+    pointRadius: d.hasMarker ? d.hasMarker.map(m => (m ? 3.5 : 0)) : 3.5,
+    pointHoverRadius: d.hasMarker ? d.hasMarker.map(m => (m ? 6 : 0)) : 6,
+    played: d.played,
+    deltas: d.deltas,
+    ranks: d.ranks,
+    hasMarker: d.hasMarker,
+    tension: 0.1,
+    fill: false,
+    hidden: idx >= 8
+  }));
+
+  return {
+    labels: ratingTimeline.value.labels,
+    datasets
+  };
+});
+
+const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      position: 'top',
+      labels: {
+        font: { family: "'Noto Serif KR', serif", size: 12 },
+        usePointStyle: true,
+        boxWidth: 8,
+        color: isDark.value ? '#cbd5e1' : '#334155',
+      },
+    },
+    tooltip: {
+      mode: 'index',
+      intersect: false,
+      callbacks: {
+        label: (context) => {
+          const val = context.parsed.y;
+          if (val === null || val === undefined || isNaN(val)) return '';
+          const dataset = context.dataset as any;
+          const isPlayed = dataset.played?.[context.dataIndex];
+          const delta = dataset.deltas?.[context.dataIndex];
+          const rank = dataset.ranks?.[context.dataIndex];
+
+          if (context.dataIndex === 0) {
+            return `${dataset.label}: R${val} (시작)`;
+          }
+
+          if (isPlayed && delta !== null && delta !== undefined) {
+            const dStr = delta >= 0 ? `+${delta}` : `${delta}`;
+            const rStr = rank ? ` [${rank}위]` : '';
+            return `${dataset.label}: R${val} (${dStr}pt)${rStr}`;
+          }
+          return `${dataset.label}: R${val} (미참가)`;
+        }
+      }
+    }
+  },
+  scales: {
+    x: {
+      grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
+      ticks: { color: isDark.value ? '#94a3b8' : '#64748b' }
+    },
+    y: {
+      grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
+      ticks: {
+        color: isDark.value ? '#94a3b8' : '#64748b',
+        callback: (value) => `R${value}`
+      }
+    }
+  }
+}));
+
+const ratingLeaderboard = computed(() => {
+  return [...allStats.value]
+    .filter(s => s.name && s.name.trim() !== '')
+    .sort((a, b) => (b.rating ?? 1320) - (a.rating ?? 1320));
+});
+
+const modalPlayerRatingHistory = computed(() => {
+  if (!selectedPlayer.value) return [];
+  if (selectedPlayer.value.ratingHistory && selectedPlayer.value.ratingHistory.length > 0) {
+    return selectedPlayer.value.ratingHistory;
+  }
+  return [];
+});
+
+const modalPlayerRatingSummary = computed(() => {
+  const hist = modalPlayerRatingHistory.value;
+  const current = selectedPlayer.value?.rating ?? 1320;
+  if (!hist || hist.length === 0) {
+    return { current, peak: current, lowest: current, totalGames: 0 };
+  }
+  const ordinals = hist.map(h => h.ordinal);
+  return {
+    current: ordinals[ordinals.length - 1],
+    peak: Math.max(...ordinals),
+    lowest: Math.min(...ordinals),
+    totalGames: hist.length
+  };
+});
+
+const modalPlayerRatingChartData = computed(() => {
+  const hist = modalPlayerRatingHistory.value;
+  if (!hist || hist.length === 0) {
+    return { labels: [], datasets: [] };
+  }
+  return {
+    labels: ['시작', ...hist.map((_, i) => `${i + 1}국`)],
+    datasets: [{
+      label: selectedPlayer.value?.name || '',
+      data: [1320, ...hist.map(h => h.ordinal)],
+      deltas: [null, ...hist.map(h => h.delta)],
+      borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59, 130, 246, 0.12)',
+      borderWidth: 2.4,
+      pointRadius: 3.5,
+      pointHoverRadius: 6,
+      tension: 0.15,
+      fill: true
+    }]
+  };
+});
+
+const modalPlayerRatingChartOptions = computed<ChartOptions<'line'>>(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { display: false },
+    tooltip: {
+      callbacks: {
+        label: (context) => {
+          const val = context.parsed.y;
+          const dataset = context.dataset as any;
+          const delta = dataset.deltas?.[context.dataIndex];
+          if (context.dataIndex === 0) return `시작: R${val}`;
+          const dStr = delta !== null && delta !== undefined ? ` (${delta >= 0 ? '+' : ''}${delta})` : '';
+          return `레이팅: R${val}${dStr}`;
+        }
+      }
+    }
+  },
+  scales: {
+    x: {
+      grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
+      ticks: { color: isDark.value ? '#94a3b8' : '#64748b' }
+    },
+    y: {
+      grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
+      ticks: { color: isDark.value ? '#94a3b8' : '#64748b' }
+    }
+  }
+}));
+
+const formatDonutPct = (pct: number): string => {
+  if (pct >= 9) return pct.toFixed(1) + '%';
+  return Math.round(pct) + '%';
 };
 
 onMounted(() => {
@@ -1089,6 +1291,13 @@ const getRankClass = (rank: number) => {
         @click="activeTab = 'ranking'"
       >
         종합 랭킹 & 스탯
+      </button>
+      <button 
+        class="tab-btn" 
+        :class="{ active: activeTab === 'rating' }" 
+        @click="activeTab = 'rating'"
+      >
+        레이팅 & 추이
       </button>
       <button 
         class="tab-btn" 
@@ -1305,7 +1514,170 @@ const getRankClass = (rank: number) => {
       </section>
 
       <!-- ============================================== -->
-      <!-- TAB 2: 역대 회차 전적 ('통계' 시트)            -->
+      <!-- TAB 2: 레이팅 & 추이                            -->
+      <!-- ============================================== -->
+      <section v-else-if="activeTab === 'rating'" class="tab-rating">
+        <!-- 1. 전체 플레이어 레이팅 변동 추이 차트 -->
+        <div class="rating-chart-card">
+          <div class="rating-chart-header">
+            <div class="rating-chart-title-group">
+              <h2 class="rating-section-title">전체 플레이어 레이팅 변동 추이</h2>
+              <span class="rating-section-desc">범례의 이름을 클릭하면 해당 플레이어의 선을 켜거나 끌 수 있습니다.</span>
+            </div>
+            <div class="rating-filter-buttons">
+              <button type="button" class="btn-rating-filter" @click="filterRatingTopN(5)">상위 5명</button>
+              <button type="button" class="btn-rating-filter" @click="filterRatingTopN(10)">상위 10명</button>
+              <button type="button" class="btn-rating-filter" @click="filterRatingAll(true)">전체 선택</button>
+              <button type="button" class="btn-rating-filter" @click="filterRatingAll(false)">전체 해제</button>
+            </div>
+          </div>
+
+          <div class="rating-chart-wrapper">
+            <div v-if="ratingChartData.datasets.length > 0" style="height: 380px; position: relative;">
+              <LineChart 
+                ref="ratingChartRef" 
+                :data="ratingChartData" 
+                :options="ratingChartOptions" 
+              />
+            </div>
+            <div v-else class="rating-chart-empty">
+              레이팅 변동 이력 데이터를 불러오는 중이거나 기록이 없습니다.
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. 레이팅 순위표 -->
+        <div class="rating-leaderboard-card">
+          <div class="leaderboard-header">
+            <h2 class="rating-section-title">레이팅 순위 및 현황</h2>
+            <span class="rating-section-desc">OpenSkill 알고리즘으로 산출된 보수적 레이팅(R) 기준 랭킹입니다.</span>
+          </div>
+
+          <div class="table-container">
+            <table class="rating-table">
+              <thead>
+                <tr>
+                  <th style="width: 50px; text-align: center;">순위</th>
+                  <th style="min-width: 100px;">이름</th>
+                  <th style="min-width: 90px; text-align: center;">표기 레이팅 (R)</th>
+                  <th style="min-width: 80px; text-align: center;">역대 최고</th>
+                  <th style="min-width: 80px; text-align: center;">역대 최저</th>
+                  <th style="min-width: 70px; text-align: center;">대국 수</th>
+                  <th style="min-width: 70px; text-align: center;">평균 (μ)</th>
+                  <th style="min-width: 70px; text-align: center;">불확실도 (σ)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr 
+                  v-for="(player, idx) in ratingLeaderboard" 
+                  :key="player.name"
+                  @click="openPlayerModal(player, false)"
+                  class="clickable-row"
+                >
+                  <td style="text-align: center; font-weight: bold;">
+                    <span 
+                      class="rank-chip" 
+                      :class="{
+                        'gold': idx === 0,
+                        'silver': idx === 1,
+                        'bronze': idx === 2
+                      }"
+                    >
+                      {{ idx + 1 }}
+                    </span>
+                  </td>
+                  <td class="player-name-cell">
+                    <strong>{{ player.name }}</strong>
+                  </td>
+                  <td style="text-align: center;">
+                    <span class="rating-badge-pill">R{{ player.rating ?? 1320 }}</span>
+                  </td>
+                  <td style="text-align: center; color: #16a34a; font-weight: 600;">
+                    R{{ player.ratingPeak ?? (player.ratingHistory && player.ratingHistory.length > 0 ? Math.max(...player.ratingHistory.map(h => h.ordinal)) : (player.rating ?? 1320)) }}
+                  </td>
+                  <td style="text-align: center; color: #dc2626; font-weight: 600;">
+                    R{{ player.ratingLowest ?? (player.ratingHistory && player.ratingHistory.length > 0 ? Math.min(...player.ratingHistory.map(h => h.ordinal)) : (player.rating ?? 1320)) }}
+                  </td>
+                  <td style="text-align: center;">
+                    {{ player.totalGames }}전
+                  </td>
+                  <td style="text-align: center; color: #64748b;">
+                    {{ (player.ratingMu ?? 1500).toFixed(1) }}
+                  </td>
+                  <td style="text-align: center; color: #64748b;">
+                    {{ (player.ratingSigma ?? 120).toFixed(1) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 3. 레이팅 시스템 산출 원리 및 공식 안내 -->
+        <div class="rating-guide-card">
+          <div class="guide-header">
+            <h2 class="rating-section-title">OpenSkill 레이팅 산출 원리 및 파라미터</h2>
+            <span class="rating-section-desc">베이지안 추론 기반 4인 다자간 경쟁(Plackett-Luce) 모델 규격입니다.</span>
+          </div>
+
+          <div class="formula-cards-grid">
+            <div class="formula-box">
+              <div class="formula-tag">1. 실력 분포 모델</div>
+              <div class="formula-latex">S_i \sim \mathcal{N}(\mu_i, \, \sigma_i^2)</div>
+              <p class="formula-explanation">플레이어의 실력은 평균(μ)과 불확실도(σ)를 모수로 하는 정규분포로 정의됩니다.</p>
+            </div>
+
+            <div class="formula-box">
+              <div class="formula-tag">2. 4인 마작 순위 확률 (Plackett-Luce)</div>
+              <div class="formula-latex">P(r_1, r_2, r_3, r_4) = \prod_{i=1}^{3} \frac{\exp(\mu_i / \beta)}{\sum_{j=i}^{4} \exp(\mu_j / \beta)}</div>
+              <p class="formula-explanation">최종 점수 순위에 기초하여 4명의 실력 사후 분포(μ, σ)를 순차적으로 갱신합니다.</p>
+            </div>
+
+            <div class="formula-box">
+              <div class="formula-tag">3. 보수적 표기 레이팅 (Conservative Rating)</div>
+              <div class="formula-latex">R = \mathrm{round}(\mu - 1.5 \times \sigma)</div>
+              <p class="formula-explanation">불확실도를 차감하여 대국 수가 적은 상태에서의 랭킹 과대평가를 완충합니다.</p>
+            </div>
+          </div>
+
+          <div class="param-table-container">
+            <table class="param-table">
+              <thead>
+                <tr>
+                  <th>파라미터</th>
+                  <th>설정값</th>
+                  <th>의미 및 역할</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>\mu_0</code></td>
+                  <td>1500</td>
+                  <td>초기 실력 기대값 기준점</td>
+                </tr>
+                <tr>
+                  <td><code>\sigma_0</code></td>
+                  <td>120</td>
+                  <td>초기 불확실도 (대국 진행 시 신뢰도 증가로 점진적 감소)</td>
+                </tr>
+                <tr>
+                  <td><code>R_0</code></td>
+                  <td>1320</td>
+                  <td>시작 표기 레이팅 (\mu_0 - 1.5 \times \sigma_0)</td>
+                </tr>
+                <tr>
+                  <td><code>\beta</code></td>
+                  <td>60</td>
+                  <td>마작의 운 및 패산 변동성을 감안한 스케일 완충 계수</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================== -->
+      <!-- TAB 3: 역대 회차 전적 ('통계' 시트)            -->
       <!-- ============================================== -->
       <section v-else-if="activeTab === 'matrix'" class="tab-matrix">
         <div class="matrix-controls-bar">
@@ -1997,7 +2369,7 @@ const getRankClass = (rank: number) => {
                                 r="60" 
                                 fill="none" 
                                 stroke="var(--border-color, rgba(0,0,0,0.08))" 
-                                stroke-width="28" 
+                                stroke-width="36" 
                               />
                               <g transform="rotate(-90 100 100)">
                                 <!-- 4위 (빨강) -->
@@ -2006,7 +2378,7 @@ const getRankClass = (rank: number) => {
                                   cx="100" cy="100" r="60" 
                                   fill="none" 
                                   stroke="#ef4444" 
-                                  stroke-width="28" 
+                                  stroke-width="36" 
                                   :stroke-dasharray="`${(currentSessionRankStats.p4 / 100) * 376.9911} 376.9911`"
                                   :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2 + currentSessionRankStats.p3) / 100) * 376.9911}`"
                                   class="donut_segment"
@@ -2020,7 +2392,7 @@ const getRankClass = (rank: number) => {
                                   cx="100" cy="100" r="60" 
                                   fill="none" 
                                   stroke="#f59e0b" 
-                                  stroke-width="28" 
+                                  stroke-width="36" 
                                   :stroke-dasharray="`${(currentSessionRankStats.p3 / 100) * 376.9911} 376.9911`"
                                   :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2) / 100) * 376.9911}`"
                                   class="donut_segment"
@@ -2034,7 +2406,7 @@ const getRankClass = (rank: number) => {
                                   cx="100" cy="100" r="60" 
                                   fill="none" 
                                   stroke="#06b6d4" 
-                                  stroke-width="28" 
+                                  stroke-width="36" 
                                   :stroke-dasharray="`${(currentSessionRankStats.p2 / 100) * 376.9911} 376.9911`"
                                   :stroke-dashoffset="`-${(currentSessionRankStats.p1 / 100) * 376.9911}`"
                                   class="donut_segment"
@@ -2048,7 +2420,7 @@ const getRankClass = (rank: number) => {
                                   cx="100" cy="100" r="60" 
                                   fill="none" 
                                   stroke="#10b981" 
-                                  stroke-width="28" 
+                                  stroke-width="36" 
                                   :stroke-dasharray="`${(currentSessionRankStats.p1 / 100) * 376.9911} 376.9911`"
                                   stroke-dashoffset="0"
                                   class="donut_segment"
@@ -2060,44 +2432,44 @@ const getRankClass = (rank: number) => {
                               <!-- 각 순위 영역 내 % 레이블 -->
                               <g class="donut_labels" pointer-events="none">
                                 <text 
-                                  v-if="currentSessionRankStats.p1 >= 5"
+                                  v-if="currentSessionRankStats.p1 >= 6"
                                   :x="getRankLabelPos(currentSessionRankStats, 1).x" 
                                   :y="getRankLabelPos(currentSessionRankStats, 1).y" 
                                   text-anchor="middle" 
                                   dominant-baseline="central" 
                                   class="donut_segment_text"
                                 >
-                                  {{ currentSessionRankStats.p1.toFixed(1) }}%
+                                  {{ formatDonutPct(currentSessionRankStats.p1) }}
                                 </text>
                                 <text 
-                                  v-if="currentSessionRankStats.p2 >= 5"
+                                  v-if="currentSessionRankStats.p2 >= 6"
                                   :x="getRankLabelPos(currentSessionRankStats, 2).x" 
                                   :y="getRankLabelPos(currentSessionRankStats, 2).y" 
                                   text-anchor="middle" 
                                   dominant-baseline="central" 
                                   class="donut_segment_text"
                                 >
-                                  {{ currentSessionRankStats.p2.toFixed(1) }}%
+                                  {{ formatDonutPct(currentSessionRankStats.p2) }}
                                 </text>
                                 <text 
-                                  v-if="currentSessionRankStats.p3 >= 5"
+                                  v-if="currentSessionRankStats.p3 >= 6"
                                   :x="getRankLabelPos(currentSessionRankStats, 3).x" 
                                   :y="getRankLabelPos(currentSessionRankStats, 3).y" 
                                   text-anchor="middle" 
                                   dominant-baseline="central" 
                                   class="donut_segment_text"
                                 >
-                                  {{ currentSessionRankStats.p3.toFixed(1) }}%
+                                  {{ formatDonutPct(currentSessionRankStats.p3) }}
                                 </text>
                                 <text 
-                                  v-if="currentSessionRankStats.p4 >= 5"
+                                  v-if="currentSessionRankStats.p4 >= 6"
                                   :x="getRankLabelPos(currentSessionRankStats, 4).x" 
                                   :y="getRankLabelPos(currentSessionRankStats, 4).y" 
                                   text-anchor="middle" 
                                   dominant-baseline="central" 
                                   class="donut_segment_text"
                                 >
-                                  {{ currentSessionRankStats.p4.toFixed(1) }}%
+                                  {{ formatDonutPct(currentSessionRankStats.p4) }}
                                 </text>
                               </g>
                               <!-- 중앙 텍스트 -->
@@ -2268,6 +2640,13 @@ const getRankClass = (rank: number) => {
                 @click="modalActiveTab = 'rank'"
               >
                 순위 비율
+              </button>
+              <button 
+                class="tab_btn" 
+                :class="{ active: modalActiveTab === 'rating' }" 
+                @click="modalActiveTab = 'rating'"
+              >
+                레이팅 추이
               </button>
             </div>
 
@@ -2586,7 +2965,7 @@ const getRankClass = (rank: number) => {
                       r="60" 
                       fill="none" 
                       stroke="var(--border-color, rgba(0,0,0,0.08))" 
-                      stroke-width="28"
+                      stroke-width="36"
                     />
                     <!-- 조각 링 -->
                     <g transform="rotate(-90 100 100)">
@@ -2596,7 +2975,7 @@ const getRankClass = (rank: number) => {
                         cx="100" cy="100" r="60" 
                         fill="none" 
                         stroke="#ef4444" 
-                        stroke-width="28" 
+                        stroke-width="36" 
                         :stroke-dasharray="`${(modalRankStats.p4 / 100) * 376.9911} 376.9911`"
                         :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2 + modalRankStats.p3) / 100) * 376.9911}`"
                         class="donut_segment"
@@ -2610,7 +2989,7 @@ const getRankClass = (rank: number) => {
                         cx="100" cy="100" r="60" 
                         fill="none" 
                         stroke="#f59e0b" 
-                        stroke-width="28" 
+                        stroke-width="36" 
                         :stroke-dasharray="`${(modalRankStats.p3 / 100) * 376.9911} 376.9911`"
                         :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2) / 100) * 376.9911}`"
                         class="donut_segment"
@@ -2624,7 +3003,7 @@ const getRankClass = (rank: number) => {
                         cx="100" cy="100" r="60" 
                         fill="none" 
                         stroke="#06b6d4" 
-                        stroke-width="28" 
+                        stroke-width="36" 
                         :stroke-dasharray="`${(modalRankStats.p2 / 100) * 376.9911} 376.9911`"
                         :stroke-dashoffset="`-${(modalRankStats.p1 / 100) * 376.9911}`"
                         class="donut_segment"
@@ -2638,7 +3017,7 @@ const getRankClass = (rank: number) => {
                         cx="100" cy="100" r="60" 
                         fill="none" 
                         stroke="#10b981" 
-                        stroke-width="28" 
+                        stroke-width="36" 
                         :stroke-dasharray="`${(modalRankStats.p1 / 100) * 376.9911} 376.9911`"
                         stroke-dashoffset="0"
                         class="donut_segment"
@@ -2650,44 +3029,44 @@ const getRankClass = (rank: number) => {
                     <!-- 각 순위 영역 내 % 레이블 -->
                     <g class="donut_labels" pointer-events="none">
                       <text 
-                        v-if="modalRankStats.p1 >= 5"
+                        v-if="modalRankStats.p1 >= 6"
                         :x="getRankLabelPos(modalRankStats, 1).x" 
                         :y="getRankLabelPos(modalRankStats, 1).y" 
                         text-anchor="middle" 
                         dominant-baseline="central" 
                         class="donut_segment_text"
                       >
-                        {{ modalRankStats.p1.toFixed(1) }}%
+                        {{ formatDonutPct(modalRankStats.p1) }}
                       </text>
                       <text 
-                        v-if="modalRankStats.p2 >= 5"
+                        v-if="modalRankStats.p2 >= 6"
                         :x="getRankLabelPos(modalRankStats, 2).x" 
                         :y="getRankLabelPos(modalRankStats, 2).y" 
                         text-anchor="middle" 
                         dominant-baseline="central" 
                         class="donut_segment_text"
                       >
-                        {{ modalRankStats.p2.toFixed(1) }}%
+                        {{ formatDonutPct(modalRankStats.p2) }}
                       </text>
                       <text 
-                        v-if="modalRankStats.p3 >= 5"
+                        v-if="modalRankStats.p3 >= 6"
                         :x="getRankLabelPos(modalRankStats, 3).x" 
                         :y="getRankLabelPos(modalRankStats, 3).y" 
                         text-anchor="middle" 
                         dominant-baseline="central" 
                         class="donut_segment_text"
                       >
-                        {{ modalRankStats.p3.toFixed(1) }}%
+                        {{ formatDonutPct(modalRankStats.p3) }}
                       </text>
                       <text 
-                        v-if="modalRankStats.p4 >= 5"
+                        v-if="modalRankStats.p4 >= 6"
                         :x="getRankLabelPos(modalRankStats, 4).x" 
                         :y="getRankLabelPos(modalRankStats, 4).y" 
                         text-anchor="middle" 
                         dominant-baseline="central" 
                         class="donut_segment_text"
                       >
-                        {{ modalRankStats.p4.toFixed(1) }}%
+                        {{ formatDonutPct(modalRankStats.p4) }}
                       </text>
                     </g>
                     <!-- 중앙 텍스트 -->
@@ -2774,6 +3153,37 @@ const getRankClass = (rank: number) => {
                 <div class="summary_metric_box">
                   <span class="metric_label">라스 회피율</span>
                   <span class="metric_val text_positive">{{ modalRankStats.lastAvoidRate }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 5. 레이팅 추이 탭 -->
+            <div v-else-if="modalActiveTab === 'rating'" class="rating_tab_wrapper">
+              <div class="rating_summary_grid">
+                <div class="summary_stat_box">
+                  <span class="summary_label">현재 레이팅</span>
+                  <span class="summary_value highlight">R{{ modalPlayerRatingSummary.current }}</span>
+                </div>
+                <div class="summary_stat_box">
+                  <span class="summary_label">역대 최고</span>
+                  <span class="summary_value text_positive">R{{ modalPlayerRatingSummary.peak }}</span>
+                </div>
+                <div class="summary_stat_box">
+                  <span class="summary_label">역대 최저</span>
+                  <span class="summary_value text_negative">R{{ modalPlayerRatingSummary.lowest }}</span>
+                </div>
+                <div class="summary_stat_box">
+                  <span class="summary_label">기록 대국 수</span>
+                  <span class="summary_value">{{ modalPlayerRatingSummary.totalGames }}전</span>
+                </div>
+              </div>
+
+              <div class="rating_chart_container">
+                <div v-if="modalPlayerRatingChartData.labels.length > 1" style="height: 220px; position: relative;">
+                  <LineChart :data="modalPlayerRatingChartData" :options="modalPlayerRatingChartOptions" />
+                </div>
+                <div v-else class="no_rating_data">
+                  기록된 레이팅 변동 이력이 없습니다. (기본 R1320)
                 </div>
               </div>
             </div>
@@ -2936,6 +3346,18 @@ const getRankClass = (rank: number) => {
   max-width: 1200px;
   margin: 0 auto;
   box-sizing: border-box;
+}
+
+.stats-dashboard-container button,
+.stats-dashboard-container input,
+.stats-dashboard-container select,
+.tab-btn,
+.btn-action,
+.search-input,
+.session-select,
+.gdm-tab-btn,
+.btn-rating-filter {
+  font-family: inherit !important;
 }
 
 /* 토스트 */
@@ -4429,7 +4851,7 @@ html.dark .rank_chart_section {
   cursor: pointer;
 }
 .donut_segment.active {
-  stroke-width: 32;
+  stroke-width: 40;
   filter: brightness(1.1);
 }
 .donut_segment_text {
@@ -5044,5 +5466,247 @@ html.dark .gdm-legacy-notice {
   .gdm-chart-box {
     height: 220px;
   }
+}
+
+/* ========================================== */
+/* 레이팅 탭 및 시스템 안내 스타일               */
+/* ========================================== */
+.tab-rating {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.rating-chart-card,
+.rating-leaderboard-card,
+.rating-guide-card {
+  background-color: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #eaeaea);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.rating-chart-header,
+.leaderboard-header,
+.guide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.rating-chart-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rating-section-title {
+  font-size: 17px;
+  font-weight: 800;
+  margin: 0;
+  color: var(--text-color, #1a1a1a);
+}
+
+.rating-section-desc {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.rating-filter-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.btn-rating-filter {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 5px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-color, #f8fafc);
+  color: var(--text-color, #334155);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-rating-filter:hover {
+  background: #3b82f6;
+  color: #ffffff;
+  border-color: #3b82f6;
+}
+
+.rating-chart-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.rating-chart-empty {
+  text-align: center;
+  color: #94a3b8;
+  padding: 50px 0;
+  font-size: 13px;
+}
+
+/* 레이팅 테이블 */
+.rating-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rating-table th {
+  padding: 10px 12px;
+  background-color: var(--table-header-bg, #f8fafc);
+  color: #475569;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.rating-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.rating-table tr:hover {
+  background-color: var(--bg-hover, rgba(59, 130, 246, 0.05));
+}
+
+.rating-badge-pill {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 800;
+  color: #2563eb;
+  background-color: rgba(37, 99, 235, 0.12);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+html.dark .rating-badge-pill {
+  color: #60a5fa;
+  background-color: rgba(96, 165, 250, 0.18);
+}
+
+/* 수식 안내 카드 */
+.formula-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 800px) {
+  .formula-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.formula-box {
+  background: var(--bg-color, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.formula-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: #3b82f6;
+  margin-bottom: 8px;
+}
+
+.formula-latex {
+  font-family: 'Cambria Math', 'KaTeX_Math', 'Times New Roman', serif;
+  font-size: 14.5px;
+  font-weight: bold;
+  background: rgba(0, 0, 0, 0.03);
+  padding: 8px 10px;
+  border-radius: 6px;
+  text-align: center;
+  margin-bottom: 8px;
+  color: var(--text-color, #0f172a);
+}
+
+html.dark .formula-latex {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.formula-explanation {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* 파라미터 테이블 */
+.param-table-container {
+  overflow-x: auto;
+}
+
+.param-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.param-table th,
+.param-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  text-align: left;
+}
+
+.param-table th {
+  background-color: var(--table-header-bg, #f8fafc);
+  color: #475569;
+  font-weight: 700;
+}
+
+.param-table code {
+  font-family: Consolas, monospace;
+  font-weight: bold;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* 플레이어 모달 레이팅 탭 스타일 */
+.rating_tab_wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.rating_summary_grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+@media (max-width: 600px) {
+  .rating_summary_grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.rating_chart_container {
+  background-color: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.no_rating_data {
+  text-align: center;
+  color: #94a3b8;
+  padding: 40px 0;
+  font-size: 13px;
 }
 </style>

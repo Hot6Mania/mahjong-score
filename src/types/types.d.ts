@@ -68,6 +68,7 @@ export interface Option { // 옵션
   alwaysShowRank: boolean, // 등수 상시 표시
   sekiOrder: boolean, // 동점 석순 기준 등수 정하기
   powerSaving?: boolean, // 절전 모드
+  ratingDisplayMode?: 'side' | 'top' | 'off', // 레이팅 표기 모드 ('side': 이름 옆, 'top': 이름 위, 'off': 표기 안함)
 }
 
 export interface ModalInfo { // 모달창

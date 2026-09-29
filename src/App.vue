@@ -161,12 +161,22 @@ const defaultOption: OptionType = {
   alwaysShowRank: false, // 등수 상시 표시
   sekiOrder: true, // 동점 석순 기준
   powerSaving: false, // 절전 모드
+  ratingDisplayMode: 'side', // 레이팅 표기 ('side' | 'top' | 'off')
 };
 const savedOption = localStorage.getItem("mahjong_option");
 const loadSavedOption = (): OptionType => {
   if (!savedOption) return defaultOption;
   try {
     const parsed = JSON.parse(savedOption);
+    let ratingMode: 'side' | 'top' | 'off' = 'side';
+    if (parsed.ratingDisplayMode && ['side', 'top', 'off'].includes(parsed.ratingDisplayMode)) {
+      ratingMode = parsed.ratingDisplayMode;
+    } else if (parsed.showRating === false) {
+      ratingMode = 'off';
+    } else if (parsed.showRating === true) {
+      ratingMode = 'side';
+    }
+
     return {
       ...defaultOption,
       ...parsed,
@@ -174,6 +184,7 @@ const loadSavedOption = (): OptionType => {
       returnScore: Number(parsed.returnScore ?? defaultOption.returnScore),
       rankUma: Array.isArray(parsed.rankUma) ? parsed.rankUma.map(Number) : defaultOption.rankUma,
       powerSaving: !!parsed.powerSaving,
+      ratingDisplayMode: ratingMode,
     };
   } catch (e) {
     return defaultOption;
@@ -1151,6 +1162,15 @@ const setToggleButton = (status: string) => {
     option.sekiOrder=!option.sekiOrder;
   else if (status==='powersaving') // 절전 모드 토글
     option.powerSaving=!option.powerSaving;
+  else if (status==='ratingdisplay') { // 레이팅 표기 토글 ('side' -> 'top' -> 'off' -> 'side')
+    if (option.ratingDisplayMode === 'side') {
+      option.ratingDisplayMode = 'top';
+    } else if (option.ratingDisplayMode === 'top') {
+      option.ratingDisplayMode = 'off';
+    } else {
+      option.ratingDisplayMode = 'side';
+    }
+  }
 }
 
 /**판/부 버튼 동작 설정*/
@@ -2373,12 +2393,13 @@ const saveGameToSheet = async (silent: boolean = false) => {
         .join(' | ');
       ratingDeltaSummary = `\n[레이팅] ${deltasStr}`;
 
-      // 구글 시트 연동 중일 경우 실시간으로 '레이팅' 시트 즉시 갱신
+      // 구글 시트 연동 중일 경우 실시간으로 '레이팅' 및 '레이팅 이력' 시트 즉시 갱신
       if (googleInfo.isLoggedIn && googleInfo.spreadsheetId && googleInfo.syncMode === 'google') {
         updateMatchRatingsInSheet(
           googleInfo.spreadsheetId,
           matchPlayersForRating,
-          currentSessionSheetName.value || '회차'
+          currentSessionSheetName.value || '회차',
+          todayGamesHistory.length
         ).catch(sheetErr => {
           console.warn("실시간 구글 레이팅 시트 갱신 중 오류 (무시 가능):", sheetErr);
         });

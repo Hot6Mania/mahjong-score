@@ -137,10 +137,14 @@ const handleScoreClick = () => {
     </div>
   </div>
   <div class="score">
+    <!-- 이름 위 레이팅 뱃지 (리치봉 아래 배경처럼 렌더링) -->
+    <div v-if="option.ratingDisplayMode === 'top' && player.rating" class="player_rating_top_badge" :title="'OpenSkill 레이팅: ' + player.rating + 'pt'">
+      R{{ player.rating }}
+    </div>
     <!-- 이름 배지를 score 상단에 직접 배치하여 고정 -->
     <div class="player_name_badge">
       <span>{{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
-      <span v-if="player.rating" class="player_rating_pill" :title="'OpenSkill 레이팅: ' + player.rating + 'pt'">R{{ player.rating }}</span>
+      <span v-if="option.ratingDisplayMode === 'side' && player.rating" class="player_rating_pill" :title="'OpenSkill 레이팅: ' + player.rating + 'pt'">R{{ player.rating }}</span>
     </div>
     <div v-if="isNaN(player.gapScore)" :style="[displayScoreStyle(), { cursor: (animateRank || modalInfo.isOpen) ? 'default' : 'pointer' }]" @click="handleScoreClick" style="display: inline-block; line-height: 0.95;">
       {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
@@ -202,6 +206,7 @@ const handleScoreClick = () => {
 }
 .stick{
   grid-area: stick;
+  z-index: 5;
   /* 리치봉 크기를 키우고 (scale 0.9) 좌측 쏠림 없이 다시 중앙 정렬로 복구 */
   transform: translate(var(--riichi-offset-x, 0px), var(--riichi-offset-y, 0px)) rotate(var(--riichi-angle, 0deg)) scale(0.9);
   transform-origin: center center;
@@ -295,6 +300,29 @@ const handleScoreClick = () => {
 :global(.dark) .player_rating_pill {
   color: #60a5fa;
   background-color: rgba(96, 165, 250, 0.18);
+}
+.player_rating_top_badge {
+  position: absolute;
+  left: 158px !important;
+  right: auto !important;
+  bottom: 86px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background-color: var(--modal-bg-color);
+  color: #2563eb;
+  border: 1px solid var(--border-color);
+  box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+  line-height: normal;
+  z-index: 1;
+  pointer-events: none;
+  letter-spacing: -0.2px;
+}
+:global(.dark) .player_rating_top_badge {
+  color: #60a5fa;
+  background-color: var(--modal-bg-color);
 }
 .large_rank_overlay {
   position: absolute;

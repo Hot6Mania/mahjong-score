@@ -2,6 +2,20 @@
 import { ref, computed, watch } from "vue"
 import { useRouter } from "vue-router"
 import type { Player, Option } from "@/types/types.d"
+import {
+  Chart as ChartJS,
+  Title,
+  Tooltip as ChartTooltip,
+  Legend,
+  LineElement,
+  LinearScale,
+  PointElement,
+  CategoryScale,
+  type ChartOptions
+} from 'chart.js'
+import { Line as LineChart } from 'vue-chartjs'
+
+ChartJS.register(Title, ChartTooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale)
 
 interface Props {
   todayMembers: string[]
@@ -43,7 +57,7 @@ const activeHistory = computed(() => {
 })
 
 // 탭 종류
-type TabType = 'basic' | 'riichi' | 'other' | 'rank'
+type TabType = 'basic' | 'riichi' | 'other' | 'rank' | 'rating'
 const activeTab = ref<TabType>('basic')
 
 // 호버 중인 순위 카드/차트 세그먼트 (1, 2, 3, 4)
@@ -257,6 +271,119 @@ const selectedPlayerRating = computed(() => {
   } catch (e) {}
   return undefined
 })
+
+const selectedPlayerRatingHistory = computed(() => {
+  const name = selectedPlayer.value
+  if (!name) return []
+
+  if (props.googleMemberStats) {
+    const s = props.googleMemberStats.find((x: any) => x.name === name)
+    if (s && s.ratingHistory && s.ratingHistory.length > 0) {
+      return s.ratingHistory
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem('mahjong_ratings')
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed[name]?.history && parsed[name].history.length > 0) {
+        return parsed[name].history.map((h: any, idx: number) => ({
+          gameIndex: idx + 1,
+          ordinal: h.newOrdinal ?? h.ordinal ?? 1320,
+          delta: h.delta ?? 0,
+          score: 0,
+          rank: 0,
+          session: h.sessionLabel,
+          date: h.date
+        }))
+      }
+    }
+  } catch (e) {}
+
+  return []
+})
+
+const playerRatingSummary = computed(() => {
+  const hist = selectedPlayerRatingHistory.value
+  const current = selectedPlayerRating.value ? Number(selectedPlayerRating.value) : 1320
+  if (!hist || hist.length === 0) {
+    return {
+      current,
+      peak: current,
+      lowest: current,
+      totalGames: 0
+    }
+  }
+  const ordinals = hist.map((h: any) => h.ordinal)
+  return {
+    current: ordinals[ordinals.length - 1],
+    peak: Math.max(...ordinals),
+    lowest: Math.min(...ordinals),
+    totalGames: hist.length
+  }
+})
+
+const playerRatingChartData = computed(() => {
+  const hist = selectedPlayerRatingHistory.value
+  if (!hist || hist.length === 0) {
+    return { labels: [], datasets: [] }
+  }
+  const labels = ['시작', ...hist.map((_: any, idx: number) => `${idx + 1}국`)]
+  const data = [1320, ...hist.map((h: any) => h.ordinal)]
+  const deltas = [null, ...hist.map((h: any) => h.delta)]
+
+  return {
+    labels,
+    datasets: [{
+      label: selectedPlayer.value,
+      data,
+      deltas,
+      borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59, 130, 246, 0.12)',
+      borderWidth: 2.4,
+      pointRadius: 3.5,
+      pointHoverRadius: 6,
+      tension: 0.15,
+      fill: true
+    }]
+  }
+})
+
+const playerRatingChartOptions = computed<ChartOptions<'line'>>(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { display: false },
+    tooltip: {
+      callbacks: {
+        label: (context) => {
+          const val = context.parsed.y
+          const dataset = context.dataset as any
+          const delta = dataset.deltas?.[context.dataIndex]
+          if (context.dataIndex === 0) return `시작: R${val}`
+          const dStr = delta !== null && delta !== undefined ? ` (${delta >= 0 ? '+' : ''}${delta})` : ''
+          return `레이팅: R${val}${dStr}`
+        }
+      }
+    }
+  },
+  scales: {
+    x: {
+      grid: { color: 'rgba(128, 128, 128, 0.1)' },
+      ticks: { font: { size: 10 } }
+    },
+    y: {
+      grid: { color: 'rgba(128, 128, 128, 0.1)' },
+      ticks: { font: { size: 10 } }
+    }
+  }
+}))
+
+const formatDonutPct = (pct: number): string => {
+  if (pct >= 9) return pct.toFixed(1) + '%'
+  return Math.round(pct) + '%'
+}
 
 // 리액티브하게 초기 플레이어 및 선택값 갱신
 watch([allPlayers, scopeTab], ([newVal]) => {
@@ -834,7 +961,7 @@ const emptyScopeMessage = computed(() => {
         <line x1="12" y1="20" x2="12" y2="4"></line>
         <line x1="6" y1="20" x2="6" y2="14"></line>
       </svg>
-      <span>대시보드</span>
+      <span class="dashboard-tab-label">대시보드</span>
     </button>
   </div>
 
@@ -880,6 +1007,13 @@ const emptyScopeMessage = computed(() => {
       @click="activeTab = 'rank'"
     >
       순위 비율
+    </button>
+    <button 
+      class="tab_btn" 
+      :class="{ active: activeTab === 'rating' }" 
+      @click="activeTab = 'rating'"
+    >
+      레이팅 추이
     </button>
   </div>
 
@@ -1047,7 +1181,7 @@ const emptyScopeMessage = computed(() => {
                 r="60" 
                 fill="none" 
                 stroke="var(--border-color, rgba(255,255,255,0.1))" 
-                stroke-width="28"
+                stroke-width="36"
               />
               
               <!-- 원형 조각들 (12시 방향 시작 회전) -->
@@ -1058,7 +1192,7 @@ const emptyScopeMessage = computed(() => {
                   cx="100" cy="100" r="60" 
                   fill="none" 
                   stroke="var(--color-rank-4)" 
-                  stroke-width="28" 
+                  stroke-width="36" 
                   :stroke-dasharray="`${(rankStats.p4 / 100) * 376.9911} 376.9911`"
                   :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2 + rankStats.p3) / 100) * 376.9911}`"
                   class="donut_segment"
@@ -1072,7 +1206,7 @@ const emptyScopeMessage = computed(() => {
                   cx="100" cy="100" r="60" 
                   fill="none" 
                   stroke="var(--color-rank-3)" 
-                  stroke-width="28" 
+                  stroke-width="36" 
                   :stroke-dasharray="`${(rankStats.p3 / 100) * 376.9911} 376.9911`"
                   :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2) / 100) * 376.9911}`"
                   class="donut_segment"
@@ -1086,7 +1220,7 @@ const emptyScopeMessage = computed(() => {
                   cx="100" cy="100" r="60" 
                   fill="none" 
                   stroke="var(--color-rank-2)" 
-                  stroke-width="28" 
+                  stroke-width="36" 
                   :stroke-dasharray="`${(rankStats.p2 / 100) * 376.9911} 376.9911`"
                   :stroke-dashoffset="`-${(rankStats.p1 / 100) * 376.9911}`"
                   class="donut_segment"
@@ -1100,7 +1234,7 @@ const emptyScopeMessage = computed(() => {
                   cx="100" cy="100" r="60" 
                   fill="none" 
                   stroke="var(--color-rank-1)" 
-                  stroke-width="28" 
+                  stroke-width="36" 
                   :stroke-dasharray="`${(rankStats.p1 / 100) * 376.9911} 376.9911`"
                   stroke-dashoffset="0"
                   class="donut_segment"
@@ -1113,44 +1247,44 @@ const emptyScopeMessage = computed(() => {
               <!-- 각 순위 영역 내 % 레이블 -->
               <g class="donut_labels" pointer-events="none">
                 <text 
-                  v-if="rankStats.p1 >= 5"
+                  v-if="rankStats.p1 >= 6"
                   :x="getRankLabelPos(rankStats, 1).x" 
                   :y="getRankLabelPos(rankStats, 1).y" 
                   text-anchor="middle" 
                   dominant-baseline="central" 
                   class="donut_segment_text"
                 >
-                  {{ rankStats.p1.toFixed(1) }}%
+                  {{ formatDonutPct(rankStats.p1) }}
                 </text>
                 <text 
-                  v-if="rankStats.p2 >= 5"
+                  v-if="rankStats.p2 >= 6"
                   :x="getRankLabelPos(rankStats, 2).x" 
                   :y="getRankLabelPos(rankStats, 2).y" 
                   text-anchor="middle" 
                   dominant-baseline="central" 
                   class="donut_segment_text"
                 >
-                  {{ rankStats.p2.toFixed(1) }}%
+                  {{ formatDonutPct(rankStats.p2) }}
                 </text>
                 <text 
-                  v-if="rankStats.p3 >= 5"
+                  v-if="rankStats.p3 >= 6"
                   :x="getRankLabelPos(rankStats, 3).x" 
                   :y="getRankLabelPos(rankStats, 3).y" 
                   text-anchor="middle" 
                   dominant-baseline="central" 
                   class="donut_segment_text"
                 >
-                  {{ rankStats.p3.toFixed(1) }}%
+                  {{ formatDonutPct(rankStats.p3) }}
                 </text>
                 <text 
-                  v-if="rankStats.p4 >= 5"
+                  v-if="rankStats.p4 >= 6"
                   :x="getRankLabelPos(rankStats, 4).x" 
                   :y="getRankLabelPos(rankStats, 4).y" 
                   text-anchor="middle" 
                   dominant-baseline="central" 
                   class="donut_segment_text"
                 >
-                  {{ rankStats.p4.toFixed(1) }}%
+                  {{ formatDonutPct(rankStats.p4) }}
                 </text>
               </g>
 
@@ -1242,6 +1376,37 @@ const emptyScopeMessage = computed(() => {
           <div class="summary_stat_box">
             <span class="summary_label">평균 순위</span>
             <span class="summary_value">{{ rankStats.avgRank }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 레이팅 추이 탭 -->
+      <div v-else-if="activeTab === 'rating'" class="rating_tab_wrapper">
+        <div class="rating_summary_grid">
+          <div class="summary_stat_box">
+            <span class="summary_label">현재 레이팅</span>
+            <span class="summary_value highlight">R{{ playerRatingSummary.current }}</span>
+          </div>
+          <div class="summary_stat_box">
+            <span class="summary_label">역대 최고</span>
+            <span class="summary_value text_positive">R{{ playerRatingSummary.peak }}</span>
+          </div>
+          <div class="summary_stat_box">
+            <span class="summary_label">역대 최저</span>
+            <span class="summary_value text_negative">R{{ playerRatingSummary.lowest }}</span>
+          </div>
+          <div class="summary_stat_box">
+            <span class="summary_label">기록 대국 수</span>
+            <span class="summary_value">{{ playerRatingSummary.totalGames }}전</span>
+          </div>
+        </div>
+
+        <div class="rating_chart_container">
+          <div v-if="playerRatingChartData.labels.length > 1" style="height: 220px; position: relative;">
+            <LineChart :data="playerRatingChartData" :options="playerRatingChartOptions" />
+          </div>
+          <div v-else class="no_rating_data">
+            기록된 레이팅 변동 이력이 없습니다. (기본 R1320)
           </div>
         </div>
       </div>
@@ -1570,7 +1735,7 @@ html:not(.dark) .tab_btn.active {
 }
 
 .donut_segment.active {
-  stroke-width: 32;
+  stroke-width: 40;
   filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.4));
 }
 
@@ -1783,5 +1948,64 @@ html:not(.dark) .rank_bar_track {
 }
 .dashboard-icon-svg {
   flex-shrink: 0;
+}
+
+.rating_tab_wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.rating_summary_grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+@media (max-width: 600px) {
+  .rating_summary_grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.rating_chart_container {
+  background-color: var(--bg-card, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.no_rating_data {
+  text-align: center;
+  color: var(--color-disabled, #888888);
+  padding: 40px 0;
+  font-size: 13px;
+}
+
+.dashboard-tab-label {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .btn-dashboard-tab {
+    padding: 6px 8px;
+    gap: 0;
+  }
+  .dashboard-tab-label {
+    max-width: 0;
+    opacity: 0;
+    overflow: hidden;
+    margin-left: 0;
+    transition: max-width 0.25s ease, opacity 0.2s ease, margin 0.2s ease;
+  }
+  .btn-dashboard-tab:hover .dashboard-tab-label,
+  .btn-dashboard-tab:focus-visible .dashboard-tab-label {
+    max-width: 60px;
+    opacity: 1;
+    margin-left: 4px;
+  }
 }
 </style>

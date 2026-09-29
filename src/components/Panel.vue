@@ -85,7 +85,7 @@ const emit = defineEmits<Emits>()
     <line x1="12" y1="20" x2="12" y2="4"></line>
     <line x1="6" y1="20" x2="6" y2="14"></line>
   </svg>
-  <span>대시보드</span>
+  <span class="dashboard-quick-label">대시보드</span>
 </button>
 </template>
 
@@ -111,7 +111,7 @@ const emit = defineEmits<Emits>()
   border: 1px solid var(--border-color, #cccccc);
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
-  transition: all 0.2s ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   opacity: 0.9;
 }
 #DashboardQuick:hover {
@@ -119,8 +119,39 @@ const emit = defineEmits<Emits>()
   transform: translateY(-1px);
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
 }
+.dashboard-quick-label {
+  display: inline-block;
+  white-space: nowrap;
+  transition: max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, margin 0.2s ease;
+}
+@media (max-width: 768px) {
+  #DashboardQuick {
+    padding: 6px 8px;
+    gap: 0;
+  }
+  #DashboardQuick .dashboard-quick-label {
+    max-width: 0;
+    opacity: 0;
+    overflow: hidden;
+    margin-left: 0;
+  }
+  #DashboardQuick:hover,
+  #DashboardQuick:focus-visible,
+  #DashboardQuick:active {
+    padding: 6px 10px;
+    gap: 4px;
+  }
+  #DashboardQuick:hover .dashboard-quick-label,
+  #DashboardQuick:focus-visible .dashboard-quick-label,
+  #DashboardQuick:active .dashboard-quick-label {
+    max-width: 65px;
+    opacity: 1;
+    margin-left: 3px;
+  }
+}
 .dashboard-icon-svg {
   color: var(--color-toggle-on, #3b82f6);
+  flex-shrink: 0;
 }
 
 /* 박스 바깥 어두워지는 백드롭 */

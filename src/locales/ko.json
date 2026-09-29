@@ -70,7 +70,11 @@
         "mangan" : "만관",
         "riichiPayout" : "공탁금처리",
         "firstPlace" : "1위",
-        "powerSaving" : "절전 모드"
+        "powerSaving" : "절전 모드",
+        "ratingDisplay" : "레이팅 표기",
+        "ratingDisplaySide" : "이름 옆",
+        "ratingDisplayTop" : "이름 위",
+        "ratingDisplayOff" : "표기 안함"
     },
     "sync" : {
         "online" : "온라인",
