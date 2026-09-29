@@ -30,10 +30,14 @@ import {
   type SessionGame,
   type GameDetailRecord,
   type StatsMatrixData,
+  type StatsMatrixRow,
   type DistributionData
 } from '@/services/publicStatsService';
+import zoomPlugin from 'chartjs-plugin-zoom';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
-ChartJS.register(Title, ChartTooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale);
+ChartJS.register(Title, ChartTooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, zoomPlugin);
 
 const emit = defineEmits<{
   (e: 'go-to-scorer'): void;
@@ -896,46 +900,108 @@ const loadAllData = async () => {
 // ==========================================
 const ratingTimeline = ref<AllPlayersRatingTrajectory | null>(null);
 const ratingChartRef = ref<any>(null);
+const isRatingTimelineModalOpen = ref(false);
+const selectedRatingSessionFilter = ref('');
+const hiddenRatingPlayerNames = ref<Set<string>>(new Set());
 
+// 수식 KaTeX 렌더러
+const renderKatex = (latex: string) => {
+  try {
+    return katex.renderToString(latex, {
+      displayMode: true,
+      throwOnError: false
+    });
+  } catch (e) {
+    return latex;
+  }
+};
+
+// 줌 배율 초기화
+const resetRatingChartZoom = () => {
+  if (ratingChartRef.value?.chart) {
+    ratingChartRef.value.chart.resetZoom();
+  }
+};
+
+// 상위 N명 필터
 const filterRatingTopN = (n: number) => {
-  if (!ratingChartData.value.datasets) return;
-  ratingChartData.value.datasets.forEach((ds: any, idx: number) => {
-    ds.hidden = idx >= n;
+  hiddenRatingPlayerNames.value.clear();
+  const datasets = ratingTimeline.value?.datasets || [];
+  datasets.forEach((ds, idx) => {
+    if (idx >= n) {
+      hiddenRatingPlayerNames.value.add(ds.name);
+    }
   });
   if (ratingChartRef.value?.chart) {
     ratingChartRef.value.chart.update();
   }
 };
 
+// 전체 선택 / 전체 해제
 const filterRatingAll = (showAll: boolean) => {
-  if (!ratingChartData.value.datasets) return;
-  ratingChartData.value.datasets.forEach((ds: any) => {
-    ds.hidden = !showAll;
-  });
+  if (showAll) {
+    hiddenRatingPlayerNames.value.clear();
+  } else {
+    hiddenRatingPlayerNames.value = new Set(ratingTimeline.value?.datasets.map(d => d.name) || []);
+  }
   if (ratingChartRef.value?.chart) {
     ratingChartRef.value.chart.update();
   }
 };
+
+const availableRatingSessions = computed(() => {
+  if (statsMatrix.value?.sessions && statsMatrix.value.sessions.length > 0) {
+    return statsMatrix.value.sessions;
+  }
+  return availableSessions.value.map(s => {
+    const m = s.match(/제\d+회/);
+    return m ? m[0] : s;
+  });
+});
+
+// 특정 회차 참가자 필터링 감시
+watch(selectedRatingSessionFilter, (sessName) => {
+  if (!sessName) {
+    filterRatingTopN(8);
+    return;
+  }
+  const rows = statsMatrix.value?.rows || [];
+  const participantNames = new Set(
+    rows
+      .filter((r: StatsMatrixRow) => r.sessionUmas[sessName] !== null && r.sessionUmas[sessName] !== undefined)
+      .map((r: StatsMatrixRow) => r.name)
+  );
+
+  hiddenRatingPlayerNames.value.clear();
+  ratingTimeline.value?.datasets.forEach(ds => {
+    if (!participantNames.has(ds.name)) {
+      hiddenRatingPlayerNames.value.add(ds.name);
+    }
+  });
+  if (ratingChartRef.value?.chart) {
+    ratingChartRef.value.chart.update();
+  }
+});
 
 const ratingChartData = computed(() => {
   if (!ratingTimeline.value) {
     return { labels: [], datasets: [] };
   }
-  const datasets = ratingTimeline.value.datasets.map((d, idx) => ({
+  const datasets = ratingTimeline.value.datasets.map((d) => ({
     label: d.name,
     data: d.data,
     borderColor: d.color,
     backgroundColor: d.color,
-    borderWidth: 2.2,
-    pointRadius: d.hasMarker ? d.hasMarker.map(m => (m ? 3.5 : 0)) : 3.5,
-    pointHoverRadius: d.hasMarker ? d.hasMarker.map(m => (m ? 6 : 0)) : 6,
+    borderWidth: 1.6,
+    pointRadius: 0,
+    pointHoverRadius: 5,
     played: d.played,
     deltas: d.deltas,
     ranks: d.ranks,
     hasMarker: d.hasMarker,
-    tension: 0.1,
+    tension: 0.15,
     fill: false,
-    hidden: idx >= 8
+    hidden: hiddenRatingPlayerNames.value.has(d.name)
   }));
 
   return {
@@ -956,6 +1022,21 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
         boxWidth: 8,
         color: isDark.value ? '#cbd5e1' : '#334155',
       },
+      onClick: (_e, legendItem, legend) => {
+        const chart = legend.chart;
+        const index = legendItem.datasetIndex;
+        if (index !== undefined) {
+          const ds = chart.data.datasets[index] as any;
+          const name = ds.label;
+          if (hiddenRatingPlayerNames.value.has(name)) {
+            hiddenRatingPlayerNames.value.delete(name);
+          } else {
+            hiddenRatingPlayerNames.value.add(name);
+          }
+          chart.setDatasetVisibility(index, !hiddenRatingPlayerNames.value.has(name));
+          chart.update();
+        }
+      }
     },
     tooltip: {
       mode: 'index',
@@ -981,16 +1062,37 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
           return `${dataset.label}: R${val} (미참가)`;
         }
       }
+    },
+    zoom: {
+      pan: {
+        enabled: true,
+        mode: 'x',
+      },
+      zoom: {
+        wheel: {
+          enabled: true,
+          speed: 0.1,
+        },
+        pinch: {
+          enabled: true,
+        },
+        mode: 'x',
+      }
     }
   },
   scales: {
     x: {
       grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
-      ticks: { color: isDark.value ? '#94a3b8' : '#64748b' }
+      ticks: {
+        font: { family: "'Noto Serif KR', serif", size: 11 },
+        color: isDark.value ? '#94a3b8' : '#64748b',
+        maxRotation: 45
+      }
     },
     y: {
       grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
       ticks: {
+        font: { family: "'Noto Serif KR', serif", size: 11 },
         color: isDark.value ? '#94a3b8' : '#64748b',
         callback: (value) => `R${value}`
       }
@@ -1517,33 +1619,20 @@ const getRankClass = (rank: number) => {
       <!-- TAB 2: 레이팅 & 추이                            -->
       <!-- ============================================== -->
       <section v-else-if="activeTab === 'rating'" class="tab-rating">
-        <!-- 1. 전체 플레이어 레이팅 변동 추이 차트 -->
-        <div class="rating-chart-card">
-          <div class="rating-chart-header">
-            <div class="rating-chart-title-group">
-              <h2 class="rating-section-title">전체 플레이어 레이팅 변동 추이</h2>
-              <span class="rating-section-desc">범례의 이름을 클릭하면 해당 플레이어의 선을 켜거나 끌 수 있습니다.</span>
-            </div>
-            <div class="rating-filter-buttons">
-              <button type="button" class="btn-rating-filter" @click="filterRatingTopN(5)">상위 5명</button>
-              <button type="button" class="btn-rating-filter" @click="filterRatingTopN(10)">상위 10명</button>
-              <button type="button" class="btn-rating-filter" @click="filterRatingAll(true)">전체 선택</button>
-              <button type="button" class="btn-rating-filter" @click="filterRatingAll(false)">전체 해제</button>
-            </div>
+        <!-- 1. 전체 플레이어 레이팅 변동 추이 모달 진입 카드 -->
+        <div class="rating-chart-entry-card">
+          <div class="rating-entry-info">
+            <h2 class="rating-section-title">전체 플레이어 레이팅 변동 추이</h2>
+            <span class="rating-section-desc">역대 모든 대국의 플레이어별 레이팅 변화 추이를 전용 인터랙티브 차트 모달로 확인합니다.</span>
           </div>
-
-          <div class="rating-chart-wrapper">
-            <div v-if="ratingChartData.datasets.length > 0" style="height: 380px; position: relative;">
-              <LineChart 
-                ref="ratingChartRef" 
-                :data="ratingChartData" 
-                :options="ratingChartOptions" 
-              />
-            </div>
-            <div v-else class="rating-chart-empty">
-              레이팅 변동 이력 데이터를 불러오는 중이거나 기록이 없습니다.
-            </div>
-          </div>
+          <button type="button" class="btn-open-rating-modal" @click="isRatingTimelineModalOpen = true">
+            <svg class="dashboard-icon-svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"></line>
+              <line x1="12" y1="20" x2="12" y2="4"></line>
+              <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+            전체화면 그래프 열기
+          </button>
         </div>
 
         <!-- 2. 레이팅 순위표 -->
@@ -1623,19 +1712,19 @@ const getRankClass = (rank: number) => {
           <div class="formula-cards-grid">
             <div class="formula-box">
               <div class="formula-tag">1. 실력 분포 모델</div>
-              <div class="formula-latex">S_i \sim \mathcal{N}(\mu_i, \, \sigma_i^2)</div>
+              <div class="formula-latex" v-html="renderKatex('S_i \\sim \\mathcal{N}(\\mu_i, \\, \\sigma_i^2)')"></div>
               <p class="formula-explanation">플레이어의 실력은 평균(μ)과 불확실도(σ)를 모수로 하는 정규분포로 정의됩니다.</p>
             </div>
 
             <div class="formula-box">
-              <div class="formula-tag">2. 4인 마작 순위 확률 (Plackett-Luce)</div>
-              <div class="formula-latex">P(r_1, r_2, r_3, r_4) = \prod_{i=1}^{3} \frac{\exp(\mu_i / \beta)}{\sum_{j=i}^{4} \exp(\mu_j / \beta)}</div>
-              <p class="formula-explanation">최종 점수 순위에 기초하여 4명의 실력 사후 분포(μ, σ)를 순차적으로 갱신합니다.</p>
+              <div class="formula-tag">2. 우마(Uma) 기반 레이팅 갱신</div>
+              <div class="formula-latex" v-html="renderKatex('\\Delta \\mu_i = \\left(\\frac{\\sigma_i}{\\sigma_0}\\right) \\times \\left( \\text{Uma}_i + \\frac{\\bar{R} - R_i}{40} \\times 2.0 \\right)')"></div>
+              <p class="formula-explanation">경기 결과 획득한 순수 우마(Uma)와 상대 테이블 평균 레이팅과의 격차를 직접 반영하여 실력 평균을 갱신합니다.</p>
             </div>
 
             <div class="formula-box">
               <div class="formula-tag">3. 보수적 표기 레이팅 (Conservative Rating)</div>
-              <div class="formula-latex">R = \mathrm{round}(\mu - 1.5 \times \sigma)</div>
+              <div class="formula-latex" v-html="renderKatex('R = \\mathrm{round}(\\mu - 1.5 \\times \\sigma)')"></div>
               <p class="formula-explanation">불확실도를 차감하여 대국 수가 적은 상태에서의 랭킹 과대평가를 완충합니다.</p>
             </div>
           </div>
@@ -1651,24 +1740,24 @@ const getRankClass = (rank: number) => {
               </thead>
               <tbody>
                 <tr>
-                  <td><code>\mu_0</code></td>
+                  <td><code v-html="renderKatex('\\mu_0')"></code></td>
                   <td>1500</td>
                   <td>초기 실력 기대값 기준점</td>
                 </tr>
                 <tr>
-                  <td><code>\sigma_0</code></td>
+                  <td><code v-html="renderKatex('\\sigma_0')"></code></td>
                   <td>120</td>
                   <td>초기 불확실도 (대국 진행 시 신뢰도 증가로 점진적 감소)</td>
                 </tr>
                 <tr>
-                  <td><code>R_0</code></td>
+                  <td><code v-html="renderKatex('R_0')"></code></td>
                   <td>1320</td>
                   <td>시작 표기 레이팅 (\mu_0 - 1.5 \times \sigma_0)</td>
                 </tr>
                 <tr>
-                  <td><code>\beta</code></td>
+                  <td><code v-html="renderKatex('\\beta')"></code></td>
                   <td>60</td>
-                  <td>마작의 운 및 패산 변동성을 감안한 스케일 완충 계수</td>
+                  <td>경기 내 환경 및 확률적 변동성을 감안한 스케일 완충 계수</td>
                 </tr>
               </tbody>
             </table>
@@ -3328,6 +3417,69 @@ const getRankClass = (rank: number) => {
 
             <div class="gdm-hint" @click="gameModalMode = 'sheet'">
               💡 차트를 클릭하면 국별 결과 표로 돌아갑니다.
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ============================================== -->
+    <!-- 레이팅 변동 추이 전용 모달 (줌/팬 및 회차 필터 탑재) -->
+    <!-- ============================================== -->
+    <Transition name="modal-fade">
+      <div 
+        v-if="isRatingTimelineModalOpen" 
+        class="rating-modal-overlay" 
+        @click.self="isRatingTimelineModalOpen = false"
+      >
+        <div class="rating-modal-card">
+          <!-- 모달 헤더 -->
+          <div class="rating-modal-header">
+            <div class="rating-modal-title-group">
+              <h3 class="rating-modal-title">전체 플레이어 레이팅 변동 추이</h3>
+              <span class="rating-modal-subtitle">마우스 휠 스크롤 / 핀치 줌으로 확대하고 좌우 드래그로 타임라인을 탐색할 수 있습니다.</span>
+            </div>
+            <button class="gdm-close-btn" @click="isRatingTimelineModalOpen = false" title="닫기">✕</button>
+          </div>
+
+          <!-- 모달 툴바: 퀵 필터 버튼 + 회차별 필터 + 줌 리셋 -->
+          <div class="rating-modal-toolbar">
+            <div class="toolbar-left">
+              <span class="toolbar-label">선택:</span>
+              <button type="button" class="btn-rating-filter" @click="filterRatingTopN(5)">상위 5명</button>
+              <button type="button" class="btn-rating-filter" @click="filterRatingTopN(10)">상위 10명</button>
+              <button type="button" class="btn-rating-filter" @click="filterRatingAll(true)">전체 선택</button>
+              <button type="button" class="btn-rating-filter" @click="filterRatingAll(false)">전체 해제</button>
+            </div>
+
+            <div class="toolbar-right">
+              <div class="session-filter-group">
+                <span class="toolbar-label">회차 필터:</span>
+                <select v-model="selectedRatingSessionFilter" class="session-filter-select">
+                  <option value="">전체 회차</option>
+                  <option v-for="s in availableRatingSessions" :key="s" :value="s">
+                    {{ s }}
+                  </option>
+                </select>
+              </div>
+
+              <button type="button" class="btn-zoom-reset" @click="resetRatingChartZoom" title="확대/축소 배율을 초기화합니다">
+                줌 리셋
+              </button>
+            </div>
+          </div>
+
+          <!-- 차트 캔버스 영역 -->
+          <div class="rating-modal-chart-wrapper">
+            <div v-if="ratingChartData.datasets.length > 0" class="rating-modal-chart-inner">
+              <LineChart 
+                ref="ratingChartRef" 
+                :data="ratingChartData" 
+                :options="ratingChartOptions" 
+              />
+            </div>
+            <div v-else class="rating-chart-empty">
+              레이팅 변동 이력 데이터를 불러오는 중이거나 기록이 없습니다.
             </div>
           </div>
         </div>
@@ -5708,5 +5860,196 @@ html.dark .formula-latex {
   color: #94a3b8;
   padding: 40px 0;
   font-size: 13px;
+}
+
+/* 레이팅 진입 카드 */
+.rating-chart-entry-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background-color: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+@media (max-width: 640px) {
+  .rating-chart-entry-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
+.btn-open-rating-modal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff !important;
+  background-color: #4f46e5;
+  border: 1px solid #4338ca;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  font-family: inherit;
+  box-shadow: 0 1px 3px rgba(79, 70, 229, 0.25);
+}
+.btn-open-rating-modal:hover {
+  background-color: #4338ca;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 6px rgba(79, 70, 229, 0.35);
+}
+html.dark .btn-open-rating-modal {
+  background-color: #6366f1;
+  border-color: #818cf8;
+}
+html.dark .btn-open-rating-modal:hover {
+  background-color: #4f46e5;
+}
+
+/* 레이팅 변동 추이 전용 모달 */
+.rating-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2200;
+  padding: 16px;
+  backdrop-filter: blur(4px);
+}
+.rating-modal-card {
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #0f172a);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 1060px;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 24px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-color, #e2e8f0);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+html.dark .rating-modal-card {
+  background: var(--bg-modal, #18181b);
+  color: var(--text-color, #f4f4f5);
+  border-color: var(--border-color, #27272a);
+}
+
+.rating-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  gap: 12px;
+}
+.rating-modal-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rating-modal-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.rating-modal-subtitle {
+  font-size: 11.5px;
+  color: var(--text-dimmed, #64748b);
+}
+
+/* 툴바 */
+.rating-modal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+.toolbar-left, .toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.toolbar-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dimmed, #64748b);
+  margin-right: 2px;
+}
+.session-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.session-filter-select {
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #0f172a);
+  font-family: inherit;
+  cursor: pointer;
+}
+html.dark .session-filter-select {
+  background: #27272a;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+.btn-zoom-reset {
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 700;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #0f172a);
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-zoom-reset:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+html.dark .btn-zoom-reset {
+  background: #27272a;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+html.dark .btn-zoom-reset:hover {
+  background: #3f3f46;
+}
+
+/* 차트 래퍼 */
+.rating-modal-chart-wrapper {
+  flex: 1;
+  min-height: 480px;
+  height: 58vh;
+  position: relative;
+  overflow: hidden;
+}
+.rating-modal-chart-inner {
+  width: 100%;
+  height: 100%;
+  position: relative;
 }
 </style>

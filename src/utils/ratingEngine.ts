@@ -1,7 +1,5 @@
-import { rating, rate } from 'openskill';
-
 /**
- * OpenSkill 마작 레이팅 기본 상수
+ * 마작 레이팅 기본 상수
  */
 export const DEFAULT_MU = 1500;
 export const DEFAULT_SIGMA = 120; // 초기 불확실도
@@ -95,7 +93,7 @@ export function createInitialRating(name: string): PlayerRating {
 }
 
 /**
- * 단일 대국 결과(4인)를 바탕으로 OpenSkill 레이팅 계산
+ * 단일 대국 결과(4인)를 바탕으로 순수 우마(Uma) 직접 반영 및 베이지안 불확실도 감쇄 레이팅 계산
  */
 export function calculateMatchRatings(
   matchPlayers: MatchPlayerInput[],
@@ -108,25 +106,40 @@ export function calculateMatchRatings(
   const updatedRatings: Record<string, PlayerRating> = {};
   const matchDeltas: Record<string, MatchDeltaResult> = {};
 
-  // 1. 4명의 기존 레이팅 객체 확보 (없으면 초기값 생성)
-  const teams = matchPlayers.map(p => {
-    const existing = currentRatings[p.name] || createInitialRating(p.name);
-    return [rating({ mu: existing.mu, sigma: existing.sigma })];
-  });
-
-  const ranks = matchPlayers.map(p => p.rank);
-
-  // 2. OpenSkill Plackett-Luce 모델 레이팅 산출
-  const newTeams = rate(teams, {
-    rank: ranks,
-    beta: BETA
-  });
-
-  // 3. 선수별 레이팅 및 델타 업데이트
-  matchPlayers.forEach((p, idx) => {
+  // 1. 4명의 기존 레이팅 객체 확보 및 테이블 평균 레이팅 계산
+  const playerStates = matchPlayers.map(p => {
     const prev = currentRatings[p.name] || createInitialRating(p.name);
-    const newMu = newTeams[idx][0].mu;
-    const newSigma = newTeams[idx][0].sigma;
+    return { input: p, prev };
+  });
+
+  const avgTableRating = playerStates.reduce((sum, p) => sum + p.prev.ordinal, 0) / (playerStates.length || 1);
+  const totalVariance = playerStates.reduce((acc, p) => acc + (p.prev.sigma ** 2) + (BETA ** 2), 0);
+  const c = Math.sqrt(totalVariance);
+
+  // 2. 각 플레이어별 순수 우마(Uma) 직접 반영 갱신
+  playerStates.forEach(({ input: p, prev }) => {
+    // 순수 우마 (미제공 시 점수 기반 폴백: (score - 30000)/1000)
+    let rawUma = p.uma;
+    if (rawUma === undefined || isNaN(rawUma)) {
+      if (p.score !== undefined && !isNaN(p.score)) {
+        rawUma = (p.score - 30000) / 1000;
+      } else {
+        rawUma = p.rank === 1 ? 50 : (p.rank === 2 ? 10 : (p.rank === 3 ? -15 : -45));
+      }
+    }
+
+    // 상대방과의 실력차 보정 (자신보다 높은 레이팅의 테이블에서 플레이할 경우 가산점)
+    const oppDiff = (avgTableRating - prev.ordinal) / 40;
+
+    // 불확실도(sigma) 기반 학습률 스케일 (초기 플레이어는 빠른 궤도 진입, 베테랑은 안정화)
+    const scale = prev.sigma / DEFAULT_SIGMA;
+    const dMu = scale * (rawUma + oppDiff * 2.0);
+
+    // 베이지안 불확실도 점진적 감쇄 (대국 수가 쌓일수록 신뢰도 증가)
+    const deltaDecay = Math.min(0.06, (prev.sigma / c) ** 2 * 0.4);
+    const newSigma = Math.max(40, prev.sigma * Math.sqrt(Math.max(1 - deltaDecay, 0.001)));
+
+    const newMu = prev.mu + dMu;
     const newOrdinal = computeOrdinal(newMu, newSigma);
     const oldOrdinal = prev.ordinal;
     const delta = newOrdinal - oldOrdinal;
