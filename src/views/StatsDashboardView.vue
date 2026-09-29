@@ -1056,7 +1056,7 @@ const ratingChartData = computed(() => {
     borderColor: d.color,
     backgroundColor: d.color,
     borderWidth: 1.5,
-    // 미출전 수평 구간 자연스러운 그라디언트 페이드인/아웃 전환 (기본 불투명도 0.32)
+    // 미출전 수평 구간 자연스러운 그라디언트 페이드인/아웃 전환 (기본 불투명도 0.52로 상향)
     segment: {
       borderColor: (ctx: any) => {
         const p0Idx = ctx.p0DataIndex;
@@ -1074,35 +1074,36 @@ const ratingChartData = computed(() => {
           try {
             const grad = chartCtx.createLinearGradient(ctx.p0.x, ctx.p0.y, ctx.p1.x, ctx.p1.y);
             if (justPlayed && willPlaySoon) {
-              grad.addColorStop(0, hexToRgba(d.color, 0.85));
-              grad.addColorStop(1, hexToRgba(d.color, 0.70));
-            } else if (justPlayed) {
-              // 대국 직후: 0.90 -> 0.32 부드러운 페이드아웃
+              // 경기 사이 짧은 휴식: 0.90 -> 0.80 선명 유지
               grad.addColorStop(0, hexToRgba(d.color, 0.90));
-              grad.addColorStop(1, hexToRgba(d.color, 0.32));
+              grad.addColorStop(1, hexToRgba(d.color, 0.80));
+            } else if (justPlayed) {
+              // 대국 직후: 0.92 -> 0.52 부드러운 페이드아웃
+              grad.addColorStop(0, hexToRgba(d.color, 0.92));
+              grad.addColorStop(1, hexToRgba(d.color, 0.52));
             } else if (willPlaySoon) {
-              // 대국 직전: 0.32 -> 0.75 점진적 페이드인
-              grad.addColorStop(0, hexToRgba(d.color, 0.32));
-              grad.addColorStop(1, hexToRgba(d.color, 0.75));
+              // 대국 직전: 0.52 -> 0.85 점진적 페이드인
+              grad.addColorStop(0, hexToRgba(d.color, 0.52));
+              grad.addColorStop(1, hexToRgba(d.color, 0.85));
             } else {
-              // 깊은 수평 구간: 안정적인 32% 불투명도 유지
-              grad.addColorStop(0, hexToRgba(d.color, 0.32));
-              grad.addColorStop(1, hexToRgba(d.color, 0.32));
+              // 깊은 수평 구간: 52% 불투명도로 선명하게 식별 가능
+              grad.addColorStop(0, hexToRgba(d.color, 0.52));
+              grad.addColorStop(1, hexToRgba(d.color, 0.52));
             }
             return grad;
           } catch (_) {}
         }
 
-        if (justPlayed) return hexToRgba(d.color, 0.55);
-        if (willPlaySoon) return hexToRgba(d.color, 0.55);
-        return hexToRgba(d.color, 0.32);
+        if (justPlayed) return hexToRgba(d.color, 0.70);
+        if (willPlaySoon) return hexToRgba(d.color, 0.70);
+        return hexToRgba(d.color, 0.52);
       },
       borderWidth: (ctx: any) => {
         const p0Idx = ctx.p0DataIndex;
         const p1Idx = ctx.p1DataIndex;
         if (d.played?.[p1Idx]) return 1.8;
-        if (d.played?.[p0Idx] || d.played?.[p1Idx + 1]) return 1.4;
-        return 1.1;
+        if (d.played?.[p0Idx] || d.played?.[p1Idx + 1]) return 1.45;
+        return 1.25; // 1.1px -> 1.25px로 소폭 상향하여 선의 굵기감 확보
       }
     },
     pointRadius: (ctx: any) => {
