@@ -1317,7 +1317,7 @@ const codeforcesTierBandsPlugin = {
       { name: '혼천', min: 1700, max: 2400, color: '#38BEDA' },
       { name: '작성', min: 1600, max: 1700, color: '#CD4A62' },
       { name: '작호', min: 1500, max: 1600, color: '#E88640' },
-      { name: '작걸', min: 1400, max: 1500, color: '#CA8A04' },
+      { name: '작걸', min: 1400, max: 1500, color: '#E5B800' },
       { name: '작사', min: 1300, max: 1400, color: '#21A73C' },
       { name: '초심', min: 800,  max: 1300, color: '#98B324' }
     ];

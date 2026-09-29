@@ -18,7 +18,7 @@ export const RATING_COLORS = {
   choncheon: '#38BEDA',
   jakseong: '#CD4A62',
   jakho: '#E88640',
-  jakgeol: '#CA8A04',
+  jakgeol: '#E5B800',
   jaksa: '#21A73C',
   chosim: '#98B324'
 } as const;
