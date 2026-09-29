@@ -21,6 +21,11 @@
   --color-offline: #64748b;
   --bg-stripe-light: #f8fafc;
   --bg-stripe-dark: #f1f5f9;
+  /* 테마 호환성 변수 별칭 */
+  --color-input-bg: #f8fafc;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
 }
 
 html.dark {
@@ -46,6 +51,11 @@ html.dark {
   --color-offline: #6b7280;
   --bg-stripe-light: #222222;
   --bg-stripe-dark: #1b1b1b;
+  /* 테마 호환성 변수 별칭 */
+  --color-input-bg: #2a2a2a;
+  --color-border: #334155;
+  --color-text: #e5e5e5;
+  --color-text-muted: #94a3b8;
 }
 
 /* 글자 드래그 방지 */

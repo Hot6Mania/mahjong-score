@@ -949,15 +949,13 @@ const getSignColor = (sign: number, x: boolean) => {
           
           <!-- 저장되어 있고 편집 상태가 아닐 때: 캐시 저장됨 표시 및 마스킹 -->
           <div v-if="!isEditingSpreadsheetId && googleInfo.spreadsheetId" style="display: flex; align-items: center; gap: 8px; justify-content: center; width: 100%;">
-            <div style="flex: 1; min-width: 200px; max-width: 320px; background-color: var(--color-input-bg, #f3f3f3); padding: 8px 12px; border-radius: 4px; font-size: 13px; color: var(--color-text-muted, #666); border: 1px dashed var(--color-border, #ccc); font-family: sans-serif; display: flex; align-items: center; justify-content: center; gap: 6px;">
+            <div class="spreadsheet-saved-box">
               <span>🔒 주소 저장됨</span>
             </div>
             <button 
               type="button"
               @click="isEditingSpreadsheetId = true" 
-              style="padding: 8px 12px; font-size: 13px; font-weight: bold; background-color: var(--color-btn, #555); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
-              onmouseover="this.style.opacity='0.9'"
-              onmouseout="this.style.opacity='1.0'"
+              class="btn-edit-sheet-id"
             >
               수정
             </button>
@@ -971,15 +969,13 @@ const getSignColor = (sign: number, x: boolean) => {
               @input="onSpreadsheetInput"
               @change="emit('save-google-settings')"
               placeholder="스프레드시트 주소 전체 또는 ID 입력"
-              style="flex: 1; min-width: 200px; max-width: 320px; padding: 8px 10px; font-size: 13px; border-radius: 4px; border: 1px solid var(--color-border, #ccc); background-color: var(--color-input-bg, #fff); color: var(--color-text, #333);"
+              class="input-spreadsheet-id"
             />
             <button 
               v-if="googleInfo.spreadsheetId"
               type="button"
               @click="isEditingSpreadsheetId = false"
-              style="padding: 8px 12px; font-size: 13px; font-weight: bold; background-color: var(--color-toggle-on, #4caf50); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s;"
-              onmouseover="this.style.opacity='0.9'"
-              onmouseout="this.style.opacity='1.0'"
+              class="btn-save-sheet-id"
             >
               완료
             </button>
@@ -990,14 +986,14 @@ const getSignColor = (sign: number, x: boolean) => {
 
 
       <!-- 현재 연동 회차 상태 및 마감 토글 카드 -->
-      <div v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId" style="margin-top: 14px; width: 100%; display: flex; flex-direction: column; gap: 8px; background-color: var(--color-input-bg, #f7f7f7); border: 1px solid var(--color-border, #ddd); border-radius: 6px; padding: 10px 12px; box-sizing: border-box;">
-        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 13px;">
-          <span style="font-weight: bold; color: var(--text-color, #333);">연동 회차:</span>
-          <span style="font-weight: bold; color: var(--color-toggle-on, #4caf50);">{{ currentSessionSheetName || '미지정 (자동 생성)' }}</span>
+      <div v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId" class="session-status-card">
+        <div class="session-status-row">
+          <span class="session-status-label">연동 회차:</span>
+          <span class="session-status-val">{{ currentSessionSheetName || '회차 미지정 (로컬)' }}</span>
         </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
-          <span style="color: var(--text-color-muted, #666);">회차 상태:</span>
-          <span :style="{ fontWeight: 'bold', color: isSessionClosed ? 'var(--color-negative, #f44336)' : 'var(--color-toggle-on, #4caf50)' }">
+        <div class="session-status-row">
+          <span class="session-status-sublabel">회차 상태:</span>
+          <span :style="{ fontWeight: 'bold', color: isSessionClosed ? 'var(--color-negative)' : 'var(--color-online)' }">
             {{ isSessionClosed ? '🔒 종료(마감)됨' : '🟢 진행 중' }}
           </span>
         </div>
@@ -1005,39 +1001,30 @@ const getSignColor = (sign: number, x: boolean) => {
           v-if="currentSessionSheetName"
           type="button" 
           @click="emit('toggle-close-session')"
-          style="margin-top: 4px; padding: 6px 10px; font-size: 12px; font-weight: bold; border-radius: 4px; border: 1px solid var(--color-border, #ccc); background-color: var(--card-bg-color, #fff); color: var(--text-color, #333); cursor: pointer;"
+          class="btn-toggle-close"
         >
           {{ isSessionClosed ? '회차 마감 해제 🔓' : '현재 회차 마감하기 🔒' }}
         </button>
       </div>
 
       <div class="action_buttons" style="margin-top: 15px; display: flex; flex-direction: column; gap: 8px;">
-        <button 
-          v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId" 
-          @click.stop="isSaving ? null : emit('sync-local-to-google')" 
-          :disabled="isSaving"
-          :style="{
-            width: '100%',
-            padding: '8px',
-            fontSize: '14px',
-            fontWeight: 'bold',
-            backgroundColor: isSaving ? 'var(--border-color)' : 'var(--color-toggle-on)',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: isSaving ? 'default' : 'pointer',
-            transition: 'opacity 0.2s',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px'
-          }"
-          onmouseover="if(!this.disabled) this.style.opacity='0.9'"
-          onmouseout="if(!this.disabled) this.style.opacity='1.0'"
-        >
-          <span v-if="isSaving" class="spinner"></span>
-          {{ isSaving ? `동기화 중 (${syncProgress || 0}%)...` : '로컬 성적 구글 시트에 일괄 동기화' }}
-        </button>
+        <!-- 기존 회차 / 신규 회차 수평 버튼 그룹 -->
+        <div v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId" class="session-action-group">
+          <button 
+            type="button" 
+            @click.stop="emit('open-choose-session-popup')" 
+            class="btn-session-action btn-choose-session"
+          >
+            기존 회차
+          </button>
+          <button 
+            type="button" 
+            @click.stop="emit('start-new-day')" 
+            class="btn-session-action btn-new-session"
+          >
+            신규 회차
+          </button>
+        </div>
         <!-- 로그인 유지 체크박스 -->
         <div v-if="!googleInfo.isLoggedIn" class="keep_login_wrapper">
           <input 
@@ -1213,10 +1200,144 @@ const getSignColor = (sign: number, x: boolean) => {
   align-items: flex-start;
   gap: 4px;
 }
-.input_group label {
+/* 스프레드시트 주소 마스킹 박스 및 입력 필드 */
+.spreadsheet-saved-box {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+  background-color: var(--input-bg-color);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-dimmed);
+  border: 1px dashed var(--border-color);
+  font-family: sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.btn-edit-sheet-id {
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: bold;
+  background-color: var(--text-dimmed, #64748b);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.btn-edit-sheet-id:hover {
+  opacity: 0.9;
+}
+.input-spreadsheet-id {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 8px 10px;
+  font-size: 13px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background-color: var(--input-bg-color);
+  color: var(--text-color);
+  outline: none;
+}
+.input-spreadsheet-id:focus {
+  border-color: var(--color-toggle-on);
+}
+.btn-save-sheet-id {
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: bold;
+  background-color: var(--color-toggle-on);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.btn-save-sheet-id:hover {
+  opacity: 0.9;
+}
+
+/* 현재 연동 회차 상태 카드 */
+.session-status-card {
+  margin-top: 14px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+.session-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+.session-status-label {
+  font-weight: bold;
+  color: var(--text-color);
+}
+.session-status-val {
+  font-weight: bold;
+  color: var(--color-toggle-on);
+}
+.session-status-sublabel {
   font-size: 12px;
   color: var(--text-dimmed);
 }
+.btn-toggle-close {
+  margin-top: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: bold;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background-color: var(--modal-bg-color);
+  color: var(--text-color);
+  cursor: pointer;
+  transition: opacity 0.2s, background-color 0.2s;
+}
+.btn-toggle-close:hover {
+  opacity: 0.85;
+}
+
+/* 동기화 모달 내 기존 회차 / 신규 회차 수평 버튼 그룹 */
+.session-action-group {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.btn-session-action {
+  flex: 1;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: bold;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+.btn-choose-session {
+  background-color: var(--color-toggle-on);
+}
+.btn-new-session {
+  background-color: var(--color-negative);
+}
+.btn-session-action:hover {
+  opacity: 0.9;
+}
+
 .btn_g_login, .btn_g_logout {
   width: 100%;
   padding: 8px;

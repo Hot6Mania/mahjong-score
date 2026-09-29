@@ -405,6 +405,7 @@ const googleMemberStats = ref<any[]>([]);
 const currentSessionSheetName = ref(localStorage.getItem("current_session_sheet_name") || "");
 const isScoreRolling = ref(false); // 점수 이동 및 순위 연출 중 플래그 (리치 등 상호작용 차단)
 const closedSessions = ref<string[]>(JSON.parse(localStorage.getItem("mahjong_closed_sessions") || "[]"));
+const openedSessions = ref<string[]>(JSON.parse(localStorage.getItem("mahjong_opened_sessions") || "[]"));
 
 // 현재 활성 회차가 종료/마감된 회차인지 판정
 const isSessionClosed = computed(() => {
@@ -412,7 +413,9 @@ const isSessionClosed = computed(() => {
   if (!cur) return false;
   // 1. 수동 마감 목록에 포함된 경우
   if (closedSessions.value.includes(cur)) return true;
-  // 2. 구글 시트에서 수집된 유효 회차 목록 중 최신 회차가 아닌 과거 회차를 불러온 경우
+  // 2. 수동 마감 해제(오픈) 목록에 포함된 경우
+  if (openedSessions.value.includes(cur)) return false;
+  // 3. 구글 시트에서 수집된 유효 회차 목록 중 최신 회차가 아닌 과거 회차를 불러온 경우 기본 마감
   if (validGoogleSessions.value.length > 0 && validGoogleSessions.value[0] !== cur) {
     return true;
   }
@@ -423,15 +426,21 @@ const isSessionClosed = computed(() => {
 const toggleCloseCurrentSession = () => {
   const cur = currentSessionSheetName.value;
   if (!cur) return;
-  const idx = closedSessions.value.indexOf(cur);
-  if (idx > -1) {
-    closedSessions.value.splice(idx, 1);
+  if (isSessionClosed.value) {
+    // 마감 상태 -> 마감 해제
+    const cIdx = closedSessions.value.indexOf(cur);
+    if (cIdx > -1) closedSessions.value.splice(cIdx, 1);
+    if (!openedSessions.value.includes(cur)) openedSessions.value.push(cur);
     triggerToast(`'${cur}' 회차 마감이 해제되었습니다.`);
   } else {
-    closedSessions.value.push(cur);
+    // 진행 중 상태 -> 마감 처리
+    const oIdx = openedSessions.value.indexOf(cur);
+    if (oIdx > -1) openedSessions.value.splice(oIdx, 1);
+    if (!closedSessions.value.includes(cur)) closedSessions.value.push(cur);
     triggerToast(`'${cur}' 회차가 마감(종료) 처리되었습니다.`);
   }
   localStorage.setItem("mahjong_closed_sessions", JSON.stringify(closedSessions.value));
+  localStorage.setItem("mahjong_opened_sessions", JSON.stringify(openedSessions.value));
 };
 
 const isShowSpreadsheetIdPrompt = ref(false);
