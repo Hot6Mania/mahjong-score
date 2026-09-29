@@ -864,7 +864,8 @@ onMounted(() => {
 // 링크 복사
 const copyDashboardLink = async () => {
   try {
-    const url = window.location.origin + '/mahjong-score/stats';
+    const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+    const url = `${window.location.origin}${base}/stats`;
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(url);
     } else {

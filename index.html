@@ -34,13 +34,13 @@
     <link rel="icon" type="image/svg+xml" href="/riichi-stick.svg" />
 
     <!-- PWA Manifest & iOS Standalone App config -->
-    <link rel="manifest" href="/mahjong-score/manifest.json">
+    <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#4caf50">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="김케이 하우스">
-    <link rel="apple-touch-icon" href="/mahjong-score/images/icon-192.png">
+    <link rel="apple-touch-icon" href="/images/icon-192.png">
 
     <!-- Screen Size -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -73,10 +73,10 @@
     <title>김케이 하우스</title>
     <meta name="description" content="김케이 하우스 마작 점수 기록기">
     <meta name="keywords" content="마작,리치 마작,일본 마작,마작 점수,마작 점수 계산기,마작 점수 표시기,mahjong,riichi mahjong,japanese mahjong,mahjong score,mahjong score counter,麻雀,リーチ麻雀,麻雀スコア,麻雀スコア計算機, 김케이 하우스, 김케하, 김케이">
-    <meta name="author" content="hot6mania">
+    <meta name="author" content="김케이 하우스">
     <meta name="robots" content="index, follow">
-    <link rel="canonical" href="https://hot6mania.github.io/mahjong-score/" />
-    <link rel="alternate" hreflang="ko" href="https://hot6mania.github.io/mahjong-score/ko" />
+    <link rel="canonical" href="https://kimk-house.party/" />
+    <link rel="alternate" hreflang="ko" href="https://kimk-house.party/" />
 
   </head>
   <body>
@@ -90,7 +90,7 @@
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           const deployVersion = "20260712_0920";
-          navigator.serviceWorker.register(`/mahjong-score/sw.js?v=${deployVersion}`)
+          navigator.serviceWorker.register(`/sw.js?v=${deployVersion}`)
             .then(reg => {
               console.log('ServiceWorker registered:', reg);
               reg.update(); // 강제 업데이트 체크

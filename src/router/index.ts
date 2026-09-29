@@ -20,14 +20,15 @@ const routes = [
 ]
 
 const router = createRouter({
-  history: createWebHistory('/mahjong-score'),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes,
 })
 
 router.beforeEach((to, _from, next) => {
-  // Canonical 태그 동적 업데이트 (hot6mania 도메인 설정)
-  const baseUrl = 'https://hot6mania.github.io/mahjong-score';
-  const canonicalUrl = to.path === '/stats' ? `${baseUrl}/stats` : `${baseUrl}/`;
+  // Canonical 태그 동적 업데이트
+  const origin = window.location.origin;
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+  const canonicalUrl = to.path === '/stats' ? `${origin}${base}/stats` : `${origin}${base}/`;
   let link: HTMLLinkElement | null = document.querySelector("link[rel='canonical']");
   
   if (link) {

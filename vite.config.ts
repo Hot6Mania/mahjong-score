@@ -8,16 +8,16 @@ export default defineConfig({
   plugins: [
     vue(),
     sitemap({
-      hostname: 'https://hot6mania.github.io',
+      hostname: process.env.VITE_SITE_URL || 'https://kimk-house.party',
       dynamicRoutes: [
-        '/mahjong-score/'   // 메인
+        '/'   // 메인
       ],
-      exclude: ['/', '/404'],
+      exclude: ['/404'],
       outDir: 'dist',
       generateRobotsTxt: false
     })
   ],
-  base: "/mahjong-score/",
+  base: process.env.VITE_BASE_URL || "/",
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src')

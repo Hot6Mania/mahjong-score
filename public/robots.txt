@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://he1fire.github.io/mahjong-score/sitemap.xml
+Sitemap: https://kimk-house.party/sitemap.xml

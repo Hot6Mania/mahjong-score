@@ -3,23 +3,23 @@
   "name": "김케이 하우스 마작 기록기",
   "icons": [
     {
-      "src": "/mahjong-score/riichi-stick.svg",
+      "src": "/riichi-stick.svg",
       "type": "image/svg+xml",
       "sizes": "any",
       "purpose": "any"
     },
     {
-      "src": "/mahjong-score/images/icon-192.png",
+      "src": "/images/icon-192.png",
       "type": "image/png",
       "sizes": "192x192"
     },
     {
-      "src": "/mahjong-score/images/icon-512.png",
+      "src": "/images/icon-512.png",
       "type": "image/png",
       "sizes": "512x512"
     }
   ],
-  "start_url": "/mahjong-score/index.html",
+  "start_url": "/",
   "background_color": "#fcfcfc",
   "theme_color": "#4caf50",
   "display": "standalone",

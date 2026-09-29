@@ -1,9 +1,9 @@
-const CACHE_NAME = 'mahjong-score-v4';
+const CACHE_NAME = 'mahjong-score-v5';
 const ASSETS = [
-  '/mahjong-score/',
-  '/mahjong-score/index.html',
-  '/mahjong-score/riichi-stick.svg',
-  '/mahjong-score/manifest.json'
+  '/',
+  '/index.html',
+  '/riichi-stick.svg',
+  '/manifest.json'
 ];
 
 self.addEventListener('install', (e) => {
