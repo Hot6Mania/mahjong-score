@@ -35,6 +35,9 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          VITE_BASE_URL: '/mahjong-score/'
+          VITE_SITE_URL: 'https://hot6mania.github.io/mahjong-score'
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

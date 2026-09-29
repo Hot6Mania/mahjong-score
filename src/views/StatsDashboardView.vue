@@ -232,12 +232,13 @@ const formatDualMetric = (
   return oStr;
 };
 
-// 모달 내 순위 비율 도넛 차트 계산 (9회차 이후 순수 통계 기준)
+// 모달 내 순위 비율 도넛 차트 계산 (종합 대국 통계 기준)
 const modalRankStats = computed(() => {
   if (!selectedPlayer.value) {
     return { r1: 0, r2: 0, r3: 0, r4: 0, p1: 0, p2: 0, p3: 0, p4: 0, totalGames: 0, top2Rate: '0.00%', lastAvoidRate: '0.00%' };
   }
-  const m = displayPlayerStats.value;
+  // 세부 스탯 집계 대국만이 아닌 종합 대국 통계(종합 랭킹 & 스탯)의 순위 분포 비율 사용
+  const m = selectedPlayer.value;
   const tot = m.totalGames;
   const p1 = tot > 0 ? (m.rank1Count / tot) * 100 : 0;
   const p2 = tot > 0 ? (m.rank2Count / tot) * 100 : 0;
@@ -1111,7 +1112,7 @@ const getRankClass = (rank: number) => {
             </div>
             <div class="podium-sub">
               <span>평균우마 {{ podiumTop3[1].avgUma > 0 ? '+' : '' }}{{ podiumTop3[1].avgUma }}pt</span>
-              <span>평균 {{ podiumTop3[1].avgRank.toFixed(3) }}위 · {{ podiumTop3[1].totalGames }}전 ({{ formatPct(podiumTop3[1].top2Rate) }})</span>
+              <span>평균 {{ podiumTop3[1].avgRank.toFixed(3) }}위 · {{ podiumTop3[1].totalGames }}전 (연대율 {{ formatPct(podiumTop3[1].top2Rate) }})</span>
             </div>
           </div>
 
@@ -1124,7 +1125,7 @@ const getRankClass = (rank: number) => {
             </div>
             <div class="podium-sub">
               <span>평균우마 {{ podiumTop3[0].avgUma > 0 ? '+' : '' }}{{ podiumTop3[0].avgUma }}pt</span>
-              <span>평균 {{ podiumTop3[0].avgRank.toFixed(3) }}위 · {{ podiumTop3[0].totalGames }}전 ({{ formatPct(podiumTop3[0].top2Rate) }})</span>
+              <span>평균 {{ podiumTop3[0].avgRank.toFixed(3) }}위 · {{ podiumTop3[0].totalGames }}전 (연대율 {{ formatPct(podiumTop3[0].top2Rate) }})</span>
             </div>
           </div>
 
@@ -1137,7 +1138,7 @@ const getRankClass = (rank: number) => {
             </div>
             <div class="podium-sub">
               <span>평균우마 {{ podiumTop3[2].avgUma > 0 ? '+' : '' }}{{ podiumTop3[2].avgUma }}pt</span>
-              <span>평균 {{ podiumTop3[2].avgRank.toFixed(3) }}위 · {{ podiumTop3[2].totalGames }}전 ({{ formatPct(podiumTop3[2].top2Rate) }})</span>
+              <span>평균 {{ podiumTop3[2].avgRank.toFixed(3) }}위 · {{ podiumTop3[2].totalGames }}전 (연대율 {{ formatPct(podiumTop3[2].top2Rate) }})</span>
             </div>
           </div>
         </div>
@@ -2570,7 +2571,7 @@ const getRankClass = (rank: number) => {
                     <!-- 중앙 텍스트 -->
                     <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
                     <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ modalRankStats.totalGames }}전</text>
-                    <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ (displayPlayerStats.avgRank ?? 0).toFixed(3) }}위</text>
+                    <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ (selectedPlayer?.avgRank ?? 0).toFixed(3) }}위</text>
                   </svg>
                 </div>
 

@@ -242,7 +242,7 @@ const setupAutoRefreshTimer = () => {
 
 // 구글 로그인 세션 자동 복원 (Keep Logged In)
 const restoreGoogleSessionIfValid = async () => {
-  const keep = localStorage.getItem("keep_logged_in") === "true";
+  const keep = localStorage.getItem("keep_logged_in") !== "false";
   const token = localStorage.getItem("google_access_token");
   const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
 
@@ -1583,7 +1583,9 @@ const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) =
   googleInfo.syncMode = "google";
   localStorage.setItem("sync_mode", "google");
 
-  if (localStorage.getItem("keep_logged_in") === "true") {
+  const keep = localStorage.getItem("keep_logged_in") !== "false";
+  if (keep) {
+    localStorage.setItem("keep_logged_in", "true");
     localStorage.setItem("google_access_token", _token);
     const expiresAt = Date.now() + Math.max(expiresIn - 60, 300) * 1000;
     localStorage.setItem("google_token_expires_at", expiresAt.toString());
@@ -1698,7 +1700,7 @@ const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) =
 
 // 토큰의 유효성을 보장하며, 만료 시 백그라운드 무인 갱신 시도
 const ensureValidToken = async (): Promise<void> => {
-  const keep = localStorage.getItem("keep_logged_in") === "true";
+  const keep = localStorage.getItem("keep_logged_in") !== "false";
   const token = localStorage.getItem("google_access_token");
   const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
 

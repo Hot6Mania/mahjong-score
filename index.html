@@ -31,16 +31,16 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@200..900&family=Noto+Serif+KR:wght@200..900&family=Noto+Serif:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="/riichi-stick.svg" />
+    <link rel="icon" type="image/svg+xml" href="./riichi-stick.svg" />
 
     <!-- PWA Manifest & iOS Standalone App config -->
-    <link rel="manifest" href="/manifest.json">
+    <link rel="manifest" href="./manifest.json">
     <meta name="theme-color" content="#4caf50">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="김케이 하우스">
-    <link rel="apple-touch-icon" href="/images/icon-192.png">
+    <link rel="apple-touch-icon" href="./images/icon-192.png">
 
     <!-- Screen Size -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -90,7 +90,8 @@
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           const deployVersion = "20260712_0920";
-          navigator.serviceWorker.register(`/sw.js?v=${deployVersion}`)
+          const swBase = window.location.pathname.startsWith('/mahjong-score') ? '/mahjong-score' : '';
+          navigator.serviceWorker.register(`${swBase}/sw.js?v=${deployVersion}`)
             .then(reg => {
               console.log('ServiceWorker registered:', reg);
               reg.update(); // 강제 업데이트 체크

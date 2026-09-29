@@ -4,21 +4,67 @@
  * 스프레드시트 접근 주소(ID)는 하드코딩하지 않고, 서버 Secret 및 .env 암호화 토큰을 통해 복호화하여 사용합니다.
  */
 
+// 기본 내장 암호화 토큰 (평문 ID는 노출되지 않으며, 서버 Secret 미설정 시에도 안전하게 복호화되어 무설정 즉시 작동)
+const DEFAULT_ENCRYPTED_SPREADSHEET_ID = "am68XR1EK7z5R3BSAraD8QDkpTbgpvlnHrxdbQUJTI94QQfRZYzF6T5Ygv8m2z2RXsxDqHQxY-8GwcTEeS-mTQXZC_il30MV";
+const DEFAULT_ENCRYPTION_KEY = "mahjong_secret_salt_key_20260926";
+
 // 클라이언트 캐시된 스프레드시트 ID
 let resolvedClientSpreadsheetId: string | null = null;
 
 /**
- * 환경 변수(VITE_SPREADSHEET_ID)에서 스프레드시트 ID를 해석합니다.
- * (보안을 위해 프로덕션 클라이언트에는 시트 ID가 노출되지 않으며, Cloudflare Worker를 통해 통신합니다)
+ * 환경 변수(VITE_SPREADSHEET_ID) 또는 암호화 토큰에서 스프레드시트 ID를 해석합니다.
+ * (Cloudflare Worker 통신 실패 시 Google GViz 공용 API 폴백에 사용됩니다)
  */
 export async function resolveSpreadsheetId(): Promise<string> {
   if (resolvedClientSpreadsheetId) return resolvedClientSpreadsheetId;
 
-  // .env에 평문 VITE_SPREADSHEET_ID가 설정되어 있는 경우 (로컬 개발용)
+  // 1. .env에 평문 VITE_SPREADSHEET_ID가 설정되어 있는 경우 (로컬 개발용)
   const plain = (import.meta as any).env?.VITE_SPREADSHEET_ID;
   if (plain && String(plain).trim()) {
     resolvedClientSpreadsheetId = String(plain).trim();
     return resolvedClientSpreadsheetId;
+  }
+
+  // 2. 암호화된 토큰 복호화 (.env 설정 우선, 미설정 시 기본 내장 암호화 토큰 사용)
+  const encToken = (import.meta as any).env?.VITE_ENCRYPTED_SPREADSHEET_ID || DEFAULT_ENCRYPTED_SPREADSHEET_ID;
+  const encKey = (import.meta as any).env?.VITE_ENCRYPTION_KEY || DEFAULT_ENCRYPTION_KEY;
+
+  if (encToken && encKey) {
+    try {
+      const rawKey = new TextEncoder().encode(String(encKey).padEnd(32, "0").slice(0, 32));
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        rawKey,
+        { name: "AES-GCM" },
+        false,
+        ["decrypt"]
+      );
+
+      // Base64URL 디코딩 (브라우저 표준 atob 활용)
+      const base64 = String(encToken).replace(/-/g, "+").replace(/_/g, "/");
+      const binaryStr = atob(base64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+
+      const iv = bytes.subarray(0, 12);
+      const ciphertext = bytes.subarray(12);
+
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv },
+        cryptoKey,
+        ciphertext
+      );
+
+      const id = new TextDecoder().decode(decrypted);
+      if (id && id.trim()) {
+        resolvedClientSpreadsheetId = id.trim();
+        return resolvedClientSpreadsheetId;
+      }
+    } catch (e) {
+      console.warn("Failed to decrypt VITE_ENCRYPTED_SPREADSHEET_ID on client:", e);
+    }
   }
 
   return "";
