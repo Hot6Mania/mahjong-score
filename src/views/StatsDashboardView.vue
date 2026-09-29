@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   Chart as ChartJS,
@@ -907,6 +907,38 @@ const selectedRatingSessionFilter = ref('');
 const hiddenRatingPlayerNames = ref<Set<string>>(new Set());
 const activeRatingPreset = ref<'top5' | 'top10' | 'all' | 'none' | 'session'>('top5');
 
+// 모달 확대 시 Chart.js 캔버스 리사이즈 동기화
+watch(isRatingTimelineModalOpen, (isOpen) => {
+  if (isOpen) {
+    nextTick(() => {
+      setTimeout(() => {
+        ratingModalChartRef.value?.chart?.resize();
+      }, 60);
+    });
+  }
+});
+
+// 색상 투명화 헬퍼 (미출전 수평 구간용)
+function hexToRgba(color: string, alpha: number): string {
+  if (!color) return `rgba(100, 116, 139, ${alpha})`;
+  if (color.startsWith('rgba')) {
+    return color.replace(/[\d\.]+\)$/, `${alpha})`);
+  }
+  if (color.startsWith('rgb')) {
+    return color.replace('rgb', 'rgba').replace(')', `, ${alpha})`);
+  }
+  let c = color.replace('#', '');
+  if (c.length === 3) {
+    c = c.split('').map(x => x + x).join('');
+  }
+  const num = parseInt(c, 16);
+  if (isNaN(num)) return `rgba(100, 116, 139, ${alpha})`;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 // 수식 KaTeX 렌더러
 const renderKatex = (latex: string) => {
   try {
@@ -964,8 +996,9 @@ const availableRatingSessions = computed(() => {
   });
 });
 
-// 특정 회차 참가자 필터링 감시
-watch(selectedRatingSessionFilter, (sessName) => {
+// 회차 필터 드롭다운 직접 변경 시 처리 핸들러
+const handleSessionFilterChange = () => {
+  const sessName = selectedRatingSessionFilter.value;
   if (!sessName) {
     filterRatingTopN(5);
     return;
@@ -985,7 +1018,7 @@ watch(selectedRatingSessionFilter, (sessName) => {
     }
   });
   hiddenRatingPlayerNames.value = newSet;
-});
+};
 
 const ratingChartData = computed(() => {
   if (!ratingTimeline.value) {
@@ -996,14 +1029,25 @@ const ratingChartData = computed(() => {
     data: d.data,
     borderColor: d.color,
     backgroundColor: d.color,
-    borderWidth: 1.8,
+    borderWidth: 1.5,
+    // 미출전 수평 구간 초고투명화 (15% 불투명도 = 85% 투명)
+    segment: {
+      borderColor: (ctx: any) => {
+        const isPlayed = d.played?.[ctx.p1DataIndex];
+        return isPlayed ? d.color : hexToRgba(d.color, 0.15);
+      },
+      borderWidth: (ctx: any) => {
+        const isPlayed = d.played?.[ctx.p1DataIndex];
+        return isPlayed ? 1.6 : 1.0;
+      }
+    },
     pointRadius: (ctx: any) => {
       const idx = ctx.dataIndex;
-      if (idx === 0) return 3;
-      if (idx === d.data.length - 1) return 3.5;
-      return d.played?.[idx] ? 2.2 : 0;
+      if (idx === 0) return 1.6;
+      if (idx === d.data.length - 1) return 1.8;
+      return d.played?.[idx] ? 1.2 : 0;
     },
-    pointHoverRadius: 6,
+    pointHoverRadius: 4.5,
     pointHitRadius: 8,
     played: d.played,
     deltas: d.deltas,
@@ -1201,7 +1245,7 @@ const modalPlayerRatingChartOptions = computed<ChartOptions<'line'>>(() => ({
           const delta = dataset.deltas?.[context.dataIndex];
           if (context.dataIndex === 0) return `시작: R${val}`;
           const dStr = delta !== null && delta !== undefined ? ` (${delta >= 0 ? '+' : ''}${delta})` : '';
-          return `레이팅: R${val}${dStr}`;
+          return `레이팅(R): R${val}${dStr}`;
         }
       }
     }
@@ -1715,7 +1759,7 @@ const getRankClass = (rank: number) => {
             <div class="toolbar-right">
               <div class="session-filter-group">
                 <span class="toolbar-label">회차 필터:</span>
-                <select v-model="selectedRatingSessionFilter" class="session-filter-select">
+                <select v-model="selectedRatingSessionFilter" @change="handleSessionFilterChange" class="session-filter-select">
                   <option value="">전체 회차</option>
                   <option v-for="s in availableRatingSessions" :key="s" :value="s">
                     {{ s }}
@@ -1733,6 +1777,7 @@ const getRankClass = (rank: number) => {
           <div class="rating-inline-chart-wrapper">
             <div v-if="ratingChartData.datasets.length > 0" class="rating-inline-chart-inner">
               <LineChart 
+                id="rating-inline-chart-canvas"
                 ref="ratingEmbeddedChartRef" 
                 :data="ratingChartData" 
                 :options="ratingChartOptions" 
@@ -1748,7 +1793,7 @@ const getRankClass = (rank: number) => {
         <div class="rating-leaderboard-card">
           <div class="leaderboard-header">
             <h2 class="rating-section-title">레이팅 순위 및 현황</h2>
-            <span class="rating-section-desc">OpenSkill 알고리즘으로 산출된 레이팅(R) 기준 랭킹입니다.</span>
+            <span class="rating-section-desc">레이팅(R) 기준 랭킹입니다.</span>
           </div>
 
           <div class="table-container">
@@ -1757,7 +1802,7 @@ const getRankClass = (rank: number) => {
                 <tr>
                   <th style="width: 50px; text-align: center;">순위</th>
                   <th style="min-width: 100px;">이름</th>
-                  <th style="min-width: 90px; text-align: center;">레이팅 (R)</th>
+                  <th style="min-width: 90px; text-align: center;">레이팅(R)</th>
                   <th style="min-width: 80px; text-align: center;">역대 최고</th>
                   <th style="min-width: 70px; text-align: center;">대국 수</th>
                   <th style="min-width: 70px; text-align: center;">평균 (μ)</th>
@@ -1810,7 +1855,7 @@ const getRankClass = (rank: number) => {
         <!-- 3. 레이팅 시스템 산출 원리 및 공식 안내 -->
         <div class="rating-guide-card">
           <div class="guide-header">
-            <h2 class="rating-section-title">OpenSkill 레이팅 산출 원리 및 파라미터</h2>
+            <h2 class="rating-section-title">레이팅 산출 원리 및 파라미터</h2>
             <span class="rating-section-desc">베이지안 추론 기반 4인 다자간 경쟁(Plackett-Luce) 모델 규격입니다.</span>
           </div>
 
@@ -1828,7 +1873,7 @@ const getRankClass = (rank: number) => {
             </div>
 
             <div class="formula-box">
-              <div class="formula-tag">3. OpenSkill 레이팅 산출 (Display Rating)</div>
+              <div class="formula-tag">3. 레이팅(R) 산출</div>
               <div class="formula-latex" v-html="renderKatex('R = \\mathrm{round}(\\mu - 1.5 \\times \\sigma)')"></div>
               <p class="formula-explanation">불확실도를 차감하여 대국 수가 적은 상태에서의 랭킹 과대평가를 완충합니다.</p>
             </div>
@@ -2858,7 +2903,7 @@ const getRankClass = (rank: number) => {
                 <span class="stat_value">{{ formatDualMetric(selectedPlayer?.totalGames, displayPlayerStats.totalGames) }}전</span>
               </div>
               <div v-if="selectedPlayer?.rating" class="stat_row">
-                <span class="stat_label">오픈스킬 레이팅</span>
+                <span class="stat_label">레이팅(R)</span>
                 <span class="stat_value highlight">
                   R{{ selectedPlayer.rating }}
                   <span v-if="selectedPlayer.ratingDelta !== undefined" class="rating-delta" :class="selectedPlayer.ratingDelta >= 0 ? 'text_positive' : 'text_negative'">
@@ -3355,7 +3400,7 @@ const getRankClass = (rank: number) => {
             <div v-else-if="modalActiveTab === 'rating'" class="rating_tab_wrapper">
               <div class="rating_summary_grid">
                 <div class="summary_stat_box">
-                  <span class="summary_label">현재 레이팅</span>
+                  <span class="summary_label">레이팅(R)</span>
                   <span class="summary_value highlight">R{{ modalPlayerRatingSummary.current }}</span>
                 </div>
                 <div class="summary_stat_box">
@@ -3584,7 +3629,7 @@ const getRankClass = (rank: number) => {
             <div class="toolbar-right">
               <div class="session-filter-group">
                 <span class="toolbar-label">회차 필터:</span>
-                <select v-model="selectedRatingSessionFilter" class="session-filter-select">
+                <select v-model="selectedRatingSessionFilter" @change="handleSessionFilterChange" class="session-filter-select">
                   <option value="">전체 회차</option>
                   <option v-for="s in availableRatingSessions" :key="s" :value="s">
                     {{ s }}
@@ -3602,6 +3647,7 @@ const getRankClass = (rank: number) => {
           <div class="rating-modal-chart-wrapper">
             <div v-if="ratingChartData.datasets.length > 0" class="rating-modal-chart-inner">
               <LineChart 
+                id="rating-modal-chart-canvas"
                 ref="ratingModalChartRef" 
                 :data="ratingChartData" 
                 :options="ratingChartOptions" 
@@ -6058,9 +6104,13 @@ html.dark .formula-latex {
   }
 }
 .rating-inline-chart-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
   height: 100%;
-  position: relative;
 }
 
 .btn-open-rating-modal {
@@ -6112,12 +6162,12 @@ html.dark .btn-open-rating-modal:hover {
   background: var(--card-bg-color, #ffffff);
   color: var(--text-color, #0f172a);
   border-radius: 12px;
-  width: 100%;
-  max-width: 1060px;
+  width: 95vw;
+  max-width: 860px;
   max-height: 92vh;
   display: flex;
   flex-direction: column;
-  padding: 18px 24px;
+  padding: 18px 22px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
   border: 1px solid var(--border-color, #e2e8f0);
   box-sizing: border-box;
@@ -6222,15 +6272,25 @@ html.dark .btn-zoom-reset:hover {
 
 /* 차트 래퍼 */
 .rating-modal-chart-wrapper {
-  flex: 1;
-  min-height: 480px;
-  height: 58vh;
+  width: 100%;
+  height: 540px;
+  min-height: 460px;
   position: relative;
   overflow: hidden;
 }
+@media (max-width: 640px) {
+  .rating-modal-chart-wrapper {
+    height: 400px;
+    min-height: 350px;
+  }
+}
 .rating-modal-chart-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
   height: 100%;
-  position: relative;
 }
 </style>

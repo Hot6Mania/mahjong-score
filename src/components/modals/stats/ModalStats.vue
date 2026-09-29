@@ -361,7 +361,7 @@ const playerRatingChartOptions = computed<ChartOptions<'line'>>(() => ({
           const delta = dataset.deltas?.[context.dataIndex]
           if (context.dataIndex === 0) return `시작: R${val}`
           const dStr = delta !== null && delta !== undefined ? ` (${delta >= 0 ? '+' : ''}${delta})` : ''
-          return `레이팅: R${val}${dStr}`
+          return `레이팅(R): R${val}${dStr}`
         }
       }
     }
@@ -1031,7 +1031,7 @@ const emptyScopeMessage = computed(() => {
           <span class="stat_value">{{ stats.totalGames }}전</span>
         </div>
         <div v-if="selectedPlayerRating" class="stat_row">
-          <span class="stat_label">오픈스킬 레이팅</span>
+          <span class="stat_label">레이팅(R)</span>
           <span class="stat_value highlight">R{{ selectedPlayerRating }}</span>
         </div>
         <div class="stat_row">
@@ -1382,7 +1382,7 @@ const emptyScopeMessage = computed(() => {
       <div v-else-if="activeTab === 'rating'" class="rating_tab_wrapper">
         <div class="rating_summary_grid">
           <div class="summary_stat_box">
-            <span class="summary_label">현재 레이팅</span>
+            <span class="summary_label">레이팅(R)</span>
             <span class="summary_value highlight">R{{ playerRatingSummary.current }}</span>
           </div>
           <div class="summary_stat_box">
