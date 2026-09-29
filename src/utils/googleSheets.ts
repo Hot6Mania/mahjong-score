@@ -1854,3 +1854,29 @@ export const restoreSessionSheetFromBackup = async (
   // 3. raw 시트의 A열 멤버 명단도 백업 당시의 멤버로 복원
   await saveSessionMembers(spreadsheetId, backup.sessionSheetName, backup.oldMembers);
 };
+
+/**
+ * 회차 문자열에서 회차 번호 정수와 날짜를 추출하여 내림차순 정렬 (예: 제15회 > 제9회)
+ */
+export const compareSessionDesc = (a: string, b: string): number => {
+  const matchA = a.match(/제\s*(\d+)\s*회(?:\s*(\d{6}))?/);
+  const matchB = b.match(/제\s*(\d+)\s*회(?:\s*(\d{6}))?/);
+
+  const numA = matchA ? parseInt(matchA[1], 10) : 0;
+  const numB = matchB ? parseInt(matchB[1], 10) : 0;
+
+  // 1. 회차 번호 정수 내림차순 (15 > 9)
+  if (numB !== numA) {
+    return numB - numA;
+  }
+
+  // 2. 같은 회차일 경우 날짜 내림차순
+  const dateA = matchA && matchA[2] ? parseInt(matchA[2], 10) : 0;
+  const dateB = matchB && matchB[2] ? parseInt(matchB[2], 10) : 0;
+  if (dateB !== dateA) {
+    return dateB - dateA;
+  }
+
+  // 3. 자연 정렬 폴백
+  return b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' });
+};

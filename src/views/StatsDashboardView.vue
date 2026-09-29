@@ -262,6 +262,21 @@ const modalRankStats = computed(() => {
   };
 });
 
+// 도넛 차트 순위별 % 텍스트 위치 계산 헬퍼
+function getRankLabelPos(stats: { p1: number; p2: number; p3: number; p4: number }, rank: 1 | 2 | 3 | 4) {
+  let midPct = 0;
+  if (rank === 1) midPct = stats.p1 / 2;
+  else if (rank === 2) midPct = stats.p1 + stats.p2 / 2;
+  else if (rank === 3) midPct = stats.p1 + stats.p2 + stats.p3 / 2;
+  else if (rank === 4) midPct = stats.p1 + stats.p2 + stats.p3 + stats.p4 / 2;
+
+  const rad = ((midPct / 100) * 360 - 90) * (Math.PI / 180);
+  return {
+    x: Number((100 + 60 * Math.cos(rad)).toFixed(2)),
+    y: Number((100 + 60 * Math.sin(rad)).toFixed(2))
+  };
+}
+
 // ==========================================
 // 2. 역대 회차 전적 ('통계' 시트) 데이터
 // ==========================================
@@ -990,9 +1005,9 @@ const getRankClass = (rank: number) => {
 
         <!-- 폰트 왜곡 방지용 HTML 레이블 오버레이 (비율 찌그러짐 원천 차단) -->
         <div class="dist-chart-labels-overlay">
-          <span class="dist-line-tag" :style="{ left: (activeDist.line30X / 160 * 100) + '%' }">하위 30%</span>
+          <span class="dist-line-tag" :style="{ left: (activeDist.line30X / 160 * 100) + '%' }">{{ activeDist.higherIsBetter === false ? '상위 30%' : '하위 30%' }}</span>
           <span class="dist-line-tag tag-50" style="left: 50%;">50%</span>
-          <span class="dist-line-tag" :style="{ left: (activeDist.line70X / 160 * 100) + '%' }">상위 30%</span>
+          <span class="dist-line-tag" :style="{ left: (activeDist.line70X / 160 * 100) + '%' }">{{ activeDist.higherIsBetter === false ? '하위 30%' : '상위 30%' }}</span>
         </div>
       </div>
 
@@ -1962,7 +1977,7 @@ const getRankClass = (rank: number) => {
                                 r="60" 
                                 fill="none" 
                                 stroke="var(--border-color, rgba(0,0,0,0.08))" 
-                                stroke-width="20" 
+                                stroke-width="28" 
                               />
                               <g transform="rotate(-90 100 100)">
                                 <!-- 4위 (빨강) -->
@@ -1971,7 +1986,7 @@ const getRankClass = (rank: number) => {
                                   cx="100" cy="100" r="60" 
                                   fill="none" 
                                   stroke="#ef4444" 
-                                  stroke-width="20" 
+                                  stroke-width="28" 
                                   :stroke-dasharray="`${(currentSessionRankStats.p4 / 100) * 376.9911} 376.9911`"
                                   :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2 + currentSessionRankStats.p3) / 100) * 376.9911}`"
                                   class="donut_segment"
@@ -1985,7 +2000,7 @@ const getRankClass = (rank: number) => {
                                   cx="100" cy="100" r="60" 
                                   fill="none" 
                                   stroke="#f59e0b" 
-                                  stroke-width="20" 
+                                  stroke-width="28" 
                                   :stroke-dasharray="`${(currentSessionRankStats.p3 / 100) * 376.9911} 376.9911`"
                                   :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2) / 100) * 376.9911}`"
                                   class="donut_segment"
@@ -1999,7 +2014,7 @@ const getRankClass = (rank: number) => {
                                   cx="100" cy="100" r="60" 
                                   fill="none" 
                                   stroke="#06b6d4" 
-                                  stroke-width="20" 
+                                  stroke-width="28" 
                                   :stroke-dasharray="`${(currentSessionRankStats.p2 / 100) * 376.9911} 376.9911`"
                                   :stroke-dashoffset="`-${(currentSessionRankStats.p1 / 100) * 376.9911}`"
                                   class="donut_segment"
@@ -2013,7 +2028,7 @@ const getRankClass = (rank: number) => {
                                   cx="100" cy="100" r="60" 
                                   fill="none" 
                                   stroke="#10b981" 
-                                  stroke-width="20" 
+                                  stroke-width="28" 
                                   :stroke-dasharray="`${(currentSessionRankStats.p1 / 100) * 376.9911} 376.9911`"
                                   stroke-dashoffset="0"
                                   class="donut_segment"
@@ -2021,6 +2036,49 @@ const getRankClass = (rank: number) => {
                                   @mouseenter="hoveredRank = 1"
                                   @mouseleave="hoveredRank = null"
                                 />
+                              </g>
+                              <!-- 각 순위 영역 내 % 레이블 -->
+                              <g class="donut_labels" pointer-events="none">
+                                <text 
+                                  v-if="currentSessionRankStats.p1 >= 5"
+                                  :x="getRankLabelPos(currentSessionRankStats, 1).x" 
+                                  :y="getRankLabelPos(currentSessionRankStats, 1).y" 
+                                  text-anchor="middle" 
+                                  dominant-baseline="central" 
+                                  class="donut_segment_text"
+                                >
+                                  {{ currentSessionRankStats.p1.toFixed(1) }}%
+                                </text>
+                                <text 
+                                  v-if="currentSessionRankStats.p2 >= 5"
+                                  :x="getRankLabelPos(currentSessionRankStats, 2).x" 
+                                  :y="getRankLabelPos(currentSessionRankStats, 2).y" 
+                                  text-anchor="middle" 
+                                  dominant-baseline="central" 
+                                  class="donut_segment_text"
+                                >
+                                  {{ currentSessionRankStats.p2.toFixed(1) }}%
+                                </text>
+                                <text 
+                                  v-if="currentSessionRankStats.p3 >= 5"
+                                  :x="getRankLabelPos(currentSessionRankStats, 3).x" 
+                                  :y="getRankLabelPos(currentSessionRankStats, 3).y" 
+                                  text-anchor="middle" 
+                                  dominant-baseline="central" 
+                                  class="donut_segment_text"
+                                >
+                                  {{ currentSessionRankStats.p3.toFixed(1) }}%
+                                </text>
+                                <text 
+                                  v-if="currentSessionRankStats.p4 >= 5"
+                                  :x="getRankLabelPos(currentSessionRankStats, 4).x" 
+                                  :y="getRankLabelPos(currentSessionRankStats, 4).y" 
+                                  text-anchor="middle" 
+                                  dominant-baseline="central" 
+                                  class="donut_segment_text"
+                                >
+                                  {{ currentSessionRankStats.p4.toFixed(1) }}%
+                                </text>
                               </g>
                               <!-- 중앙 텍스트 -->
                               <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
@@ -2233,14 +2291,6 @@ const getRankClass = (rank: number) => {
               >
                 <span class="stat_label">평균 순위</span>
                 <span class="stat_value highlight">{{ formatDualMetric(selectedPlayer?.avgRank, displayPlayerStats.avgRank, 3) }}위</span>
-              </div>
-              <div 
-                class="stat_row hoverable" 
-                @mouseenter="onHoverMetric($event, 'top2Rate', '연대율', displayPlayerStats.top2Rate, true, '%')" 
-                @mouseleave="onLeaveMetric"
-              >
-                <span class="stat_label">연대율 (1·2위)</span>
-                <span class="stat_value">{{ formatDualMetric(selectedPlayer?.top2Rate, displayPlayerStats.top2Rate, 2) }}%</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -2507,7 +2557,7 @@ const getRankClass = (rank: number) => {
                       r="60" 
                       fill="none" 
                       stroke="var(--border-color, rgba(0,0,0,0.08))" 
-                      stroke-width="20"
+                      stroke-width="28"
                     />
                     <!-- 조각 링 -->
                     <g transform="rotate(-90 100 100)">
@@ -2517,7 +2567,7 @@ const getRankClass = (rank: number) => {
                         cx="100" cy="100" r="60" 
                         fill="none" 
                         stroke="#ef4444" 
-                        stroke-width="20" 
+                        stroke-width="28" 
                         :stroke-dasharray="`${(modalRankStats.p4 / 100) * 376.9911} 376.9911`"
                         :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2 + modalRankStats.p3) / 100) * 376.9911}`"
                         class="donut_segment"
@@ -2531,7 +2581,7 @@ const getRankClass = (rank: number) => {
                         cx="100" cy="100" r="60" 
                         fill="none" 
                         stroke="#f59e0b" 
-                        stroke-width="20" 
+                        stroke-width="28" 
                         :stroke-dasharray="`${(modalRankStats.p3 / 100) * 376.9911} 376.9911`"
                         :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2) / 100) * 376.9911}`"
                         class="donut_segment"
@@ -2545,7 +2595,7 @@ const getRankClass = (rank: number) => {
                         cx="100" cy="100" r="60" 
                         fill="none" 
                         stroke="#06b6d4" 
-                        stroke-width="20" 
+                        stroke-width="28" 
                         :stroke-dasharray="`${(modalRankStats.p2 / 100) * 376.9911} 376.9911`"
                         :stroke-dashoffset="`-${(modalRankStats.p1 / 100) * 376.9911}`"
                         class="donut_segment"
@@ -2559,7 +2609,7 @@ const getRankClass = (rank: number) => {
                         cx="100" cy="100" r="60" 
                         fill="none" 
                         stroke="#10b981" 
-                        stroke-width="20" 
+                        stroke-width="28" 
                         :stroke-dasharray="`${(modalRankStats.p1 / 100) * 376.9911} 376.9911`"
                         stroke-dashoffset="0"
                         class="donut_segment"
@@ -2567,6 +2617,49 @@ const getRankClass = (rank: number) => {
                         @mouseenter="hoveredRank = 1"
                         @mouseleave="hoveredRank = null"
                       />
+                    </g>
+                    <!-- 각 순위 영역 내 % 레이블 -->
+                    <g class="donut_labels" pointer-events="none">
+                      <text 
+                        v-if="modalRankStats.p1 >= 5"
+                        :x="getRankLabelPos(modalRankStats, 1).x" 
+                        :y="getRankLabelPos(modalRankStats, 1).y" 
+                        text-anchor="middle" 
+                        dominant-baseline="central" 
+                        class="donut_segment_text"
+                      >
+                        {{ modalRankStats.p1.toFixed(1) }}%
+                      </text>
+                      <text 
+                        v-if="modalRankStats.p2 >= 5"
+                        :x="getRankLabelPos(modalRankStats, 2).x" 
+                        :y="getRankLabelPos(modalRankStats, 2).y" 
+                        text-anchor="middle" 
+                        dominant-baseline="central" 
+                        class="donut_segment_text"
+                      >
+                        {{ modalRankStats.p2.toFixed(1) }}%
+                      </text>
+                      <text 
+                        v-if="modalRankStats.p3 >= 5"
+                        :x="getRankLabelPos(modalRankStats, 3).x" 
+                        :y="getRankLabelPos(modalRankStats, 3).y" 
+                        text-anchor="middle" 
+                        dominant-baseline="central" 
+                        class="donut_segment_text"
+                      >
+                        {{ modalRankStats.p3.toFixed(1) }}%
+                      </text>
+                      <text 
+                        v-if="modalRankStats.p4 >= 5"
+                        :x="getRankLabelPos(modalRankStats, 4).x" 
+                        :y="getRankLabelPos(modalRankStats, 4).y" 
+                        text-anchor="middle" 
+                        dominant-baseline="central" 
+                        class="donut_segment_text"
+                      >
+                        {{ modalRankStats.p4.toFixed(1) }}%
+                      </text>
                     </g>
                     <!-- 중앙 텍스트 -->
                     <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
@@ -4263,8 +4356,16 @@ html.dark .rank_chart_section {
   cursor: pointer;
 }
 .donut_segment.active {
-  stroke-width: 24;
+  stroke-width: 32;
   filter: brightness(1.1);
+}
+.donut_segment_text {
+  font-size: 10px;
+  font-weight: 700;
+  fill: #ffffff;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
 }
 .chart_center_label {
   font-size: 11px;

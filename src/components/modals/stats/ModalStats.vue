@@ -189,6 +189,21 @@ const rankStats = computed(() => {
   }
 })
 
+// 도넛 차트 순위별 % 텍스트 위치 계산 헬퍼
+function getRankLabelPos(stats: { p1: number; p2: number; p3: number; p4: number }, rank: 1 | 2 | 3 | 4) {
+  let midPct = 0
+  if (rank === 1) midPct = stats.p1 / 2
+  else if (rank === 2) midPct = stats.p1 + stats.p2 / 2
+  else if (rank === 3) midPct = stats.p1 + stats.p2 + stats.p3 / 2
+  else if (rank === 4) midPct = stats.p1 + stats.p2 + stats.p3 + stats.p4 / 2
+
+  const rad = ((midPct / 100) * 360 - 90) * (Math.PI / 180)
+  return {
+    x: Number((100 + 60 * Math.cos(rad)).toFixed(2)),
+    y: Number((100 + 60 * Math.sin(rad)).toFixed(2))
+  }
+}
+
 // 오늘 참가한 모든 플레이어 목록 추출 (스코프에 따라 전체 명단 반환)
 const allPlayers = computed(() => {
   if (scopeTab.value === 'all') {
@@ -795,7 +810,12 @@ const emptyScopeMessage = computed(() => {
       @click="router.push('/dashboard')"
       title="공개 통계 대시보드 바로가기"
     >
-      📊 대시보드
+      <svg class="dashboard-icon-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="20" x2="18" y2="10"></line>
+        <line x1="12" y1="20" x2="12" y2="4"></line>
+        <line x1="6" y1="20" x2="6" y2="14"></line>
+      </svg>
+      <span>대시보드</span>
     </button>
   </div>
 
@@ -1004,7 +1024,7 @@ const emptyScopeMessage = computed(() => {
                 r="60" 
                 fill="none" 
                 stroke="var(--border-color, rgba(255,255,255,0.1))" 
-                stroke-width="20"
+                stroke-width="28"
               />
               
               <!-- 원형 조각들 (12시 방향 시작 회전) -->
@@ -1015,7 +1035,7 @@ const emptyScopeMessage = computed(() => {
                   cx="100" cy="100" r="60" 
                   fill="none" 
                   stroke="var(--color-rank-4)" 
-                  stroke-width="20" 
+                  stroke-width="28" 
                   :stroke-dasharray="`${(rankStats.p4 / 100) * 376.9911} 376.9911`"
                   :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2 + rankStats.p3) / 100) * 376.9911}`"
                   class="donut_segment"
@@ -1029,7 +1049,7 @@ const emptyScopeMessage = computed(() => {
                   cx="100" cy="100" r="60" 
                   fill="none" 
                   stroke="var(--color-rank-3)" 
-                  stroke-width="20" 
+                  stroke-width="28" 
                   :stroke-dasharray="`${(rankStats.p3 / 100) * 376.9911} 376.9911`"
                   :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2) / 100) * 376.9911}`"
                   class="donut_segment"
@@ -1043,7 +1063,7 @@ const emptyScopeMessage = computed(() => {
                   cx="100" cy="100" r="60" 
                   fill="none" 
                   stroke="var(--color-rank-2)" 
-                  stroke-width="20" 
+                  stroke-width="28" 
                   :stroke-dasharray="`${(rankStats.p2 / 100) * 376.9911} 376.9911`"
                   :stroke-dashoffset="`-${(rankStats.p1 / 100) * 376.9911}`"
                   class="donut_segment"
@@ -1057,7 +1077,7 @@ const emptyScopeMessage = computed(() => {
                   cx="100" cy="100" r="60" 
                   fill="none" 
                   stroke="var(--color-rank-1)" 
-                  stroke-width="20" 
+                  stroke-width="28" 
                   :stroke-dasharray="`${(rankStats.p1 / 100) * 376.9911} 376.9911`"
                   stroke-dashoffset="0"
                   class="donut_segment"
@@ -1065,6 +1085,50 @@ const emptyScopeMessage = computed(() => {
                   @mouseenter="hoveredRank = 1"
                   @mouseleave="hoveredRank = null"
                 />
+              </g>
+
+              <!-- 각 순위 영역 내 % 레이블 -->
+              <g class="donut_labels" pointer-events="none">
+                <text 
+                  v-if="rankStats.p1 >= 5"
+                  :x="getRankLabelPos(rankStats, 1).x" 
+                  :y="getRankLabelPos(rankStats, 1).y" 
+                  text-anchor="middle" 
+                  dominant-baseline="central" 
+                  class="donut_segment_text"
+                >
+                  {{ rankStats.p1.toFixed(1) }}%
+                </text>
+                <text 
+                  v-if="rankStats.p2 >= 5"
+                  :x="getRankLabelPos(rankStats, 2).x" 
+                  :y="getRankLabelPos(rankStats, 2).y" 
+                  text-anchor="middle" 
+                  dominant-baseline="central" 
+                  class="donut_segment_text"
+                >
+                  {{ rankStats.p2.toFixed(1) }}%
+                </text>
+                <text 
+                  v-if="rankStats.p3 >= 5"
+                  :x="getRankLabelPos(rankStats, 3).x" 
+                  :y="getRankLabelPos(rankStats, 3).y" 
+                  text-anchor="middle" 
+                  dominant-baseline="central" 
+                  class="donut_segment_text"
+                >
+                  {{ rankStats.p3.toFixed(1) }}%
+                </text>
+                <text 
+                  v-if="rankStats.p4 >= 5"
+                  :x="getRankLabelPos(rankStats, 4).x" 
+                  :y="getRankLabelPos(rankStats, 4).y" 
+                  text-anchor="middle" 
+                  dominant-baseline="central" 
+                  class="donut_segment_text"
+                >
+                  {{ rankStats.p4.toFixed(1) }}%
+                </text>
               </g>
 
               <!-- 차트 중앙 레이블 -->
@@ -1483,8 +1547,17 @@ html:not(.dark) .tab_btn.active {
 }
 
 .donut_segment.active {
-  stroke-width: 24;
+  stroke-width: 32;
   filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.4));
+}
+
+.donut_segment_text {
+  font-size: 10px;
+  font-weight: 700;
+  fill: #ffffff;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
 }
 
 .chart_center_label {
@@ -1678,8 +1751,14 @@ html:not(.dark) .rank_bar_track {
   color: #ffffff !important;
   font-weight: bold;
   border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 .btn-dashboard-tab:hover {
   filter: brightness(1.1);
+}
+.dashboard-icon-svg {
+  flex-shrink: 0;
 }
 </style>

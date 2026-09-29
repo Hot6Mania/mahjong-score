@@ -637,10 +637,9 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
         if (!name || name === "이름" || name.startsWith("#")) return;
 
         const sheetUma = parseFloat(getCellNum(row[1]).toFixed(1));
-        const totalUma = tonggeMap[name] !== undefined ? tonggeMap[name] : sheetUma;
         const avgRank = parseFloat(getCellNum(row[2]).toFixed(3));
         const totalGames = getCellNum(row[3]);
-        const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
+        const avgUma = totalGames > 0 ? parseFloat((sheetUma / totalGames).toFixed(1)) : 0;
         let rank1Count = getCellNum(row[33]);
         let rank2Count = getCellNum(row[34]);
         let rank3Count = getCellNum(row[35]);
@@ -667,7 +666,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
 
         detailedStatsMap[name] = {
           name,
-          totalUma,
+          totalUma: sheetUma,
           avgUma,
           avgRank,
           totalGames,
@@ -1544,6 +1543,7 @@ export interface DistributionData {
   bars: HistogramBar[];
   line30X: number; // 하위 30% X좌표
   line70X: number; // 상위 30% X좌표
+  higherIsBetter?: boolean;
 }
 
 export function calculateMetricDistribution(
@@ -1677,6 +1677,7 @@ export function calculateMetricDistribution(
     topPct,
     bottomPct,
     isUpperHalf,
+    higherIsBetter,
     bars,
     line30X: parseFloat((svgWidth * 0.3).toFixed(1)), // 하위 30% (48)
     line70X: parseFloat((svgWidth * 0.7).toFixed(1)), // 상위 30% (112)

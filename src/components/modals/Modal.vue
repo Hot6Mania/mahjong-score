@@ -4,6 +4,7 @@ import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
 import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputManual, ModalBackupArchive } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
+import { compareSessionDesc } from "@/utils/googleSheets"
 import { computed, ref, watch, onMounted, onUnmounted } from "vue"
 import { useI18n } from "vue-i18n"
 import { Line as LineChart } from "vue-chartjs"
@@ -143,8 +144,8 @@ const loadGoogleSessions = async () => {
       }
     });
     
-    // 최신 회차가 위로 오도록 정렬
-    validList.sort((a, b) => b.localeCompare(a));
+    // 최신 회차가 위로 오도록 숫자 기준 정렬 (제15회 > 제9회)
+    validList.sort(compareSessionDesc);
     validGoogleSessions.value = validList;
     if (validList.length > 0) {
       selectedSessionToLoad.value = validList[0];
@@ -892,17 +893,16 @@ const getSignColor = (sign: number, x: boolean) => {
       </div>
       <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 -->
       <div style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
-        <!-- 왼쪽: 기존 회차 (클릭 시 브라우저 내 팝업 띄움) -->
+        <!-- 왼쪽: 기존 회차 (1등 초록색) -->
         <button 
           type="button"
           :disabled="!googleInfo.isLoggedIn || !googleInfo.spreadsheetId"
           @click.stop="emit('open-choose-session-popup')"
-          style="flex: 1; padding: 10px; font-size: 13px; font-weight: bold; border-radius: 4px; border: none; transition: opacity 0.2s; height: 36px; display: inline-flex; alignItems: center; justifyContent: center;"
+          class="btn-choose-session"
+          style="flex: 1; padding: 10px; font-size: 13px; font-weight: bold; border-radius: 4px; border: none; transition: opacity 0.2s; height: 36px; display: inline-flex; align-items: center; justify-content: center; color: white;"
           :style="{
-            backgroundColor: (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) ? '#888' : 'var(--color-toggle-on, #4caf50)',
-            color: 'white',
-            cursor: (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) ? 'not-allowed' : 'pointer',
-            opacity: (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) ? '0.6' : '1.0'
+            opacity: (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) ? '0.6' : '1.0',
+            cursor: (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) ? 'not-allowed' : 'pointer'
           }"
           onmouseover="if(!this.disabled) this.style.opacity='0.9'"
           onmouseout="if(!this.disabled) this.style.opacity='1.0'"
@@ -910,11 +910,12 @@ const getSignColor = (sign: number, x: boolean) => {
           기존 회차
         </button>
 
-        <!-- 오른쪽: 신규 회차 시작 (빨간색) -->
+        <!-- 오른쪽: 신규 회차 시작 (2등 청록색) -->
         <button 
           type="button"
           @click.stop="emit('start-new-day')"
-          style="flex: 1; padding: 10px; font-size: 13px; font-weight: bold; background-color: var(--color-negative, #f44336); color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s; height: 36px; display: inline-flex; alignItems: center; justifyContent: center;"
+          class="btn-new-session"
+          style="flex: 1; padding: 10px; font-size: 13px; font-weight: bold; color: white; border: none; border-radius: 4px; cursor: pointer; transition: opacity 0.2s; height: 36px; display: inline-flex; align-items: center; justify-content: center;"
           onmouseover="this.style.opacity='0.9'"
           onmouseout="this.style.opacity='1.0'"
         >
@@ -1329,10 +1330,24 @@ const getSignColor = (sign: number, x: boolean) => {
   color: #ffffff;
 }
 .btn-choose-session {
-  background-color: var(--color-toggle-on);
+  background-color: #28a745;
+  color: #ffffff;
+}
+.btn-choose-session:hover:not(:disabled) {
+  background-color: #218838;
+}
+:global(.dark) .btn-choose-session {
+  background-color: #28a745;
 }
 .btn-new-session {
-  background-color: var(--color-negative);
+  background-color: #17a2b8;
+  color: #ffffff;
+}
+.btn-new-session:hover:not(:disabled) {
+  background-color: #138496;
+}
+:global(.dark) .btn-new-session {
+  background-color: #17a2b8;
 }
 .btn-session-action:hover {
   opacity: 0.9;
