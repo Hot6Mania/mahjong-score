@@ -58,7 +58,9 @@ interface Props {
   syncProgress?: number,
   chartPlayers?: any[],
   chartRecords?: any,
-  showConfirm: (message: string) => Promise<boolean>
+  showConfirm: (message: string) => Promise<boolean>,
+  currentSessionSheetName?: string,
+  isSessionClosed?: boolean
 }
 const props = defineProps<Props>()
 
@@ -83,6 +85,7 @@ type Emits = {
   (e: 'google-logout'): void,
   (e: 'save-game-to-sheet'): void,
   (e: 'save-and-sync-game'): void,
+  (e: 'toggle-close-session'): void,
   (e: 'add-new-member', name: string): void,
   (e: 'delete-member', name: string): void,
   (e: 'save-today-members', names: string[]): void,
@@ -559,6 +562,8 @@ const getSignColor = (sign: number, x: boolean) => {
   <div v-else-if="modalInfo.type==='choose_menu_kind'" class="modal_content" @click.stop>
     <ModalChooseMenu
       :googleInfo
+      :currentSessionSheetName="currentSessionSheetName"
+      :isSessionClosed="isSessionClosed"
       @show-modal="(type, status) => emit('show-modal', type, status)"
       @start-new-game="emit('start-new-game')"
       @sync-local-to-google="emit('sync-local-to-google')"
@@ -983,6 +988,28 @@ const getSignColor = (sign: number, x: boolean) => {
       </div>
 
 
+
+      <!-- 현재 연동 회차 상태 및 마감 토글 카드 -->
+      <div v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId" style="margin-top: 14px; width: 100%; display: flex; flex-direction: column; gap: 8px; background-color: var(--color-input-bg, #f7f7f7); border: 1px solid var(--color-border, #ddd); border-radius: 6px; padding: 10px 12px; box-sizing: border-box;">
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 13px;">
+          <span style="font-weight: bold; color: var(--text-color, #333);">연동 회차:</span>
+          <span style="font-weight: bold; color: var(--color-toggle-on, #4caf50);">{{ currentSessionSheetName || '미지정 (자동 생성)' }}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+          <span style="color: var(--text-color-muted, #666);">회차 상태:</span>
+          <span :style="{ fontWeight: 'bold', color: isSessionClosed ? 'var(--color-negative, #f44336)' : 'var(--color-toggle-on, #4caf50)' }">
+            {{ isSessionClosed ? '🔒 종료(마감)됨' : '🟢 진행 중' }}
+          </span>
+        </div>
+        <button 
+          v-if="currentSessionSheetName"
+          type="button" 
+          @click="emit('toggle-close-session')"
+          style="margin-top: 4px; padding: 6px 10px; font-size: 12px; font-weight: bold; border-radius: 4px; border: 1px solid var(--color-border, #ccc); background-color: var(--card-bg-color, #fff); color: var(--text-color, #333); cursor: pointer;"
+        >
+          {{ isSessionClosed ? '회차 마감 해제 🔓' : '현재 회차 마감하기 🔒' }}
+        </button>
+      </div>
 
       <div class="action_buttons" style="margin-top: 15px; display: flex; flex-direction: column; gap: 8px;">
         <button 

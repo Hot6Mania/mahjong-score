@@ -104,6 +104,8 @@ const emit = defineEmits<Emits>()
   padding: 5px 10px;
   font-size: 12px;
   font-weight: 700;
+  font-family: 'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif;
+  letter-spacing: -0.01em;
   color: var(--text-color, #1a1a1a);
   background-color: var(--card-bg-color, #ffffff);
   border: 1px solid var(--border-color, #cccccc);

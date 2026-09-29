@@ -1275,7 +1275,7 @@ const getRankClass = (rank: number) => {
       <section v-else-if="activeTab === 'matrix'" class="tab-matrix">
         <div class="matrix-controls-bar">
           <div class="matrix-info-text">
-            구글 스프레드시트 <strong>'통계'</strong> 탭의 전 회차 우마 기록입니다. 상단 회차명을 누르면 경기 상세로, 선수명을 누르면 개인 상세 스탯으로 이동합니다.
+            김케이 하우스 전 회차 우마 기록입니다. 상단 회차명을 누르면 경기 상세로, 멤버명을 누르면 개인 상세 스탯으로 이동합니다.
           </div>
           <div class="search-box">
             <svg class="search-icon-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

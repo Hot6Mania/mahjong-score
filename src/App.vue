@@ -403,6 +403,36 @@ const syncProgress = ref(0);
 const syncLoaderTitle = ref("구글 스프레드시트 일괄 동기화 중...");
 const googleMemberStats = ref<any[]>([]);
 const currentSessionSheetName = ref(localStorage.getItem("current_session_sheet_name") || "");
+const isScoreRolling = ref(false); // 점수 이동 및 순위 연출 중 플래그 (리치 등 상호작용 차단)
+const closedSessions = ref<string[]>(JSON.parse(localStorage.getItem("mahjong_closed_sessions") || "[]"));
+
+// 현재 활성 회차가 종료/마감된 회차인지 판정
+const isSessionClosed = computed(() => {
+  const cur = currentSessionSheetName.value;
+  if (!cur) return false;
+  // 1. 수동 마감 목록에 포함된 경우
+  if (closedSessions.value.includes(cur)) return true;
+  // 2. 구글 시트에서 수집된 유효 회차 목록 중 최신 회차가 아닌 과거 회차를 불러온 경우
+  if (validGoogleSessions.value.length > 0 && validGoogleSessions.value[0] !== cur) {
+    return true;
+  }
+  return false;
+});
+
+// 회차 마감 / 마감 해제 토글 함수
+const toggleCloseCurrentSession = () => {
+  const cur = currentSessionSheetName.value;
+  if (!cur) return;
+  const idx = closedSessions.value.indexOf(cur);
+  if (idx > -1) {
+    closedSessions.value.splice(idx, 1);
+    triggerToast(`'${cur}' 회차 마감이 해제되었습니다.`);
+  } else {
+    closedSessions.value.push(cur);
+    triggerToast(`'${cur}' 회차가 마감(종료) 처리되었습니다.`);
+  }
+  localStorage.setItem("mahjong_closed_sessions", JSON.stringify(closedSessions.value));
+};
 
 const isShowSpreadsheetIdPrompt = ref(false);
 const tempPromptSpreadsheetUrl = ref("");
@@ -605,8 +635,17 @@ const toggleActiveRiichi = (seat: string) => {
   if (records.time.length > 0 && records.time[records.time.length - 1] === '결과') {
     return;
   }
-  let idx=players.findIndex(x => x['seat']===seat); // 위치 기준 인덱스 반환
-  if (!isNaN(players[idx].effectScore)) // 점수변동 이펙트 도중이면 실행 x
+  // 점수 롤링 중이거나 순위 변동 연출 중일 때 리치 토글 절대 차단 (점수 버그 원천 방지)
+  if (isScoreRolling.value || animateRank.value) {
+    return;
+  }
+  // 모달창이 열려있거나 결과 확인/정산 중일 때도 리치 토글 차단
+  if (modalInfo.isOpen) {
+    return;
+  }
+  let idx = players.findIndex(x => x['seat'] === seat); // 위치 기준 인덱스 반환
+  if (idx === -1) return;
+  if (!isNaN(players[idx].effectScore) || players[idx].deltaScore !== 0) // 점수변동 이펙트 도중이면 실행 x
     return;
   if (players[idx].isRiichi===false){ // 리치 활성화
     if (players[idx].displayScore<1000 && option.tobi===true) // 리치를 걸수 없을 때
@@ -768,11 +807,14 @@ const changeScores = (targetRiichi: number, onComplete?: () => void) => {
       players[i].rank = 0;
     }
     panelInfo.riichi = targetRiichi;
+    isScoreRolling.value = false;
+    animateRank.value = false;
     if (onComplete) onComplete();
     return;
   }
 
   animateRank.value = true;
+  isScoreRolling.value = true;
   let arrCut: number[][]=[[],[],[],[]];
   for (let i=0;i<players.length;i++){
     for (let j=0;j<50;j++) // 변경될 점수 사이를 50등분해서 저장
@@ -802,6 +844,7 @@ const changeScores = (targetRiichi: number, onComplete?: () => void) => {
       // 연출 종료 2.2초 후에 애니메이션 해제 (모든 슬라이드아웃/슬라이드인/팝업 완료 후)
       setTimeout(() => {
         animateRank.value = false;
+        isScoreRolling.value = false;
       }, 2200);
 
       // 1. 모든 이전 등수를 동시에 페이드아웃 및 슬라이드 아웃시킴 (-1로 설정하여 상시 표시 상태여도 강제 퇴장)
@@ -828,6 +871,7 @@ const changeScores = (targetRiichi: number, onComplete?: () => void) => {
 
         // 3. 모든 등수의 페이드인/슬라이드가 완료되고 1등의 팝업 줌아웃까지 마무리된 시점(150ms 대기 + 1등 연출 600ms + 팝업완료 650ms = 1400ms)에 바람 변경
         setTimeout(() => {
+          isScoreRolling.value = false;
           if (onComplete) onComplete();
         }, 1400);
     }
@@ -1300,8 +1344,12 @@ const saveRound = () => {
   if (status === 'beolbu') {
     // 벌부 최종 적용: 벌부 낸 플레이어 점수 차감 및 공탁 리치봉 개수 1 증가
     panelInfo.riichi++;
+    // 모달 오버레이를 즉시 닫아 점수 감소 연출 중 화면이 어둡게 유지되지 않도록 조치
+    modalInfo.isOpen = false;
+    modalInfo.type = "";
+    modalInfo.status = "";
     changeScores(panelInfo.riichi, () => {
-      // 대국 계속 진행하므로 모달만 닫고 상태 초기화
+      // 대국 계속 진행하므로 점수 연출 완료 후 상태 초기화
       hideModal();
     });
     return;
@@ -2271,6 +2319,15 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
     if (todayGamesHistory.length === 0) {
       if (!skipConfirm) alert("오늘 기록된 로컬 대국 이력이 없습니다.");
       return false;
+    }
+
+    // 종료된 회차(과거 회차 또는 마감된 회차) 동기화 보호 가드
+    if (isSessionClosed.value) {
+      const sessName = currentSessionSheetName.value || "종료된 회차";
+      const isForceSync = await showConfirm(`⚠️ '${sessName}' 회차는 이미 종료된(과거) 회차입니다.\n과거 데이터 보호를 위해 동기화가 권장되지 않습니다.\n\n정말로 이 회차에 강제로 덮어쓰기 동기화를 진행하시겠습니까?`);
+      if (!isForceSync) {
+        return false;
+      }
     }
 
     if (!skipConfirm) {
@@ -3301,6 +3358,9 @@ const addBackupGameToCurrent = (game: any) => {
       :chart-players="chartPlayers"
       :chart-records="chartRecords"
       :showConfirm="showConfirm"
+      :currentSessionSheetName="currentSessionSheetName"
+      :isSessionClosed="isSessionClosed"
+      @toggle-close-session="toggleCloseCurrentSession"
       @show-modal="showModal"
       @hide-modal="hideModal"
       @set-arrow-button="setArrowButton"

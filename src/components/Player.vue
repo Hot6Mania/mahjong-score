@@ -104,6 +104,13 @@ const getSignColor = (sign: number, x: boolean) => {
   else
     return {color: 'var(--text-color)'};
 }
+
+const handleScoreClick = () => {
+  if (props.animateRank || props.isGameFinished || props.modalInfo.isOpen || !isNaN(props.player.effectScore) || props.player.deltaScore !== 0) {
+    return;
+  }
+  emit('toggle-active-riichi', props.player.seat);
+};
 </script>
 
 <template>
@@ -134,7 +141,7 @@ const getSignColor = (sign: number, x: boolean) => {
     <div class="player_name_badge">
       {{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span>
     </div>
-    <div v-if="isNaN(player.gapScore)" :style="displayScoreStyle()" @click="emit('toggle-active-riichi', player.seat)" style="display: inline-block; line-height: 0.95; cursor: pointer;">
+    <div v-if="isNaN(player.gapScore)" :style="[displayScoreStyle(), { cursor: (animateRank || modalInfo.isOpen) ? 'default' : 'pointer' }]" @click="handleScoreClick" style="display: inline-block; line-height: 0.95;">
       {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
         <span v-show="displayScoreLow<10">0</span>{{ displayScoreLow }}
       </span>
