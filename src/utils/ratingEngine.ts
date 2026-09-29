@@ -5,6 +5,54 @@ export const DEFAULT_MU = 1500;
 export const DEFAULT_SIGMA = 120; // 초기 불확실도
 export const BETA = 60; // 마작의 운(패산/배패) 변동성 완충 계수
 
+/**
+ * 레이팅 구간별 색상 정의 (등급 명칭 텍스트 미사용, 색상만 적용)
+ * - 1700 이상: #38BEDA (혼천색)
+ * - 1600대: #CD4A62 (작성색)
+ * - 1500대: #E88640 (작호색)
+ * - 1400대: #FDD221 (작걸색)
+ * - 1300대: #21A73C (작사색)
+ * - 1200대 이하: #98B324 (초심색)
+ */
+export const RATING_COLORS = {
+  choncheon: '#38BEDA',
+  jakseong: '#CD4A62',
+  jakho: '#E88640',
+  jakgeol: '#FDD221',
+  jaksa: '#21A73C',
+  chosim: '#98B324'
+} as const;
+
+export function getRatingColor(rating: number | undefined | null): string {
+  if (!rating || isNaN(rating)) return '#64748b';
+  if (rating >= 1700) return RATING_COLORS.choncheon;
+  if (rating >= 1600) return RATING_COLORS.jakseong;
+  if (rating >= 1500) return RATING_COLORS.jakho;
+  if (rating >= 1400) return RATING_COLORS.jakgeol;
+  if (rating >= 1300) return RATING_COLORS.jaksa;
+  return RATING_COLORS.chosim;
+}
+
+export function hexToRgba(color: string, alpha: number): string {
+  if (!color) return `rgba(100, 116, 139, ${alpha})`;
+  if (color.startsWith('rgba')) {
+    return color.replace(/[\d\.]+\)$/, `${alpha})`);
+  }
+  if (color.startsWith('rgb')) {
+    return color.replace('rgb', 'rgba').replace(')', `, ${alpha})`);
+  }
+  let c = color.replace('#', '');
+  if (c.length === 3) {
+    c = c.split('').map(x => x + x).join('');
+  }
+  const num = parseInt(c, 16);
+  if (isNaN(num)) return `rgba(100, 116, 139, ${alpha})`;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export interface PlayerRating {
   name: string;
   mu: number;

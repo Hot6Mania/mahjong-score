@@ -2,6 +2,7 @@
 import { ref, computed, watch } from "vue"
 import { useRouter } from "vue-router"
 import type { Player, Option } from "@/types/types.d"
+import { getRatingColor } from "@/utils/ratingEngine"
 import {
   Chart as ChartJS,
   Title,
@@ -1032,7 +1033,7 @@ const emptyScopeMessage = computed(() => {
         </div>
         <div v-if="selectedPlayerRating" class="stat_row">
           <span class="stat_label">레이팅(R)</span>
-          <span class="stat_value highlight">R{{ selectedPlayerRating }}</span>
+          <span class="stat_value highlight" :style="{ color: getRatingColor(selectedPlayerRating) }">R{{ selectedPlayerRating }}</span>
         </div>
         <div class="stat_row">
           <span class="stat_label">화료율</span>
@@ -1383,11 +1384,11 @@ const emptyScopeMessage = computed(() => {
         <div class="rating_summary_grid">
           <div class="summary_stat_box">
             <span class="summary_label">레이팅(R)</span>
-            <span class="summary_value highlight">R{{ playerRatingSummary.current }}</span>
+            <span class="summary_value highlight" :style="{ color: getRatingColor(playerRatingSummary.current) }">R{{ playerRatingSummary.current }}</span>
           </div>
           <div class="summary_stat_box">
             <span class="summary_label">역대 최고</span>
-            <span class="summary_value text_positive">R{{ playerRatingSummary.peak }}</span>
+            <span class="summary_value" :style="{ color: getRatingColor(playerRatingSummary.peak) }">R{{ playerRatingSummary.peak }}</span>
           </div>
           <div class="summary_stat_box">
             <span class="summary_label">기록 대국 수</span>

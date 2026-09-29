@@ -153,6 +153,9 @@ export interface SessionGamePlayer {
   rank: number;
   score: number;
   uma: number;
+  ratingBefore?: number;
+  ratingAfter?: number;
+  ratingDelta?: number;
 }
 
 export interface SessionGame {
@@ -1496,6 +1499,27 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string): Promise<St
     const match = label.match(/제\d+회/);
     if (match) {
       const sessName = match[0];
+
+      // 해당 열에 실측 데이터가 1건이라도 존재하는지 검증
+      let hasValidValue = false;
+      for (let r = 0; r < table.rows.length; r++) {
+        const cell = table.rows[r]?.c?.[c];
+        if (cell && cell.v !== null && cell.v !== undefined && cell.v !== '') {
+          hasValidValue = true;
+          break;
+        }
+      }
+
+      const hasGameCountHeader = /\d+\s*국/.test(label);
+
+      // 데이터가 아예 없거나, 헤더에 '국' 표기가 없는 미개최 회차는 제외
+      if (!hasValidValue && !hasGameCountHeader) {
+        continue;
+      }
+      if (!hasValidValue) {
+        continue;
+      }
+
       if (!sessions.includes(sessName)) {
         sessions.push(sessName);
         const sub = label.replace(sessName, '').trim();
@@ -1520,6 +1544,7 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string): Promise<St
       const match = label.match(/제\d+회/);
       if (match) {
         const sessName = match[0];
+        if (!sessions.includes(sessName)) continue; // 미개최 회차 스킵
         const cell = r.c[c];
         if (cell && (cell.v !== null && cell.v !== undefined || cell.f !== null && cell.f !== undefined)) {
           sessionUmas[sessName] = parseFloat(getCellNum(cell).toFixed(1));
@@ -1751,6 +1776,18 @@ export function calculateAllPlayersRatingTrajectory(
 }
 
 let cachedRatingTrajectory: AllPlayersRatingTrajectory | null = null;
+let cachedRatingHistoryRecords: GameRatingHistoryRecord[] | null = null;
+
+/**
+ * 경기별 레이팅 변화 이력 전체 조회 (캐시 활용)
+ */
+export async function fetchPublicRatingHistoryRecords(spreadsheetId?: string): Promise<GameRatingHistoryRecord[]> {
+  if (cachedRatingHistoryRecords && cachedRatingHistoryRecords.length > 0) {
+    return cachedRatingHistoryRecords;
+  }
+  await fetchPublicRatingTimeline(spreadsheetId);
+  return cachedRatingHistoryRecords || [];
+}
 
 /**
  * 5-2. '레이팅 이력' 시트 또는 온디맨드 리플레이를 통해 전체 플레이어 레이팅 타임라인 조회
@@ -1828,6 +1865,7 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise
           });
 
           if (historyRecords.length > 0) {
+            cachedRatingHistoryRecords = historyRecords;
             const traj = calculateAllPlayersRatingTrajectory(historyRecords);
             cachedRatingTrajectory = traj;
             return traj;
@@ -1841,9 +1879,68 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise
 
   // 폴백: 내장 레거시 데이터 리플레이
   const { matchHistory } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, []);
+  cachedRatingHistoryRecords = matchHistory;
   const traj = calculateAllPlayersRatingTrajectory(matchHistory);
   cachedRatingTrajectory = traj;
   return traj;
+}
+
+/**
+ * 특정 회차의 대국 목록에 대국 전/후 레이팅 및 변동치를 주입
+ */
+export function attachRatingToSessionGames(
+  sessionName: string,
+  games: SessionGame[],
+  historyRecords: GameRatingHistoryRecord[]
+): void {
+  if (!games || games.length === 0 || !historyRecords || historyRecords.length === 0) return;
+
+  const sessTargetMatch = sessionName.match(/제\s*(\d+)\s*회/);
+  const sessionNum = sessTargetMatch ? parseInt(sessTargetMatch[1], 10) : 0;
+  const sessionPrefix = sessTargetMatch ? sessTargetMatch[0] : sessionName;
+
+  const sessionRecords = historyRecords.filter(r => {
+    const rMatch = r.sessionLabel.match(/제\s*(\d+)\s*회/);
+    if (rMatch) {
+      return parseInt(rMatch[1], 10) === sessionNum;
+    }
+    return r.sessionLabel.includes(sessionPrefix);
+  });
+
+  games.forEach((game, gameIdx) => {
+    const gamePlayerNames = new Set(game.players.map(p => p.name));
+    let matchedRecord = sessionRecords.find(r => {
+      return r.players.length === 4 && r.players.filter(p => gamePlayerNames.has(p.name)).length === 4;
+    });
+
+    if (!matchedRecord && sessionRecords[gameIdx]) {
+      matchedRecord = sessionRecords[gameIdx];
+    } else if (matchedRecord) {
+      const candidateRecords = sessionRecords.filter(r => {
+        return r.players.length === 4 && r.players.filter(p => gamePlayerNames.has(p.name)).length === 4;
+      });
+      if (candidateRecords.length > 1) {
+        const scoreMatched = candidateRecords.find(r => {
+          return r.players.every(hp => {
+            const gp = game.players.find(p => p.name === hp.name);
+            return gp && gp.score === hp.score;
+          });
+        });
+        if (scoreMatched) matchedRecord = scoreMatched;
+      }
+    }
+
+    if (matchedRecord) {
+      game.players.forEach(p => {
+        const hp = matchedRecord!.players.find(hp => hp.name === p.name);
+        if (hp) {
+          p.ratingAfter = hp.ordinal;
+          p.ratingDelta = hp.delta;
+          p.ratingBefore = hp.ordinal - hp.delta;
+        }
+      });
+    }
+  });
 }
 
 /**
@@ -2025,6 +2122,9 @@ export interface GamePlayerResultStat {
   rank: number;
   score: number;
   uma: number;
+  ratingBefore?: number;
+  ratingAfter?: number;
+  ratingDelta?: number;
   cntRiichi: number;
   cntRon: number;
   cntTsumo: number;
@@ -2078,6 +2178,9 @@ function buildGameDetailFromLocalRecords(game: SessionGame, records: any, player
       rank: p.rank,
       score: p.score,
       uma: p.uma,
+      ratingBefore: p.ratingBefore,
+      ratingAfter: p.ratingAfter,
+      ratingDelta: p.ratingDelta,
       cntRiichi,
       cntRon,
       cntTsumo,
@@ -2282,6 +2385,9 @@ export async function fetchSessionGameDetail(
               rank: p.rank,
               score: p.score,
               uma: p.uma,
+              ratingBefore: p.ratingBefore,
+              ratingAfter: p.ratingAfter,
+              ratingDelta: p.ratingDelta,
               cntRiichi,
               cntRon,
               cntTsumo,

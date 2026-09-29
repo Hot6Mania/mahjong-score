@@ -23,6 +23,8 @@ import {
   calculateSessionUmaTrajectory,
   calculateMetricDistribution,
   fetchPublicRatingTimeline,
+  fetchPublicRatingHistoryRecords,
+  attachRatingToSessionGames,
   type AllPlayersRatingTrajectory,
   type MemberStatItem,
   type SessionDetail,
@@ -36,6 +38,7 @@ import {
 import zoomPlugin from 'chartjs-plugin-zoom';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import { getRatingColor, hexToRgba } from '@/utils/ratingEngine';
 
 ChartJS.register(Title, ChartTooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, zoomPlugin);
 
@@ -307,7 +310,7 @@ const filteredMatrixRows = computed(() => {
 
 const navigateToSession = (sessionColName: string) => {
   const cleaned = sessionColName.split('\n')[0].trim();
-  const match = availableSessions.value.find(s => s.includes(cleaned) || cleaned.includes(s));
+  const match = displayedAvailableSessions.value.find(s => s.includes(cleaned) || cleaned.includes(s));
   if (match) {
     selectedSession.value = match;
   }
@@ -354,9 +357,34 @@ const openPlayerByName = (name: string, fromSession: boolean = false, keepScopeT
 // 3. 회차별 경기 상세 데이터 & 꺾은선 차트
 // ==========================================
 const availableSessions = ref<string[]>([]);
+
+// 미진행 회차(16~25회) 배제된 실제 노출용 회차 목록
+const displayedAvailableSessions = computed(() => {
+  if (statsMatrix.value?.sessions && statsMatrix.value.sessions.length > 0) {
+    const validSessionNums = new Set(
+      statsMatrix.value.sessions.map(s => {
+        const m = s.match(/제\d+회/);
+        return m ? m[0] : s;
+      })
+    );
+    return availableSessions.value.filter(s => {
+      const m = s.match(/제\d+회/);
+      return m ? validSessionNums.has(m[0]) : true;
+    });
+  }
+  return availableSessions.value;
+});
+
 const selectedSession = ref('');
 const currentSessionDetail = ref<SessionDetail | null>(null);
 const isLoadingSession = ref(false);
+
+// 유효 회차가 결정되면 selectedSession 자동 동기화
+watch(displayedAvailableSessions, (newSessions) => {
+  if (newSessions.length > 0 && !newSessions.includes(selectedSession.value)) {
+    selectedSession.value = newSessions[0];
+  }
+}, { immediate: true });
 
 const loadSessionsList = async () => {
   try {
@@ -377,7 +405,13 @@ const loadSessionDetail = async (sessionName: string) => {
   if (!sessionName) return;
   isLoadingSession.value = true;
   try {
-    const detail = await fetchPublicSessionDetail(sessionName);
+    const [detail, historyRecords] = await Promise.all([
+      fetchPublicSessionDetail(sessionName),
+      fetchPublicRatingHistoryRecords()
+    ]);
+    if (detail && detail.games && historyRecords.length > 0) {
+      attachRatingToSessionGames(sessionName, detail.games, historyRecords);
+    }
     currentSessionDetail.value = detail;
     const detailedMap = await fetchSessionDetailedStats(sessionName);
     currentSessionDetailedStatsMap.value = detailedMap;
@@ -702,6 +736,9 @@ const openGameDetailModal = async (game: SessionGame) => {
       rank: p.rank,
       score: p.score,
       uma: p.uma,
+      ratingBefore: p.ratingBefore,
+      ratingAfter: p.ratingAfter,
+      ratingDelta: p.ratingDelta,
       cntRiichi: 0,
       cntRon: 0,
       cntTsumo: 0,
@@ -715,6 +752,16 @@ const openGameDetailModal = async (game: SessionGame) => {
     if (selectedGameDetail.value && 
         selectedGameDetail.value.gameIndex === game.gameIndex && 
         (selectedGameDetail.value.gameId === game.gameId || !game.gameId)) {
+      detail.playerStats.forEach(dp => {
+        if (dp.ratingBefore === undefined) {
+          const orig = game.players.find(gp => gp.name === dp.name);
+          if (orig) {
+            dp.ratingBefore = orig.ratingBefore;
+            dp.ratingAfter = orig.ratingAfter;
+            dp.ratingDelta = orig.ratingDelta;
+          }
+        }
+      });
       selectedGameDetail.value = detail;
     }
   } catch (e) {
@@ -918,27 +965,6 @@ watch(isRatingTimelineModalOpen, (isOpen) => {
   }
 });
 
-// 색상 투명화 헬퍼 (미출전 수평 구간용)
-function hexToRgba(color: string, alpha: number): string {
-  if (!color) return `rgba(100, 116, 139, ${alpha})`;
-  if (color.startsWith('rgba')) {
-    return color.replace(/[\d\.]+\)$/, `${alpha})`);
-  }
-  if (color.startsWith('rgb')) {
-    return color.replace('rgb', 'rgba').replace(')', `, ${alpha})`);
-  }
-  let c = color.replace('#', '');
-  if (c.length === 3) {
-    c = c.split('').map(x => x + x).join('');
-  }
-  const num = parseInt(c, 16);
-  if (isNaN(num)) return `rgba(100, 116, 139, ${alpha})`;
-  const r = (num >> 16) & 255;
-  const g = (num >> 8) & 255;
-  const b = num & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
 // 수식 KaTeX 렌더러
 const renderKatex = (latex: string) => {
   try {
@@ -990,7 +1016,7 @@ const availableRatingSessions = computed(() => {
   if (statsMatrix.value?.sessions && statsMatrix.value.sessions.length > 0) {
     return statsMatrix.value.sessions;
   }
-  return availableSessions.value.map(s => {
+  return displayedAvailableSessions.value.map(s => {
     const m = s.match(/제\d+회/);
     return m ? m[0] : s;
   });
@@ -1030,15 +1056,53 @@ const ratingChartData = computed(() => {
     borderColor: d.color,
     backgroundColor: d.color,
     borderWidth: 1.5,
-    // 미출전 수평 구간 초고투명화 (15% 불투명도 = 85% 투명)
+    // 미출전 수평 구간 자연스러운 그라디언트 페이드인/아웃 전환 (기본 불투명도 0.32)
     segment: {
       borderColor: (ctx: any) => {
-        const isPlayed = d.played?.[ctx.p1DataIndex];
-        return isPlayed ? d.color : hexToRgba(d.color, 0.15);
+        const p0Idx = ctx.p0DataIndex;
+        const p1Idx = ctx.p1DataIndex;
+        const isMatchSegment = d.played?.[p1Idx];
+        if (isMatchSegment) {
+          return d.color; // 실제 대국 변동 구간: 선명한 100% 원색
+        }
+
+        const justPlayed = d.played?.[p0Idx];
+        const willPlaySoon = d.played?.[p1Idx + 1];
+
+        const chartCtx = ctx.chart?.ctx;
+        if (chartCtx && ctx.p0 && ctx.p1 && (ctx.p0.x !== ctx.p1.x || ctx.p0.y !== ctx.p1.y)) {
+          try {
+            const grad = chartCtx.createLinearGradient(ctx.p0.x, ctx.p0.y, ctx.p1.x, ctx.p1.y);
+            if (justPlayed && willPlaySoon) {
+              grad.addColorStop(0, hexToRgba(d.color, 0.85));
+              grad.addColorStop(1, hexToRgba(d.color, 0.70));
+            } else if (justPlayed) {
+              // 대국 직후: 0.90 -> 0.32 부드러운 페이드아웃
+              grad.addColorStop(0, hexToRgba(d.color, 0.90));
+              grad.addColorStop(1, hexToRgba(d.color, 0.32));
+            } else if (willPlaySoon) {
+              // 대국 직전: 0.32 -> 0.75 점진적 페이드인
+              grad.addColorStop(0, hexToRgba(d.color, 0.32));
+              grad.addColorStop(1, hexToRgba(d.color, 0.75));
+            } else {
+              // 깊은 수평 구간: 안정적인 32% 불투명도 유지
+              grad.addColorStop(0, hexToRgba(d.color, 0.32));
+              grad.addColorStop(1, hexToRgba(d.color, 0.32));
+            }
+            return grad;
+          } catch (_) {}
+        }
+
+        if (justPlayed) return hexToRgba(d.color, 0.55);
+        if (willPlaySoon) return hexToRgba(d.color, 0.55);
+        return hexToRgba(d.color, 0.32);
       },
       borderWidth: (ctx: any) => {
-        const isPlayed = d.played?.[ctx.p1DataIndex];
-        return isPlayed ? 1.6 : 1.0;
+        const p0Idx = ctx.p0DataIndex;
+        const p1Idx = ctx.p1DataIndex;
+        if (d.played?.[p1Idx]) return 1.8;
+        if (d.played?.[p0Idx] || d.played?.[p1Idx + 1]) return 1.4;
+        return 1.1;
       }
     },
     pointRadius: (ctx: any) => {
@@ -1654,7 +1718,14 @@ const getRankClass = (rank: number) => {
                   <strong>{{ member.name }}</strong>
                 </td>
                 <td class="col-rating">
-                  <span class="rating-badge">R{{ member.rating ?? 1167 }}</span>
+                  <span 
+                    class="rating-badge"
+                    :style="{
+                      color: getRatingColor(member.rating),
+                      backgroundColor: hexToRgba(getRatingColor(member.rating), isDark ? 0.18 : 0.12),
+                      borderColor: hexToRgba(getRatingColor(member.rating), isDark ? 0.45 : 0.35)
+                    }"
+                  >R{{ member.rating ?? 1167 }}</span>
                 </td>
                 <td class="col-total-uma col-uma" :class="member.totalUma >= 0 ? 'pos' : 'neg'">
                   {{ member.totalUma > 0 ? '+' : '' }}{{ member.totalUma.toFixed(1) }}
@@ -1793,7 +1864,7 @@ const getRankClass = (rank: number) => {
         <div class="rating-leaderboard-card">
           <div class="leaderboard-header">
             <h2 class="rating-section-title">레이팅 순위 및 현황</h2>
-            <span class="rating-section-desc">레이팅(R) 기준 랭킹입니다.</span>
+            <span class="rating-section-desc"></span>
           </div>
 
           <div class="table-container">
@@ -1832,9 +1903,16 @@ const getRankClass = (rank: number) => {
                     <strong>{{ player.name }}</strong>
                   </td>
                   <td style="text-align: center;">
-                    <span class="rating-badge-pill">R{{ player.rating ?? 1320 }}</span>
+                    <span 
+                      class="rating-badge-pill"
+                      :style="{
+                        color: getRatingColor(player.rating),
+                        backgroundColor: hexToRgba(getRatingColor(player.rating), isDark ? 0.18 : 0.12),
+                        borderColor: hexToRgba(getRatingColor(player.rating), isDark ? 0.45 : 0.35)
+                      }"
+                    >R{{ player.rating ?? 1320 }}</span>
                   </td>
-                  <td style="text-align: center; color: #16a34a; font-weight: 600;">
+                  <td style="text-align: center; font-weight: 600;" :style="{ color: getRatingColor(player.ratingPeak ?? (player.ratingHistory && player.ratingHistory.length > 0 ? Math.max(...player.ratingHistory.map(h => h.ordinal)) : (player.rating ?? 1320))) }">
                     R{{ player.ratingPeak ?? (player.ratingHistory && player.ratingHistory.length > 0 ? Math.max(...player.ratingHistory.map(h => h.ordinal)) : (player.rating ?? 1320)) }}
                   </td>
                   <td style="text-align: center;">
@@ -2009,8 +2087,8 @@ const getRankClass = (rank: number) => {
         <div class="session-picker-bar">
           <label class="session-label">회차 선택:</label>
           <select v-model="selectedSession" class="session-select">
-            <option v-for="s in availableSessions" :key="s" :value="s">
-              {{ s }} {{ s === availableSessions[0] ? '(최신)' : '' }}
+            <option v-for="s in displayedAvailableSessions" :key="s" :value="s">
+              {{ s }} {{ s === displayedAvailableSessions[0] ? '(최신)' : '' }}
             </option>
           </select>
         </div>
@@ -2118,6 +2196,18 @@ const getRankClass = (rank: number) => {
                       <div class="gp-score">{{ p.score.toLocaleString() }}점</div>
                       <div class="gp-uma" :class="p.uma >= 0 ? 'pos' : 'neg'">
                         {{ p.uma > 0 ? '+' : '' }}{{ p.uma }}
+                      </div>
+                      <div 
+                        v-if="p.ratingBefore !== undefined" 
+                        class="gp-rating"
+                        :title="`대국 전 R${p.ratingBefore} → 대국 후 R${p.ratingAfter} (${p.ratingDelta !== undefined && p.ratingDelta >= 0 ? '+' : ''}${p.ratingDelta})`"
+                      >
+                        <span class="gp-rating-val" :style="{ color: getRatingColor(p.ratingBefore) }">
+                          R{{ p.ratingBefore }}
+                        </span>
+                        <span class="gp-rating-delta" :class="(p.ratingDelta || 0) >= 0 ? 'pos' : 'neg'">
+                          ({{ (p.ratingDelta || 0) >= 0 ? '+' : '' }}{{ p.ratingDelta }})
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -2904,11 +2994,8 @@ const getRankClass = (rank: number) => {
               </div>
               <div v-if="selectedPlayer?.rating" class="stat_row">
                 <span class="stat_label">레이팅(R)</span>
-                <span class="stat_value highlight">
+                <span class="stat_value highlight" :style="{ color: getRatingColor(selectedPlayer.rating) }">
                   R{{ selectedPlayer.rating }}
-                  <span v-if="selectedPlayer.ratingDelta !== undefined" class="rating-delta" :class="selectedPlayer.ratingDelta >= 0 ? 'text_positive' : 'text_negative'">
-                    ({{ selectedPlayer.ratingDelta >= 0 ? '+' : '' }}{{ selectedPlayer.ratingDelta }})
-                  </span>
                 </span>
               </div>
               <div 
@@ -3401,11 +3488,11 @@ const getRankClass = (rank: number) => {
               <div class="rating_summary_grid">
                 <div class="summary_stat_box">
                   <span class="summary_label">레이팅(R)</span>
-                  <span class="summary_value highlight">R{{ modalPlayerRatingSummary.current }}</span>
+                  <span class="summary_value highlight" :style="{ color: getRatingColor(modalPlayerRatingSummary.current) }">R{{ modalPlayerRatingSummary.current }}</span>
                 </div>
                 <div class="summary_stat_box">
                   <span class="summary_label">역대 최고</span>
-                  <span class="summary_value text_positive">R{{ modalPlayerRatingSummary.peak }}</span>
+                  <span class="summary_value" :style="{ color: getRatingColor(modalPlayerRatingSummary.peak) }">R{{ modalPlayerRatingSummary.peak }}</span>
                 </div>
                 <div class="summary_stat_box">
                   <span class="summary_label">기록 대국 수</span>
@@ -3483,6 +3570,7 @@ const getRankClass = (rank: number) => {
             >
               <div class="gdm-header-cell wind">바람</div>
               <div class="gdm-header-cell name">이름</div>
+              <div class="gdm-header-cell rating">레이팅 (변동)</div>
               <div class="gdm-header-cell score">점수 (우마)</div>
               <div class="gdm-header-cell riichi">리치</div>
               <div class="gdm-header-cell ron">론</div>
@@ -3501,6 +3589,17 @@ const getRankClass = (rank: number) => {
               <div class="gdm-content-col name_contents">
                 <div v-for="p in selectedGameDetail.playerStats" :key="'name-' + p.seat + p.name">
                   {{ p.name }}
+                </div>
+              </div>
+              <div class="gdm-content-col rating_contents">
+                <div v-for="p in selectedGameDetail.playerStats" :key="'rating-' + p.seat + p.name">
+                  <template v-if="p.ratingBefore !== undefined">
+                    <span class="gdm-rating-val" :style="{ color: getRatingColor(p.ratingBefore) }">R{{ p.ratingBefore }}</span>
+                    <span class="gdm-rating-delta" :class="(p.ratingDelta || 0) >= 0 ? 'text_pos' : 'text_neg'">
+                      ({{ (p.ratingDelta || 0) >= 0 ? '+' : '' }}{{ p.ratingDelta }})
+                    </span>
+                  </template>
+                  <template v-else>-</template>
                 </div>
               </div>
               <div class="gdm-content-col score_contents">
@@ -4789,6 +4888,36 @@ html.dark .session-select option {
   font-weight: bold;
   margin-top: 2px;
 }
+.gp-rating {
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 4px;
+  padding: 1.5px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.04);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+html.dark .gp-rating {
+  background: rgba(255, 255, 255, 0.06);
+}
+.gp-rating-val {
+  font-weight: 800;
+}
+.gp-rating-delta.pos {
+  color: #16a34a;
+}
+html.dark .gp-rating-delta.pos {
+  color: #4ade80;
+}
+.gp-rating-delta.neg {
+  color: #dc2626;
+}
+html.dark .gp-rating-delta.neg {
+  color: #f87171;
+}
 
 /* ============================================== */
 /* 플레이어 상세 모달 (ModalStats.vue 구조 일치)   */
@@ -5615,16 +5744,16 @@ html.dark .gdm-loading-badge {
 .gdm-resultsheet {
   display: grid;
   grid-template-rows: auto auto;
-  grid-template-columns: 48px minmax(70px, 1.2fr) minmax(120px, 1.8fr) repeat(4, 44px);
+  grid-template-columns: 44px minmax(65px, 1.1fr) minmax(105px, 1.3fr) minmax(115px, 1.5fr) repeat(4, 40px);
   grid-template-areas:
-    'wind name score riichi ron tsumo lose'
-    'wind_contents name_contents score_contents riichi_contents ron_contents tsumo_contents lose_contents';
+    'wind name rating score riichi ron tsumo lose'
+    'wind_contents name_contents rating_contents score_contents riichi_contents ron_contents tsumo_contents lose_contents';
   text-align: center;
   font-size: 15px;
   margin: 6px 0;
   border: 1px solid var(--border-color, #e2e8f0);
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
   background: var(--bg-card, #f8fafc);
   user-select: none;
 }
@@ -5679,6 +5808,22 @@ html.dark .gdm-content-col > div {
 .gdm-content-col.score_contents > div {
   font-size: 13px;
   font-weight: 500;
+}
+.gdm-content-col.rating_contents > div {
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.gdm-rating-val {
+  font-weight: 800;
+  font-size: 13px;
+}
+.gdm-rating-delta {
+  font-size: 11.5px;
+  font-weight: 700;
 }
 .text_pos {
   color: #16a34a;
