@@ -86,11 +86,18 @@ html.dark {
   z-index: -9999;
 }
 
-html{
+html {
   overflow-x: hidden;
   overflow-y: scroll !important;
   overscroll-behavior: auto;
   -webkit-overflow-scrolling: touch;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+}
+html.dark,
+html.dark body,
+html.dark #app {
+  background-color: #121212 !important;
 }
 body {
   position: relative;
@@ -99,6 +106,11 @@ body {
   background-color: var(--bg-color);
   color: var(--text-color);
   transition: background-color 0.3s ease, color 0.3s ease;
+}
+body.stats-mode,
+body:has(.stats-dashboard-container) {
+  min-height: 100vh !important;
+  height: auto !important;
 }
 body::-webkit-scrollbar {
   display: none;

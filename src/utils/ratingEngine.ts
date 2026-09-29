@@ -18,7 +18,7 @@ export const RATING_COLORS = {
   choncheon: '#38BEDA',
   jakseong: '#CD4A62',
   jakho: '#E88640',
-  jakgeol: '#FDD221',
+  jakgeol: '#CA8A04',
   jaksa: '#21A73C',
   chosim: '#98B324'
 } as const;
@@ -329,8 +329,10 @@ export function replayAllHistoricalGames(
   });
 
   for (const session of sortedSessions) {
-    const sessName = session.sessionName;
-    for (const g of session.games) {
+    const sessMatch = session.sessionName.match(/제\s*(\d+)\s*회/);
+    const cleanSessionName = sessMatch ? `제${sessMatch[1]}회` : session.sessionName;
+    for (let gIdx = 0; gIdx < session.games.length; gIdx++) {
+      const g = session.games[gIdx];
       if (!g.players || g.players.length !== 4) continue;
       totalReplayedGames++;
 
@@ -346,7 +348,8 @@ export function replayAllHistoricalGames(
       // rank 순 정렬 보장
       matchPlayers.sort((a, b) => a.rank - b.rank);
 
-      const fullSessionLabel = `${sessName} ${g.gameId || ''}`.trim();
+      const roundNum = gIdx + 1;
+      const fullSessionLabel = `${cleanSessionName} ${roundNum}회전`;
       const dateStr = g.time || '';
 
       const { updatedRatings, matchDeltas } = calculateMatchRatings(matchPlayers, ratings, {

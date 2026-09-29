@@ -17,7 +17,13 @@ const router = useRouter()
 const route = useRoute()
 const isStatsRoute = computed(() => {
   return route.path === '/dashboard' || route.path.startsWith('/dashboard') || route.path === '/stats' || route.path.startsWith('/stats');
-})
+});
+
+watch(isStatsRoute, (val) => {
+  if (typeof document !== 'undefined') {
+    document.body.classList.toggle('stats-mode', !!val);
+  }
+}, { immediate: true });
 
 // 원클릭 대국 기록 + 동기화 상태 관리
 const isSyncingGame = ref(false)
@@ -2395,10 +2401,13 @@ const saveGameToSheet = async (silent: boolean = false) => {
 
       // 구글 시트 연동 중일 경우 실시간으로 '레이팅' 및 '레이팅 이력' 시트 즉시 갱신
       if (googleInfo.isLoggedIn && googleInfo.spreadsheetId && googleInfo.syncMode === 'google') {
+        const sessMatch = (currentSessionSheetName.value || '').match(/제\s*(\d+)\s*회/);
+        const cleanSessName = sessMatch ? `제${sessMatch[1]}회` : (currentSessionSheetName.value || '회차');
+        const sessionRoundLabel = `${cleanSessName} ${todayGamesHistory.length}회전`;
         updateMatchRatingsInSheet(
           googleInfo.spreadsheetId,
           matchPlayersForRating,
-          currentSessionSheetName.value || '회차',
+          sessionRoundLabel,
           todayGamesHistory.length
         ).catch(sheetErr => {
           console.warn("실시간 구글 레이팅 시트 갱신 중 오류 (무시 가능):", sheetErr);

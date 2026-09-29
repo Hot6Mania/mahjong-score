@@ -1591,9 +1591,23 @@ export interface SessionUmaTrajectory {
 
 export const PLAYER_COLORS = [
   '#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#db2777',
-  '#0891b2', '#ea580c', '#0d9488', '#4f46e5', '#65a30d', '#9333ea',
-  '#475569', '#b91c1c', '#047857', '#b45309'
+  '#0891b2', '#ea580c', '#059669', '#4f46e5', '#65a30d', '#9333ea',
+  '#e11d48', '#0284c7', '#ca8a04', '#475569', '#84cc16', '#a855f7',
+  '#f43f5e', '#06b6d4', '#10b981', '#f97316', '#6366f1', '#ec4899',
+  '#14b8a6', '#8b5cf6', '#f59e0b', '#3b82f6', '#15803d', '#be185d',
+  '#0369a1', '#b91c1c', '#6d28d9', '#c2410c', '#047857', '#4338ca',
+  '#4d7c0f', '#701a75', '#0e7490', '#9f1239'
 ];
+
+export function getPlayerColor(index: number): string {
+  if (index < PLAYER_COLORS.length) {
+    return PLAYER_COLORS[index];
+  }
+  const hue = Math.round((index * 137.508) % 360);
+  const lightness = 42 + ((index % 3) * 6);
+  const saturation = 75 + ((index % 2) * 15);
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
 
 export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): SessionUmaTrajectory {
   const games = sessionDetail.games;
@@ -1649,7 +1663,7 @@ export function calculateSessionUmaTrajectory(sessionDetail: SessionDetail): Ses
     return {
       name,
       data,
-      color: PLAYER_COLORS[i % PLAYER_COLORS.length],
+      color: getPlayerColor(i),
       finalUma,
       played,
       deltas,
@@ -1690,9 +1704,21 @@ export function calculateAllPlayersRatingTrajectory(
   playerList?: string[]
 ): AllPlayersRatingTrajectory {
   const initialRating = computeOrdinal(DEFAULT_MU, DEFAULT_SIGMA); // 1320
+  const sessionGameCounters: Record<string, number> = {};
   const labels = ['시작'];
   history.forEach(g => {
-    labels.push(g.sessionLabel || `${g.gameIndex}국`);
+    const raw = g.sessionLabel || '';
+    const sessMatch = raw.match(/제\s*(\d+)\s*회/);
+    if (sessMatch) {
+      const sessName = `제${sessMatch[1]}회`;
+      sessionGameCounters[sessName] = (sessionGameCounters[sessName] || 0) + 1;
+      const roundNum = sessionGameCounters[sessName];
+      const normalized = `${sessName} ${roundNum}회전`;
+      g.sessionLabel = normalized;
+      labels.push(normalized);
+    } else {
+      labels.push(raw || `${g.gameIndex}국`);
+    }
   });
 
   const playerSet = new Set<string>(playerList || []);
@@ -1757,7 +1783,7 @@ export function calculateAllPlayersRatingTrajectory(
     return {
       name,
       data,
-      color: PLAYER_COLORS[i % PLAYER_COLORS.length],
+      color: getPlayerColor(i),
       finalRating,
       played,
       deltas,

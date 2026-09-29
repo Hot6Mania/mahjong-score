@@ -290,8 +290,8 @@ function getRankLabelPos(stats: { p1: number; p2: number; p3: number; p4: number
 
   const rad = ((midPct / 100) * 360 - 90) * (Math.PI / 180);
   return {
-    x: Number((100 + 60 * Math.cos(rad)).toFixed(2)),
-    y: Number((100 + 60 * Math.sin(rad)).toFixed(2))
+    x: Number((100 + 70 * Math.cos(rad)).toFixed(2)),
+    y: Number((100 + 70 * Math.sin(rad)).toFixed(2))
   };
 }
 
@@ -445,6 +445,9 @@ interface SessionMemberWithRanks extends SessionMemberSummary {
   r4: number;
   top2Rate: number;
   avgUma: number;
+  startRating?: number;
+  endRating?: number;
+  sessionRatingDelta?: number;
 }
 const sessionMembersWithRanks = computed<SessionMemberWithRanks[]>(() => {
   if (!currentSessionDetail.value) return [];
@@ -453,6 +456,7 @@ const sessionMembersWithRanks = computed<SessionMemberWithRanks[]>(() => {
 
   return members.map(m => {
     let r1 = 0, r2 = 0, r3 = 0, r4 = 0;
+    const playerMatchedGames: { ratingBefore?: number; ratingAfter?: number; ratingDelta?: number }[] = [];
     games.forEach(g => {
       const p = g.players.find(player => player.name === m.name);
       if (p) {
@@ -460,10 +464,30 @@ const sessionMembersWithRanks = computed<SessionMemberWithRanks[]>(() => {
         else if (p.rank === 2) r2++;
         else if (p.rank === 3) r3++;
         else if (p.rank === 4) r4++;
+        playerMatchedGames.push({
+          ratingBefore: p.ratingBefore,
+          ratingAfter: p.ratingAfter,
+          ratingDelta: p.ratingDelta
+        });
       }
     });
     const top2Rate = m.totalGames > 0 ? parseFloat((((r1 + r2) / m.totalGames) * 100).toFixed(2)) : 0;
     const avgUma = m.totalGames > 0 ? parseFloat((m.totalUma / m.totalGames).toFixed(1)) : 0;
+
+    let startRating: number | undefined = undefined;
+    let endRating: number | undefined = undefined;
+    let sessionRatingDelta: number | undefined = undefined;
+
+    if (playerMatchedGames.length > 0) {
+      const firstG = playerMatchedGames[0];
+      const lastG = playerMatchedGames[playerMatchedGames.length - 1];
+      if (firstG.ratingBefore !== undefined && lastG.ratingAfter !== undefined) {
+        startRating = firstG.ratingBefore;
+        endRating = lastG.ratingAfter;
+        sessionRatingDelta = endRating - startRating;
+      }
+    }
+
     return {
       ...m,
       r1,
@@ -472,6 +496,9 @@ const sessionMembersWithRanks = computed<SessionMemberWithRanks[]>(() => {
       r4,
       top2Rate,
       avgUma,
+      startRating,
+      endRating,
+      sessionRatingDelta
     };
   });
 });
@@ -1275,24 +1302,265 @@ const modalPlayerRatingSummary = computed(() => {
   };
 });
 
+const codeforcesTierBandsPlugin = {
+  id: 'codeforcesTierBands',
+  beforeDraw(chart: any) {
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea || !scales.y) return;
+
+    const yScale = scales.y;
+    const { left, right, top, bottom } = chartArea;
+
+    // 티어 구간 정의 (Codeforces 가로 밴드 스타일)
+    // 혼천(1700+ 하늘), 작성(1600~1700 로즈/빨강), 작호(1500~1600 주황), 작걸(1400~1500 골드), 작사(1300~1400 초록), 초심(<1300 올리브)
+    const tiers = [
+      { name: '혼천', min: 1700, max: 2400, color: '#38BEDA' },
+      { name: '작성', min: 1600, max: 1700, color: '#CD4A62' },
+      { name: '작호', min: 1500, max: 1600, color: '#E88640' },
+      { name: '작걸', min: 1400, max: 1500, color: '#CA8A04' },
+      { name: '작사', min: 1300, max: 1400, color: '#21A73C' },
+      { name: '초심', min: 800,  max: 1300, color: '#98B324' }
+    ];
+
+    const dark = isDark.value;
+    const bandAlpha = dark ? 0.05 : 0.038;
+    const lineAlpha = dark ? 0.22 : 0.16;
+    const textAlpha = dark ? 0.50 : 0.40;
+
+    ctx.save();
+    for (const tier of tiers) {
+      const yMaxPixel = yScale.getPixelForValue(tier.max);
+      const yMinPixel = yScale.getPixelForValue(tier.min);
+
+      const yTop = Math.max(top, Math.min(bottom, yMaxPixel));
+      const yBottom = Math.min(bottom, Math.max(top, yMinPixel));
+
+      if (yBottom > yTop) {
+        // 부드러운 가로 배경 밴드
+        ctx.fillStyle = hexToRgba(tier.color, bandAlpha);
+        ctx.fillRect(left, yTop, right - left, yBottom - yTop);
+
+        // 티어 명칭 레이블 (우측 상단)
+        if (yBottom - yTop >= 16) {
+          ctx.font = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+          ctx.fillStyle = hexToRgba(tier.color, textAlpha);
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'top';
+          ctx.fillText(tier.name, right - 6, yTop + 3);
+        }
+      }
+
+      // 티어 경계선 (점선)
+      if (tier.min > 800) {
+        const boundaryY = yScale.getPixelForValue(tier.min);
+        if (boundaryY >= top && boundaryY <= bottom) {
+          ctx.beginPath();
+          ctx.setLineDash([4, 4]);
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = hexToRgba(tier.color, lineAlpha);
+          ctx.moveTo(left, boundaryY);
+          ctx.lineTo(right, boundaryY);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+  }
+};
+
+const modalSessionRegionsAndCrosshairPlugin = {
+  id: 'modalSessionRegionsAndCrosshair',
+  beforeDraw(chart: any) {
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea || !scales.x) return;
+
+    const xScale = scales.x;
+    const { top, bottom, right } = chartArea;
+    const hist = modalPlayerRatingHistory.value;
+    if (!hist || hist.length === 0) return;
+
+    // 회차별 세로 영역 그룹핑
+    interface Region {
+      name: string;
+      start: number;
+      end: number;
+    }
+    const regions: Region[] = [];
+
+    for (let i = 0; i < hist.length; i++) {
+      const raw = hist[i].sessionLabel || '';
+      const m = raw.match(/제\s*(\d+)\s*회/);
+      const sName = m ? `제${m[1]}회` : (raw.split(' ')[0] || '대국');
+      const chartIdx = i + 1;
+
+      if (!regions.length || regions[regions.length - 1].name !== sName) {
+        regions.push({ name: sName, start: chartIdx, end: chartIdx });
+      } else {
+        regions[regions.length - 1].end = chartIdx;
+      }
+    }
+
+    const dark = isDark.value;
+    ctx.save();
+
+    regions.forEach((reg, rIdx) => {
+      let xLeft: number;
+      if (reg.start === 1) {
+        xLeft = (xScale.getPixelForValue(0) + xScale.getPixelForValue(1)) / 2;
+      } else {
+        xLeft = (xScale.getPixelForValue(reg.start - 1) + xScale.getPixelForValue(reg.start)) / 2;
+      }
+
+      let xRight: number;
+      if (reg.end >= hist.length) {
+        xRight = right;
+      } else {
+        xRight = (xScale.getPixelForValue(reg.end) + xScale.getPixelForValue(reg.end + 1)) / 2;
+      }
+
+      // 회차별 교차 세로 배경 밴드
+      if (rIdx % 2 === 1) {
+        ctx.fillStyle = dark ? 'rgba(255, 255, 255, 0.025)' : 'rgba(0, 0, 0, 0.02)';
+        ctx.fillRect(xLeft, top, xRight - xLeft, bottom - top);
+      }
+
+      // 회차 시작 세로 구분선 (점선)
+      ctx.beginPath();
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = dark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.12)';
+      ctx.moveTo(xLeft, top);
+      ctx.lineTo(xLeft, bottom);
+      ctx.stroke();
+    });
+
+    ctx.restore();
+  },
+  afterDraw(chart: any) {
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea || !scales.x) return;
+
+    const xScale = scales.x;
+    const { top, bottom, right } = chartArea;
+    const hist = modalPlayerRatingHistory.value;
+    if (!hist || hist.length === 0) return;
+
+    // 1. 회차 헤더 텍스트 렌더링 (차트 상단)
+    interface Region {
+      name: string;
+      start: number;
+      end: number;
+    }
+    const regions: Region[] = [];
+    for (let i = 0; i < hist.length; i++) {
+      const raw = hist[i].sessionLabel || '';
+      const m = raw.match(/제\s*(\d+)\s*회/);
+      const sName = m ? `제${m[1]}회` : (raw.split(' ')[0] || '대국');
+      const chartIdx = i + 1;
+
+      if (!regions.length || regions[regions.length - 1].name !== sName) {
+        regions.push({ name: sName, start: chartIdx, end: chartIdx });
+      } else {
+        regions[regions.length - 1].end = chartIdx;
+      }
+    }
+
+    const dark = isDark.value;
+    ctx.save();
+
+    regions.forEach((reg) => {
+      let xLeft: number;
+      if (reg.start === 1) {
+        xLeft = (xScale.getPixelForValue(0) + xScale.getPixelForValue(1)) / 2;
+      } else {
+        xLeft = (xScale.getPixelForValue(reg.start - 1) + xScale.getPixelForValue(reg.start)) / 2;
+      }
+      let xRight: number;
+      if (reg.end >= hist.length) {
+        xRight = right;
+      } else {
+        xRight = (xScale.getPixelForValue(reg.end) + xScale.getPixelForValue(reg.end + 1)) / 2;
+      }
+
+      const colWidth = xRight - xLeft;
+      const midX = (xLeft + xRight) / 2;
+
+      if (colWidth >= 24) {
+        ctx.font = '700 10.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+
+        const textMetrics = ctx.measureText(reg.name);
+        const badgeW = textMetrics.width + 10;
+        const badgeH = 15;
+        const badgeX = midX - badgeW / 2;
+        const badgeY = top - 18;
+
+        if (badgeY >= 0) {
+          ctx.fillStyle = dark ? 'rgba(39, 39, 42, 0.9)' : 'rgba(241, 245, 249, 0.92)';
+          ctx.beginPath();
+          if (typeof ctx.roundRect === 'function') {
+            ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 4);
+          } else {
+            ctx.rect(badgeX, badgeY, badgeW, badgeH);
+          }
+          ctx.fill();
+
+          ctx.strokeStyle = dark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          ctx.fillStyle = dark ? '#93c5fd' : '#2563eb';
+          ctx.fillText(reg.name, midX, badgeY + 2);
+        }
+      }
+    });
+
+    // 2. 활성 마우스 호버 세로 트래킹 크로스헤어 라인
+    const active = chart.tooltip?.getActiveElements?.();
+    if (active && active.length > 0) {
+      const activeX = active[0].element.x;
+      ctx.beginPath();
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = dark ? 'rgba(255, 255, 255, 0.45)' : 'rgba(15, 23, 42, 0.4)';
+      ctx.moveTo(activeX, top);
+      ctx.lineTo(activeX, bottom);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+};
+
+const ratingChartPlugins = computed(() => [codeforcesTierBandsPlugin]);
+const modalRatingChartPlugins = computed(() => [codeforcesTierBandsPlugin, modalSessionRegionsAndCrosshairPlugin]);
+
 const modalPlayerRatingChartData = computed(() => {
   const hist = modalPlayerRatingHistory.value;
   if (!hist || hist.length === 0) {
     return { labels: [], datasets: [] };
   }
+  const ratingValues = [1320, ...hist.map(h => h.ordinal)];
+  const pointColors = ratingValues.map(r => getRatingColor(r));
+
   return {
     labels: ['시작', ...hist.map((_, i) => `${i + 1}국`)],
     datasets: [{
       label: selectedPlayer.value?.name || '',
-      data: [1320, ...hist.map(h => h.ordinal)],
+      data: ratingValues,
       deltas: [null, ...hist.map(h => h.delta)],
-      borderColor: '#3b82f6',
-      backgroundColor: 'rgba(59, 130, 246, 0.12)',
-      borderWidth: 2.4,
-      pointRadius: 3.5,
-      pointHoverRadius: 6,
+      historyRecords: [null, ...hist],
+      borderColor: isDark.value ? '#60a5fa' : '#2563eb',
+      backgroundColor: 'transparent',
+      borderWidth: 2.2,
+      pointRadius: 4,
+      pointHoverRadius: 6.5,
+      pointBackgroundColor: pointColors,
+      pointBorderColor: isDark.value ? '#18181b' : '#ffffff',
+      pointBorderWidth: 1.5,
       tension: 0.15,
-      fill: true
+      fill: false
     }]
   };
 });
@@ -1300,29 +1568,69 @@ const modalPlayerRatingChartData = computed(() => {
 const modalPlayerRatingChartOptions = computed<ChartOptions<'line'>>(() => ({
   responsive: true,
   maintainAspectRatio: false,
+  layout: {
+    padding: {
+      top: 22,
+      right: 12,
+      left: 6,
+      bottom: 6
+    }
+  },
+  interaction: {
+    mode: 'index',
+    intersect: false,
+    axis: 'x'
+  },
   plugins: {
     legend: { display: false },
     tooltip: {
+      mode: 'index',
+      intersect: false,
       callbacks: {
+        title: (items) => {
+          if (!items.length) return '';
+          const idx = items[0].dataIndex;
+          if (idx === 0) return '초기 레이팅 (시작)';
+          const hist = modalPlayerRatingHistory.value;
+          const rec = hist[idx - 1];
+          const sess = rec?.sessionLabel || '';
+          return `${sess} (통산 ${idx}국)`;
+        },
         label: (context) => {
           const val = context.parsed.y;
           const dataset = context.dataset as any;
-          const delta = dataset.deltas?.[context.dataIndex];
-          if (context.dataIndex === 0) return `시작: R${val}`;
+          const idx = context.dataIndex;
+          if (idx === 0) return `시작: R${val}`;
+          const delta = dataset.deltas?.[idx];
           const dStr = delta !== null && delta !== undefined ? ` (${delta >= 0 ? '+' : ''}${delta})` : '';
-          return `레이팅(R): R${val}${dStr}`;
+          const rec = dataset.historyRecords?.[idx];
+          const rStr = rec?.rank ? ` · ${rec.rank}위` : '';
+          return `레이팅: R${val}${dStr}${rStr}`;
         }
       }
     }
   },
   scales: {
     x: {
-      grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
-      ticks: { color: isDark.value ? '#94a3b8' : '#64748b' }
+      grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' },
+      ticks: {
+        color: isDark.value ? '#94a3b8' : '#64748b',
+        font: { family: "'Noto Serif KR', serif", size: 10.5 },
+        maxRotation: 0,
+        autoSkip: true,
+        maxTicksLimit: 14
+      }
     },
     y: {
-      grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' },
-      ticks: { color: isDark.value ? '#94a3b8' : '#64748b' }
+      suggestedMin: 1250,
+      suggestedMax: 1650,
+      grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' },
+      ticks: {
+        font: { family: "'Noto Serif KR', serif", size: 11 },
+        color: isDark.value ? '#94a3b8' : '#64748b',
+        callback: (value) => `R${value}`,
+        stepSize: 50
+      }
     }
   }
 }));
@@ -1538,14 +1846,14 @@ const getRankClass = (rank: number) => {
         :class="{ active: activeTab === 'ranking' }" 
         @click="activeTab = 'ranking'"
       >
-        종합 랭킹 & 스탯
+        종합 랭킹
       </button>
       <button 
         class="tab-btn" 
         :class="{ active: activeTab === 'rating' }" 
         @click="activeTab = 'rating'"
       >
-        레이팅 & 추이
+        레이팅
       </button>
       <button 
         class="tab-btn" 
@@ -1588,7 +1896,17 @@ const getRankClass = (rank: number) => {
           <div class="podium-card silver" @click="openPlayerModal(podiumTop3[1], false)">
             <div class="podium-badge">2위</div>
             <div class="podium-name">{{ podiumTop3[1].name }}</div>
-            <div v-if="podiumTop3[1].rating" class="podium-rating-tag">R{{ podiumTop3[1].rating }}</div>
+            <div 
+              v-if="podiumTop3[1].rating" 
+              class="podium-rating-tag"
+              :style="{
+                color: getRatingColor(podiumTop3[1].rating),
+                backgroundColor: hexToRgba(getRatingColor(podiumTop3[1].rating), isDark ? 0.18 : 0.12),
+                borderColor: hexToRgba(getRatingColor(podiumTop3[1].rating), isDark ? 0.35 : 0.25)
+              }"
+            >
+              R{{ podiumTop3[1].rating }}
+            </div>
             <div class="podium-uma" :class="podiumTop3[1].totalUma >= 0 ? 'pos' : 'neg'">
               {{ podiumTop3[1].totalUma > 0 ? '+' : '' }}{{ podiumTop3[1].totalUma }}pt
             </div>
@@ -1602,7 +1920,17 @@ const getRankClass = (rank: number) => {
           <div class="podium-card gold" @click="openPlayerModal(podiumTop3[0], false)">
             <div class="podium-badge gold-badge">1위</div>
             <div class="podium-name">{{ podiumTop3[0].name }}</div>
-            <div v-if="podiumTop3[0].rating" class="podium-rating-tag">R{{ podiumTop3[0].rating }}</div>
+            <div 
+              v-if="podiumTop3[0].rating" 
+              class="podium-rating-tag"
+              :style="{
+                color: getRatingColor(podiumTop3[0].rating),
+                backgroundColor: hexToRgba(getRatingColor(podiumTop3[0].rating), isDark ? 0.18 : 0.12),
+                borderColor: hexToRgba(getRatingColor(podiumTop3[0].rating), isDark ? 0.35 : 0.25)
+              }"
+            >
+              R{{ podiumTop3[0].rating }}
+            </div>
             <div class="podium-uma" :class="podiumTop3[0].totalUma >= 0 ? 'pos' : 'neg'">
               {{ podiumTop3[0].totalUma > 0 ? '+' : '' }}{{ podiumTop3[0].totalUma }}pt
             </div>
@@ -1616,7 +1944,17 @@ const getRankClass = (rank: number) => {
           <div class="podium-card bronze" @click="openPlayerModal(podiumTop3[2], false)">
             <div class="podium-badge">3위</div>
             <div class="podium-name">{{ podiumTop3[2].name }}</div>
-            <div v-if="podiumTop3[2].rating" class="podium-rating-tag">R{{ podiumTop3[2].rating }}</div>
+            <div 
+              v-if="podiumTop3[2].rating" 
+              class="podium-rating-tag"
+              :style="{
+                color: getRatingColor(podiumTop3[2].rating),
+                backgroundColor: hexToRgba(getRatingColor(podiumTop3[2].rating), isDark ? 0.18 : 0.12),
+                borderColor: hexToRgba(getRatingColor(podiumTop3[2].rating), isDark ? 0.35 : 0.25)
+              }"
+            >
+              R{{ podiumTop3[2].rating }}
+            </div>
             <div class="podium-uma" :class="podiumTop3[2].totalUma >= 0 ? 'pos' : 'neg'">
               {{ podiumTop3[2].totalUma > 0 ? '+' : '' }}{{ podiumTop3[2].totalUma }}pt
             </div>
@@ -1853,6 +2191,7 @@ const getRankClass = (rank: number) => {
                 ref="ratingEmbeddedChartRef" 
                 :data="ratingChartData" 
                 :options="ratingChartOptions" 
+                :plugins="ratingChartPlugins"
               />
             </div>
             <div v-else class="rating-chart-empty">
@@ -2142,8 +2481,22 @@ const getRankClass = (rank: number) => {
                       <span class="sm-badge r4" title="4위">4등 {{ m.r4 }}</span>
                     </div>
                   </div>
-                  <div class="sm-uma" :class="m.totalUma >= 0 ? 'pos' : 'neg'">
-                    {{ m.totalUma > 0 ? '+' : '' }}{{ m.totalUma }}pt
+                  <div class="sm-points-col">
+                    <div class="sm-uma" :class="m.totalUma >= 0 ? 'pos' : 'neg'">
+                      {{ m.totalUma > 0 ? '+' : '' }}{{ m.totalUma }}pt
+                    </div>
+                    <div 
+                      v-if="m.sessionRatingDelta !== undefined" 
+                      class="sm-rating-delta"
+                      :title="m.startRating !== undefined && m.endRating !== undefined ? `회차 시작 R${m.startRating} → 종료 R${m.endRating} (${m.sessionRatingDelta >= 0 ? '+' : ''}${m.sessionRatingDelta})` : undefined"
+                    >
+                      <span class="sm-rating-val" v-if="m.endRating !== undefined" :style="{ color: getRatingColor(m.endRating) }">
+                        R{{ m.endRating }}
+                      </span>
+                      <span class="sm-rdelta" :class="m.sessionRatingDelta >= 0 ? 'pos' : 'neg'">
+                        ({{ m.sessionRatingDelta >= 0 ? '+' : '' }}{{ m.sessionRatingDelta }})
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2696,21 +3049,21 @@ const getRankClass = (rank: number) => {
                               <circle 
                                 cx="100" 
                                 cy="100" 
-                                r="60" 
+                                r="70" 
                                 fill="none" 
                                 stroke="var(--border-color, rgba(0,0,0,0.08))" 
-                                stroke-width="36" 
+                                stroke-width="24" 
                               />
                               <g transform="rotate(-90 100 100)">
                                 <!-- 4위 (빨강) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p4 > 0"
-                                  cx="100" cy="100" r="60" 
+                                  cx="100" cy="100" r="70" 
                                   fill="none" 
                                   stroke="#ef4444" 
-                                  stroke-width="36" 
-                                  :stroke-dasharray="`${(currentSessionRankStats.p4 / 100) * 376.9911} 376.9911`"
-                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2 + currentSessionRankStats.p3) / 100) * 376.9911}`"
+                                  stroke-width="24" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p4 / 100) * 439.823} 439.823`"
+                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2 + currentSessionRankStats.p3) / 100) * 439.823}`"
                                   class="donut_segment"
                                   :class="{ active: hoveredRank === 4 }"
                                   @mouseenter="hoveredRank = 4"
@@ -2719,12 +3072,12 @@ const getRankClass = (rank: number) => {
                                 <!-- 3위 (노랑/앰버) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p3 > 0"
-                                  cx="100" cy="100" r="60" 
+                                  cx="100" cy="100" r="70" 
                                   fill="none" 
                                   stroke="#f59e0b" 
-                                  stroke-width="36" 
-                                  :stroke-dasharray="`${(currentSessionRankStats.p3 / 100) * 376.9911} 376.9911`"
-                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2) / 100) * 376.9911}`"
+                                  stroke-width="24" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p3 / 100) * 439.823} 439.823`"
+                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2) / 100) * 439.823}`"
                                   class="donut_segment"
                                   :class="{ active: hoveredRank === 3 }"
                                   @mouseenter="hoveredRank = 3"
@@ -2733,12 +3086,12 @@ const getRankClass = (rank: number) => {
                                 <!-- 2위 (청록) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p2 > 0"
-                                  cx="100" cy="100" r="60" 
+                                  cx="100" cy="100" r="70" 
                                   fill="none" 
                                   stroke="#06b6d4" 
-                                  stroke-width="36" 
-                                  :stroke-dasharray="`${(currentSessionRankStats.p2 / 100) * 376.9911} 376.9911`"
-                                  :stroke-dashoffset="`-${(currentSessionRankStats.p1 / 100) * 376.9911}`"
+                                  stroke-width="24" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p2 / 100) * 439.823} 439.823`"
+                                  :stroke-dashoffset="`-${(currentSessionRankStats.p1 / 100) * 439.823}`"
                                   class="donut_segment"
                                   :class="{ active: hoveredRank === 2 }"
                                   @mouseenter="hoveredRank = 2"
@@ -2747,11 +3100,11 @@ const getRankClass = (rank: number) => {
                                 <!-- 1위 (초록) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p1 > 0"
-                                  cx="100" cy="100" r="60" 
+                                  cx="100" cy="100" r="70" 
                                   fill="none" 
                                   stroke="#10b981" 
-                                  stroke-width="36" 
-                                  :stroke-dasharray="`${(currentSessionRankStats.p1 / 100) * 376.9911} 376.9911`"
+                                  stroke-width="24" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p1 / 100) * 439.823} 439.823`"
                                   stroke-dashoffset="0"
                                   class="donut_segment"
                                   :class="{ active: hoveredRank === 1 }"
@@ -2803,9 +3156,9 @@ const getRankClass = (rank: number) => {
                                 </text>
                               </g>
                               <!-- 중앙 텍스트 -->
-                              <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
-                              <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ currentSessionRankStats.totalGames }}전</text>
-                              <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ (currentSessionPlayerStats.avgRank ?? 0).toFixed(3) }}위</text>
+                              <text x="100" y="86" text-anchor="middle" class="chart_center_label">총 대국</text>
+                              <text x="100" y="104" text-anchor="middle" class="chart_center_value">{{ currentSessionRankStats.totalGames }}전</text>
+                              <text x="100" y="122" text-anchor="middle" class="chart_center_sub">평균 {{ (currentSessionPlayerStats.avgRank ?? 0).toFixed(3) }}위</text>
                             </svg>
                           </div>
 
@@ -3289,22 +3642,22 @@ const getRankClass = (rank: number) => {
                     <circle 
                       cx="100" 
                       cy="100" 
-                      r="60" 
+                      r="70" 
                       fill="none" 
                       stroke="var(--border-color, rgba(0,0,0,0.08))" 
-                      stroke-width="36"
+                      stroke-width="24"
                     />
                     <!-- 조각 링 -->
                     <g transform="rotate(-90 100 100)">
                       <!-- 4위 (빨강) -->
                       <circle 
                         v-if="modalRankStats.p4 > 0"
-                        cx="100" cy="100" r="60" 
+                        cx="100" cy="100" r="70" 
                         fill="none" 
                         stroke="#ef4444" 
-                        stroke-width="36" 
-                        :stroke-dasharray="`${(modalRankStats.p4 / 100) * 376.9911} 376.9911`"
-                        :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2 + modalRankStats.p3) / 100) * 376.9911}`"
+                        stroke-width="24" 
+                        :stroke-dasharray="`${(modalRankStats.p4 / 100) * 439.823} 439.823`"
+                        :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2 + modalRankStats.p3) / 100) * 439.823}`"
                         class="donut_segment"
                         :class="{ active: hoveredRank === 4 }"
                         @mouseenter="hoveredRank = 4"
@@ -3313,12 +3666,12 @@ const getRankClass = (rank: number) => {
                       <!-- 3위 (노랑/앰버) -->
                       <circle 
                         v-if="modalRankStats.p3 > 0"
-                        cx="100" cy="100" r="60" 
+                        cx="100" cy="100" r="70" 
                         fill="none" 
                         stroke="#f59e0b" 
-                        stroke-width="36" 
-                        :stroke-dasharray="`${(modalRankStats.p3 / 100) * 376.9911} 376.9911`"
-                        :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2) / 100) * 376.9911}`"
+                        stroke-width="24" 
+                        :stroke-dasharray="`${(modalRankStats.p3 / 100) * 439.823} 439.823`"
+                        :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2) / 100) * 439.823}`"
                         class="donut_segment"
                         :class="{ active: hoveredRank === 3 }"
                         @mouseenter="hoveredRank = 3"
@@ -3327,12 +3680,12 @@ const getRankClass = (rank: number) => {
                       <!-- 2위 (청록) -->
                       <circle 
                         v-if="modalRankStats.p2 > 0"
-                        cx="100" cy="100" r="60" 
+                        cx="100" cy="100" r="70" 
                         fill="none" 
                         stroke="#06b6d4" 
-                        stroke-width="36" 
-                        :stroke-dasharray="`${(modalRankStats.p2 / 100) * 376.9911} 376.9911`"
-                        :stroke-dashoffset="`-${(modalRankStats.p1 / 100) * 376.9911}`"
+                        stroke-width="24" 
+                        :stroke-dasharray="`${(modalRankStats.p2 / 100) * 439.823} 439.823`"
+                        :stroke-dashoffset="`-${(modalRankStats.p1 / 100) * 439.823}`"
                         class="donut_segment"
                         :class="{ active: hoveredRank === 2 }"
                         @mouseenter="hoveredRank = 2"
@@ -3341,11 +3694,11 @@ const getRankClass = (rank: number) => {
                       <!-- 1위 (초록) -->
                       <circle 
                         v-if="modalRankStats.p1 > 0"
-                        cx="100" cy="100" r="60" 
+                        cx="100" cy="100" r="70" 
                         fill="none" 
                         stroke="#10b981" 
-                        stroke-width="36" 
-                        :stroke-dasharray="`${(modalRankStats.p1 / 100) * 376.9911} 376.9911`"
+                        stroke-width="24" 
+                        :stroke-dasharray="`${(modalRankStats.p1 / 100) * 439.823} 439.823`"
                         stroke-dashoffset="0"
                         class="donut_segment"
                         :class="{ active: hoveredRank === 1 }"
@@ -3397,9 +3750,9 @@ const getRankClass = (rank: number) => {
                       </text>
                     </g>
                     <!-- 중앙 텍스트 -->
-                    <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
-                    <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ modalRankStats.totalGames }}전</text>
-                    <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ (selectedPlayer?.avgRank ?? 0).toFixed(3) }}위</text>
+                    <text x="100" y="86" text-anchor="middle" class="chart_center_label">총 대국</text>
+                    <text x="100" y="104" text-anchor="middle" class="chart_center_value">{{ modalRankStats.totalGames }}전</text>
+                    <text x="100" y="122" text-anchor="middle" class="chart_center_sub">평균 {{ (selectedPlayer?.avgRank ?? 0).toFixed(3) }}위</text>
                   </svg>
                 </div>
 
@@ -3502,8 +3855,12 @@ const getRankClass = (rank: number) => {
               </div>
 
               <div class="rating_chart_container">
-                <div v-if="modalPlayerRatingChartData.labels.length > 1" style="height: 220px; position: relative;">
-                  <LineChart :data="modalPlayerRatingChartData" :options="modalPlayerRatingChartOptions" />
+                <div v-if="modalPlayerRatingChartData.labels.length > 1" style="height: 280px; position: relative;">
+                  <LineChart 
+                    :data="modalPlayerRatingChartData" 
+                    :options="modalPlayerRatingChartOptions" 
+                    :plugins="modalRatingChartPlugins"
+                  />
                 </div>
                 <div v-else class="no_rating_data">
                   기록된 레이팅 변동 이력이 없습니다. (기본 R1320)
@@ -3751,6 +4108,7 @@ const getRankClass = (rank: number) => {
                 ref="ratingModalChartRef" 
                 :data="ratingChartData" 
                 :options="ratingChartOptions" 
+                :plugins="ratingChartPlugins"
               />
             </div>
             <div v-else class="rating-chart-empty">
@@ -4295,14 +4653,8 @@ html.dark .rating-badge {
   border-radius: 9999px;
   font-size: 11px;
   font-weight: 800;
-  background: rgba(99, 102, 241, 0.15);
-  color: #4f46e5;
-  border: 1px solid rgba(99, 102, 241, 0.3);
-}
-html.dark .podium-rating-tag {
-  background: rgba(129, 140, 248, 0.2);
-  color: #c7d2fe;
-  border-color: rgba(129, 140, 248, 0.4);
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
 }
 .rating-delta {
   font-size: 11px;
@@ -5308,7 +5660,7 @@ html.dark .rank_chart_section {
   cursor: pointer;
 }
 .donut_segment.active {
-  stroke-width: 40;
+  stroke-width: 28;
   filter: brightness(1.1);
 }
 .donut_segment_text {
@@ -6183,13 +6535,85 @@ html.dark .formula-latex {
 .rating_summary_grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 @media (max-width: 600px) {
   .rating_summary_grid {
     grid-template-columns: repeat(3, 1fr);
   }
+}
+
+.summary_stat_box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 10px 8px;
+  text-align: center;
+  gap: 4px;
+}
+html.dark .summary_stat_box {
+  background-color: #27272a;
+  border-color: #3f3f46;
+}
+.summary_label {
+  font-size: 11.5px;
+  color: var(--text-dimmed, #64748b);
+  font-weight: 600;
+  white-space: nowrap;
+}
+html.dark .summary_label {
+  color: #94a3b8;
+}
+.summary_value {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-color, #0f172a);
+  font-family: inherit;
+  line-height: 1.2;
+}
+html.dark .summary_value {
+  color: #f4f4f5;
+}
+
+.sm-points-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  text-align: right;
+}
+.sm-rating-delta {
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.sm-rating-val {
+  font-weight: 800;
+}
+.sm-rdelta {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.sm-rdelta.pos {
+  color: #16a34a;
+}
+html.dark .sm-rdelta.pos {
+  color: #4ade80;
+}
+.sm-rdelta.neg {
+  color: #dc2626;
+}
+html.dark .sm-rdelta.neg {
+  color: #f87171;
 }
 
 .rating_chart_container {

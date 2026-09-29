@@ -214,8 +214,8 @@ function getRankLabelPos(stats: { p1: number; p2: number; p3: number; p4: number
 
   const rad = ((midPct / 100) * 360 - 90) * (Math.PI / 180)
   return {
-    x: Number((100 + 60 * Math.cos(rad)).toFixed(2)),
-    y: Number((100 + 60 * Math.sin(rad)).toFixed(2))
+    x: Number((100 + 70 * Math.cos(rad)).toFixed(2)),
+    y: Number((100 + 70 * Math.sin(rad)).toFixed(2))
   }
 }
 
@@ -1177,10 +1177,10 @@ const emptyScopeMessage = computed(() => {
               <circle 
                 cx="100" 
                 cy="100" 
-                r="60" 
+                r="70" 
                 fill="none" 
                 stroke="var(--border-color, rgba(255,255,255,0.1))" 
-                stroke-width="36"
+                stroke-width="24"
               />
               
               <!-- 원형 조각들 (12시 방향 시작 회전) -->
@@ -1188,12 +1188,12 @@ const emptyScopeMessage = computed(() => {
                 <!-- 4위 (빨강: Player.vue 등수 색상) -->
                 <circle 
                   v-if="rankStats.p4 > 0"
-                  cx="100" cy="100" r="60" 
+                  cx="100" cy="100" r="70" 
                   fill="none" 
                   stroke="var(--color-rank-4)" 
-                  stroke-width="36" 
-                  :stroke-dasharray="`${(rankStats.p4 / 100) * 376.9911} 376.9911`"
-                  :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2 + rankStats.p3) / 100) * 376.9911}`"
+                  stroke-width="24" 
+                  :stroke-dasharray="`${(rankStats.p4 / 100) * 439.823} 439.823`"
+                  :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2 + rankStats.p3) / 100) * 439.823}`"
                   class="donut_segment"
                   :class="{ active: hoveredRank === 4 }"
                   @mouseenter="hoveredRank = 4"
@@ -1202,12 +1202,12 @@ const emptyScopeMessage = computed(() => {
                 <!-- 3위 (노랑/앰버: Player.vue 등수 색상) -->
                 <circle 
                   v-if="rankStats.p3 > 0"
-                  cx="100" cy="100" r="60" 
+                  cx="100" cy="100" r="70" 
                   fill="none" 
                   stroke="var(--color-rank-3)" 
-                  stroke-width="36" 
-                  :stroke-dasharray="`${(rankStats.p3 / 100) * 376.9911} 376.9911`"
-                  :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2) / 100) * 376.9911}`"
+                  stroke-width="24" 
+                  :stroke-dasharray="`${(rankStats.p3 / 100) * 439.823} 439.823`"
+                  :stroke-dashoffset="`-${((rankStats.p1 + rankStats.p2) / 100) * 439.823}`"
                   class="donut_segment"
                   :class="{ active: hoveredRank === 3 }"
                   @mouseenter="hoveredRank = 3"
@@ -1216,12 +1216,12 @@ const emptyScopeMessage = computed(() => {
                 <!-- 2위 (청록: Player.vue 등수 색상) -->
                 <circle 
                   v-if="rankStats.p2 > 0"
-                  cx="100" cy="100" r="60" 
+                  cx="100" cy="100" r="70" 
                   fill="none" 
                   stroke="var(--color-rank-2)" 
-                  stroke-width="36" 
-                  :stroke-dasharray="`${(rankStats.p2 / 100) * 376.9911} 376.9911`"
-                  :stroke-dashoffset="`-${(rankStats.p1 / 100) * 376.9911}`"
+                  stroke-width="24" 
+                  :stroke-dasharray="`${(rankStats.p2 / 100) * 439.823} 439.823`"
+                  :stroke-dashoffset="`-${(rankStats.p1 / 100) * 439.823}`"
                   class="donut_segment"
                   :class="{ active: hoveredRank === 2 }"
                   @mouseenter="hoveredRank = 2"
@@ -1230,11 +1230,11 @@ const emptyScopeMessage = computed(() => {
                 <!-- 1위 (초록: Player.vue 등수 색상) -->
                 <circle 
                   v-if="rankStats.p1 > 0"
-                  cx="100" cy="100" r="60" 
+                  cx="100" cy="100" r="70" 
                   fill="none" 
                   stroke="var(--color-rank-1)" 
-                  stroke-width="36" 
-                  :stroke-dasharray="`${(rankStats.p1 / 100) * 376.9911} 376.9911`"
+                  stroke-width="24" 
+                  :stroke-dasharray="`${(rankStats.p1 / 100) * 439.823} 439.823`"
                   stroke-dashoffset="0"
                   class="donut_segment"
                   :class="{ active: hoveredRank === 1 }"
@@ -1288,9 +1288,9 @@ const emptyScopeMessage = computed(() => {
               </g>
 
               <!-- 차트 중앙 레이블 -->
-              <text x="100" y="90" text-anchor="middle" class="chart_center_label">총 대국</text>
-              <text x="100" y="114" text-anchor="middle" class="chart_center_value">{{ rankStats.totalGames }}전</text>
-              <text x="100" y="132" text-anchor="middle" class="chart_center_sub">평균 {{ rankStats.avgRank }}</text>
+              <text x="100" y="86" text-anchor="middle" class="chart_center_label">총 대국</text>
+              <text x="100" y="104" text-anchor="middle" class="chart_center_value">{{ rankStats.totalGames }}전</text>
+              <text x="100" y="122" text-anchor="middle" class="chart_center_sub">평균 {{ rankStats.avgRank }}</text>
             </svg>
           </div>
 
@@ -1730,7 +1730,7 @@ html:not(.dark) .tab_btn.active {
 }
 
 .donut_segment.active {
-  stroke-width: 40;
+  stroke-width: 28;
   filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.4));
 }
 
