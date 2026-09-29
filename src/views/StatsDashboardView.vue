@@ -1325,7 +1325,6 @@ const codeforcesTierBandsPlugin = {
     const dark = isDark.value;
     const bandAlpha = dark ? 0.05 : 0.038;
     const lineAlpha = dark ? 0.22 : 0.16;
-    const textAlpha = dark ? 0.50 : 0.40;
 
     ctx.save();
     for (const tier of tiers) {
@@ -1339,15 +1338,6 @@ const codeforcesTierBandsPlugin = {
         // 부드러운 가로 배경 밴드
         ctx.fillStyle = hexToRgba(tier.color, bandAlpha);
         ctx.fillRect(left, yTop, right - left, yBottom - yTop);
-
-        // 티어 명칭 레이블 (우측 상단)
-        if (yBottom - yTop >= 16) {
-          ctx.font = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-          ctx.fillStyle = hexToRgba(tier.color, textAlpha);
-          ctx.textAlign = 'right';
-          ctx.textBaseline = 'top';
-          ctx.fillText(tier.name, right - 6, yTop + 3);
-        }
       }
 
       // 티어 경계선 (점선)
@@ -1542,7 +1532,8 @@ const modalPlayerRatingChartData = computed(() => {
     return { labels: [], datasets: [] };
   }
   const ratingValues = [1320, ...hist.map(h => h.ordinal)];
-  const pointColors = ratingValues.map(r => getRatingColor(r));
+  const pointColors = ratingValues.map(r => hexToRgba(getRatingColor(r), isDark.value ? 0.65 : 0.58));
+  const pointHoverColors = ratingValues.map(r => getRatingColor(r));
 
   return {
     labels: ['시작', ...hist.map((_, i) => `${i + 1}국`)],
@@ -1555,10 +1546,13 @@ const modalPlayerRatingChartData = computed(() => {
       backgroundColor: 'transparent',
       borderWidth: 2.2,
       pointRadius: 4,
-      pointHoverRadius: 6.5,
+      pointHoverRadius: 7,
       pointBackgroundColor: pointColors,
-      pointBorderColor: isDark.value ? '#18181b' : '#ffffff',
+      pointBorderColor: isDark.value ? 'rgba(24, 24, 27, 0.7)' : 'rgba(255, 255, 255, 0.85)',
       pointBorderWidth: 1.5,
+      pointHoverBackgroundColor: pointHoverColors,
+      pointHoverBorderColor: isDark.value ? '#18181b' : '#ffffff',
+      pointHoverBorderWidth: 2,
       tension: 0.15,
       fill: false
     }]
