@@ -993,16 +993,18 @@ watch(isRatingTimelineModalOpen, (isOpen) => {
 });
 
 // 수식 KaTeX 렌더러
-const renderKatex = (latex: string) => {
+const renderKatex = (latex: string, displayMode = true) => {
   try {
     return katex.renderToString(latex, {
-      displayMode: true,
+      displayMode,
       throwOnError: false
     });
   } catch (e) {
     return latex;
   }
 };
+
+const renderKatexInline = (latex: string) => renderKatex(latex, false);
 
 // 줌 배율 초기화
 const resetRatingChartZoom = () => {
@@ -2291,6 +2293,41 @@ const getRankClass = (rank: number) => {
             </div>
           </div>
 
+          <!-- 레이팅 완충 및 자연 수렴 원리 안내 카드 -->
+          <div class="rating-buffer-callout">
+            <div class="rbc-header">
+              <span class="rbc-icon">💡</span>
+              <h3 class="rbc-title">왜 시작 레이팅은 1500(μ₀)이 아니라 1320(R₀)으로 표기되나요?</h3>
+            </div>
+            <div class="rbc-body">
+              <div class="rbc-step">
+                <div class="rbc-step-header">
+                  <span class="rbc-step-badge">원리 1</span>
+                  <span class="rbc-step-title">초반 랭킹 과대평가(거품) 방지 완충 장치</span>
+                </div>
+                <p>
+                  시스템 내부에서 모든 참가자의 잠재 실력 기댓값은 기준점인 <span v-html="renderKatexInline('\\mu_0 = 1500')"></span>에서 출발합니다. 
+                  그러나 신규 참가자가 초반 1~2판 우연한 행운으로 상위권을 독점하는 과대평가를 방지하기 위해, 
+                  초기 불확실도(<span v-html="renderKatexInline('\\sigma_0 = 120')"></span>)의 1.5배인 <strong>180점의 완충 버퍼(<span v-html="renderKatexInline('1.5 \\times \\sigma_0')"></span>)를 차감</strong>하여 공식 표기 레이팅을 <span v-html="renderKatexInline('R_0 = 1320')"></span>으로 시작합니다.
+                </p>
+              </div>
+              <div class="rbc-step">
+                <div class="rbc-step-header">
+                  <span class="rbc-step-badge">원리 2</span>
+                  <span class="rbc-step-title">대국 수(시행) 누적에 따른 1320과 1500의 갭 자연 축소(수렴)</span>
+                </div>
+                <p>
+                  대국을 거듭할수록 시스템은 선수의 실력을 점점 더 신뢰하게 되어 불확실도(<span v-html="renderKatexInline('\\sigma')"></span>)가 초기 120에서 <strong>40~50 수준으로 대폭 감소</strong>합니다. 
+                  이에 따라 차감 완충액(<span v-html="renderKatexInline('1.5 \\times \\sigma')"></span>) 역시 <strong>180점에서 60~75점 수준으로 축소</strong>됩니다.
+                </p>
+                <p class="rbc-highlight">
+                  즉, 선수가 2위권(우마 0pt)의 본전 성적을 유지하며 대국 수만 꾸준히 쌓더라도, 
+                  불확실성이 해소되는 것만으로 표기 레이팅(<span v-html="renderKatexInline('R')"></span>)은 1320에서 본래의 기준 실력치인 1500을 향해 <strong>자연 수렴(상승)</strong>하게 됩니다.
+                </p>
+              </div>
+            </div>
+          </div>
+
           <div class="param-table-container">
             <table class="param-table">
               <thead>
@@ -2302,23 +2339,25 @@ const getRankClass = (rank: number) => {
               </thead>
               <tbody>
                 <tr>
-                  <td><code v-html="renderKatex('\\mu_0')"></code></td>
-                  <td>1500</td>
-                  <td>초기 실력 기대값 기준점</td>
+                  <td><span class="param-math" v-html="renderKatexInline('\\mu_0')"></span></td>
+                  <td><strong>1500</strong></td>
+                  <td>초기 실력 기댓값 기준점 (모든 참가자의 본래 잠재 실력)</td>
                 </tr>
                 <tr>
-                  <td><code v-html="renderKatex('\\sigma_0')"></code></td>
-                  <td>120</td>
-                  <td>초기 불확실도 (대국 진행 시 신뢰도 증가로 점진적 감소)</td>
+                  <td><span class="param-math" v-html="renderKatexInline('\\sigma_0')"></span></td>
+                  <td><strong>120</strong></td>
+                  <td>초기 불확실도 (대국 시행이 거듭될수록 120에서 40~50으로 감소)</td>
                 </tr>
                 <tr>
-                  <td><code v-html="renderKatex('R_0')"></code></td>
-                  <td>1320</td>
-                  <td>시작 레이팅 (\mu_0 - 1.5 \times \sigma_0)</td>
+                  <td><span class="param-math" v-html="renderKatexInline('R_0')"></span></td>
+                  <td><strong>1320</strong></td>
+                  <td>
+                    시작 표기 레이팅 (<span v-html="renderKatexInline('R_0 = \\mu_0 - 1.5 \\times \\sigma_0 = 1500 - 180 = 1320')"></span>)
+                  </td>
                 </tr>
                 <tr>
-                  <td><code v-html="renderKatex('\\beta')"></code></td>
-                  <td>60</td>
+                  <td><span class="param-math" v-html="renderKatexInline('\\beta')"></span></td>
+                  <td><strong>60</strong></td>
                   <td>경기 내 환경 및 확률적 변동성을 감안한 스케일 완충 계수</td>
                 </tr>
               </tbody>
@@ -6516,6 +6555,97 @@ html.dark .formula-latex {
   background: rgba(37, 99, 235, 0.08);
   padding: 1px 5px;
   border-radius: 3px;
+}
+
+.param-math {
+  display: inline-flex;
+  align-items: center;
+  font-weight: bold;
+}
+
+/* 레이팅 완충 및 수렴 안내 콜아웃 */
+.rating-buffer-callout {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(37, 99, 235, 0.08) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+html.dark .rating-buffer-callout {
+  background: linear-gradient(135deg, rgba(30, 58, 138, 0.25) 0%, rgba(30, 41, 59, 0.4) 100%);
+  border-color: rgba(96, 165, 250, 0.25);
+}
+.rbc-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.rbc-icon {
+  font-size: 18px;
+}
+.rbc-title {
+  font-size: 14.5px;
+  font-weight: 800;
+  color: var(--text-color, #0f172a);
+  margin: 0;
+}
+.rbc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rbc-step {
+  background: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+html.dark .rbc-step {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.rbc-step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.rbc-step-badge {
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+html.dark .rbc-step-badge {
+  background: rgba(96, 165, 250, 0.2);
+  color: #93c5fd;
+}
+.rbc-step-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-color, #0f172a);
+}
+.rbc-step p {
+  font-size: 12.5px;
+  color: var(--text-dimmed, #475569);
+  line-height: 1.6;
+  margin: 0 0 6px 0;
+}
+.rbc-step p:last-child {
+  margin-bottom: 0;
+}
+html.dark .rbc-step p {
+  color: #cbd5e1;
+}
+.rbc-highlight {
+  font-weight: 600;
+  color: #1e40af !important;
+}
+html.dark .rbc-highlight {
+  color: #93c5fd !important;
 }
 
 /* 플레이어 모달 레이팅 탭 스타일 */
