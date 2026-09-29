@@ -15,7 +15,7 @@ import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 const router = useRouter()
 const route = useRoute()
 const isStatsRoute = computed(() => {
-  return route.path === '/stats' || route.path.startsWith('/stats') || route.path === '/dashboard';
+  return route.path === '/dashboard' || route.path.startsWith('/dashboard') || route.path === '/stats' || route.path.startsWith('/stats');
 })
 
 // 원클릭 대국 기록 + 동기화 상태 관리
@@ -3274,7 +3274,7 @@ const addBackupGameToCurrent = (game: any) => {
       @show-modal="showModal"
       @toggle-menu="isPanelMenuOpen = !isPanelMenuOpen"
       @close-menu="isPanelMenuOpen = false"
-      @open-dashboard="router.push('/stats')"
+      @open-dashboard="router.push('/dashboard')"
     />
   </main>
   <!-- modal 컴포넌트 생성 (자연스러운 페이드인 효과를 위해 Transition 적용) -->

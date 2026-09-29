@@ -8,10 +8,13 @@ const routes = [
     component: App,
   },
   {
-    path: '/stats',
-    name: 'stats',
-    alias: '/dashboard',
+    path: '/dashboard',
+    name: 'dashboard',
     component: App,
+  },
+  {
+    path: '/stats',
+    redirect: '/dashboard',
   },
   {
     path: '/:pathMatch(.*)*',
@@ -28,7 +31,8 @@ router.beforeEach((to, _from, next) => {
   // Canonical 태그 동적 업데이트
   const origin = window.location.origin;
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-  const canonicalUrl = to.path === '/stats' ? `${origin}${base}/stats` : `${origin}${base}/`;
+  const isDashboard = to.path === '/dashboard' || to.path === '/stats';
+  const canonicalUrl = isDashboard ? `${origin}${base}/dashboard` : `${origin}${base}/`;
   let link: HTMLLinkElement | null = document.querySelector("link[rel='canonical']");
   
   if (link) {

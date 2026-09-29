@@ -865,7 +865,7 @@ onMounted(() => {
 const copyDashboardLink = async () => {
   try {
     const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-    const url = `${window.location.origin}${base}/stats`;
+    const url = `${window.location.origin}${base}/dashboard`;
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(url);
     } else {

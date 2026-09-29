@@ -10,7 +10,8 @@ export default defineConfig({
     sitemap({
       hostname: process.env.VITE_SITE_URL || 'https://kimk-house.party',
       dynamicRoutes: [
-        '/'   // 메인
+        '/',
+        '/dashboard'
       ],
       exclude: ['/404'],
       outDir: 'dist',

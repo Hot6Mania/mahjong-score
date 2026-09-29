@@ -792,7 +792,7 @@ const emptyScopeMessage = computed(() => {
     </button>
     <button 
       class="scope_tab btn-dashboard-tab" 
-      @click="router.push('/stats')"
+      @click="router.push('/dashboard')"
       title="공개 통계 대시보드 바로가기"
     >
       📊 대시보드
