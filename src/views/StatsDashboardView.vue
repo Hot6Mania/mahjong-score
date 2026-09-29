@@ -93,6 +93,7 @@ const showToast = (msg: string) => {
 const allStats = ref<MemberStatItem[]>([]);
 const searchQuery = ref('');
 type SortKey =
+  | 'rating'
   | 'totalUma'
   | 'avgUma'
   | 'avgRank'
@@ -151,6 +152,14 @@ const compareRankDist = (a: MemberStatItem, b: MemberStatItem, primaryRank: 1 | 
 const filteredStats = computed(() => {
   // 1) 전체 리스트를 현재 정렬 기준에 따라 정렬
   const sorted = [...allStats.value].sort((a, b) => {
+    if (sortKey.value === 'rating') {
+      const rA = a.rating ?? 0;
+      const rB = b.rating ?? 0;
+      if (rA !== rB) {
+        return sortOrder.value === 'asc' ? rA - rB : rB - rA;
+      }
+      return sortOrder.value === 'asc' ? a.totalUma - b.totalUma : b.totalUma - a.totalUma;
+    }
     if (sortKey.value === 'rankDist' || sortKey.value === 'rank1Rate') {
       const diff = compareRankDist(a, b, 1);
       return sortOrder.value === 'desc' ? -diff : diff;
@@ -1122,6 +1131,7 @@ const getRankClass = (rank: number) => {
           <div class="podium-card silver" @click="openPlayerModal(podiumTop3[1], false)">
             <div class="podium-badge">2위</div>
             <div class="podium-name">{{ podiumTop3[1].name }}</div>
+            <div v-if="podiumTop3[1].rating" class="podium-rating-tag">R{{ podiumTop3[1].rating }}</div>
             <div class="podium-uma" :class="podiumTop3[1].totalUma >= 0 ? 'pos' : 'neg'">
               {{ podiumTop3[1].totalUma > 0 ? '+' : '' }}{{ podiumTop3[1].totalUma }}pt
             </div>
@@ -1135,6 +1145,7 @@ const getRankClass = (rank: number) => {
           <div class="podium-card gold" @click="openPlayerModal(podiumTop3[0], false)">
             <div class="podium-badge gold-badge">1위</div>
             <div class="podium-name">{{ podiumTop3[0].name }}</div>
+            <div v-if="podiumTop3[0].rating" class="podium-rating-tag">R{{ podiumTop3[0].rating }}</div>
             <div class="podium-uma" :class="podiumTop3[0].totalUma >= 0 ? 'pos' : 'neg'">
               {{ podiumTop3[0].totalUma > 0 ? '+' : '' }}{{ podiumTop3[0].totalUma }}pt
             </div>
@@ -1148,6 +1159,7 @@ const getRankClass = (rank: number) => {
           <div class="podium-card bronze" @click="openPlayerModal(podiumTop3[2], false)">
             <div class="podium-badge">3위</div>
             <div class="podium-name">{{ podiumTop3[2].name }}</div>
+            <div v-if="podiumTop3[2].rating" class="podium-rating-tag">R{{ podiumTop3[2].rating }}</div>
             <div class="podium-uma" :class="podiumTop3[2].totalUma >= 0 ? 'pos' : 'neg'">
               {{ podiumTop3[2].totalUma > 0 ? '+' : '' }}{{ podiumTop3[2].totalUma }}pt
             </div>
@@ -1176,6 +1188,7 @@ const getRankClass = (rank: number) => {
             <label>정렬:</label>
             <select v-model="sortKey" @change="sortOrder = (sortKey === 'avgRank') ? 'asc' : 'desc'" class="sort-dropdown">
               <option value="totalUma">누적 우마순</option>
+              <option value="rating">레이팅순</option>
               <option value="avgUma">평균 우마순</option>
               <option value="avgRank">평균 순위순</option>
               <option value="totalGames">대국수순</option>
@@ -1192,6 +1205,10 @@ const getRankClass = (rank: number) => {
               <tr>
                 <th rowspan="2" class="col-rank">순위</th>
                 <th rowspan="2" class="col-name">이름</th>
+                <th rowspan="2" class="col-sortable col-rating" @click="handleSort('rating')">
+                  레이팅
+                  <span class="sort-mark" v-if="sortKey === 'rating'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
+                </th>
                 <th rowspan="2" class="col-sortable col-total-uma" @click="handleSort('totalUma')">
                   누적 우마
                   <span class="sort-mark" v-if="sortKey === 'totalUma'">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
@@ -1243,6 +1260,9 @@ const getRankClass = (rank: number) => {
                 </td>
                 <td class="col-name" :title="member.name">
                   <strong>{{ member.name }}</strong>
+                </td>
+                <td class="col-rating">
+                  <span class="rating-badge">R{{ member.rating ?? 1167 }}</span>
                 </td>
                 <td class="col-total-uma col-uma" :class="member.totalUma >= 0 ? 'pos' : 'neg'">
                   {{ member.totalUma > 0 ? '+' : '' }}{{ member.totalUma.toFixed(1) }}
@@ -2263,6 +2283,15 @@ const getRankClass = (rank: number) => {
               >
                 <span class="stat_label">기록 대국 수</span>
                 <span class="stat_value">{{ formatDualMetric(selectedPlayer?.totalGames, displayPlayerStats.totalGames) }}전</span>
+              </div>
+              <div v-if="selectedPlayer?.rating" class="stat_row">
+                <span class="stat_label">오픈스킬 레이팅</span>
+                <span class="stat_value highlight">
+                  R{{ selectedPlayer.rating }}
+                  <span v-if="selectedPlayer.ratingDelta !== undefined" class="rating-delta" :class="selectedPlayer.ratingDelta >= 0 ? 'text_positive' : 'text_negative'">
+                    ({{ selectedPlayer.ratingDelta >= 0 ? '+' : '' }}{{ selectedPlayer.ratingDelta }})
+                  </span>
+                </span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -3386,6 +3415,50 @@ html.dark .dist-avg-val {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.col-rating {
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
+}
+.rating-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background-color: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+  font-weight: 700;
+  font-size: 12px;
+  font-family: inherit;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+}
+html.dark .rating-badge {
+  background-color: rgba(129, 140, 248, 0.18);
+  color: #a5b4fc;
+  border-color: rgba(129, 140, 248, 0.35);
+}
+.podium-rating-tag {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 800;
+  background: rgba(99, 102, 241, 0.15);
+  color: #4f46e5;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+html.dark .podium-rating-tag {
+  background: rgba(129, 140, 248, 0.2);
+  color: #c7d2fe;
+  border-color: rgba(129, 140, 248, 0.4);
+}
+.rating-delta {
+  font-size: 11px;
+  margin-left: 4px;
+  font-weight: 600;
 }
 .col-total-uma {
   width: 82px;

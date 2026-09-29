@@ -102,6 +102,7 @@ type Emits = {
   (e: 'add-backup-game-to-current', game: any): void,
   (e: 'restore-session-backup', backup: any): void,
   (e: 'manual-backup-session'): void,
+  (e: 'sync-all-ratings'): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -1026,6 +1027,16 @@ const getSignColor = (sign: number, x: boolean) => {
             신규 회차
           </button>
         </div>
+        <!-- 오픈스킬 레이팅 전수 동기화 버튼 -->
+        <button 
+          v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId"
+          type="button" 
+          @click.stop="emit('sync-all-ratings')" 
+          class="btn-sync-ratings"
+          title="역대 모든 경기(1~8회 레거시 + 9회 이후 전체)를 순차 재계산하여 '레이팅' 시트에 전체 동기화합니다"
+        >
+          📊 레이팅 전수 동기화
+        </button>
         <!-- 로그인 유지 체크박스 -->
         <div v-if="!googleInfo.isLoggedIn" class="keep_login_wrapper">
           <input 
@@ -1351,6 +1362,34 @@ const getSignColor = (sign: number, x: boolean) => {
 }
 .btn-session-action:hover {
   opacity: 0.9;
+}
+.btn-sync-ratings {
+  width: 100%;
+  padding: 9px 8px;
+  font-size: 13px;
+  font-weight: bold;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.08);
+  color: #4f46e5;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-sync-ratings:hover {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.6);
+}
+:global(.dark) .btn-sync-ratings {
+  background: rgba(129, 140, 248, 0.12);
+  color: #c7d2fe;
+  border-color: rgba(129, 140, 248, 0.35);
+}
+:global(.dark) .btn-sync-ratings:hover {
+  background: rgba(129, 140, 248, 0.22);
+  border-color: rgba(129, 140, 248, 0.55);
 }
 
 .btn_g_login, .btn_g_logout {

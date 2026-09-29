@@ -7,7 +7,8 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, type SessionMigrationBackup } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, type SessionMigrationBackup } from "@/utils/googleSheets"
+import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
@@ -28,7 +29,7 @@ const { t, locale } = useI18n()
 /**data 정의*/
 // 로컬 스토리지에 백업된 대국 데이터가 있는지 확인하고 복원
 const savedPlayers = localStorage.getItem("mahjong_players");
-let initialPlayers = [
+let initialPlayers: PlayerInterface[] = [
   {seat: "Down",  name: "▼", wind: "東", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
     isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
@@ -56,7 +57,54 @@ if (savedPlayers) {
     console.error("Failed to parse saved players", e);
   }
 }
-const players = reactive(initialPlayers);
+const players = reactive<PlayerInterface[]>(initialPlayers);
+
+// 오픈스킬 레이팅 캐시 및 관리 상태
+const ratingsMap = ref<Record<string, PlayerRating>>({});
+try {
+  const rawRatings = localStorage.getItem("mahjong_ratings");
+  if (rawRatings) {
+    ratingsMap.value = JSON.parse(rawRatings);
+  }
+} catch (e) {}
+
+// 플레이어 이름 변경 시 레이팅 실시간 동기화
+watch(() => players.map(p => p.name), (names) => {
+  names.forEach((name, idx) => {
+    if (ratingsMap.value[name]) {
+      players[idx].rating = ratingsMap.value[name].ordinal;
+    } else {
+      delete players[idx].rating;
+    }
+  });
+}, { immediate: true, deep: true });
+
+const loadRatings = async () => {
+  try {
+    const raw = localStorage.getItem("mahjong_ratings");
+    if (raw) {
+      ratingsMap.value = JSON.parse(raw);
+    }
+  } catch (e) {}
+
+  if (googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
+    try {
+      const sheetRatings = await fetchRatingsFromSheet(googleInfo.spreadsheetId);
+      if (sheetRatings && Object.keys(sheetRatings).length > 0) {
+        ratingsMap.value = sheetRatings;
+        localStorage.setItem("mahjong_ratings", JSON.stringify(sheetRatings));
+      }
+    } catch (e) {
+      console.warn("구글 시트 레이팅 데이터 로드 실패:", e);
+    }
+  }
+
+  players.forEach(p => {
+    if (ratingsMap.value[p.name]) {
+      p.rating = ratingsMap.value[p.name].ordinal;
+    }
+  });
+};
 
 const scoringState = reactive({ // 점수계산 요소
   whoWin: -1, // 현재 점수 입력하는 플레이어
@@ -267,6 +315,7 @@ const restoreGoogleSessionIfValid = async () => {
         } catch (e) {
           console.warn("세션 복원 중 통계 로드 실패:", e);
         }
+        await loadRatings();
       }
       setupAutoRefreshTimer();
       console.log("구글 세션(Worker 연동 캐시) 복원 완료.");
@@ -293,6 +342,7 @@ const restoreGoogleSessionIfValid = async () => {
         } catch (e) {
           console.warn("세션 복원 중 통계 로드 실패:", e);
         }
+        await loadRatings();
       }
       setupAutoRefreshTimer();
       console.log("Worker를 통한 구글 세션 백그라운드 자동 복원 완료.");
@@ -321,6 +371,7 @@ const restoreGoogleSessionIfValid = async () => {
         } catch (e) {
           console.warn("세션 복원 중 통계 로드 실패:", e);
         }
+        await loadRatings();
       }
       console.log("구글 로그인 상태가 로컬 캐시를 통해 성공적으로 유지/복원되었습니다.");
     } catch (err) {
@@ -584,6 +635,13 @@ onMounted(async () => {
     }
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
+  }
+
+  // 레이팅 데이터 초기 로드
+  try {
+    await loadRatings();
+  } catch (rErr) {
+    console.warn("초기 레이팅 로드 실패:", rErr);
   }
 
   // 로컬 스토리지에 유효한 진행 대국이 있는지 확인하여 있을 경우 자리뽑기 창을 띄우지 않음
@@ -2091,6 +2149,7 @@ const handlePromptConfirm = async () => {
       } catch (statsErr) {
         console.warn("통계 로드 실패:", statsErr);
       }
+      await loadRatings();
       
       syncProgress.value = 100;
       setTimeout(async () => {
@@ -2279,13 +2338,62 @@ const saveGameToSheet = async (silent: boolean = false) => {
     localStorage.setItem("today_games_history", JSON.stringify(todayGamesHistory));
     saveToPermanentBackup(newGame);
 
+    // 오픈스킬 레이팅 계산 및 실시간 반영
+    let ratingDeltaSummary = "";
+    try {
+      const matchPlayersForRating = historyResults.map(hr => ({
+        name: hr.name,
+        score: hr.score,
+        uma: hr.uma,
+        rank: hr.rank
+      }));
+
+      const { updatedRatings, matchDeltas } = calculateMatchRatings(
+        matchPlayersForRating,
+        ratingsMap.value,
+        {
+          sessionLabel: currentSessionSheetName.value || '로컬',
+          date: newGame.timestamp
+        }
+      );
+
+      // ratingsMap에 병합 및 로컬 스토리지 보존
+      Object.assign(ratingsMap.value, updatedRatings);
+      localStorage.setItem("mahjong_ratings", JSON.stringify(ratingsMap.value));
+
+      // 플레이어 화면 뱃지 즉시 갱신
+      players.forEach(p => {
+        if (ratingsMap.value[p.name]) {
+          p.rating = ratingsMap.value[p.name].ordinal;
+        }
+      });
+
+      const deltasStr = Object.entries(matchDeltas)
+        .map(([name, d]) => `${name}: R${d.newOrdinal}(${d.delta >= 0 ? '+' : ''}${d.delta})`)
+        .join(' | ');
+      ratingDeltaSummary = `\n[레이팅] ${deltasStr}`;
+
+      // 구글 시트 연동 중일 경우 실시간으로 '레이팅' 시트 즉시 갱신
+      if (googleInfo.isLoggedIn && googleInfo.spreadsheetId && googleInfo.syncMode === 'google') {
+        updateMatchRatingsInSheet(
+          googleInfo.spreadsheetId,
+          matchPlayersForRating,
+          currentSessionSheetName.value || '회차'
+        ).catch(sheetErr => {
+          console.warn("실시간 구글 레이팅 시트 갱신 중 오류 (무시 가능):", sheetErr);
+        });
+      }
+    } catch (rErr) {
+      console.warn("대국 결과 레이팅 계산 실패:", rErr);
+    }
+
     // 기록 성공 플래그 셋팅 및 복구 보장
     isGameSaved.value = true;
     localStorage.setItem("is_game_saved", "true");
 
     // 로컬에만 누적 보관하며, 일괄 동기화 버튼을 통해 구글 전송 처리
     if (!silent) {
-      triggerToast("게임 결과 로컬 기록 완료!");
+      triggerToast("게임 결과 로컬 기록 완료!" + ratingDeltaSummary);
     }
   } catch (err) {
     console.error("결과 기록 실패:", err);
@@ -2700,6 +2808,51 @@ const saveAndSyncGame = async () => {
     console.error("원클릭 기록 + 동기화 오류:", err);
   } finally {
     isSyncingGame.value = false;
+  }
+};
+
+// 오픈스킬 레이팅 전체 전수 동기화 핸들러 (1~8회 레거시 + 9회 이후 전체 raw 경기 순차 재생)
+const handleSyncAllRatings = async () => {
+  if (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) {
+    alert("구글 로그인 및 스프레드시트 연동이 필요합니다.");
+    return;
+  }
+
+  const ok = await showConfirm(
+    "역대 모든 경기(1~8회 레거시 107경기 + 제9회 이후 모든 raw 경기)를 순차 재계산하여 '레이팅' 시트에 전수 동기화하시겠습니까?\n\n※ 기존 '레이팅' 시트가 없으면 자동 생성되며, 최신 레이팅순으로 정렬되어 갱신됩니다."
+  );
+  if (!ok) return;
+
+  isSaving.value = true;
+  syncProgress.value = 10;
+  syncLoaderTitle.value = "역대 경기 순차 재계산 및 레이팅 시트 동기화 중...";
+
+  try {
+    syncProgress.value = 30;
+    const result = await recalculateAndSyncAllRatings(googleInfo.spreadsheetId);
+    const updatedRatings = result.ratings;
+    syncProgress.value = 85;
+
+    // 로컬 상태 및 스토리지 갱신
+    ratingsMap.value = updatedRatings;
+    localStorage.setItem("mahjong_ratings", JSON.stringify(updatedRatings));
+
+    players.forEach(p => {
+      if (updatedRatings[p.name]) {
+        p.rating = updatedRatings[p.name].ordinal;
+      }
+    });
+
+    syncProgress.value = 100;
+    triggerToast("레이팅 전수 동기화가 성공적으로 완료되었습니다!");
+  } catch (err) {
+    console.error("레이팅 전수 동기화 실패:", err);
+    showErrorModal("레이팅 전수 동기화 오류", err);
+  } finally {
+    isSaving.value = false;
+    setTimeout(() => {
+      syncProgress.value = 0;
+    }, 1000);
   }
 };
 
@@ -3403,6 +3556,7 @@ const addBackupGameToCurrent = (game: any) => {
       @add-backup-game-to-current="addBackupGameToCurrent"
       @restore-session-backup="handleRestoreSessionBackup"
       @manual-backup-session="handleManualBackupSession"
+      @sync-all-ratings="handleSyncAllRatings"
     />
   </Transition>
 

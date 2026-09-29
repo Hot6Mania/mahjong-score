@@ -3,6 +3,7 @@
  * Cloudflare Worker 엣지 캐시(3분)를 우선 호출하고, 미설정 또는 장애 시 Google GViz 공용 API로 자동 폴백합니다.
  * 스프레드시트 접근 주소(ID)는 하드코딩하지 않고, 서버 Secret 및 .env 암호화 토큰을 통해 복호화하여 사용합니다.
  */
+import { type PlayerRating, replayAllHistoricalGames } from '@/utils/ratingEngine';
 
 // 기본 내장 암호화 토큰 (평문 ID는 노출되지 않으며, 서버 Secret 미설정 시에도 안전하게 복호화되어 무설정 즉시 작동)
 const DEFAULT_ENCRYPTED_SPREADSHEET_ID = "am68XR1EK7z5R3BSAraD8QDkpTbgpvlnHrxdbQUJTI94QQfRZYzF6T5Ygv8m2z2RXsxDqHQxY-8GwcTEeS-mTQXZC_il30MV";
@@ -112,6 +113,14 @@ export interface MemberStatItem {
   rank4Count: number;
   top2Rate: number; // 연대율 (%)
   detailedStats?: MemberStatItem; // 9회차 이후 순수 상세 통계 (레거시 제외)
+  // 레이팅 (OpenSkill) 필드
+  rating?: number; // Ordinal = round(μ - 2σ)
+  ratingMu?: number;
+  ratingSigma?: number;
+  ratingPeak?: number;
+  ratingLowest?: number;
+  ratingDelta?: number;
+  ratingLastUpdated?: string;
 }
 
 export interface SessionMemberSummary {
@@ -841,12 +850,101 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
     // 기본 정렬: 누적 우마 내림차순
     items.sort((a, b) => b.totalUma - a.totalUma);
 
+    // OpenSkill 레이팅 데이터 주입
+    try {
+      const ratingsMap = await fetchPublicRatings(sId);
+      items.forEach(item => {
+        const r = ratingsMap[item.name];
+        if (r) {
+          item.rating = r.ordinal;
+          item.ratingMu = r.mu;
+          item.ratingSigma = r.sigma;
+          item.ratingPeak = r.peakOrdinal;
+          item.ratingLowest = r.lowestOrdinal;
+          item.ratingDelta = r.recentDelta;
+          item.ratingLastUpdated = r.lastUpdated;
+        } else {
+          item.rating = 1167;
+          item.ratingMu = 1500;
+          item.ratingSigma = 166.67;
+        }
+      });
+    } catch (rErr) {
+      console.warn("레이팅 데이터 주입 실패:", rErr);
+    }
+
     cachedAllStats = items;
     return items;
   } catch (err) {
     console.error("fetchPublicAllStats failed:", err);
     return [];
   }
+}
+
+let cachedRatings: Record<string, PlayerRating> | null = null;
+
+/**
+ * '레이팅' 시트에서 현재 전체 선수 레이팅을 조회하거나 폴백 리플레이를 수행합니다.
+ */
+export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record<string, PlayerRating>> {
+  if (cachedRatings && Object.keys(cachedRatings).length > 0) {
+    return cachedRatings;
+  }
+
+  const sId = spreadsheetId || await resolveSpreadsheetId();
+  if (sId) {
+    // 1. Google GViz를 통해 '레이팅' 시트 직접 조회 시도
+    try {
+      const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('레이팅')}`;
+      const res = await fetch(gvizUrl);
+      if (res.ok) {
+        const text = await res.text();
+        const data = parseGVizResponse(text);
+        if (data && data.table && data.table.rows && data.table.rows.length > 0) {
+          const map: Record<string, PlayerRating> = {};
+          data.table.rows.forEach((r: any) => {
+            if (!r.c) return;
+            const name = getCellStr(r.c[1]).trim();
+            if (!name || name === '이름') return;
+
+            const ordinal = Number(getCellNum(r.c[2])) || 1167;
+            const mu = Number(getCellNum(r.c[3])) || 1500;
+            const sigma = Number(getCellNum(r.c[4])) || 166.67;
+            const games = Number(getCellNum(r.c[5])) || 0;
+            const peak = Number(getCellNum(r.c[6])) || ordinal;
+            const lowest = Number(getCellNum(r.c[7])) || ordinal;
+            const recentDelta = Number(String(getCellStr(r.c[8]) || '').replace('+', '')) || 0;
+            const lastUpdated = getCellStr(r.c[9]).trim();
+
+            map[name] = {
+              name,
+              ordinal,
+              mu,
+              sigma,
+              games,
+              peakOrdinal: peak,
+              lowestOrdinal: lowest,
+              recentDelta,
+              lastUpdated
+            };
+          });
+
+          if (Object.keys(map).length > 0) {
+            cachedRatings = map;
+            return map;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("'레이팅' 시트 GViz 조회 실패, 온디맨드 리플레이 폴백 사용:", e);
+    }
+  }
+
+  // 2. 만약 '레이팅' 시트가 아직 생성되지 않았거나 비어있는 경우:
+  // 내장된 1~8회차 레거시 데이터를 바탕으로 안전 폴백 레이팅 생성
+  const { finalRatings } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, []);
+  cachedRatings = finalRatings;
+  return finalRatings;
 }
 
 /**

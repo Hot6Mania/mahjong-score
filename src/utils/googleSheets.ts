@@ -1,3 +1,12 @@
+import {
+  type PlayerRating,
+  type MatchPlayerInput,
+  calculateMatchRatings,
+  sortRatingsDesc,
+  replayAllHistoricalGames
+} from './ratingEngine';
+import { LEGACY_CONSOLIDATED_RAW } from '@/services/publicStatsService';
+
 let tokenClient: any = null;
 let codeClient: any = null;
 let accessToken: string | null = null;
@@ -1879,4 +1888,267 @@ export const compareSessionDesc = (a: string, b: string): number => {
 
   // 3. 자연 정렬 폴백
   return b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' });
+};
+
+// ==========================================
+// 마작 OpenSkill 레이팅 시스템 전용 구글 시트 연동
+// ==========================================
+
+export const RATING_SHEET_TITLE = '레이팅';
+
+/**
+ * '레이팅' 시트가 존재하는지 확인하고, 없으면 신규 생성 후 헤더를 초기화합니다.
+ */
+export const ensureRatingSheetExists = async (spreadsheetId: string): Promise<boolean> => {
+  if (!spreadsheetId) return false;
+  try {
+    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const existingSheets = resMetadata.result.sheets.map((s: any) => s.properties.title);
+    if (existingSheets.includes(RATING_SHEET_TITLE)) {
+      return true;
+    }
+
+    console.log(`'${RATING_SHEET_TITLE}' 마스터 시트가 없어 신규 생성합니다.`);
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: RATING_SHEET_TITLE,
+                gridProperties: {
+                  rowCount: 100,
+                  columnCount: 12,
+                  frozenRowCount: 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    });
+
+    const headers = [
+      '순위', '이름', '레이팅', 'μ (실력)', 'σ (불확실성)', '대국수', '최고 레이팅', '최저 레이팅', '최근 등락 (Δ)', '최종 갱신'
+    ];
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${RATING_SHEET_TITLE}'!A1:J1`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [headers]
+      }
+    });
+    return true;
+  } catch (err) {
+    console.error(`'${RATING_SHEET_TITLE}' 시트 확인/생성 실패:`, err);
+    return false;
+  }
+};
+
+/**
+ * '레이팅' 시트에서 현재 전체 선수 레이팅 데이터를 조회합니다.
+ */
+export const fetchRatingsFromSheet = async (spreadsheetId: string): Promise<Record<string, PlayerRating>> => {
+  const result: Record<string, PlayerRating> = {};
+  if (!spreadsheetId) return result;
+
+  try {
+    const res = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${RATING_SHEET_TITLE}'!A2:J100`
+    });
+    const rows = res.result.values || [];
+    rows.forEach((r: any) => {
+      const name = r[1] ? String(r[1]).trim() : '';
+      if (!name || name === '이름') return;
+
+      const ordinal = Number(r[2]) || 1167;
+      const mu = Number(r[3]) || 1500;
+      const sigma = Number(r[4]) || 166.67;
+      const games = Number(r[5]) || 0;
+      const peak = Number(r[6]) || ordinal;
+      const lowest = Number(r[7]) || ordinal;
+      const recentDelta = Number(String(r[8] || '').replace('+', '')) || 0;
+      const lastUpdated = r[9] ? String(r[9]).trim() : '';
+
+      result[name] = {
+        name,
+        ordinal,
+        mu,
+        sigma,
+        games,
+        peakOrdinal: peak,
+        lowestOrdinal: lowest,
+        recentDelta,
+        lastUpdated
+      };
+    });
+  } catch (err) {
+    console.warn(`'${RATING_SHEET_TITLE}' 시트 조회 실패:`, err);
+  }
+  return result;
+};
+
+/**
+ * 모든 선수 레이팅 데이터를 '레이팅' 시트에 일괄 기입 (내림차순 정렬)
+ */
+export const batchSaveAllRatingsToSheet = async (
+  spreadsheetId: string,
+  ratingsMap: Record<string, PlayerRating>
+): Promise<void> => {
+  if (!spreadsheetId) return;
+  await ensureRatingSheetExists(spreadsheetId);
+
+  const sortedList = sortRatingsDesc(ratingsMap);
+  const rows = sortedList.map((p, idx) => [
+    idx + 1,
+    p.name,
+    p.ordinal,
+    parseFloat(p.mu.toFixed(1)),
+    parseFloat(p.sigma.toFixed(1)),
+    p.games,
+    p.peakOrdinal,
+    p.lowestOrdinal,
+    p.recentDelta >= 0 ? `+${p.recentDelta}` : `${p.recentDelta}`,
+    p.lastUpdated || ''
+  ]);
+
+  if (rows.length === 0) return;
+
+  // 1. 데이터 영역 업데이트 (A2:J...)
+  await window.gapi.client.sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${RATING_SHEET_TITLE}'!A2:J${1 + rows.length}`,
+    valueInputOption: 'USER_ENTERED',
+    resource: {
+      values: rows
+    }
+  });
+
+  // 2. 남은 이전 행 초기화 (최대 100행까지)
+  if (rows.length < 98) {
+    try {
+      await window.gapi.client.sheets.spreadsheets.values.clear({
+        spreadsheetId,
+        range: `'${RATING_SHEET_TITLE}'!A${2 + rows.length}:J100`
+      });
+    } catch (_) {}
+  }
+  console.log(`'${RATING_SHEET_TITLE}' 시트에 ${rows.length}명 레이팅 기입 완료`);
+};
+
+/**
+ * 단일 대국 결과(4인)를 바탕으로 '레이팅' 시트를 즉시 실시간 업데이트
+ */
+export const updateMatchRatingsInSheet = async (
+  spreadsheetId: string,
+  matchPlayers: MatchPlayerInput[],
+  sessionLabel: string
+): Promise<{ updatedRatings: Record<string, PlayerRating>; matchDeltas: Record<string, any> }> => {
+  // 1. 현재 '레이팅' 시트의 전체 데이터 로드
+  await ensureRatingSheetExists(spreadsheetId);
+  const currentRatings = await fetchRatingsFromSheet(spreadsheetId);
+
+  // 2. 4명에 대해 OpenSkill 레이팅 계산
+  const { updatedRatings, matchDeltas } = calculateMatchRatings(matchPlayers, currentRatings, {
+    sessionLabel,
+    date: new Date().toLocaleDateString('ko-KR')
+  });
+
+  // 3. 기존 맵에 4명의 갱신 결과 병합
+  const mergedMap: Record<string, PlayerRating> = { ...currentRatings, ...updatedRatings };
+
+  // 4. 전원 순위 재정렬 후 시트에 일괄 갱신
+  await batchSaveAllRatingsToSheet(spreadsheetId, mergedMap);
+
+  return { updatedRatings, matchDeltas };
+};
+
+/**
+ * 1~8회차 레거시 및 스프레드시트의 9~15회차 raw 시트를 전수 수집하여
+ * 시간순으로 OpenSkill 리플레이를 수행하고 '레이팅' 시트를 완전 초기화/동기화합니다.
+ */
+export const recalculateAndSyncAllRatings = async (
+  spreadsheetId: string
+): Promise<{ success: boolean; totalGames: number; playerCount: number; ratings: Record<string, PlayerRating> }> => {
+  if (!spreadsheetId) {
+    return { success: false, totalGames: 0, playerCount: 0, ratings: {} };
+  }
+
+  try {
+    // 1. 스프레드시트 내 존재하는 회차 (raw) 시트 목록 탐색
+    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const sheetTitles: string[] = resMetadata.result.sheets.map((s: any) => s.properties.title);
+
+    // 제N회 ... (raw) 시트 필터링 및 숫자 오름차순 정렬 (제9회 -> 제15회)
+    const rawSheetTitles = sheetTitles
+      .filter((title: string) => /제\s*\d+\s*회.*\(raw\)/.test(title))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/제\s*(\d+)\s*회/)?.[1] || '0', 10);
+        const numB = parseInt(b.match(/제\s*(\d+)\s*회/)?.[1] || '0', 10);
+        return numA - numB;
+      });
+
+    const sessionRawGamesList: {
+      sessionName: string;
+      games: { gameId: string; time?: string; players: { name: string; rank: number; score?: number; uma?: number }[] }[];
+    }[] = [];
+
+    // 2. 각 raw 시트에서 경기 데이터(F:W열) 추출
+    for (const rawTitle of rawSheetTitles) {
+      const sessCleanName = rawTitle.replace(/\s*\(raw\)/, '').trim();
+      const res = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${rawTitle}'!F2:W100`
+      });
+      const rows = res.result.values || [];
+      const games: any[] = [];
+
+      rows.forEach((r: any) => {
+        const gameId = r[0] ? String(r[0]).trim() : '';
+        if (!gameId || gameId === '대국 ID') return;
+
+        const time = r[1] ? String(r[1]).trim() : '';
+        const pList = [
+          { name: r[2] ? String(r[2]).trim() : '', rank: Number(r[3]) || 1, score: Number(r[4]) || 0, uma: Number(r[5]) || 0 },
+          { name: r[6] ? String(r[6]).trim() : '', rank: Number(r[7]) || 2, score: Number(r[8]) || 0, uma: Number(r[9]) || 0 },
+          { name: r[10] ? String(r[10]).trim() : '', rank: Number(r[11]) || 3, score: Number(r[12]) || 0, uma: Number(r[13]) || 0 },
+          { name: r[14] ? String(r[14]).trim() : '', rank: Number(r[15]) || 4, score: Number(r[16]) || 0, uma: Number(r[17]) || 0 }
+        ];
+
+        if (pList.some(p => !p.name)) return;
+        pList.sort((a, b) => a.rank - b.rank);
+
+        games.push({
+          gameId,
+          time,
+          players: pList
+        });
+      });
+
+      sessionRawGamesList.push({
+        sessionName: sessCleanName,
+        games
+      });
+    }
+
+    // 3. 1~8회차 레거시 및 9~15회차 raw 대국 전수 순차 리플레이
+    const { finalRatings, totalReplayedGames } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, sessionRawGamesList);
+
+    // 4. '레이팅' 시트에 전체 갱신 결과 일괄 기입
+    await batchSaveAllRatingsToSheet(spreadsheetId, finalRatings);
+
+    const playerCount = Object.keys(finalRatings).length;
+    return {
+      success: true,
+      totalGames: totalReplayedGames,
+      playerCount,
+      ratings: finalRatings
+    };
+  } catch (err) {
+    console.error('레이팅 전수 재계산 및 시트 동기화 실패:', err);
+    return { success: false, totalGames: 0, playerCount: 0, ratings: {} };
+  }
 };

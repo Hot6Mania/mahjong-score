@@ -236,8 +236,27 @@ const allPlayers = computed(() => {
   return Array.from(set)
 })
 
-// 선택된 플레이어
 const selectedPlayer = ref<string>('')
+
+// 오픈스킬 레이팅 (Player 또는 localStorage 캐시에서 참조)
+const selectedPlayerRating = computed(() => {
+  const name = selectedPlayer.value
+  if (!name) return undefined
+  const p = props.players?.find(x => x.name === name)
+  if (p && p.rating) return p.rating
+  if (props.googleMemberStats) {
+    const s = props.googleMemberStats.find((x: any) => x.name === name)
+    if (s && s.rating) return s.rating
+  }
+  try {
+    const raw = localStorage.getItem('mahjong_ratings')
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed[name]?.ordinal) return parsed[name].ordinal
+    }
+  } catch (e) {}
+  return undefined
+})
 
 // 리액티브하게 초기 플레이어 및 선택값 갱신
 watch([allPlayers, scopeTab], ([newVal]) => {
@@ -878,6 +897,10 @@ const emptyScopeMessage = computed(() => {
         <div class="stat_row">
           <span class="stat_label">기록 대국 수</span>
           <span class="stat_value">{{ stats.totalGames }}전</span>
+        </div>
+        <div v-if="selectedPlayerRating" class="stat_row">
+          <span class="stat_label">오픈스킬 레이팅</span>
+          <span class="stat_value highlight">R{{ selectedPlayerRating }}</span>
         </div>
         <div class="stat_row">
           <span class="stat_label">화료율</span>

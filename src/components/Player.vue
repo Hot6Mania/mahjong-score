@@ -139,7 +139,8 @@ const handleScoreClick = () => {
   <div class="score">
     <!-- 이름 배지를 score 상단에 직접 배치하여 고정 -->
     <div class="player_name_badge">
-      {{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span>
+      <span>{{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
+      <span v-if="player.rating" class="player_rating_pill" :title="'OpenSkill 레이팅: ' + player.rating + 'pt'">R{{ player.rating }}</span>
     </div>
     <div v-if="isNaN(player.gapScore)" :style="[displayScoreStyle(), { cursor: (animateRank || modalInfo.isOpen) ? 'default' : 'pointer' }]" @click="handleScoreClick" style="display: inline-block; line-height: 0.95;">
       {{ displayScoreHigh }}<span style="font-size: 50px; position: relative; display: inline-block;">
@@ -277,6 +278,23 @@ const handleScoreClick = () => {
   z-index: 2;
   transition: background-color 0.3s, color 0.3s, border-color 0.3s;
   line-height: normal;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.player_rating_pill {
+  font-size: 9px;
+  font-weight: 800;
+  color: #2563eb;
+  background-color: rgba(37, 99, 235, 0.12);
+  padding: 0.5px 3px;
+  border-radius: 3px;
+  letter-spacing: -0.2px;
+  line-height: 1.1;
+}
+:global(.dark) .player_rating_pill {
+  color: #60a5fa;
+  background-color: rgba(96, 165, 250, 0.18);
 }
 .large_rank_overlay {
   position: absolute;
