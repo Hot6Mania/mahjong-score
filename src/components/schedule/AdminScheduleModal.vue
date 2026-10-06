@@ -77,13 +77,13 @@ watch(() => props.isOpen, (open) => {
     map[d] = 'none';
   }
 
-  // 기존 등록된 날짜 반영
+  // 기존 등록된 날짜 반영 (관리자 지정 속성 우선 복원)
   for (const item of props.existingDates) {
     const parts = item.date.split('-');
     if (parts.length === 3) {
       const d = parseInt(parts[2], 10);
       if (d >= 1 && d <= daysInCurrentMonth.value) {
-        map[d] = item.sessionType;
+        map[d] = item.adminSessionType || item.sessionType;
       }
     }
   }
@@ -166,7 +166,8 @@ const handleApply = () => {
 
       result.push({
         date: dateStr,
-        sessionType: status,
+        sessionType: prev?.sessionType || status,
+        adminSessionType: status === 'overnight' ? 'overnight' : 'day',
         customStartTime: prev?.customStartTime,
         customEndTime: prev?.customEndTime,
         customIsOvernight: prev?.customIsOvernight,

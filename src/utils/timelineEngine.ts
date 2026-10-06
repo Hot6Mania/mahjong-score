@@ -1,4 +1,4 @@
-import type { ScheduleAttendee } from '@/types/schedule';
+import type { ScheduleAttendee, SessionType } from '@/types/schedule';
 
 /**
  * 시간 문자열("HH:mm")을 기준 분(Minute)으로 변환합니다.
@@ -101,4 +101,58 @@ export function computeEffectiveOverlapRange(attendees: ScheduleAttendee[] = [])
   const endStr = minutesToTimeString(lastValidMin);
 
   return `${startStr} ~ ${endStr}`;
+}
+
+/**
+ * 참석자들의 시간을 기반으로 모임 전체 시간 범위(가장 이른 출발 ~ 가장 늦은 종료)를 유동적으로 계산합니다.
+ */
+export function computeSessionTimeFromAttendees(
+  attendees: ScheduleAttendee[] = [],
+  baseSessionType?: 'day' | 'overnight' | SessionType
+): {
+  customStartTime: string;
+  customEndTime: string;
+  customIsOvernight: boolean;
+  startTime: string;
+  endTime: string;
+  isOvernight: boolean;
+  sessionType: SessionType;
+} {
+  if (!attendees || attendees.length === 0) {
+    const isOvernight = baseSessionType === 'overnight';
+    return {
+      customStartTime: '10:00',
+      customEndTime: isOvernight ? '익일' : '22:00',
+      customIsOvernight: isOvernight,
+      startTime: '10:00',
+      endTime: isOvernight ? '익일' : '22:00',
+      isOvernight: isOvernight,
+      sessionType: isOvernight ? 'overnight' : 'day'
+    };
+  }
+
+  const intervals = attendees.map(a => getAttendeeInterval(a));
+  const earliestMin = Math.min(...intervals.map(([s]) => s));
+  const latestMin = Math.max(...intervals.map(([, e]) => e));
+
+  const customStartTime = minutesToTimeString(earliestMin);
+  const customEndTime = minutesToTimeString(latestMin);
+  const customIsOvernight = latestMin > 1440 || attendees.some(a => a.isOvernight);
+
+  let sessionType: SessionType = 'custom';
+  if (customIsOvernight && customStartTime === '10:00') {
+    sessionType = 'overnight';
+  } else if (!customIsOvernight && customStartTime === '10:00' && customEndTime === '22:00') {
+    sessionType = 'day';
+  }
+
+  return {
+    customStartTime,
+    customEndTime,
+    customIsOvernight,
+    startTime: customStartTime,
+    endTime: customEndTime,
+    isOvernight: customIsOvernight,
+    sessionType
+  };
 }

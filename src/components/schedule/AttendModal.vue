@@ -18,7 +18,23 @@ const props = defineProps<{
 const isCreatorAddMode = computed(() => {
   if (props.isAdmin) return true;
   if (props.isManager) return true;
+  if (props.creatorName && props.dayItem?.creator && props.dayItem.creator === props.creatorName) return true;
   return false;
+});
+
+const isMultiSelectMode = computed(() => {
+  return isCreatorAddMode.value && !props.targetAttendeeName;
+});
+
+const isOvernightAllowed = computed(() => {
+  if (!props.dayItem) return true;
+  return (
+    props.dayItem.adminSessionType === 'overnight' ||
+    props.dayItem.sessionType === 'overnight' ||
+    props.dayItem.sessionType === 'custom' ||
+    props.isAdmin ||
+    props.isManager
+  );
 });
 
 const emit = defineEmits<{
@@ -32,14 +48,50 @@ const emit = defineEmits<{
     memo?: string;
     pin: string;
   }): void;
+  (e: 'submitBatch', payload: {
+    attendees: Array<{
+      name: string;
+      isOvernight: boolean;
+      startTime: string;
+      endTime: string;
+      isCustomTime: boolean;
+      memo?: string;
+    }>;
+    pin: string;
+  }): void;
   (e: 'cancel', payload: { name: string; pin: string }): void;
 }>();
 
 // 폼 입력 상태
 const selectedName = ref('');
+const selectedNames = ref<string[]>([]);
 const isCustomName = ref(false);
 const nameSearchQuery = ref('');
 const isDropdownOpen = ref(false);
+
+const toggleMemberSelection = (name: string) => {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const idx = selectedNames.value.indexOf(trimmed);
+  if (idx !== -1) {
+    selectedNames.value.splice(idx, 1);
+  } else {
+    selectedNames.value.push(trimmed);
+  }
+};
+
+const removeSelectedName = (name: string) => {
+  selectedNames.value = selectedNames.value.filter(n => n !== name);
+};
+
+const addCustomName = () => {
+  const val = nameSearchQuery.value.trim();
+  if (!val) return;
+  if (!selectedNames.value.includes(val)) {
+    selectedNames.value.push(val);
+  }
+  nameSearchQuery.value = '';
+};
 
 // 시간대 선택: 'day' (10~22시) | 'overnight' (10시~익일) | 'custom' (직접 입력)
 const timeMode = ref<'day' | 'overnight' | 'custom'>('day');
@@ -148,6 +200,7 @@ watch(() => [props.isOpen, props.dayItem, props.targetAttendeeName], () => {
 
   // 대상 이름 결정: targetAttendeeName 우선 -> 없으면 빈 값으로 깨끗하게 초기화
   const nameToUse = (props.targetAttendeeName && props.targetAttendeeName.trim()) || '';
+  selectedNames.value = [];
 
   if (nameToUse) {
     selectedName.value = nameToUse;
@@ -350,14 +403,9 @@ const adjustEndTime = (deltaMinutes: number) => {
 
 const handleSubmit = () => {
   errorMessage.value = '';
-  const finalName = selectedName.value.trim();
   const finalPin = pin.value.trim();
-  const canBypassPin = !!(props.isAdmin || props.isManager);
+  const canBypassPin = !!(props.isAdmin || props.isManager || isCreatorAddMode.value);
 
-  if (!finalName) {
-    errorMessage.value = '참가자 이름을 선택하거나 입력해주세요.';
-    return;
-  }
   if (!canBypassPin && (!finalPin || finalPin.length < 4)) {
     errorMessage.value = '4자리 확인 PIN을 입력해주세요.';
     return;
@@ -383,6 +431,52 @@ const handleSubmit = () => {
     startTime = customStartTime.value || '10:00';
     endTime = customEndTime.value || '22:00';
     isCustomTime = (startTime !== '10:00' || endTime !== '22:00');
+  }
+
+  // 다중 참가자 일괄 추가 모드
+  if (isMultiSelectMode.value) {
+    const namesToSubmit = [...selectedNames.value];
+    const singleName = selectedName.value.trim();
+    if (singleName && !namesToSubmit.includes(singleName)) {
+      namesToSubmit.push(singleName);
+    }
+
+    if (namesToSubmit.length === 0) {
+      errorMessage.value = '추가할 참가자를 한 명 이상 선택하거나 입력해주세요.';
+      return;
+    }
+
+    if (namesToSubmit.length > 1) {
+      emit('submitBatch', {
+        attendees: namesToSubmit.map(name => ({
+          name,
+          isOvernight,
+          startTime,
+          endTime,
+          isCustomTime,
+          memo: memo.value.trim() || undefined
+        })),
+        pin: finalPin || 'admin_bypass'
+      });
+      return;
+    } else {
+      emit('submit', {
+        name: namesToSubmit[0],
+        isOvernight,
+        startTime,
+        endTime,
+        isCustomTime,
+        memo: memo.value.trim() || undefined,
+        pin: finalPin || (canBypassPin ? 'admin_bypass' : '')
+      });
+      return;
+    }
+  }
+
+  const finalName = selectedName.value.trim();
+  if (!finalName) {
+    errorMessage.value = '참가자 이름을 선택하거나 입력해주세요.';
+    return;
   }
 
   emit('submit', {
@@ -446,9 +540,43 @@ const handleCancel = () => {
             </span>
           </div>
 
-          <!-- 1. 참가자 선택 (대국수 순 정렬 & 검색) -->
+          <!-- 1. 참가자 선택 (단일 또는 다중 선택) -->
           <div class="form-group">
-            <label class="form-label">참가자</label>
+            <div class="form-label-row">
+              <label class="form-label">
+                참가자 {{ isMultiSelectMode ? '(다중 선택 가능)' : '' }}
+              </label>
+              <span v-if="isMultiSelectMode && selectedNames.length > 0" class="multi-select-count">
+                {{ selectedNames.length }}명 선택됨
+              </span>
+            </div>
+
+            <!-- 다중 선택된 태그 목록 (다중 모드 시) -->
+            <div v-if="isMultiSelectMode && selectedNames.length > 0" class="selected-tags-box">
+              <span v-for="sName in selectedNames" :key="sName" class="selected-tag">
+                {{ sName }}
+                <button type="button" class="btn-remove-tag" @click="removeSelectedName(sName)" title="제거">✕</button>
+              </span>
+            </div>
+
+            <!-- 빠른 멤버 추천 칩 (다중 모드 시) -->
+            <div v-if="isMultiSelectMode" class="quick-members-section">
+              <span class="quick-members-title">멤버 빠른 선택:</span>
+              <div class="quick-members-chips">
+                <button
+                  v-for="member in sortedMembers.slice(0, 12)"
+                  :key="member.name"
+                  type="button"
+                  class="quick-member-chip"
+                  :class="{ 'is-selected': selectedNames.includes(member.name) }"
+                  @click="toggleMemberSelection(member.name)"
+                >
+                  {{ member.name }}
+                  <span v-if="selectedNames.includes(member.name)" class="check-icon">✓</span>
+                </button>
+              </div>
+            </div>
+
             <div class="autocomplete-wrapper">
               <input
                 type="text"
@@ -457,7 +585,8 @@ const handleCancel = () => {
                 @input="onSearchInput"
                 @focus="openDropdown"
                 @keydown="onKeyDown"
-                placeholder="이름 검색 또는 직접 입력"
+                @keydown.enter.prevent="isMultiSelectMode ? addCustomName() : null"
+                :placeholder="isMultiSelectMode ? '이름 검색 후 선택 또는 엔터로 추가' : '이름 검색 또는 직접 입력'"
               />
               <button 
                 type="button" 
@@ -477,13 +606,14 @@ const handleCancel = () => {
                   :key="member.name"
                   class="dropdown-item"
                   :class="{ 
-                    selected: selectedName === member.name,
+                    selected: isMultiSelectMode ? selectedNames.includes(member.name) : selectedName === member.name,
                     highlighted: highlightedIndex === idx 
                   }"
                   @mousemove="onDropdownItemMouseMove($event, idx)"
-                  @click="selectMember(member.name)"
+                  @click="isMultiSelectMode ? toggleMemberSelection(member.name) : selectMember(member.name)"
                 >
                   <span class="member-name">{{ member.name }}</span>
+                  <span v-if="isMultiSelectMode && selectedNames.includes(member.name)" class="item-check">✓</span>
                 </div>
               </div>
             </div>
@@ -502,7 +632,7 @@ const handleCancel = () => {
                 당일
               </button>
               <button
-                v-if="dayItem.sessionType === 'overnight' || dayItem.sessionType === 'custom'"
+                v-if="isOvernightAllowed"
                 type="button"
                 class="segment-btn"
                 :class="{ active: timeMode === 'overnight' }"
@@ -732,7 +862,7 @@ const handleCancel = () => {
             class="btn-primary"
             @click="handleSubmit"
           >
-            {{ existingAttendee ? '수정 완료' : '등록' }}
+            {{ isMultiSelectMode && selectedNames.length > 1 ? `${selectedNames.length}명 일괄 등록` : (existingAttendee ? '수정 완료' : '등록') }}
           </button>
         </div>
       </div>
@@ -741,6 +871,116 @@ const handleCancel = () => {
 </template>
 
 <style scoped>
+.form-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.multi-select-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: #2563eb;
+}
+
+.selected-tags-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.selected-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+:global(html.dark) .selected-tag {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+
+.btn-remove-tag {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+}
+.btn-remove-tag:hover {
+  color: #ef4444;
+}
+
+.quick-members-section {
+  margin-bottom: 10px;
+}
+
+.quick-members-title {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+  margin-bottom: 6px;
+}
+
+.quick-members-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 80px;
+  overflow-y: auto;
+  padding-bottom: 2px;
+}
+
+.quick-member-chip {
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #334155);
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+.quick-member-chip:hover {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
+}
+.quick-member-chip.is-selected {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+  font-weight: 600;
+}
+:global(html.dark) .quick-member-chip {
+  background: #1e293b;
+  color: #cbd5e1;
+  border-color: #334155;
+}
+:global(html.dark) .quick-member-chip.is-selected {
+  background: #3b82f6;
+  color: #ffffff;
+  border-color: #3b82f6;
+}
+
+.item-check {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: bold;
+  color: #2563eb;
+}
+
 .apple-modal-backdrop {
   position: fixed;
   inset: 0;

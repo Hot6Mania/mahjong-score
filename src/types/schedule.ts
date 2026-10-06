@@ -16,6 +16,7 @@ export interface ScheduleAttendee {
 export interface ScheduleDayItem {
   date: string; // "YYYY-MM-DD"
   sessionType: SessionType; // 'day' | 'overnight' | 'custom'
+  adminSessionType?: 'day' | 'overnight'; // 관리자가 지정한 원래 후보 일정 속성 (당일 vs 밤샘)
   customStartTime?: string;
   customEndTime?: string;
   customIsOvernight?: boolean;

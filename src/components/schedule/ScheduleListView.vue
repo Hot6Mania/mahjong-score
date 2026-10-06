@@ -15,9 +15,35 @@ const emit = defineEmits<{
   (e: 'openAdmin'): void;
 }>();
 
-// 날짜순 오름차순 정렬된 일정 목록
+// 우선순위 정렬된 일정 목록
+// Tier 2: 출발 확정된 회차 (날짜 오름차순)
+// Tier 1: 신청 인원이 있는 일정 (인원수 많은 순 -> 날짜순)
+// Tier 0: 신청 인원이 없는 빈 일정 (날짜 오름차순)
 const sortedDates = computed(() => {
-  return [...props.dates].sort((a, b) => a.date.localeCompare(b.date));
+  return [...props.dates].sort((a, b) => {
+    const aConfirmed = props.sessionMap.has(a.date);
+    const bConfirmed = props.sessionMap.has(b.date);
+    const aCount = a.attendees?.length || 0;
+    const bCount = b.attendees?.length || 0;
+
+    // 1. 확정 일정 최상단
+    if (aConfirmed && !bConfirmed) return -1;
+    if (!aConfirmed && bConfirmed) return 1;
+    if (aConfirmed && bConfirmed) {
+      return a.date.localeCompare(b.date);
+    }
+
+    // 2. 참가자 있는 일정 중간 (인원 많은 순 -> 날짜순)
+    if (aCount > 0 && bCount === 0) return -1;
+    if (aCount === 0 && bCount > 0) return 1;
+    if (aCount > 0 && bCount > 0) {
+      if (bCount !== aCount) return bCount - aCount;
+      return a.date.localeCompare(b.date);
+    }
+
+    // 3. 참가자 없는 빈 후보 일정 최하단 (날짜 오름차순)
+    return a.date.localeCompare(b.date);
+  });
 });
 
 const getDayOfWeek = (dateStr: string) => {
@@ -62,18 +88,18 @@ const getOverlapRange = (day: ScheduleDayItem) => {
         class="agenda-card"
         :class="{ 'my-session': isUserAttending(item) }"
       >
-        <!-- 카드 상단: 날짜, 회차, 세션 유형, 인원수 -->
+        <!-- 카드 상단: 날짜, 회차(날짜 오른쪽), 세션 유형, 인원수 -->
         <div class="card-header">
           <div class="header-left">
+            <h4 class="card-date">
+              {{ formatDateLabel(item.date) }} ({{ getDayOfWeek(item.date) }})
+            </h4>
             <span v-if="sessionMap.get(item.date)" class="session-badge badge-confirmed">
               제{{ sessionMap.get(item.date) }}회
             </span>
             <span v-else class="session-badge badge-recruiting">
               {{ (item.attendees?.length || 0) >= 4 ? '확정 대기' : '모집중' }}
             </span>
-            <h4 class="card-date">
-              {{ formatDateLabel(item.date) }} ({{ getDayOfWeek(item.date) }})
-            </h4>
             <span 
               class="type-pill"
               :class="{

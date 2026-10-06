@@ -6,6 +6,7 @@ import {
   fetchMonthSchedule,
   saveAdminScheduleDates,
   submitAttendance,
+  submitBatchAttendance,
   cancelAttendance,
   checkAdminStatus,
   getLastAttendeeName,
@@ -430,6 +431,7 @@ const onOpenAttendModal = (dayItem?: ScheduleDayItem, targetName?: string) => {
 const onUpdateDateSessionType = async (payload: {
   dateStr: string;
   sessionType: SessionType;
+  adminSessionType?: 'day' | 'overnight';
   customStartTime?: string;
   customEndTime?: string;
   customIsOvernight?: boolean;
@@ -441,6 +443,7 @@ const onUpdateDateSessionType = async (payload: {
   currentDates[targetIdx] = {
     ...currentDates[targetIdx],
     sessionType: payload.sessionType,
+    adminSessionType: payload.adminSessionType || currentDates[targetIdx].adminSessionType,
     customStartTime: payload.customStartTime,
     customEndTime: payload.customEndTime,
     customIsOvernight: payload.customIsOvernight
@@ -642,6 +645,41 @@ const onAttendSubmit = async (payload: {
   }
 };
 
+// 다중 참가자 일괄 등록 핸들러
+const onAttendBatchSubmit = async (payload: {
+  attendees: Array<{
+    name: string;
+    isOvernight: boolean;
+    startTime: string;
+    endTime: string;
+    isCustomTime: boolean;
+    memo?: string;
+  }>;
+  pin: string;
+}) => {
+  if (!selectedDayItem.value) return;
+
+  const res = await submitBatchAttendance(
+    currentMonth.value,
+    selectedDayItem.value.date,
+    payload.attendees,
+    payload.pin,
+    isAdmin.value,
+    true
+  );
+
+  if (res.success) {
+    monthSchedule.value = res.data;
+    const updated = res.data.dates.find(d => d.date === selectedDayItem.value?.date);
+    if (updated) selectedDayItem.value = updated;
+
+    isAttendModalOpen.value = false;
+    showToast(`${payload.attendees.length}명의 참석자가 등록되었습니다.`);
+  } else {
+    showToast(res.error || '일괄 참석 등록에 실패했습니다.', 'error');
+  }
+};
+
 // 참석 취소 핸들러
 const onAttendCancel = async (payload: { name: string; pin: string }) => {
   if (!selectedDayItem.value) return;
@@ -838,6 +876,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       :creatorName="selectedDayItem?.creator || ''"
       @close="isAttendModalOpen = false"
       @submit="onAttendSubmit"
+      @submitBatch="onAttendBatchSubmit"
       @cancel="onAttendCancel"
     />
 

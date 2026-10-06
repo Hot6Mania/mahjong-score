@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import type { ScheduleDayItem, SessionType } from '@/types/schedule';
-import { computeEffectiveOverlapRange } from '@/utils/timelineEngine';
+import type { ScheduleDayItem, SessionType, ScheduleAttendee } from '@/types/schedule';
+import { computeEffectiveOverlapRange, getAttendeeInterval } from '@/utils/timelineEngine';
 import { getSavedPins, hashPin } from '@/services/scheduleService';
 
 const props = defineProps<{
@@ -19,6 +19,7 @@ const emit = defineEmits<{
   (e: 'updateSessionType', payload: {
     dateStr: string;
     sessionType: SessionType;
+    adminSessionType?: 'day' | 'overnight';
     customStartTime?: string;
     customEndTime?: string;
     customIsOvernight?: boolean;
@@ -40,6 +41,9 @@ const isEditingCustomSession = ref(false);
 const customStartInput = ref('10:00');
 const customEndInput = ref('22:00');
 const customOvernightInput = ref(false);
+
+// 타임테이블 가로(horizontal)/세로(vertical) 토글 모드
+const timetableOrientation = ref<'horizontal' | 'vertical'>('horizontal');
 
 // 오전/오후 판별 및 토글
 const isPm = (timeStr: string): boolean => {
@@ -89,12 +93,127 @@ const getDayOfWeek = (dateStr: string) => {
   return days[d.getDay()] || '';
 };
 
+// 타임테이블 전체 윈도우 계산 (시작분, 종료분, 전체분)
+const timetableWindow = computed(() => {
+  if (!props.dayItem || !props.dayItem.attendees || props.dayItem.attendees.length === 0) {
+    return { startMin: 600, endMin: 1380, totalMin: 780, isOvernight: false };
+  }
+  const attendees = props.dayItem.attendees;
+  const isOvernight = props.dayItem.sessionType === 'overnight' ||
+    props.dayItem.customIsOvernight ||
+    props.dayItem.adminSessionType === 'overnight' ||
+    attendees.some(a => a.isOvernight);
+
+  let minStart = 600; // 10:00
+  let maxEnd = isOvernight ? 1800 : 1380; // 익일 06:00 (1800분) 또는 23:00 (1380분)
+
+  for (const a of attendees) {
+    const [s, e] = getAttendeeInterval(a);
+    if (s < minStart) minStart = Math.max(360, s);
+    if (e > maxEnd) maxEnd = Math.min(2160, e);
+  }
+
+  const windowStart = Math.floor(minStart / 60) * 60;
+  const windowEnd = Math.ceil(maxEnd / 60) * 60;
+
+  return {
+    startMin: windowStart,
+    endMin: windowEnd,
+    totalMin: Math.max(60, windowEnd - windowStart),
+    isOvernight
+  };
+});
+
+// 가로 시간표 눈금 (2시간 간격)
+const timeTicks = computed(() => {
+  const { startMin, endMin } = timetableWindow.value;
+  const ticks: { min: number; label: string }[] = [];
+  const step = 120;
+  for (let m = startMin; m <= endMin; m += step) {
+    const isNextDay = m >= 1440;
+    const h = Math.floor((m % 1440) / 60);
+    const label = isNextDay ? `+${String(h).padStart(2, '0')}:00` : `${String(h).padStart(2, '0')}:00`;
+    ticks.push({ min: m, label });
+  }
+  return ticks;
+});
+
+// 세로 시간표 눈금 (1시간 간격)
+const verticalTimeTicks = computed(() => {
+  const { startMin, endMin } = timetableWindow.value;
+  const ticks: { min: number; label: string; hour: number }[] = [];
+  for (let m = startMin; m <= endMin; m += 60) {
+    const isNextDay = m >= 1440;
+    const h = Math.floor((m % 1440) / 60);
+    const label = isNextDay ? `익일 ${h}시` : `${h}시`;
+    ticks.push({ min: m, label, hour: h });
+  }
+  return ticks;
+});
+
+// 개별 참가자 바/블록 위치 및 시간 레이블
+const getAttendeeBar = (att: ScheduleAttendee) => {
+  const [sMin, eMin] = getAttendeeInterval(att);
+  const { startMin, totalMin } = timetableWindow.value;
+
+  const leftPercent = Math.max(0, Math.min(100, ((sMin - startMin) / totalMin) * 100));
+  const widthPercent = Math.max(3, Math.min(100 - leftPercent, ((eMin - sMin) / totalMin) * 100));
+
+  const topPercent = Math.max(0, Math.min(100, ((sMin - startMin) / totalMin) * 100));
+  const heightPercent = Math.max(4, Math.min(100 - topPercent, ((eMin - sMin) / totalMin) * 100));
+
+  const startFormatted = att.startTime || '10:00';
+  const endFormatted = att.isOvernight ? '익일' : (att.endTime || '22:00');
+
+  return {
+    left: `${leftPercent}%`,
+    width: `${widthPercent}%`,
+    top: `${topPercent}%`,
+    height: `${heightPercent}%`,
+    timeLabel: `${startFormatted} ~ ${endFormatted}`,
+    isOvernight: att.isOvernight
+  };
+};
+
+// 골든타임(4인 이상 겹치는 시간) 영역 하이라이트
+const overlapHighlightRegion = computed(() => {
+  if (!props.dayItem?.attendees || props.dayItem.attendees.length < 4) return null;
+  const intervals = props.dayItem.attendees.map(a => getAttendeeInterval(a));
+  const { startMin, endMin, totalMin } = timetableWindow.value;
+
+  let firstMin: number | null = null;
+  let lastMin: number | null = null;
+  for (let m = startMin; m <= endMin; m += 15) {
+    const active = intervals.filter(([s, e]) => s <= m && m < e).length;
+    if (active >= 4) {
+      if (firstMin === null) firstMin = m;
+      lastMin = m + 15;
+    }
+  }
+
+  if (firstMin === null || lastMin === null) return null;
+
+  const leftPercent = Math.max(0, Math.min(100, ((firstMin - startMin) / totalMin) * 100));
+  const widthPercent = Math.max(0, Math.min(100 - leftPercent, ((lastMin - firstMin) / totalMin) * 100));
+
+  const topPercent = Math.max(0, Math.min(100, ((firstMin - startMin) / totalMin) * 100));
+  const heightPercent = Math.max(0, Math.min(100 - topPercent, ((lastMin - firstMin) / totalMin) * 100));
+
+  return {
+    left: `${leftPercent}%`,
+    width: `${widthPercent}%`,
+    top: `${topPercent}%`,
+    height: `${heightPercent}%`
+  };
+});
+
 const changeSession = (type: 'day' | 'overnight') => {
   if (!props.dayItem) return;
   isEditingCustomSession.value = false;
   emit('updateSessionType', {
     dateStr: props.dayItem.date,
-    sessionType: type
+    sessionType: type,
+    adminSessionType: props.dayItem.adminSessionType
   });
 };
 
@@ -103,6 +222,7 @@ const saveCustomSession = () => {
   emit('updateSessionType', {
     dateStr: props.dayItem.date,
     sessionType: 'custom',
+    adminSessionType: props.dayItem.adminSessionType,
     customStartTime: customStartInput.value,
     customEndTime: customEndInput.value,
     customIsOvernight: customOvernightInput.value
@@ -355,9 +475,17 @@ const onConfirmSessionClick = () => {
       <div class="apple-modal-sheet">
         <!-- 헤더 (깔끔한 2행 구조) -->
         <div class="sheet-header">
-          <!-- 1행: 날짜 타이틀 & 우측 아이콘 툴바 -->
+          <!-- 1행: 날짜 타이틀 & 우측 회차 뱃지 & 우측 아이콘 툴바 -->
           <div class="header-main-row">
-            <h3 class="sheet-title">{{ dayItem.date }} ({{ getDayOfWeek(dayItem.date) }})</h3>
+            <div class="title-with-badge">
+              <h3 class="sheet-title">{{ dayItem.date }} ({{ getDayOfWeek(dayItem.date) }})</h3>
+              <span v-if="dayItem.isConfirmed && sessionNumber" class="session-badge badge-confirmed">
+                제{{ sessionNumber }}회
+              </span>
+              <span v-else class="session-badge badge-recruiting">
+                {{ attendeeCount >= 4 ? '확정 대기' : '모집중' }}
+              </span>
+            </div>
             <div class="header-actions">
               <!-- 4인 이상 충족 시 노출되는 출발 확정 토글 버튼 -->
               <button
@@ -404,14 +532,8 @@ const onConfirmSessionClick = () => {
           <!-- 2행: 상태 배지 서브 바 -->
           <div class="header-sub-row">
             <div class="title-badge-row">
-              <span v-if="dayItem.isConfirmed && sessionNumber" class="session-badge badge-confirmed">
-                제{{ sessionNumber }}회
-              </span>
-              <span v-else class="session-badge badge-recruiting">
-                {{ attendeeCount >= 4 ? '확정 대기' : '모집중' }}
-              </span>
               <span class="count-badge" :class="{ 'count-full': attendeeCount >= 5, 'count-min': attendeeCount === 4 }">
-                {{ attendeeCount }}명
+                {{ attendeeCount }}명 참가
               </span>
               <span v-if="dayItem.sessionType === 'overnight'" class="tag-overnight">밤샘</span>
               <span v-else-if="dayItem.sessionType === 'custom'" class="tag-custom">커스텀</span>
@@ -513,6 +635,150 @@ const onConfirmSessionClick = () => {
             <div v-if="overlapTimeRange" class="info-row highlight-row">
               <span class="info-label">대국 가능 시간</span>
               <span class="info-value highlight-text">{{ overlapTimeRange }}</span>
+            </div>
+          </div>
+
+          <!-- 회차 타임테이블 인터랙티브 뷰 섹션 -->
+          <div v-if="attendeeCount > 0" class="timetable-section">
+            <div class="timetable-header">
+              <div class="timetable-title-group">
+                <span class="timetable-title">회차 타임테이블</span>
+                <span v-if="overlapTimeRange" class="timetable-sub-badge">4인 성립</span>
+              </div>
+              <!-- 가로 / 세로 토글 스위치 -->
+              <div class="orientation-toggle-group">
+                <button
+                  type="button"
+                  class="btn-orientation"
+                  :class="{ active: timetableOrientation === 'horizontal' }"
+                  @click="timetableOrientation = 'horizontal'"
+                  title="가로 타임라인 보기"
+                >
+                  가로형
+                </button>
+                <button
+                  type="button"
+                  class="btn-orientation"
+                  :class="{ active: timetableOrientation === 'vertical' }"
+                  @click="timetableOrientation = 'vertical'"
+                  title="세로 시간표 보기"
+                >
+                  세로형
+                </button>
+              </div>
+            </div>
+
+            <!-- 1) 가로 타임라인 뷰 (Gantt) -->
+            <div v-if="timetableOrientation === 'horizontal'" class="horizontal-timetable-card">
+              <!-- 상단 시간 눈금 헤더 -->
+              <div class="time-axis-header">
+                <div class="axis-spacer"></div>
+                <div class="axis-ticks">
+                  <span
+                    v-for="tick in timeTicks"
+                    :key="tick.min"
+                    class="axis-tick-label"
+                    :style="{ left: `${((tick.min - timetableWindow.startMin) / timetableWindow.totalMin) * 100}%` }"
+                  >
+                    {{ tick.label }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- 참가자 행들 -->
+              <div class="horizontal-rows-wrapper">
+                <!-- 4인 이상 겹침 골든타임 배경 하이라이트 -->
+                <div
+                  v-if="overlapHighlightRegion"
+                  class="horizontal-golden-range"
+                  :style="{ left: overlapHighlightRegion.left, width: overlapHighlightRegion.width }"
+                  title="4인 이상 대국 가능 시간대"
+                ></div>
+
+                <div
+                  v-for="att in dayItem.attendees"
+                  :key="att.id"
+                  class="horizontal-row"
+                  :class="{ 'is-me': att.name === myAttendeeName }"
+                >
+                  <div class="row-user-label" :title="att.name">
+                    <span class="user-name">{{ att.name }}</span>
+                    <span v-if="att.name === myAttendeeName" class="badge-me-dot">나</span>
+                  </div>
+                  <div class="row-track">
+                    <!-- 시간 바 (직사각형 막대) -->
+                    <div
+                      class="time-bar"
+                      :class="{
+                        'is-me-bar': att.name === myAttendeeName,
+                        'is-overnight-bar': att.isOvernight
+                      }"
+                      :style="{ left: getAttendeeBar(att).left, width: getAttendeeBar(att).width }"
+                      :title="`${att.name}: ${getAttendeeBar(att).timeLabel}${att.memo ? ' (' + att.memo + ')' : ''}`"
+                    >
+                      <span class="bar-label">{{ getAttendeeBar(att).timeLabel }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2) 세로 시간표 뷰 (Vertical Timetable) -->
+            <div v-else class="vertical-timetable-card">
+              <div class="vertical-timetable-scroll">
+                <!-- 좌측 세로 시간축 -->
+                <div class="vertical-time-axis">
+                  <div
+                    v-for="tick in verticalTimeTicks"
+                    :key="tick.min"
+                    class="vertical-axis-tick"
+                    :style="{ top: `${((tick.min - timetableWindow.startMin) / timetableWindow.totalMin) * 100}%` }"
+                  >
+                    <span class="tick-text">{{ tick.label }}</span>
+                    <div class="tick-line"></div>
+                  </div>
+                </div>
+
+                <!-- 우측 참가자 열들 (Columns) -->
+                <div class="vertical-columns-container">
+                  <!-- 4인 이상 골든타임 수평 하이라이트 -->
+                  <div
+                    v-if="overlapHighlightRegion"
+                    class="vertical-golden-range"
+                    :style="{ top: overlapHighlightRegion.top, height: overlapHighlightRegion.height }"
+                    title="4인 이상 대국 가능 시간대"
+                  ></div>
+
+                  <div
+                    v-for="att in dayItem.attendees"
+                    :key="att.id"
+                    class="vertical-attendee-col"
+                    :class="{ 'is-me': att.name === myAttendeeName }"
+                  >
+                    <!-- 참가자 이름 컬럼 헤더 -->
+                    <div class="col-header" :title="att.name">
+                      <span class="col-name">{{ att.name }}</span>
+                      <span v-if="att.name === myAttendeeName" class="col-me-badge">나</span>
+                    </div>
+
+                    <!-- 세로 트랙 및 직사각형 블록 -->
+                    <div class="col-track">
+                      <div
+                        class="vertical-time-block"
+                        :class="{
+                          'is-me-block': att.name === myAttendeeName,
+                          'is-overnight-block': att.isOvernight
+                        }"
+                        :style="{ top: getAttendeeBar(att).top, height: getAttendeeBar(att).height }"
+                        :title="`${att.name}: ${getAttendeeBar(att).timeLabel}${att.memo ? ' (' + att.memo + ')' : ''}`"
+                      >
+                        <span class="block-time">{{ getAttendeeBar(att).timeLabel }}</span>
+                        <span v-if="att.memo" class="block-memo">{{ att.memo }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -707,7 +973,7 @@ const onConfirmSessionClick = () => {
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
   border-radius: 20px;
   width: 100%;
-  max-width: 440px;
+  max-width: 480px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
   display: flex;
   flex-direction: column;
@@ -748,6 +1014,14 @@ const onConfirmSessionClick = () => {
   gap: 12px;
 }
 
+.title-with-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .header-sub-row {
   display: flex;
   align-items: center;
@@ -762,11 +1036,396 @@ const onConfirmSessionClick = () => {
 
 .sheet-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.02em;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* 타임테이블 섹션 스타일 */
+.timetable-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-hover-color, #f8fafc);
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+:global(html.dark) .timetable-section {
+  background: rgba(30, 41, 59, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.timetable-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.timetable-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timetable-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-color, #0f172a);
+}
+
+.timetable-sub-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.12);
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+.orientation-toggle-group {
+  display: inline-flex;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px;
+  border-radius: 8px;
+  gap: 2px;
+}
+:global(html.dark) .orientation-toggle-group {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.btn-orientation {
+  border: none;
+  background: transparent;
+  color: var(--text-dimmed, #64748b);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-orientation.active {
+  background: var(--card-bg-color, #ffffff);
+  color: #2563eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+:global(html.dark) .btn-orientation.active {
+  background: #334155;
+  color: #60a5fa;
+}
+
+/* 1) 가로 타임라인 (Gantt) */
+.horizontal-timetable-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.time-axis-header {
+  display: flex;
+  align-items: center;
+  position: relative;
+  height: 18px;
+}
+
+.axis-spacer {
+  width: 58px;
+  flex-shrink: 0;
+}
+
+.axis-ticks {
+  position: relative;
+  flex: 1;
+  height: 100%;
+}
+
+.axis-tick-label {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dimmed, #94a3b8);
+  white-space: nowrap;
+}
+
+.horizontal-rows-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.horizontal-golden-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(234, 179, 8, 0.15);
+  border-left: 1px dashed rgba(202, 138, 4, 0.4);
+  border-right: 1px dashed rgba(202, 138, 4, 0.4);
+  pointer-events: none;
+  z-index: 1;
+  border-radius: 4px;
+}
+
+.horizontal-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+  height: 24px;
+  z-index: 2;
+}
+
+.row-user-label {
+  width: 58px;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-color, #334155);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.horizontal-row.is-me .row-user-label {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.badge-me-dot {
+  font-size: 9px;
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: #2563eb;
+  color: #ffffff;
+  line-height: 1;
+}
+
+.row-track {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 6px;
+}
+:global(html.dark) .row-track {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.time-bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: #93c5fd;
+  color: #1e3a8a;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: all 0.15s ease;
+}
+
+.time-bar.is-me-bar {
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 2px 5px rgba(59, 130, 246, 0.3);
+}
+
+.time-bar.is-overnight-bar {
+  background: #a855f7;
+  color: #ffffff;
+}
+
+/* 2) 세로 시간표 (Vertical Timetable) */
+.vertical-timetable-card {
+  position: relative;
+  background: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
+  border-radius: 10px;
+  overflow: hidden;
+}
+:global(html.dark) .vertical-timetable-card {
+  background: #0f172a;
+}
+
+.vertical-timetable-scroll {
+  display: flex;
+  position: relative;
+  height: 320px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 8px 10px;
+}
+
+.vertical-time-axis {
+  position: relative;
+  width: 50px;
+  flex-shrink: 0;
+  height: 100%;
+  border-right: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.vertical-axis-tick {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 4px;
+}
+
+.tick-text {
+  font-size: 10px;
+  color: var(--text-dimmed, #94a3b8);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tick-line {
+  position: absolute;
+  right: -1px;
+  width: 4px;
+  height: 1px;
+  background: var(--border-color, rgba(0, 0, 0, 0.2));
+}
+
+.vertical-columns-container {
+  display: flex;
+  position: relative;
+  flex: 1;
+  height: 100%;
+  gap: 8px;
+  padding-left: 8px;
+  min-width: min-content;
+}
+
+.vertical-golden-range {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(234, 179, 8, 0.15);
+  border-top: 1px dashed rgba(202, 138, 4, 0.4);
+  border-bottom: 1px dashed rgba(202, 138, 4, 0.4);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.vertical-attendee-col {
+  display: flex;
+  flex-direction: column;
+  width: 72px;
+  flex-shrink: 0;
+  height: 100%;
+  position: relative;
+  z-index: 2;
+}
+
+.col-header {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-color, #334155);
+  text-align: center;
+  border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vertical-attendee-col.is-me .col-header {
+  color: #2563eb;
+}
+
+.col-me-badge {
+  font-size: 8px;
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.col-track {
+  position: relative;
+  flex: 1;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 6px;
+  margin-top: 4px;
+}
+:global(html.dark) .col-track {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.vertical-time-block {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid #3b82f6;
+  color: #1e40af;
+  border-radius: 6px;
+  padding: 4px 3px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: all 0.15s ease;
+}
+:global(html.dark) .vertical-time-block {
+  color: #93c5fd;
+}
+
+.vertical-time-block.is-me-block {
+  background: rgba(37, 99, 235, 0.3);
+  border-color: #2563eb;
+  border-width: 2px;
+  font-weight: 700;
+}
+
+.vertical-time-block.is-overnight-block {
+  background: rgba(168, 85, 247, 0.25);
+  border-color: #a855f7;
+  color: #7e22ce;
+}
+:global(html.dark) .vertical-time-block.is-overnight-block {
+  color: #d8b4fe;
+}
+
+.block-time {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.1;
+  word-break: break-all;
+}
+
+.block-memo {
+  font-size: 8px;
+  opacity: 0.85;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-badge {

@@ -1,4 +1,5 @@
 import type { ScheduleDayItem, ScheduleMonthData } from '@/types/schedule';
+import { computeSessionTimeFromAttendees } from '@/utils/timelineEngine';
 
 export function getWorkerUrl(): string {
   const custom = localStorage.getItem('google_auth_worker_url');
@@ -519,10 +520,147 @@ export async function submitAttendance(
     });
   }
 
+  // 참가자 시간 기준 모임 시간 유동적 자동 동기화
+  const updatedSession = computeSessionTimeFromAttendees(targetDay.attendees, targetDay.adminSessionType || targetDay.sessionType);
+  targetDay.customStartTime = updatedSession.customStartTime;
+  targetDay.customEndTime = updatedSession.customEndTime;
+  targetDay.customIsOvernight = updatedSession.customIsOvernight;
+  targetDay.sessionType = updatedSession.sessionType;
+
   currentData.updatedAt = Date.now();
   if (trimmedPin && trimmedPin.length >= 4) {
     saveUserPin(trimmedName, trimmedPin, !isProxy);
   }
+  saveLocalMonthSchedule(currentData);
+
+  return { success: true, data: currentData };
+}
+
+/**
+ * 다중 참석자 일괄 등록 (관리자 및 개설자 모드)
+ */
+export async function submitBatchAttendance(
+  month: string,
+  date: string,
+  attendeesInput: Array<{
+    name: string;
+    isOvernight: boolean;
+    startTime: string;
+    endTime: string;
+    isCustomTime?: boolean;
+    memo?: string;
+  }>,
+  pin: string,
+  isAdmin?: boolean,
+  _isProxy?: boolean
+): Promise<{ success: boolean; data: ScheduleMonthData; error?: string }> {
+  if (!attendeesInput || attendeesInput.length === 0) {
+    return { success: false, data: getLocalMonthSchedule(month), error: '추가할 참석자를 선택해주세요.' };
+  }
+
+  const trimmedPin = pin.trim();
+  if (!isAdmin && (!trimmedPin || trimmedPin.length < 4)) {
+    return { success: false, data: getLocalMonthSchedule(month), error: '4자리 확인 PIN을 입력해주세요.' };
+  }
+
+  const pinHash = trimmedPin && trimmedPin.length >= 4 ? await hashPin(trimmedPin) : 'admin_bypass';
+  const cipher = localStorage.getItem('google_refresh_cipher');
+  const lastName = getLastAttendeeName();
+
+  const formattedAttendees = attendeesInput.map(a => ({
+    ...a,
+    name: a.name.trim(),
+    pinHash
+  }));
+
+  try {
+    const res = await fetch(`${getWorkerUrl()}/api/schedule/attend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        month,
+        date,
+        attendees: formattedAttendees,
+        pin: trimmedPin,
+        creator_name: lastName,
+        my_name: lastName,
+        refresh_cipher: cipher,
+        access_token: localStorage.getItem('google_access_token'),
+        admin_passcode: getAdminPasscode()
+      })
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.success && json.data) {
+        saveLocalMonthSchedule(json.data);
+        return { success: true, data: json.data };
+      } else if (json && json.error) {
+        return { success: false, data: getLocalMonthSchedule(month), error: json.error };
+      }
+    }
+  } catch (err) {
+    console.warn('Worker 다중 참석 등록 실패, 로컬 처리 진행:', err);
+  }
+
+  // 로컬 폴백 처리
+  const currentData = getLocalMonthSchedule(month);
+  const targetDay = currentData.dates.find(d => d.date === date);
+
+  if (!targetDay) {
+    return { success: false, data: currentData, error: '해당 날짜의 일정을 찾을 수 없습니다.' };
+  }
+
+  if (!targetDay.attendees) {
+    targetDay.attendees = [];
+  }
+
+  const isCreator = !!(targetDay.creator && targetDay.creator === lastName);
+  const canManage = !!(isAdmin || isCreator);
+
+  for (const attendeeInput of attendeesInput) {
+    const trimmedName = attendeeInput.name.trim();
+    if (!trimmedName) continue;
+
+    const existingIdx = targetDay.attendees.findIndex(a => a.name === trimmedName);
+    if (existingIdx !== -1) {
+      const existing = targetDay.attendees[existingIdx];
+      if (!canManage && existing.pinHash && existing.pinHash !== 'admin_bypass' && existing.pinHash !== pinHash) {
+        continue;
+      }
+      targetDay.attendees[existingIdx] = {
+        ...existing,
+        isOvernight: attendeeInput.isOvernight,
+        startTime: attendeeInput.startTime,
+        endTime: attendeeInput.endTime,
+        isCustomTime: attendeeInput.isCustomTime,
+        memo: attendeeInput.memo,
+        pinHash: (pinHash && pinHash !== 'admin_bypass') ? pinHash : (existing.pinHash || targetDay.creatorPinHash || 'admin_bypass'),
+        updatedAt: Date.now()
+      };
+    } else {
+      targetDay.attendees.push({
+        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        name: trimmedName,
+        isOvernight: attendeeInput.isOvernight,
+        startTime: attendeeInput.startTime,
+        endTime: attendeeInput.endTime,
+        isCustomTime: attendeeInput.isCustomTime,
+        memo: attendeeInput.memo,
+        pinHash: (pinHash && pinHash !== 'admin_bypass') ? pinHash : (targetDay.creatorPinHash || 'admin_bypass'),
+        updatedAt: Date.now()
+      });
+    }
+  }
+
+  // 참가자 기준 모임 시간 유동적 동기화
+  const updatedSession = computeSessionTimeFromAttendees(targetDay.attendees, targetDay.adminSessionType || targetDay.sessionType);
+  targetDay.customStartTime = updatedSession.customStartTime;
+  targetDay.customEndTime = updatedSession.customEndTime;
+  targetDay.customIsOvernight = updatedSession.customIsOvernight;
+  targetDay.sessionType = updatedSession.sessionType;
+
+  currentData.updatedAt = Date.now();
   saveLocalMonthSchedule(currentData);
 
   return { success: true, data: currentData };
@@ -606,6 +744,14 @@ export async function cancelAttendance(
   }
 
   targetDay.attendees = targetDay.attendees.filter(a => a.name !== trimmedName);
+
+  // 참가자 취소 후 모임 시간 유동적 동기화
+  const updatedSession = computeSessionTimeFromAttendees(targetDay.attendees, targetDay.adminSessionType || targetDay.sessionType);
+  targetDay.customStartTime = updatedSession.customStartTime;
+  targetDay.customEndTime = updatedSession.customEndTime;
+  targetDay.customIsOvernight = updatedSession.customIsOvernight;
+  targetDay.sessionType = updatedSession.sessionType;
+
   currentData.updatedAt = Date.now();
   saveLocalMonthSchedule(currentData);
 
