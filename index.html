@@ -14,6 +14,58 @@
         } catch (e) {}
       })();
     </script>
+    <!-- Global Chunk / Asset Load Failure Recovery -->
+    <script>
+      (function() {
+        var reloadKey = 'mahjong_chunk_reload_ts';
+        function tryRecover() {
+          try {
+            var last = sessionStorage.getItem(reloadKey);
+            var now = Date.now();
+            if (!last || now - parseInt(last, 10) > 12000) {
+              sessionStorage.setItem(reloadKey, String(now));
+              if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(function(regs) {
+                  for (var i = 0; i < regs.length; i++) {
+                    regs[i].update();
+                  }
+                });
+              }
+              window.location.reload();
+            }
+          } catch (e) {}
+        }
+
+        window.addEventListener('error', function(e) {
+          var target = e.target;
+          if (target && (target.tagName === 'SCRIPT' || target.tagName === 'LINK')) {
+            var src = target.src || target.href || '';
+            if (src.indexOf('/assets/') !== -1) {
+              tryRecover();
+              return;
+            }
+          }
+          var msg = (e && e.message) ? e.message : '';
+          if (
+            msg.indexOf('Failed to fetch dynamically imported module') !== -1 ||
+            msg.indexOf('Importing a module script failed') !== -1 ||
+            msg.indexOf('Refused to apply style') !== -1
+          ) {
+            tryRecover();
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e && e.reason ? (e.reason.message || String(e.reason)) : '';
+          if (
+            reason.indexOf('Failed to fetch dynamically imported module') !== -1 ||
+            reason.indexOf('Importing a module script failed') !== -1
+          ) {
+            tryRecover();
+          }
+        });
+      })();
+    </script>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-SVWTT4WQNZ"></script>
     <script>
@@ -89,7 +141,7 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          const deployVersion = "20261006_2210";
+          const deployVersion = "20261006_2245";
           const swBase = window.location.pathname.startsWith('/mahjong-score') ? '/mahjong-score' : '';
           navigator.serviceWorker.register(`${swBase}/sw.js?v=${deployVersion}`)
             .then(reg => {

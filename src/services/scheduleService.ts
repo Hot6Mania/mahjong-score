@@ -107,7 +107,7 @@ export function getLastAttendeeName(): string {
 /**
  * 로컬 스토리지 기반 오프라인/폴백 스케줄 조회
  */
-function getLocalMonthSchedule(month: string): ScheduleMonthData {
+export function getLocalMonthSchedule(month: string): ScheduleMonthData {
   try {
     const raw = localStorage.getItem(`${STORAGE_SCHEDULE_PREFIX}${month}`);
     if (raw) {

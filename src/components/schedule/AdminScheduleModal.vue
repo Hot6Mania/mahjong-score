@@ -13,6 +13,7 @@ import {
   rollbackSchedule,
   type AdminPasscodeInfo
 } from '@/services/scheduleService';
+import { logoutGoogle } from '@/utils/googleSheets';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -25,9 +26,52 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'save', dates: ScheduleDayItem[]): void;
+  (e: 'adminLogout'): void;
 }>();
 
-const editMode = ref<'visual' | 'text' | 'passcode' | 'pin' | 'history' | 'rollback'>('visual');
+type PrimaryTab = 'schedule' | 'tools';
+type SubTab = 'visual' | 'text' | 'passcode' | 'pin' | 'history' | 'rollback';
+
+const primaryTab = ref<PrimaryTab>('schedule');
+const editMode = ref<SubTab>('visual');
+
+const switchPrimaryTab = (tab: PrimaryTab) => {
+  primaryTab.value = tab;
+  if (tab === 'schedule') {
+    if (editMode.value !== 'visual' && editMode.value !== 'text') {
+      editMode.value = 'visual';
+    }
+  } else {
+    if (editMode.value === 'visual' || editMode.value === 'text') {
+      editMode.value = 'passcode';
+    }
+  }
+};
+
+const isGoogleAdmin = computed(() => {
+  return typeof window !== 'undefined' && localStorage.getItem('google_is_logged_in') === 'true';
+});
+
+const handleAdminLogout = () => {
+  if (!confirm('관리자 세션에서 로그아웃하시겠습니까?')) {
+    return;
+  }
+  try {
+    logoutGoogle();
+  } catch (e) {}
+
+  localStorage.removeItem('google_is_logged_in');
+  localStorage.removeItem('google_access_token');
+  localStorage.removeItem('google_refresh_cipher');
+  localStorage.removeItem('google_token_expires_at');
+  sessionStorage.removeItem('schedule_admin_passcode');
+  sessionStorage.removeItem('schedule_admin_verified');
+  sessionStorage.removeItem('schedule_admin_attendee_name');
+
+  window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+  emit('adminLogout');
+  emit('close');
+};
 const rawText = ref('');
 const errorMessage = ref('');
 const registeredPasscodes = ref<AdminPasscodeInfo[]>([]);
@@ -81,6 +125,7 @@ watch(() => props.isOpen, (open) => {
   if (!open) return;
   errorMessage.value = '';
   rawText.value = '';
+  primaryTab.value = 'schedule';
   editMode.value = 'visual';
 
   const map: Record<number, 'none' | SessionType> = {};
@@ -625,11 +670,29 @@ const handleRollback = async (targetId: string, label: string) => {
       <div class="apple-modal-sheet">
         <!-- 모달 헤더 -->
         <div class="sheet-header">
-          <div>
-            <span class="sheet-sub">{{ currentMonth }} 관리자 모드</span>
-            <h3 class="sheet-title">가능한 날짜 풀 수정</h3>
+          <div class="sheet-title-group">
+            <div class="sheet-sub-row">
+              <span class="sheet-sub">{{ currentMonth }} 관리자 모드</span>
+              <span v-if="isGoogleAdmin" class="badge-google-admin">Google 관리자</span>
+            </div>
+            <h3 class="sheet-title">{{ primaryTab === 'schedule' ? '가능한 날짜 풀 수정' : '운영 및 보안 도구' }}</h3>
           </div>
-          <button class="btn-close" @click="emit('close')" aria-label="닫기">✕</button>
+          <div class="header-actions-group">
+            <button
+              type="button"
+              class="btn-admin-logout"
+              @click="handleAdminLogout"
+              title="관리자 권한 로그아웃"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+              <span>관리자 로그아웃</span>
+            </button>
+            <button class="btn-close" @click="emit('close')" aria-label="닫기">✕</button>
+          </div>
         </div>
 
         <!-- 에러 배너 -->
@@ -637,12 +700,35 @@ const handleRollback = async (targetId: string, label: string) => {
           {{ errorMessage }}
         </div>
 
-        <!-- 모드 전환 세그먼트 -->
-        <div class="mode-tabs-wrapper">
-          <div class="apple-segmented-control">
+        <!-- 1차 상위 탭 네비게이션 (이모지 없음) -->
+        <div class="primary-tabs-wrapper">
+          <div class="apple-segmented-control primary-control">
             <button
               type="button"
-              class="segment-btn"
+              class="segment-btn primary-btn"
+              :class="{ active: primaryTab === 'schedule' }"
+              @click="switchPrimaryTab('schedule')"
+            >
+              일정 관리
+            </button>
+            <button
+              type="button"
+              class="segment-btn primary-btn"
+              :class="{ active: primaryTab === 'tools' }"
+              @click="switchPrimaryTab('tools')"
+            >
+              운영 및 보안
+            </button>
+          </div>
+        </div>
+
+        <!-- 2차 하위 서브 탭 네비게이션 (한 줄 정렬) -->
+        <div class="sub-tabs-wrapper">
+          <!-- 1) 일정 관리 하위 탭 -->
+          <div v-if="primaryTab === 'schedule'" class="apple-segmented-control sub-control">
+            <button
+              type="button"
+              class="segment-btn sub-btn"
               :class="{ active: editMode === 'visual' }"
               @click="editMode = 'visual'"
             >
@@ -650,23 +736,27 @@ const handleRollback = async (targetId: string, label: string) => {
             </button>
             <button
               type="button"
-              class="segment-btn"
+              class="segment-btn sub-btn"
               :class="{ active: editMode === 'text' }"
               @click="editMode = 'text'"
             >
               텍스트로 입력
             </button>
+          </div>
+
+          <!-- 2) 운영 및 보안 하위 탭 -->
+          <div v-else class="apple-segmented-control sub-control">
             <button
               type="button"
-              class="segment-btn"
+              class="segment-btn sub-btn"
               :class="{ active: editMode === 'passcode' }"
               @click="editMode = 'passcode'"
             >
-              인증 코드 관리
+              인증 코드
             </button>
             <button
               type="button"
-              class="segment-btn"
+              class="segment-btn sub-btn"
               :class="{ active: editMode === 'pin' }"
               @click="editMode = 'pin'"
             >
@@ -674,7 +764,7 @@ const handleRollback = async (targetId: string, label: string) => {
             </button>
             <button
               type="button"
-              class="segment-btn"
+              class="segment-btn sub-btn"
               :class="{ active: editMode === 'history' }"
               @click="editMode = 'history'"
             >
@@ -682,11 +772,11 @@ const handleRollback = async (targetId: string, label: string) => {
             </button>
             <button
               type="button"
-              class="segment-btn"
+              class="segment-btn sub-btn"
               :class="{ active: editMode === 'rollback' }"
               @click="editMode = 'rollback'"
             >
-              ⏱️ 타임머신 복원
+              타임머신 복원
             </button>
           </div>
         </div>
@@ -1270,7 +1360,7 @@ const handleRollback = async (targetId: string, label: string) => {
           <button type="button" class="btn-cancel" @click="emit('close')">
             닫기
           </button>
-          <button v-if="editMode !== 'passcode' && editMode !== 'pin' && editMode !== 'history' && editMode !== 'rollback'" type="button" class="btn-primary" @click="handleApply">
+          <button v-if="primaryTab === 'schedule'" type="button" class="btn-primary" @click="handleApply">
             {{ selectedCounts.total }}개 일정으로 적용
           </button>
           <button v-else type="button" class="btn-primary" @click="emit('close')">
@@ -1330,11 +1420,26 @@ const handleRollback = async (targetId: string, label: string) => {
 }
 
 .sheet-header {
-  padding: 18px 20px 14px;
+  padding: 16px 20px 12px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
+  gap: 12px;
+}
+
+.sheet-title-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sheet-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  flex-wrap: wrap;
 }
 
 .sheet-sub {
@@ -1342,7 +1447,18 @@ const handleRollback = async (targetId: string, label: string) => {
   color: #2563eb;
   font-weight: 600;
   display: block;
-  margin-bottom: 2px;
+}
+
+.badge-google-admin {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .sheet-title {
@@ -1350,6 +1466,34 @@ const handleRollback = async (targetId: string, label: string) => {
   font-size: 19px;
   font-weight: 700;
   letter-spacing: -0.02em;
+}
+
+.header-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.btn-admin-logout {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-admin-logout:hover {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 .btn-close {
@@ -1368,6 +1512,85 @@ const handleRollback = async (targetId: string, label: string) => {
   padding: 10px 20px;
   font-size: 13px;
   font-weight: 500;
+}
+
+/* 1차 상위 탭 (일정 관리 vs 운영 및 보안) */
+.primary-tabs-wrapper {
+  padding: 12px 20px 6px;
+}
+
+.primary-control {
+  display: flex;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 4px;
+  border-radius: 12px;
+  gap: 4px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.primary-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 8px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-radius: 9px;
+  color: var(--text-dimmed, #64748b);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.primary-btn.active {
+  background: var(--card-bg-color, #ffffff);
+  color: #2563eb;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* 2차 하위 서브 탭 (한 줄 정렬 유지) */
+.sub-tabs-wrapper {
+  padding: 0 20px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.sub-tabs-wrapper::-webkit-scrollbar {
+  display: none;
+}
+
+.sub-control {
+  display: flex;
+  background: var(--input-bg-color, #f8fafc);
+  padding: 3px;
+  border-radius: 10px;
+  gap: 3px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  min-width: 100%;
+}
+
+.sub-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border-radius: 7px;
+  color: var(--text-dimmed, #64748b);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.sub-btn.active {
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #0f172a);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
 .mode-tabs-wrapper {
@@ -2774,8 +2997,30 @@ html.dark .btn-rollback-action:hover:not(:disabled) {
   box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
 }
 
-.btn-rollback-action.highlight:hover:not(:disabled) {
-  background: linear-gradient(135deg, #059669 0%, #047857 100%);
-  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.4);
+html.dark .primary-control {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+html.dark .primary-btn.active {
+  background: #1e293b;
+  color: #60a5fa;
+}
+html.dark .sub-control {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+html.dark .sub-btn.active {
+  background: #1e293b;
+  color: #f1f5f9;
+}
+html.dark .badge-google-admin {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.35);
+}
+html.dark .btn-admin-logout {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #f87171;
 }
 </style>

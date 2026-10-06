@@ -4,6 +4,7 @@ import type { ScheduleDayItem, ScheduleMonthData, SessionType } from '@/types/sc
 import type { MemberStatItem } from '@/services/publicStatsService';
 import {
   fetchMonthSchedule,
+  getLocalMonthSchedule,
   saveAdminScheduleDates,
   submitAttendance,
   submitBatchAttendance,
@@ -15,6 +16,7 @@ import {
   hashPin,
   logScheduleHistory
 } from '@/services/scheduleService';
+import { isScheduleDataEqual } from '@/utils/scheduleComparator';
 import { computeScheduleSessionNumbers, getMaxCompletedSessionNumber } from '@/utils/sessionNumbering';
 import { timeStringToMinutes } from '@/utils/timelineEngine';
 import ScheduleCalendarView from './ScheduleCalendarView.vue';
@@ -40,18 +42,7 @@ const getInitialMonth = (): string => {
       return mParam;
     }
   }
-  // 2. availableSessions 중 최신 회차 날짜 분석 (예: "제16회 261009" -> "2026-10")
-  if (props.availableSessions && props.availableSessions.length > 0) {
-    for (const s of props.availableSessions) {
-      const match = s.match(/(\d{2})(\d{2})\d{2}/);
-      if (match) {
-        const year = `20${match[1]}`;
-        const month = match[2];
-        return `${year}-${month}`;
-      }
-    }
-  }
-  // 3. 로컬 시스템 시간 폴백
+  // 2. 현재 오늘 날짜 기준 (항상 오늘이 속한 달로 기본 포커싱, 예: 2026-10)
   const now = new Date();
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
@@ -65,32 +56,33 @@ const isRefreshing = ref<boolean>(false);
 const toastMessage = ref<string>('');
 const toastType = ref<'success' | 'error' | 'info'>('success');
 
-// props.availableSessions 가 비동기로 뒤늦게 로드될 때 최신 회차 월로 자동 보정
-watch(() => props.availableSessions, (sessions) => {
-  if (sessions && sessions.length > 0 && (!monthSchedule.value.dates || monthSchedule.value.dates.length === 0)) {
-    for (const s of sessions) {
-      const match = s.match(/(\d{2})(\d{2})\d{2}/);
-      if (match) {
-        const target = `20${match[1]}-${match[2]}`;
-        if (target !== currentMonth.value) {
-          currentMonth.value = target;
-        }
-        break;
-      }
-    }
-  }
+// 현재 월 포맷팅 (연도와 큼직한 월 강조 표시용)
+const formattedCurrentMonth = computed(() => {
+  const parts = currentMonth.value.split('-');
+  const y = parts[0] || '2026';
+  const m = parseInt(parts[1] || '10', 10);
+  return {
+    year: `${y}년`,
+    month: `${m}월`
+  };
 });
+
+// 현재 보고 있는 달이 이번 달인지 여부
+const isCurrentMonthToday = computed(() => {
+  return currentMonth.value === getInitialMonth();
+});
+
+// 이번 달(오늘) 바로가기
+const goToTodayMonth = () => {
+  currentMonth.value = getInitialMonth();
+};
 
 // 관리자 상태
 const isAdmin = ref<boolean>(false);
 const adminToken = ref<string | undefined>(undefined);
 
-// 일정 데이터
-const monthSchedule = ref<ScheduleMonthData>({
-  month: currentMonth.value,
-  updatedAt: Date.now(),
-  dates: []
-});
+// 일정 데이터: 초기 마운트 시 즉시 로컬 캐시를 바인딩하여 0초 만에 정상 화면 노출 (스피너 제거)
+const monthSchedule = ref<ScheduleMonthData>(getLocalMonthSchedule(currentMonth.value));
 
 // 내 참가자 이름
 const myAttendeeName = ref<string>(getLastAttendeeName());
@@ -617,10 +609,8 @@ const loadSchedule = async (silent = false) => {
   if (silent) {
     try {
       const data = await fetchMonthSchedule(currentMonth.value);
-      // 데이터 변동 여부 대조 (변동 없을 시 리렌더링 원천 차단)
-      const isUnchanged = JSON.stringify(monthSchedule.value.dates) === JSON.stringify(data.dates)
-        && monthSchedule.value.month === data.month;
-      if (!isUnchanged) {
+      // 데이터 변동 여부 정밀 대조 (변동 없을 시 리렌더링 원천 차단)
+      if (!isScheduleDataEqual(monthSchedule.value, data)) {
         monthSchedule.value = data;
       }
     } catch (e) {
@@ -629,17 +619,31 @@ const loadSchedule = async (silent = false) => {
     return;
   }
 
-  // 사용자가 직접 새로고침을 눌렀거나 초기 로딩일 때
+  // 사용자가 직접 새로고침을 눌렀을 때
   isRefreshing.value = true;
   if (!monthSchedule.value.dates || monthSchedule.value.dates.length === 0) {
     isLoading.value = true;
   }
+
+  const startTime = Date.now();
   try {
     const data = await fetchMonthSchedule(currentMonth.value);
-    monthSchedule.value = data;
+    const hasChanged = !isScheduleDataEqual(monthSchedule.value, data);
+    if (hasChanged) {
+      monthSchedule.value = data;
+      showToast('일정이 최신 상태로 동기화되었습니다.');
+    } else {
+      showToast('이미 최신 일정입니다.');
+    }
   } catch (e) {
     console.error('일정 로드 실패:', e);
+    showToast('일정 동기화에 실패했습니다.', 'error');
   } finally {
+    // 사용자가 새로고침 클릭 시 버튼이 회전하는 자연스러운 피드백 시간(350ms) 보장
+    const elapsed = Date.now() - startTime;
+    if (elapsed < 350) {
+      await new Promise(r => setTimeout(r, 350 - elapsed));
+    }
     isLoading.value = false;
     isRefreshing.value = false;
   }
@@ -662,8 +666,11 @@ const nextMonth = () => {
   currentMonth.value = `${nextY}-${nextM}`;
 };
 
-watch(currentMonth, () => {
-  loadSchedule();
+watch(currentMonth, (newMonth) => {
+  // 월 이동 시 즉시 해당 월 로컬 캐시를 보여줘서 빈 화면 없앰
+  const cached = getLocalMonthSchedule(newMonth);
+  monthSchedule.value = cached;
+  loadSchedule(true);
 });
 
 // 토스트 트리거
@@ -1152,9 +1159,29 @@ const setViewMode = (mode: 'calendar' | 'list') => {
     <div class="schedule-header-bar">
       <!-- 월 선택기 -->
       <div class="month-selector">
-        <button type="button" class="btn-nav-month" @click="prevMonth" title="이전 달">‹</button>
-        <span class="current-month-label">{{ currentMonth }}</span>
-        <button type="button" class="btn-nav-month" @click="nextMonth" title="다음 달">›</button>
+        <button type="button" class="btn-nav-month" @click="prevMonth" title="이전 달">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+        </button>
+        <div class="current-month-display">
+          <span class="year-text">{{ formattedCurrentMonth.year }}</span>
+          <span class="month-highlight">{{ formattedCurrentMonth.month }}</span>
+        </div>
+        <button type="button" class="btn-nav-month" @click="nextMonth" title="다음 달">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </button>
+        <button
+          v-if="!isCurrentMonthToday"
+          type="button"
+          class="btn-today"
+          @click="goToTodayMonth"
+          title="이번 달로 바로가기"
+        >
+          이번 달
+        </button>
         <button
           type="button"
           class="btn-nav-refresh"
@@ -1254,12 +1281,12 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       </div>
     </div>
 
-    <!-- 로딩 스피너 -->
-    <div v-if="isLoading" class="schedule-loading">
+    <!-- 로딩 스피너 (데이터가 전혀 없을 때만 표시) -->
+    <div v-if="isLoading && (!monthSchedule.dates || monthSchedule.dates.length === 0)" class="schedule-loading">
       <div class="spinner"></div>
     </div>
 
-    <!-- 메인 뷰 영역 -->
+    <!-- 메인 뷰 영역 (데이터가 있으면 상시 유지) -->
     <div v-else class="schedule-view-content">
       <!-- 달력 뷰 -->
       <ScheduleCalendarView
@@ -1338,6 +1365,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       :adminToken="adminToken"
       @close="isAdminModalOpen = false"
       @save="onAdminSaveDates"
+      @adminLogout="handleGoogleLogout"
     />
 
     <!-- 일정 만들기 모달 (일정 먼저 생성 후 인원 추가 흐름) -->
@@ -1678,41 +1706,74 @@ const setViewMode = (mode: 'calendar' | 'list') => {
 .month-selector {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 32px;
+  gap: 8px;
+  height: 36px;
 }
 
-.current-month-label {
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--text-color, #0f172a);
-  letter-spacing: -0.02em;
-  min-width: 86px;
+.current-month-display {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 5px;
+  min-width: 105px;
   text-align: center;
-  height: 32px;
-  line-height: 32px;
+  user-select: none;
 }
 
-.btn-nav-month {
-  background: var(--input-bg-color, #f1f5f9);
-  border: 1px solid var(--border-color, #e2e8f0);
+.year-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dimmed, #64748b);
+  letter-spacing: -0.01em;
+}
+
+.month-highlight {
+  font-size: 24px;
+  font-weight: 800;
   color: var(--text-color, #0f172a);
-  width: 32px;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+html.dark .month-highlight {
+  color: #f8fafc;
+}
+
+.btn-today {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: #2563eb;
+  padding: 0 10px;
   height: 32px;
   border-radius: 8px;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s;
-  box-sizing: border-box;
-}
-.btn-nav-month:hover {
-  background: var(--card-bg-color, #ffffff);
+  transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
+.btn-today:hover {
+  background: #3b82f6;
+  color: #ffffff;
+  border-color: #3b82f6;
+}
+
+html.dark .btn-today {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #60a5fa;
+}
+
+html.dark .btn-today:hover {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+.btn-nav-month,
 .btn-nav-refresh {
   background: var(--input-bg-color, #f1f5f9);
   border: 1px solid var(--border-color, #e2e8f0);
@@ -1724,27 +1785,51 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s;
-  box-sizing: border-box;
-  margin-left: 2px;
   padding: 0;
+  margin: 0;
+  line-height: 0;
+  font-size: 0;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+  vertical-align: middle;
 }
+
+.btn-nav-refresh {
+  margin-left: 2px;
+}
+
+.btn-nav-month svg,
+.btn-nav-refresh svg {
+  display: block;
+  margin: auto;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.btn-nav-month:hover,
 .btn-nav-refresh:hover:not(:disabled) {
   background: var(--card-bg-color, #ffffff);
+  border-color: #cbd5e1;
+}
+
+.btn-nav-refresh:hover:not(:disabled) {
   border-color: #3b82f6;
   color: #3b82f6;
 }
+
 .btn-nav-refresh svg {
-  display: block;
   transition: transform 0.2s ease;
 }
+
 .btn-nav-refresh.is-loading svg {
   animation: spinRefresh 0.8s linear infinite;
 }
+
 .btn-nav-refresh:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
+
 @keyframes spinRefresh {
   to { transform: rotate(360deg); }
 }
@@ -1915,9 +2000,9 @@ html.dark .stat-chip.chip-me {
 }
 
 .btn-action-admin {
-  background: #0f172a;
-  color: #ffffff;
-  border: none;
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #cbd5e1;
   height: 32px;
   padding: 0 12px;
   border-radius: 8px;
@@ -1928,15 +2013,25 @@ html.dark .stat-chip.chip-me {
   align-items: center;
   gap: 6px;
   box-sizing: border-box;
-  transition: opacity 0.15s;
+  transition: all 0.15s ease;
 }
+
 .btn-action-admin:hover {
-  opacity: 0.88;
+  background: #e2e8f0;
+  border-color: #94a3b8;
+  color: #1e293b;
 }
+
 html.dark .btn-action-admin {
   background: #2563eb;
   color: #ffffff;
+  border-color: transparent;
   box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+}
+
+html.dark .btn-action-admin:hover {
+  background: #1d4ed8;
+  color: #ffffff;
 }
 .admin-dot {
   width: 6px;
