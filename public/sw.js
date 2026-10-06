@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mahjong-score-v6';
+const CACHE_NAME = 'mahjong-score-v7';
 const ASSETS = [
   '/',
   '/index.html',
@@ -44,6 +44,12 @@ self.addEventListener('fetch', (e) => {
       .then((networkResponse) => {
         // 응답이 성공적이면 백그라운드 캐시 스토리지 자동 갱신
         if (networkResponse && networkResponse.status === 200) {
+          const contentType = networkResponse.headers.get('content-type') || '';
+          // 정적 에셋(/assets/...) 요청인데 text/html 응답이 온 경우(404 SPA 리디렉트)는 캐시 오염 방지를 위해 캐시하지 않음
+          const isAsset = url.pathname.startsWith('/assets/');
+          if (isAsset && contentType.includes('text/html')) {
+            return networkResponse;
+          }
           const cacheCopy = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(e.request, cacheCopy);
