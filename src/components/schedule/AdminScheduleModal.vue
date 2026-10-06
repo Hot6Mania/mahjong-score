@@ -506,10 +506,10 @@ const getActionLabel = (action: ScheduleActionType | string): string => {
     case 'ATTEND': return '참석 신청';
     case 'CANCEL_ATTEND': return '참석 취소';
     case 'CLEAR_ATTENDEES': return '전체 비우기';
-    case 'DELETE_SESSION': return '회차 삭제';
+    case 'DELETE_SESSION': return '일정 삭제';
     case 'UPDATE_SESSION_TYPE': return '시간/속성 변경';
     case 'TOGGLE_CONFIRM': return '확정 / 해제';
-    case 'CREATE_SESSION': return '회차 개설';
+    case 'CREATE_SESSION': return '일정 생성';
     case 'UPDATE_DATES': return '후보 일정 수정';
     default: return action;
   }
@@ -1121,10 +1121,10 @@ const handleRollback = async (targetId: string, label: string) => {
                   <option value="ATTEND">참석 신청</option>
                   <option value="CANCEL_ATTEND">참석 취소</option>
                   <option value="CLEAR_ATTENDEES">전체 비우기</option>
-                  <option value="DELETE_SESSION">회차 삭제</option>
+                  <option value="DELETE_SESSION">일정 삭제</option>
                   <option value="TOGGLE_CONFIRM">확정 / 해제</option>
                   <option value="UPDATE_SESSION_TYPE">시간/속성 변경</option>
-                  <option value="CREATE_SESSION">회차 개설</option>
+                  <option value="CREATE_SESSION">일정 생성</option>
                   <option value="UPDATE_DATES">후보 일정 수정</option>
                 </select>
               </div>

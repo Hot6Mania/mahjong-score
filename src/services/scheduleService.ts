@@ -527,7 +527,7 @@ export async function saveAdminScheduleDates(
   dates: ScheduleDayItem[],
   adminToken?: string,
   creatorPin?: string,
-  options?: { baseSessionNumber?: number; isClearAttendees?: boolean; isToggleConfirm?: boolean; targetDate?: string }
+  options?: { baseSessionNumber?: number; isClearAttendees?: boolean; isToggleConfirm?: boolean; isCreateSession?: boolean; targetDate?: string }
 ): Promise<{ success: boolean; data: ScheduleMonthData; error?: string }> {
   const payload: ScheduleMonthData = {
     month,
@@ -553,6 +553,7 @@ export async function saveAdminScheduleDates(
         base_session_number: options?.baseSessionNumber,
         is_clear_attendees: options?.isClearAttendees,
         is_toggle_confirm: options?.isToggleConfirm,
+        is_create_session: options?.isCreateSession,
         target_date: options?.targetDate,
         creator_name: lastName,
         creator_pin: creatorPin,

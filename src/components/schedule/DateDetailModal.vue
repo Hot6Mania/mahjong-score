@@ -381,7 +381,7 @@ const overlapHighlightRegion = computed(() => {
 const changeSession = (type: 'day' | 'overnight') => {
   if (!props.dayItem) return;
   if (type === 'overnight' && isDayOnly.value) {
-    emit('toast', '당일로 개설된 회차는 밤샘으로 변경할 수 없습니다.', 'error');
+    emit('toast', '당일로 생성된 일정은 밤샘으로 변경할 수 없습니다.', 'error');
     return;
   }
   isEditingCustomSession.value = false;
@@ -418,16 +418,16 @@ const isDeleteDatePinModalOpen = ref(false);
 const deleteDatePinInput = ref('');
 const deleteDatePinErrorMessage = ref('');
 
-// 회차 정보 초기화 (날짜는 가능한 일정 목록으로 유지)
+// 일정 정보 초기화 (날짜는 가능한 일정 목록으로 유지)
 const onDeleteDateClick = async () => {
   if (!props.dayItem) return;
 
   const count = props.dayItem.attendees?.length || 0;
   const countMsg = count > 0 ? `\n(등록된 참가자 ${count}명의 신청 내역도 함께 초기화됩니다)` : '';
 
-  // 1) 관리자 로그인 상태인 경우: PIN 없이 즉시 회차 취소 가능
+  // 1) 관리자 로그인 상태인 경우: PIN 없이 즉시 일정 취소 가능
   if (props.isAdmin) {
-    if (confirm(`정말 이 회차(${props.dayItem.date})를 취소하시겠습니까?${countMsg}\n(날짜는 가능한 일정 목록에 그대로 유지됩니다)`)) {
+    if (confirm(`정말 이 일정(${props.dayItem.date})을 취소하시겠습니까?${countMsg}\n(날짜는 가능한 일정 목록에 그대로 유지됩니다)`)) {
       emit('clearAttendees', props.dayItem.date);
     }
     return;
@@ -441,7 +441,7 @@ const onDeleteDateClick = async () => {
     if (cachedPin && cachedPin.length >= 4) {
       const hashedCached = await hashPin(cachedPin);
       if (hashedCached === props.dayItem.creatorPinHash) {
-        if (confirm(`개설자('${creatorName}') 인증이 확인되었습니다.\n정말 이 회차(${props.dayItem.date})를 취소하시겠습니까?${countMsg}\n(날짜는 가능한 일정으로 유지됩니다)`)) {
+        if (confirm(`개설자('${creatorName}') 인증이 확인되었습니다.\n정말 이 일정(${props.dayItem.date})을 취소하시겠습니까?${countMsg}\n(날짜는 가능한 일정으로 유지됩니다)`)) {
           emit('clearAttendees', props.dayItem.date);
           return;
         }
@@ -493,11 +493,11 @@ const confirmDeleteDateWithPin = async () => {
   isDeleteDatePinModalOpen.value = false;
 };
 
-// 해당 회차 참가인원 전체 비우기 (날짜는 가능한 일정으로 유지)
+// 해당 일정 참가인원 전체 비우기 (날짜는 가능한 일정으로 유지)
 const onClearAttendeesClick = () => {
   if (!props.dayItem) return;
   const count = props.dayItem.attendees?.length || 0;
-  if (confirm(`정말 이 회차의 참가 인원을 전부 비우시겠습니까?\n(등록된 참가자 ${count}명이 모두 취소되며, 날짜는 가능한 일정으로 유지됩니다)`)) {
+  if (confirm(`정말 이 일정의 참가 인원을 전부 비우시겠습니까?\n(등록된 참가자 ${count}명이 모두 취소되며, 날짜는 가능한 일정으로 유지됩니다)`)) {
     emit('clearAttendees', props.dayItem.date);
   }
 };
@@ -986,7 +986,7 @@ const handleUnconfirmKeepSheet = () => {
                 type="button"
                 class="btn-share-session"
                 @click="copySessionShareText"
-                title="이 회차 일정 공유 텍스트 복사"
+                title="이 일정 공유 텍스트 복사"
               >
                 <span class="txt-long">공유</span>
                 <span class="txt-short icon-share">
@@ -999,14 +999,14 @@ const handleUnconfirmKeepSheet = () => {
                   </svg>
                 </span>
               </button>
-              <!-- 회차 정보 초기화 휴지통 아이콘 버튼 (날짜는 가능한 일정으로 유지) -->
+              <!-- 일정 정보 초기화 휴지통 아이콘 버튼 (날짜는 가능한 일정으로 유지) -->
               <button
                 v-if="isAdmin || !!dayItem.creator"
                 type="button"
                 class="btn-icon-delete-date"
                 @click="onDeleteDateClick"
-                title="이 회차 정보 및 참가자 명단 초기화 (날짜는 가능한 일정으로 유지)"
-                aria-label="회차 초기화"
+                title="이 일정 정보 및 참가자 명단 초기화 (날짜는 가능한 일정으로 유지)"
+                aria-label="일정 초기화"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="3 6 5 6 21 6"></polyline>
@@ -1020,7 +1020,7 @@ const handleUnconfirmKeepSheet = () => {
           </div>
         </div>
 
-        <!-- 서브 탭 네비게이션 (회차 상세 | 타임테이블) -->
+        <!-- 서브 탭 네비게이션 (일정 상세 | 타임테이블) -->
         <div class="detail-tabs-nav">
           <button
             type="button"
@@ -1028,7 +1028,7 @@ const handleUnconfirmKeepSheet = () => {
             :class="{ active: activeDetailTab === 'info' }"
             @click="activeDetailTab = 'info'"
           >
-            회차 상세
+            일정 상세
           </button>
           <button
             type="button"
@@ -1084,7 +1084,7 @@ const handleUnconfirmKeepSheet = () => {
                     }"
                     :disabled="isDayOnly"
                     @click="changeSession('overnight')"
-                    :title="isDayOnly ? '당일로 개설된 회차는 밤샘으로 변경할 수 없습니다.' : '밤샘 세션 (10:00~익일)'"
+                    :title="isDayOnly ? '당일로 생성된 일정은 밤샘으로 변경할 수 없습니다.' : '밤샘 세션 (10:00~익일)'"
                   >
                     밤샘
                   </button>
@@ -1146,7 +1146,7 @@ const handleUnconfirmKeepSheet = () => {
                     type="button"
                     class="btn-clear-attendees"
                     @click="onClearAttendeesClick"
-                    title="참가자 명단 비우기 및 회차 리셋"
+                    title="참가자 명단 비우기 및 일정 리셋"
                   >
                     전체 비우기
                   </button>
@@ -1578,17 +1578,17 @@ const handleUnconfirmKeepSheet = () => {
     </div>
   </Transition>
 
-  <!-- 회차 취소 4자리 PIN 입력 모달 (날짜는 가능한 일정으로 유지) -->
+  <!-- 일정 취소 4자리 PIN 입력 모달 (날짜는 가능한 일정으로 유지) -->
   <Transition name="apple-modal-fade">
     <div v-if="isDeleteDatePinModalOpen && dayItem" class="pin-modal-backdrop" v-backdrop-dismiss="() => isDeleteDatePinModalOpen = false">
       <div class="pin-modal-sheet">
         <div class="pin-modal-header">
-          <h4 class="pin-modal-title">회차 취소 PIN 확인</h4>
+          <h4 class="pin-modal-title">일정 취소 PIN 확인</h4>
           <button type="button" class="btn-close" @click="isDeleteDatePinModalOpen = false">✕</button>
         </div>
         <div class="pin-modal-body">
           <p class="pin-modal-desc">
-            <strong>{{ dayItem.date }}</strong> 회차를 취소하고 참가자 명단을 초기화하려면 개설자<strong v-if="dayItem.creator"> '{{ dayItem.creator }}'</strong> 님이 설정한 4자리 확인 PIN을 입력해주세요. (날짜는 가능한 일정으로 유지됩니다)
+            <strong>{{ dayItem.date }}</strong> 일정을 취소하고 참가자 명단을 초기화하려면 개설자<strong v-if="dayItem.creator"> '{{ dayItem.creator }}'</strong> 님이 설정한 4자리 확인 PIN을 입력해주세요. (날짜는 가능한 일정으로 유지됩니다)
           </p>
           <p v-if="(dayItem.attendees?.length || 0) > 0" class="pin-modal-subdesc">
             ※ 등록된 참가자 {{ dayItem.attendees.length }}명의 신청 내역도 함께 초기화됩니다.
@@ -1612,7 +1612,7 @@ const handleUnconfirmKeepSheet = () => {
         </div>
         <div class="pin-modal-footer">
           <button type="button" class="btn-modal-cancel" @click="isDeleteDatePinModalOpen = false">취소</button>
-          <button type="button" class="btn-modal-confirm btn-danger" @click="confirmDeleteDateWithPin">회차 취소 확인</button>
+          <button type="button" class="btn-modal-confirm btn-danger" @click="confirmDeleteDateWithPin">일정 취소 확인</button>
         </div>
       </div>
     </div>

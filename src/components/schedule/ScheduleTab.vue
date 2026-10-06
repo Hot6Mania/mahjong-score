@@ -262,7 +262,7 @@ const myAttendingDaysCount = computed(() => {
 });
 
 
-// 회차 개설 모달 오픈 (관리자가 등록한 가능한 날짜 대상)
+// 일정 만들기 모달 오픈 (관리자가 등록한 가능한 날짜 대상)
 const openCreateScheduleModal = (dateStr: string, existingItem?: ScheduleDayItem) => {
   createDate.value = dateStr;
   createCreatorName.value = myAttendeeName.value || '';
@@ -371,9 +371,9 @@ const handleCreateScheduleSubmit = async () => {
     isCustomTime = (startTime !== '10:00' || endTime !== '22:00');
   }
 
-  // 당일로 지정된 날짜에는 밤샘 회차 개설 금지
+  // 당일로 지정된 날짜에는 밤샘 일정 생성 금지
   if (isDayOnlyDate.value && isOvernight) {
-    createErrorMessage.value = '당일로 설정된 날짜에는 밤샘 회차를 개설할 수 없습니다.';
+    createErrorMessage.value = '당일로 설정된 날짜에는 밤샘 일정을 생성할 수 없습니다.';
     return;
   }
 
@@ -450,7 +450,9 @@ const handleCreateScheduleSubmit = async () => {
   }
 
   const res = await saveAdminScheduleDates(currentMonth.value, updatedDates, adminToken.value, undefined, {
-    baseSessionNumber: currentBaseSessionNumber.value
+    baseSessionNumber: currentBaseSessionNumber.value,
+    isCreateSession: true,
+    targetDate: createDate.value
   });
   if (res.success) {
     monthSchedule.value = res.data;
@@ -461,7 +463,7 @@ const handleCreateScheduleSubmit = async () => {
       action: 'CREATE_SESSION',
       targetDate: createDate.value,
       actorName: creatorName,
-      details: `${createDate.value} 회차 개설 (${createSessionType.value === 'overnight' ? '밤샘' : (createSessionType.value === 'custom' ? '커스텀' : '당일')}, 개설자: ${creatorName})`
+      details: `${createDate.value} 일정 생성 (${createSessionType.value === 'overnight' ? '밤샘' : (createSessionType.value === 'custom' ? '커스텀' : '당일')}, 개설자: ${creatorName})`
     });
 
     // 관리자가 다른 사람을 개설자로 대신 설정해준 경우, 관리자의 본인 로그인을 유지!
@@ -480,9 +482,9 @@ const handleCreateScheduleSubmit = async () => {
 
     isCreateScheduleModalOpen.value = false;
     isDetailModalOpen.value = true;
-    showToast(`${createDate.value} 회차가 개설되었습니다. (개설자 및 김케이 등록 완료)`);
+    showToast(`${createDate.value} 일정이 생성되었습니다. (개설자 및 김케이 등록 완료)`);
   } else {
-    createErrorMessage.value = res.error || '일정 개설에 실패했습니다.';
+    createErrorMessage.value = res.error || '일정 생성에 실패했습니다.';
   }
 };
 
@@ -689,9 +691,9 @@ const showToast = (msg: string, type: 'success' | 'error' | 'info' = 'success') 
   }, 2600);
 };
 
-// 날짜 선택 시 상세 모달 또는 회차 개설 모달 열기
+// 날짜 선택 시 상세 모달 또는 일정 만들기 모달 열기
 const onSelectDay = (dayItem: ScheduleDayItem) => {
-  // 관리자가 등록한 가능한 날짜이지만 아직 회차가 개설되지 않은 경우 -> 회차 개설 모달 오픈!
+  // 관리자가 등록한 가능한 날짜이지만 아직 일정이 생성되지 않은 경우 -> 일정 만들기 모달 오픈!
   const hasCreatedSession = !!(dayItem.creator && (dayItem.attendees?.length || 0) > 0);
   if (!hasCreatedSession) {
     openCreateScheduleModal(dayItem.date, dayItem);
@@ -901,12 +903,12 @@ const onClearAttendees = async (dateStr: string) => {
       action: 'CLEAR_ATTENDEES',
       targetDate: dateStr,
       actorName: myAttendeeName.value || (isAdmin.value ? '관리자' : '개설자'),
-      details: `${dateStr} 참가자 전체 비우기 및 회차 취소 (가능한 날짜로 유지)`
+      details: `${dateStr} 참가자 전체 비우기 및 일정 취소 (가능한 날짜로 유지)`
     });
 
-    showToast(`${dateStr} 회차가 취소되고 참가자 명단이 초기화되었습니다. (가능한 날짜로 유지)`);
+    showToast(`${dateStr} 일정이 취소되고 참가자 명단이 초기화되었습니다. (가능한 날짜로 유지)`);
   } else {
-    showToast(res.error || '회차 취소에 실패했습니다.', 'error');
+    showToast(res.error || '일정 취소에 실패했습니다.', 'error');
   }
 };
 
@@ -1467,7 +1469,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
                   class="segment-btn"
                   :class="{ active: createSessionType === 'overnight', disabled: isDayOnlyDate }"
                   :disabled="isDayOnlyDate"
-                  :title="isDayOnlyDate ? '관리자가 당일로 지정한 날짜에는 밤샘 회차를 개설할 수 없습니다.' : ''"
+                  :title="isDayOnlyDate ? '관리자가 당일로 지정한 날짜에는 밤샘 일정을 생성할 수 없습니다.' : ''"
                   @click="handleSelectCreateSessionType('overnight')"
                 >
                   <svg class="theme_svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

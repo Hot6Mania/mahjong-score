@@ -220,12 +220,12 @@ const todayStr = (() => {
 
         <!-- 후보 일정 정보 -->
         <div v-if="cell.scheduleItem" class="cell-content">
-          <!-- 1. 아직 회차가 개설되지 않은 가능한 날짜 -->
+          <!-- 1. 아직 일정이 생성되지 않은 가능한 날짜 -->
           <div v-if="!cell.scheduleItem.creator || !cell.scheduleItem.attendees?.length" class="cell-uncreated-box">
-            <span class="pill-create-action">+ 회차 개설</span>
+            <span class="pill-create-action">+ 일정 만들기</span>
           </div>
 
-          <!-- 2. 이미 회차가 개설된 날짜 -->
+          <!-- 2. 이미 일정이 생성된 날짜 -->
           <div v-else class="cell-created-box">
             <!-- 회차 & 인원수 뱃지 (수식어 없이 깔끔) -->
             <div 
