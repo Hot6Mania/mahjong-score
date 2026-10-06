@@ -722,7 +722,7 @@ const handleRollback = async (targetId: string, label: string) => {
           </div>
         </div>
 
-        <!-- 2차 하위 서브 탭 네비게이션 (한 줄 정렬) -->
+        <!-- 2차 하위 서브 탭 네비게이션 (중앙 정렬 캡슐 세그먼트 포맷) -->
         <div class="sub-tabs-wrapper" :class="{ 'is-schedule': primaryTab === 'schedule' }">
           <!-- 1) 일정 관리 하위 탭 -->
           <div v-if="primaryTab === 'schedule'" class="apple-segmented-control sub-control schedule-sub-control">
@@ -734,6 +734,7 @@ const handleRollback = async (targetId: string, label: string) => {
             >
               달력 칩
             </button>
+            <span class="sub-tab-divider"></span>
             <button
               type="button"
               class="segment-btn sub-btn"
@@ -745,7 +746,7 @@ const handleRollback = async (targetId: string, label: string) => {
           </div>
 
           <!-- 2) 운영 및 보안 하위 탭 -->
-          <div v-else class="apple-segmented-control sub-control">
+          <div v-else class="apple-segmented-control sub-control security-sub-control">
             <button
               type="button"
               class="segment-btn sub-btn"
@@ -754,6 +755,7 @@ const handleRollback = async (targetId: string, label: string) => {
             >
               인증 코드
             </button>
+            <span class="sub-tab-divider"></span>
             <button
               type="button"
               class="segment-btn sub-btn"
@@ -762,6 +764,7 @@ const handleRollback = async (targetId: string, label: string) => {
             >
               참가자 PIN
             </button>
+            <span class="sub-tab-divider"></span>
             <button
               type="button"
               class="segment-btn sub-btn"
@@ -770,6 +773,7 @@ const handleRollback = async (targetId: string, label: string) => {
             >
               변동 기록
             </button>
+            <span class="sub-tab-divider"></span>
             <button
               type="button"
               class="segment-btn sub-btn"
@@ -1202,10 +1206,9 @@ const handleRollback = async (targetId: string, label: string) => {
             <div class="rollback-intro-card">
               <div class="intro-icon">🛡️</div>
               <div class="intro-content">
-                <div class="intro-title">Git 방식 델타 버전 관리 & 타임머신</div>
+                <div class="intro-title">타임머신 복원</div>
                 <div class="intro-desc">
-                  일정 수정이나 참석 변경 시 전체를 무겁게 덮어쓰지 않고 <strong>변화량(Diff)</strong>만 고속 저장합니다.
-                  오작동이나 실수로 일정이 삭제되었을 때 안전 체크포인트나 특정 커밋 시점으로 1초 만에 롤백할 수 있습니다.
+                  특정 지점으로 일정을 복구할 수 있습니다.
                 </div>
               </div>
             </div>
@@ -1261,7 +1264,6 @@ const handleRollback = async (targetId: string, label: string) => {
 
             <!-- 커밋 없음 -->
             <div v-else-if="commitsList.length === 0" class="history-empty">
-              <span class="empty-icon">🌱</span>
               <p class="empty-text">아직 기록된 커밋 내역이 없습니다. (일정 변경 시 자동 생성됩니다)</p>
             </div>
 
@@ -1552,68 +1554,58 @@ const handleRollback = async (targetId: string, label: string) => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-/* 2차 하위 서브 탭 (한 줄 정렬 유지) */
+/* 2차 하위 서브 탭 (중앙 정렬 및 일관된 캡슐 세그먼트 스타일) */
 .sub-tabs-wrapper {
-  margin: 12px 20px 0;
-  padding: 0 0 12px;
+  margin: 10px 20px 0;
+  padding: 0 0 10px;
   border-bottom: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  justify-content: center;
+  align-items: center;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
-}
-.sub-tabs-wrapper.is-schedule {
-  overflow-x: visible;
 }
 .sub-tabs-wrapper::-webkit-scrollbar {
   display: none;
 }
 
 .apple-segmented-control.sub-control {
-  display: flex;
-  background: transparent;
-  padding: 0;
-  border-radius: 0;
-  gap: 4px;
-  border: none;
-  min-width: max-content;
-}
-
-/* 일정 관리 하위 탭 (달력 칩 / 텍스트로 입력): 50:50 균등 분할 및 중앙 정렬 */
-.apple-segmented-control.sub-control.schedule-sub-control {
-  width: 100%;
-  min-width: 0;
+  display: inline-flex;
+  align-items: center;
   background: var(--input-bg-color, #f1f5f9);
   padding: 3px;
   border-radius: 10px;
-  gap: 4px;
   border: 1px solid var(--border-color, #e2e8f0);
   box-sizing: border-box;
+  margin: 0 auto;
+  gap: 2px;
+}
+
+/* 1) 일정 관리 하위 탭 (달력 칩 / 텍스트로 입력): 균형 잡힌 폭과 50:50 균등 분할 */
+.apple-segmented-control.sub-control.schedule-sub-control {
+  width: 100%;
+  max-width: 320px;
 }
 
 .apple-segmented-control.sub-control.schedule-sub-control .segment-btn.sub-btn {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 34px;
-  padding: 6px 12px;
-  font-size: 13px;
   text-align: center;
   justify-content: center;
-  border-radius: 7px;
 }
 
-.apple-segmented-control.sub-control.schedule-sub-control .segment-btn.sub-btn.active {
-  background: var(--card-bg-color, #ffffff);
-  color: var(--text-color, #0f172a);
-  font-weight: 700;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+/* 2) 운영 및 보안 하위 탭 (인증 코드 / 참가자 PIN / 변동 기록 / 타임머신 복원) */
+.apple-segmented-control.sub-control.security-sub-control {
+  max-width: 100%;
 }
 
 .segment-btn.sub-btn {
   flex: 0 0 auto;
-  min-height: 36px;
+  min-height: 32px;
   border: none;
   background: transparent;
-  padding: 6px 10px;
+  padding: 5px 12px;
   font-size: 12.5px;
   font-weight: 500;
   border-radius: 7px;
@@ -1622,13 +1614,30 @@ const handleRollback = async (targetId: string, label: string) => {
   transition: all 0.15s ease;
   white-space: nowrap;
   text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.segment-btn.sub-btn:hover {
+  color: var(--text-color, #0f172a);
 }
 
 .segment-btn.sub-btn.active {
-  background: var(--input-bg-color, #f1f5f9);
+  background: var(--card-bg-color, #ffffff);
   color: var(--text-color, #0f172a);
   font-weight: 600;
-  box-shadow: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* 하위 탭 버튼 사이 세로 구분선 (| 모양, 위아래 여백 유지) */
+.sub-tab-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border-color, #cbd5e1);
+  margin: 0 2px;
+  flex-shrink: 0;
+  opacity: 0.8;
 }
 
 .mode-tabs-wrapper {
@@ -3044,13 +3053,23 @@ html.dark .primary-btn.active {
   background: #1e293b;
   color: #60a5fa;
 }
-html.dark .sub-control {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.08);
-}
-html.dark .sub-btn.active {
+html.dark .apple-segmented-control.sub-control {
   background: #1e293b;
+  border-color: #334155;
+}
+html.dark .segment-btn.sub-btn {
+  color: #94a3b8;
+}
+html.dark .segment-btn.sub-btn:hover {
   color: #f1f5f9;
+}
+html.dark .segment-btn.sub-btn.active {
+  background: #0f172a;
+  color: #f8fafc;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+html.dark .sub-tab-divider {
+  background: #475569;
 }
 html.dark .badge-google-admin {
   background: rgba(59, 130, 246, 0.2);
@@ -3061,14 +3080,6 @@ html.dark .btn-admin-logout {
   background: rgba(239, 68, 68, 0.15);
   border-color: rgba(239, 68, 68, 0.3);
   color: #f87171;
-}
-html.dark .apple-segmented-control.sub-control.schedule-sub-control {
-  background: #1e293b;
-  border-color: #334155;
-}
-html.dark .apple-segmented-control.sub-control.schedule-sub-control .segment-btn.sub-btn.active {
-  background: #0f172a;
-  color: #f8fafc;
 }
 
 /* 375x667(iPhone SE) 등 소형/세로가 짧은 모바일 화면 대응 컴팩트 모드 */
@@ -3126,6 +3137,9 @@ html.dark .apple-segmented-control.sub-control.schedule-sub-control .segment-btn
     min-height: 30px;
     padding: 4px 8px;
     font-size: 12px;
+  }
+  .sub-tab-divider {
+    height: 12px;
   }
   .sheet-body {
     padding: 8px 14px;
