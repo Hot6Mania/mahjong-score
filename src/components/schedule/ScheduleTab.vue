@@ -23,6 +23,7 @@ import DateDetailModal from './DateDetailModal.vue';
 import AttendModal from './AttendModal.vue';
 import AdminScheduleModal from './AdminScheduleModal.vue';
 import UserPinLoginModal from './UserPinLoginModal.vue';
+import { initGis, loginGoogle, logoutGoogle } from '@/utils/googleSheets';
 
 const props = defineProps<{
   members: MemberStatItem[];
@@ -508,6 +509,78 @@ const onOpenAdminOrAuth = async () => {
   } else {
     isAdminAuthModalOpen.value = true;
   }
+};
+
+// 관리자 구글 로그인 상태
+const isGoogleLoggedIn = ref<boolean>(
+  typeof window !== 'undefined' && localStorage.getItem('google_is_logged_in') === 'true'
+);
+
+// 관리자 권한 및 구글 로그인 상태 동기화
+const syncAdminAuth = async () => {
+  isGoogleLoggedIn.value = typeof window !== 'undefined' && localStorage.getItem('google_is_logged_in') === 'true';
+  const googleLoggedIn = isGoogleLoggedIn.value;
+  const passcodePresent = typeof window !== 'undefined' && !!sessionStorage.getItem('schedule_admin_passcode');
+
+  if (!googleLoggedIn && !passcodePresent) {
+    isAdmin.value = false;
+    adminToken.value = undefined;
+    sessionStorage.removeItem('schedule_admin_verified');
+    sessionStorage.removeItem('schedule_admin_attendee_name');
+    return;
+  }
+
+  const adminRes = await checkAdminStatus();
+  if (adminRes.isAdmin) {
+    isAdmin.value = true;
+    adminToken.value = adminRes.adminToken;
+    sessionStorage.setItem('schedule_admin_verified', 'true');
+    if (adminRes.attendeeName) {
+      myAttendeeName.value = adminRes.attendeeName;
+      setLastAttendeeName(adminRes.attendeeName);
+    }
+  } else {
+    isAdmin.value = false;
+    adminToken.value = undefined;
+    sessionStorage.removeItem('schedule_admin_verified');
+    sessionStorage.removeItem('schedule_admin_attendee_name');
+  }
+};
+
+// 관리자 구글 계정 로그인 트리거 (사용자 클릭 직통 호출로 팝업 차단 원천 방지)
+const handleGoogleLogin = () => {
+  const clientId = localStorage.getItem("google_client_id") || "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com";
+
+  initGis(clientId, async (token: string) => {
+    localStorage.setItem("google_access_token", token);
+    localStorage.setItem("google_token_expires_at", String(Date.now() + 3600 * 1000));
+    localStorage.setItem("google_is_logged_in", "true");
+    isGoogleLoggedIn.value = true;
+    window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+
+    await syncAdminAuth();
+    if (isAdmin.value) {
+      showToast("관리자 구글 계정 인증이 완료되었습니다.", "success");
+      isAdminAuthModalOpen.value = false;
+      isAdminModalOpen.value = true;
+    } else {
+      showToast("구글 로그인이 완료되었습니다.", "info");
+    }
+  });
+
+  loginGoogle();
+};
+
+// 관리자 구글 계정 로그아웃 트리거
+const handleGoogleLogout = () => {
+  logoutGoogle();
+  isGoogleLoggedIn.value = false;
+  isAdmin.value = false;
+  adminToken.value = undefined;
+  sessionStorage.removeItem('schedule_admin_verified');
+  sessionStorage.removeItem('schedule_admin_attendee_name');
+  window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+  showToast("관리자 구글 계정에서 로그아웃되었습니다.", "info");
 };
 
 // 관리자 암호 인증
@@ -1028,45 +1101,6 @@ onMounted(async () => {
   localStorage.removeItem('schedule_admin_verified');
   localStorage.removeItem('schedule_admin_passcode');
 
-  const isGoogleLoggedIn = localStorage.getItem('google_is_logged_in') === 'true';
-  const hasAdminPasscode = !!sessionStorage.getItem('schedule_admin_passcode');
-  if (!isGoogleLoggedIn && !hasAdminPasscode) {
-    sessionStorage.removeItem('schedule_admin_verified');
-    sessionStorage.removeItem('schedule_admin_attendee_name');
-    isAdmin.value = false;
-  } else if (sessionStorage.getItem('schedule_admin_verified') === 'true') {
-    isAdmin.value = true;
-  }
-
-  const syncAdminAuth = async () => {
-    const googleLoggedIn = localStorage.getItem('google_is_logged_in') === 'true';
-    const passcodePresent = !!sessionStorage.getItem('schedule_admin_passcode');
-
-    if (!googleLoggedIn && !passcodePresent) {
-      isAdmin.value = false;
-      adminToken.value = undefined;
-      sessionStorage.removeItem('schedule_admin_verified');
-      sessionStorage.removeItem('schedule_admin_attendee_name');
-      return;
-    }
-
-    const adminRes = await checkAdminStatus();
-    if (adminRes.isAdmin) {
-      isAdmin.value = true;
-      adminToken.value = adminRes.adminToken;
-      sessionStorage.setItem('schedule_admin_verified', 'true');
-      if (adminRes.attendeeName) {
-        myAttendeeName.value = adminRes.attendeeName;
-        setLastAttendeeName(adminRes.attendeeName);
-      }
-    } else {
-      isAdmin.value = false;
-      adminToken.value = undefined;
-      sessionStorage.removeItem('schedule_admin_verified');
-      sessionStorage.removeItem('schedule_admin_attendee_name');
-    }
-  };
-
   await syncAdminAuth();
 
   let pollingTimer: any = null;
@@ -1568,10 +1602,33 @@ const setViewMode = (mode: 'calendar' | 'list') => {
             <h3 class="sheet-title">관리자 인증</h3>
             <button class="btn-close" @click="isAdminAuthModalOpen = false">✕</button>
           </div>
-          <div class="sheet-body">
-            <p class="auth-desc">
-              구글 관리자 계정으로 로그인되어 있거나, 발급받은 관리자 인증 코드를 입력하여 일정을 관리할 수 있습니다.
-            </p>
+          <div class="sheet-body auth-modal-body">
+            <!-- 관리자 구글 계정 로그인 / 로그아웃 버튼 (담백한 단일 버튼) -->
+            <div class="auth-google-section">
+              <button
+                v-if="!isGoogleLoggedIn"
+                type="button"
+                class="btn-g-auth btn-g-login"
+                @click="handleGoogleLogin"
+              >
+                관리자 구글 계정 로그인
+              </button>
+              <button
+                v-else
+                type="button"
+                class="btn-g-auth btn-g-logout"
+                @click="handleGoogleLogout"
+              >
+                관리자 구글 계정 로그아웃
+              </button>
+            </div>
+
+            <!-- 구분선 -->
+            <div class="auth-separator">
+              <span>또는</span>
+            </div>
+
+            <!-- 관리자 인증 코드 입력 폼 -->
             <div class="auth-form">
               <input
                 type="password"
@@ -2287,8 +2344,69 @@ html.dark .user-auth-badge {
   transition: all 0.15s;
   text-align: center;
 }
-.btn-quick-overnight:hover {
-  background: rgba(139, 92, 246, 0.22);
+/* 관리자 인증 모달 구글 로그인 & 구분선 스타일 */
+.auth-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-google-section {
+  width: 100%;
+}
+
+.btn-g-auth {
+  width: 100%;
+  padding: 11px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  color: #ffffff;
+  transition: opacity 0.2s ease, transform 0.1s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.btn-g-auth:hover {
+  opacity: 0.92;
+}
+
+.btn-g-auth:active {
+  transform: scale(0.98);
+}
+
+.btn-g-auth.btn-g-login {
+  background-color: #4285f4;
+}
+
+.btn-g-auth.btn-g-logout {
+  background-color: #ef4444;
+}
+
+.auth-separator {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: var(--text-dimmed, #94a3b8);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.auth-separator::before,
+.auth-separator::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.auth-separator span {
+  padding: 0 10px;
 }
 
 .auth-form {
@@ -2465,25 +2583,31 @@ html.dark .user-auth-badge {
   top: 24px;
   left: 50%;
   transform: translateX(-50%);
-  padding: 10px 20px;
+  padding: 12px 24px;
   border-radius: 12px;
   font-size: 13px;
-  font-weight: 600;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  font-weight: 700;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   z-index: 100000;
+  max-width: 90vw;
+  text-align: center;
+  word-break: keep-all;
 }
 .schedule-toast.success {
   background: #0f172a;
   color: #ffffff;
+  border-color: #334155;
 }
 .schedule-toast.error {
-  background: #ef4444;
+  background: #dc2626;
   color: #ffffff;
+  border-color: #ef4444;
 }
 .schedule-toast.info {
   background: #1e293b;
   color: #ffffff;
-  border: 1px solid #334155;
+  border-color: #3b82f6;
 }
 
 .toast-fade-enter-active, .toast-fade-leave-active {

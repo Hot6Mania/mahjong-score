@@ -654,11 +654,26 @@ onMounted(async () => {
   try {
     await initGapi();
     if (googleInfo.clientId) {
+      // Worker 인증 상태 백그라운드 사전 점검 (Secret 유무에 따른 모드 자동 결정)
+      if (googleInfo.workerUrl) {
+        fetch(`${googleInfo.workerUrl.replace(/\/$/, '')}/api/auth/status`)
+          .then(r => r.json())
+          .then(status => {
+            if (status && !status.hasSecret) {
+              localStorage.setItem("google_auth_mode", "direct");
+            } else if (status && status.hasSecret) {
+              localStorage.setItem("google_auth_mode", "worker");
+            }
+          })
+          .catch(() => {});
+      }
+
       // google GIS SDK 로드 대기 (최대 5초)
       let gisRetry = 0;
       const initGisWithRetry = () => {
         if (typeof window.google !== 'undefined' && window.google.accounts) {
-          if (googleInfo.workerUrl) {
+          const authMode = localStorage.getItem("google_auth_mode");
+          if (googleInfo.workerUrl && authMode !== "direct") {
             initGisCodeClient(googleInfo.clientId, googleInfo.workerUrl, (data) => {
               if (data.refresh_cipher) {
                 localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
@@ -713,6 +728,33 @@ onMounted(async () => {
   setTimeout(() => {
     window.scrollTo(0, 1);
   }, 300);
+
+  // 일정 탭 등 외부에서 구글 로그인/로그아웃 시 전역 googleInfo 상태 실시간 동기화
+  const handleAuthSync = async () => {
+    const isLogged = localStorage.getItem('google_is_logged_in') === 'true';
+    if (googleInfo.isLoggedIn !== isLogged) {
+      googleInfo.isLoggedIn = isLogged;
+      if (isLogged) {
+        if (googleInfo.spreadsheetId) {
+          try {
+            await loadMemberList();
+            await loadRatings();
+          } catch (e) {
+            console.warn("구글 로그인 상태 동기화 중 데이터 로드 실패:", e);
+          }
+        }
+      } else {
+        googleInfo.memberList = [];
+        googleInfo.todayMembers = [];
+        if (autoRefreshTimer) {
+          clearInterval(autoRefreshTimer);
+          autoRefreshTimer = null;
+        }
+      }
+    }
+  };
+  window.addEventListener('mahjong_admin_auth_changed', handleAuthSync);
+  window.addEventListener('storage', handleAuthSync);
 })
 
 
@@ -2140,7 +2182,10 @@ const googleLogin = () => {
   }
 
   isManualLogin.value = true;
-  if (googleInfo.workerUrl) {
+  const authMode = localStorage.getItem("google_auth_mode");
+
+  // Worker URL이 있고 직통(direct) 모드가 아닌 경우 Code Client 방식 시도
+  if (googleInfo.workerUrl && authMode !== "direct") {
     initGisCodeClient(
       googleInfo.clientId,
       googleInfo.workerUrl,
@@ -2148,17 +2193,20 @@ const googleLogin = () => {
         if (data.refresh_cipher) {
           localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
         }
+        localStorage.setItem("google_auth_mode", "worker");
         onGoogleTokenReceived(data.access_token, data.expires_in);
       },
-      (err) => {
-        console.warn("Worker 인증 서버 연결 실패, 기존 구글 로그인 방식으로 자동 전환합니다:", err);
-        triggerToast("인증 서버 응답 없음: 기본 구글 로그인으로 자동 전환합니다.", "warning");
+      (err: any) => {
+        console.warn("Worker 인증 서버 연결 실패, 기본 구글 로그인 모드로 전환합니다:", err);
+        localStorage.setItem("google_auth_mode", "direct");
+        localStorage.removeItem("google_refresh_cipher");
+        triggerToast("서버 Secret 미등록: 기본 로그인 모드로 자동 전환되었습니다. [구글 로그인] 버튼을 다시 눌러주세요.", "info");
         initGis(googleInfo.clientId, onGoogleTokenReceived);
-        loginGoogle();
       }
     );
     loginGoogleWithCode();
   } else {
+    // 기본 TokenClient 방식 (직통 모드: 사용자 직접 클릭 제스처로 팝업 차단 없이 즉시 실행)
     initGis(googleInfo.clientId, onGoogleTokenReceived);
     loginGoogle();
   }
@@ -3851,24 +3899,46 @@ const addBackupGameToCurrent = (game: any) => {
   opacity: 0;
 }
 
-/* 커스텀 토스트 알림 */
+/* 커스텀 토스트 알림 (완전 불투명 고대비 스타일) */
 .custom-toast {
   position: fixed;
   top: 24px;
   left: 50%;
   transform: translateX(-50%);
-  padding: 14px 28px;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: bold;
-  z-index: 10000;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 12px 24px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  z-index: 100000;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
   pointer-events: none;
   transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  background-color: #1e293b;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  max-width: 90vw;
+  text-align: center;
+  word-break: keep-all;
 }
 .custom-toast.success {
-  background-color: #4caf50;
+  background-color: #059669;
   color: #ffffff;
+  border-color: #10b981;
+}
+.custom-toast.warning {
+  background-color: #d97706;
+  color: #ffffff;
+  border-color: #f59e0b;
+}
+.custom-toast.error {
+  background-color: #dc2626;
+  color: #ffffff;
+  border-color: #ef4444;
+}
+.custom-toast.info {
+  background-color: #2563eb;
+  color: #ffffff;
+  border-color: #3b82f6;
 }
 .toast-fade-enter-from,
 .toast-fade-leave-to {

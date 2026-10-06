@@ -167,7 +167,11 @@ export const refreshAccessTokenViaWorker = async (
     });
     const data = await res.json();
     if (!res.ok || data.error) {
-      throw new Error(data.error || 'Worker refresh failed');
+      if (data.code === 'MISSING_CLIENT_SECRET' || data.code === 'INVALID_CIPHER') {
+        localStorage.removeItem("google_refresh_cipher");
+      }
+      console.warn("Worker 토큰 갱신 안내:", data.error || 'Worker refresh failed');
+      return null;
     }
     if (data.access_token) {
       accessToken = data.access_token;
@@ -177,7 +181,7 @@ export const refreshAccessTokenViaWorker = async (
       return data;
     }
   } catch (err) {
-    console.error("Worker 백그라운드 토큰 갱신 에러:", err);
+    console.warn("Worker 백그라운드 토큰 갱신 에러:", err);
   }
   return null;
 };
