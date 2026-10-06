@@ -2,7 +2,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue';
 import type { ScheduleDayItem } from '@/types/schedule';
 import type { MemberStatItem } from '@/services/publicStatsService';
-import { hashPin, fetchMonthSchedule } from '@/services/scheduleService';
+import { verifyUserPin } from '@/services/scheduleService';
 import {
   checkPinLockout,
   recordPinFailure,
@@ -123,15 +123,12 @@ const getPreviousMonthStr = (monthStr: string): string => {
   return `${y}-${String(m).padStart(2, '0')}`;
 };
 
-// 대상 참가자의 유효한 개인 PIN 해시 여부 검증 (64자리 hex SHA-256 검사 & 과거 개설자 PIN 복제 오염 배제)
-const isValidPersonalPinHash = (targetName: string, pinHash?: string, creatorName?: string, creatorPinHash?: string): boolean => {
-  if (!pinHash || pinHash === 'admin_bypass') return false;
-  if (!/^[a-f0-9]{64}$/i.test(pinHash)) return false;
-  // 타인인데 과거 버그로 인해 개설자 핀이 그대로 복제된 경우 배제
-  if (creatorName && creatorPinHash && creatorName !== targetName && pinHash === creatorPinHash) {
-    return false;
-  }
-  return true;
+// 대상 참가자의 유효한 개인 PIN 설정 여부 검증 (hasPin 불리언 플래그 또는 레거시 pinHash)
+const checkUserHasPin = (hasPinFlag?: boolean, pinHash?: string, isAdminBypassFlag?: boolean): boolean => {
+  if (isAdminBypassFlag || pinHash === 'admin_bypass') return false;
+  if (hasPinFlag !== undefined) return hasPinFlag;
+  if (pinHash && pinHash.length >= 4) return true;
+  return false;
 };
 
 // 현재 입력된 참가자의 PIN 등록 상태 실시간 분석
@@ -145,7 +142,7 @@ const selectedUserPinState = computed(() => {
   for (const d of props.dates) {
     if (d.creator === name) {
       exists = true;
-      if (isValidPersonalPinHash(name, d.creatorPinHash, d.creator, d.creatorPinHash)) {
+      if (checkUserHasPin(d.hasCreatorPin, d.creatorPinHash, d.isCreatorAdminBypass)) {
         hasPin = true;
         break;
       }
@@ -153,7 +150,7 @@ const selectedUserPinState = computed(() => {
     const match = d.attendees?.find(a => a.name === name);
     if (match) {
       exists = true;
-      if (isValidPersonalPinHash(name, match.pinHash, d.creator, d.creatorPinHash)) {
+      if (checkUserHasPin(match.hasPin, match.pinHash, match.isAdminBypass)) {
         hasPin = true;
         break;
       }
@@ -202,74 +199,39 @@ const handleLogin = async () => {
   await applyDelayIfRepeated(trimmedName);
 
   try {
-    const inputHash = await hashPin(trimmedPin);
+    // 1. 현재 월 스케줄에 대해 서버 검증 요청
+    let verifyRes = await verifyUserPin({
+      month: props.currentMonth,
+      name: trimmedName,
+      pin: trimmedPin,
+    });
 
-    // 1. 현재 월 스케줄에서 대상 참가자의 유효 pinHash 조회
-    let foundPinHash: string | undefined;
-    let userExistsInSchedule = false;
-
-    for (const d of props.dates) {
-      if (d.creator === trimmedName) {
-        userExistsInSchedule = true;
-        if (isValidPersonalPinHash(trimmedName, d.creatorPinHash, d.creator, d.creatorPinHash)) {
-          foundPinHash = d.creatorPinHash;
-          break;
-        }
-      }
-      const match = d.attendees?.find(a => a.name === trimmedName);
-      if (match) {
-        userExistsInSchedule = true;
-        if (isValidPersonalPinHash(trimmedName, match.pinHash, d.creator, d.creatorPinHash)) {
-          foundPinHash = match.pinHash;
-          break;
-        }
-      }
-    }
-
-    // 2. 현재 월에 등록 기록이 없거나 PIN이 없는 경우 직전 월 데이터에서 추가 조회
-    if (!foundPinHash) {
+    // 2. 현재 월에 등록 기록이 없는 신규 사용자인 경우, 직전 월 데이터에서도 확인
+    if (verifyRes.isNew) {
       try {
         const prevMonth = getPreviousMonthStr(props.currentMonth);
-        const prevData = await fetchMonthSchedule(prevMonth);
-        if (prevData && prevData.dates) {
-          for (const d of prevData.dates) {
-            if (d.creator === trimmedName) {
-              userExistsInSchedule = true;
-              if (isValidPersonalPinHash(trimmedName, d.creatorPinHash, d.creator, d.creatorPinHash)) {
-                foundPinHash = d.creatorPinHash;
-                break;
-              }
-            }
-            const match = d.attendees?.find(a => a.name === trimmedName);
-            if (match) {
-              userExistsInSchedule = true;
-              if (isValidPersonalPinHash(trimmedName, match.pinHash, d.creator, d.creatorPinHash)) {
-                foundPinHash = match.pinHash;
-                break;
-              }
-            }
-          }
+        const prevRes = await verifyUserPin({
+          month: prevMonth,
+          name: trimmedName,
+          pin: trimmedPin,
+        });
+        if (!prevRes.isNew) {
+          verifyRes = prevRes;
         }
       } catch (err) {
         console.warn('과거 월 PIN 조회 실패:', err);
       }
     }
 
-    // 3. 해시 대조 및 판정 (PIN 미설정 사용자 로그인 원천 차단)
-    if (!foundPinHash) {
-      if (userExistsInSchedule) {
-        errorMessage.value = `'${trimmedName}' 님은 개인 PIN이 설정되지 않은 상태입니다. PIN 설정을 위해 관리자에게 문의해주세요.`;
-      } else {
-        errorMessage.value = `'${trimmedName}' 이름으로 등록된 참석 일정이 없습니다. 본인 이름을 확인하거나 관리자에게 문의해주세요.`;
-      }
+    // 3. 등록 기록이 아예 없는 경우
+    if (verifyRes.isNew) {
+      errorMessage.value = `'${trimmedName}' 이름으로 등록된 참석 일정이 없습니다. 본인 이름을 확인하거나 관리자에게 문의해주세요.`;
       isVerifying.value = false;
       return;
     }
 
-    // 4. 엄격한 1:1 해시 대조 (우회/기본 PIN 일체 차단)
-    const isMatch = (foundPinHash === inputHash);
-
-    if (isMatch) {
+    // 4. PIN 일치 여부 판정
+    if (verifyRes.valid) {
       recordPinSuccess(trimmedName);
       emit('loginSuccess', trimmedName, trimmedPin);
       emit('close');

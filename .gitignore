@@ -37,3 +37,4 @@ docs/game_scoring_logic*
 cloudflare-worker/
 scripts/
 .worker-backups/
+.wrangler/

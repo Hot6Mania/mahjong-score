@@ -29,8 +29,28 @@ const props = defineProps<{
   availableSessions: string[];
 }>();
 
-// 현재 연월 ("YYYY-MM")
+// 현재 연월 ("YYYY-MM") - 세션 목록 및 URL 파라미터를 우선 분석하여 텅 빈 월이 열리지 않도록 보정
 const getInitialMonth = (): string => {
+  // 1. URL 쿼리 파라미터 우선 확인 (?month=YYYY-MM)
+  if (typeof window !== 'undefined') {
+    const urlParams = new URLSearchParams(window.location.search);
+    const mParam = urlParams.get('month');
+    if (mParam && /^\d{4}-\d{2}$/.test(mParam)) {
+      return mParam;
+    }
+  }
+  // 2. availableSessions 중 최신 회차 날짜 분석 (예: "제16회 261009" -> "2026-10")
+  if (props.availableSessions && props.availableSessions.length > 0) {
+    for (const s of props.availableSessions) {
+      const match = s.match(/(\d{2})(\d{2})\d{2}/);
+      if (match) {
+        const year = `20${match[1]}`;
+        const month = match[2];
+        return `${year}-${month}`;
+      }
+    }
+  }
+  // 3. 로컬 시스템 시간 폴백
   const now = new Date();
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
@@ -40,8 +60,25 @@ const getInitialMonth = (): string => {
 const currentMonth = ref<string>(getInitialMonth());
 const viewMode = ref<'calendar' | 'list'>('calendar');
 const isLoading = ref<boolean>(false);
+const isRefreshing = ref<boolean>(false);
 const toastMessage = ref<string>('');
 const toastType = ref<'success' | 'error' | 'info'>('success');
+
+// props.availableSessions 가 비동기로 뒤늦게 로드될 때 최신 회차 월로 자동 보정
+watch(() => props.availableSessions, (sessions) => {
+  if (sessions && sessions.length > 0 && (!monthSchedule.value.dates || monthSchedule.value.dates.length === 0)) {
+    for (const s of sessions) {
+      const match = s.match(/(\d{2})(\d{2})\d{2}/);
+      if (match) {
+        const target = `20${match[1]}-${match[2]}`;
+        if (target !== currentMonth.value) {
+          currentMonth.value = target;
+        }
+        break;
+      }
+    }
+  }
+});
 
 // 관리자 상태
 const isAdmin = ref<boolean>(false);
@@ -451,6 +488,7 @@ const handleCreateScheduleSubmit = async () => {
 
 // 관리자 버튼 클릭 핸들러
 const onOpenAdminOrAuth = async () => {
+  await loadSchedule(true);
   if (isAdmin.value) {
     isAdminModalOpen.value = true;
     return;
@@ -501,9 +539,28 @@ const verifyAdminPasscode = async () => {
   }
 };
 
-// 일정 데이터 로드
-const loadSchedule = async () => {
-  isLoading.value = true;
+// 일정 데이터 로드 (silent: true일 경우 로딩 스피너 및 화면 깜빡임 없이 조용히 동기화)
+const loadSchedule = async (silent = false) => {
+  if (silent) {
+    try {
+      const data = await fetchMonthSchedule(currentMonth.value);
+      // 데이터 변동 여부 대조 (변동 없을 시 리렌더링 원천 차단)
+      const isUnchanged = JSON.stringify(monthSchedule.value.dates) === JSON.stringify(data.dates)
+        && monthSchedule.value.month === data.month;
+      if (!isUnchanged) {
+        monthSchedule.value = data;
+      }
+    } catch (e) {
+      console.warn('백그라운드 일정 동기화 실패:', e);
+    }
+    return;
+  }
+
+  // 사용자가 직접 새로고침을 눌렀거나 초기 로딩일 때
+  isRefreshing.value = true;
+  if (!monthSchedule.value.dates || monthSchedule.value.dates.length === 0) {
+    isLoading.value = true;
+  }
   try {
     const data = await fetchMonthSchedule(currentMonth.value);
     monthSchedule.value = data;
@@ -511,6 +568,7 @@ const loadSchedule = async () => {
     console.error('일정 로드 실패:', e);
   } finally {
     isLoading.value = false;
+    isRefreshing.value = false;
   }
 };
 
@@ -675,7 +733,9 @@ const onToggleConfirmSession = async (dateStr: string) => {
   };
 
   const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, undefined, {
-    baseSessionNumber: currentBaseSessionNumber.value
+    baseSessionNumber: currentBaseSessionNumber.value,
+    isToggleConfirm: true,
+    targetDate: dateStr
   });
   if (res.success) {
     monthSchedule.value = res.data;
@@ -1014,7 +1074,7 @@ onMounted(async () => {
   const handleVisibilityOrStorage = () => {
     syncAdminAuth();
     if (typeof document !== 'undefined' && !document.hidden) {
-      loadSchedule();
+      loadSchedule(true);
     }
   };
 
@@ -1022,10 +1082,10 @@ onMounted(async () => {
   window.addEventListener('storage', handleVisibilityOrStorage);
   document.addEventListener('visibilitychange', handleVisibilityOrStorage);
 
-  // 다른 기기 변경 사항을 조용히 반영하기 위한 45초 백그라운드 폴링
+  // 다른 기기 변경 사항을 조용히 반영하기 위한 45초 백그라운드 폴링 (무깜빡임 Silent Refresh)
   pollingTimer = setInterval(() => {
-    if (typeof document !== 'undefined' && !document.hidden && !isLoading.value) {
-      loadSchedule();
+    if (typeof document !== 'undefined' && !document.hidden && !isLoading.value && !isRefreshing.value) {
+      loadSchedule(true);
     }
   }, 45000);
 
@@ -1064,12 +1124,18 @@ const setViewMode = (mode: 'calendar' | 'list') => {
         <button
           type="button"
           class="btn-nav-refresh"
-          :class="{ 'is-loading': isLoading }"
-          :disabled="isLoading"
-          @click="loadSchedule"
+          :class="{ 'is-loading': isRefreshing }"
+          :disabled="isRefreshing"
+          @click="() => loadSchedule(false)"
           title="일정 최신 동기화"
+          aria-label="일정 새로고침"
         >
-          🔄
+          <svg class="refresh-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+            <path d="M3 3v5h5" />
+            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+            <path d="M16 21h5v-5" />
+          </svg>
         </button>
       </div>
 
@@ -1597,7 +1663,6 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  font-size: 13px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1605,14 +1670,23 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   transition: all 0.15s;
   box-sizing: border-box;
   margin-left: 2px;
+  padding: 0;
 }
 .btn-nav-refresh:hover:not(:disabled) {
   background: var(--card-bg-color, #ffffff);
   border-color: #3b82f6;
+  color: #3b82f6;
 }
-.btn-nav-refresh.is-loading {
+.btn-nav-refresh svg {
+  display: block;
+  transition: transform 0.2s ease;
+}
+.btn-nav-refresh.is-loading svg {
   animation: spinRefresh 0.8s linear infinite;
+}
+.btn-nav-refresh:disabled {
   opacity: 0.7;
+  cursor: not-allowed;
 }
 @keyframes spinRefresh {
   to { transform: rotate(360deg); }

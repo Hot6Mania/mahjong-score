@@ -8,7 +8,9 @@ export interface ScheduleAttendee {
   endTime: string; // 기본 "22:00" 또는 "익일"
   isCustomTime?: boolean; // 사용자가 직접 시간을 커스텀했는지 여부
   memo?: string; // 늦참 메모 등
-  pinHash?: string; // SHA-256 (PIN + Salt)
+  pinHash?: string; // SHA-256 (PIN + Salt) - 보안을 위해 서버 응답 시 마스킹될 수 있음
+  hasPin?: boolean; // 서버에서 마스킹된 경우 PIN 존재 여부 플래그
+  isAdminBypass?: boolean; // 관리자 프리패스로 등록된 경우
   clientToken?: string; // 로컬 기기 인증 토큰
   updatedAt: number;
 }
@@ -21,7 +23,9 @@ export interface ScheduleDayItem {
   customEndTime?: string;
   customIsOvernight?: boolean;
   creator?: string; // 일정을 개설한 사용자 이름
-  creatorPinHash?: string; // 개설자 PIN 해시
+  creatorPinHash?: string; // 개설자 PIN 해시 - 보안을 위해 서버 응답 시 마스킹될 수 있음
+  hasCreatorPin?: boolean; // 서버에서 마스킹된 경우 개설자 PIN 존재 여부 플래그
+  isCreatorAdminBypass?: boolean; // 관리자 권한으로 개설된 경우
   note?: string; // 관리자/개설자 메모
   isClosed?: boolean; // 마감 여부
   isConfirmed?: boolean; // 개설자/관리자의 출발 확정 여부

@@ -488,6 +488,50 @@ const formatHistoryTime = (timestamp: number | string): string => {
   const sec = String(d.getSeconds()).padStart(2, '0');
   return `${m}-${day} ${h}:${min}:${sec}`;
 };
+
+const copySuccessMsg = ref('');
+
+const copyHistoryToClipboard = async () => {
+  if (filteredHistory.value.length === 0) return;
+
+  const lines = [
+    `[${props.currentMonth} 마작 모임 일정 변동 기록] (총 ${filteredHistory.value.length}건)`,
+    '--------------------------------------------------'
+  ];
+
+  for (const item of filteredHistory.value) {
+    const timeStr = formatHistoryTime(item.timestamp);
+    const actionLabel = getActionLabel(item.action);
+    const dateLabel = item.targetDate ? ` (${item.targetDate})` : '';
+    const actor = item.actorName || '익명';
+    const detail = item.details || '';
+    lines.push(`• [${timeStr}] ${actionLabel}${dateLabel} | 실행: ${actor} | ${detail}`);
+  }
+
+  const textToCopy = lines.join('\n');
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(textToCopy);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = textToCopy;
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    copySuccessMsg.value = '변동 기록이 클립보드에 복사되었습니다.';
+    setTimeout(() => {
+      copySuccessMsg.value = '';
+    }, 2500);
+  } catch (err) {
+    console.error('클립보드 복사 실패:', err);
+    alert('클립보드 복사에 실패했습니다.');
+  }
+};
 </script>
 
 <template>
@@ -901,14 +945,35 @@ const formatHistoryTime = (timestamp: number | string): string => {
                   <option value="UPDATE_DATES">후보 일정 수정</option>
                 </select>
               </div>
-              <button
-                type="button"
-                class="btn-refresh-history"
-                :disabled="isLoadingHistory"
-                @click="loadHistory"
-              >
-                {{ isLoadingHistory ? '조회 중...' : '🔄 새로고침' }}
-              </button>
+              <div class="history-actions-group">
+                <button
+                  type="button"
+                  class="btn-copy-history"
+                  :disabled="filteredHistory.length === 0"
+                  @click="copyHistoryToClipboard"
+                  title="현재 조회된 변동 기록을 클립보드에 복사"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span>기록 복사</span>
+                </button>
+                <button
+                  type="button"
+                  class="btn-refresh-history"
+                  :disabled="isLoadingHistory"
+                  @click="loadHistory"
+                  title="변동 기록 새로고침"
+                >
+                  {{ isLoadingHistory ? '조회 중...' : '🔄 새로고침' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 복사 완료 토스트 배너 -->
+            <div v-if="copySuccessMsg" class="copy-success-toast">
+              {{ copySuccessMsg }}
             </div>
 
             <div v-if="isLoadingHistory && historyList.length === 0" class="history-loading">
@@ -1839,6 +1904,55 @@ html.dark .chip-session-badge {
   background: var(--card-bg-color, #ffffff);
   border-color: #3b82f6;
   color: #2563eb;
+}
+
+.history-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-copy-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: var(--input-bg-color, #f1f5f9);
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-color, #334155);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-copy-history:hover:not(:disabled) {
+  background: var(--card-bg-color, #ffffff);
+  border-color: #3b82f6;
+  color: #2563eb;
+}
+
+.btn-copy-history:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.copy-success-toast {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #059669;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: 8px;
+  text-align: center;
+  animation: fadeIn 0.2s ease;
+}
+
+html.dark .copy-success-toast {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
 }
 
 .history-loading {

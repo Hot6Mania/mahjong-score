@@ -7,7 +7,7 @@ import {
   computeSessionTimeFromAttendees,
   timeStringToMinutes
 } from '@/utils/timelineEngine';
-import { getSavedPins, hashPin } from '@/services/scheduleService';
+import { getSavedPins, hashPin, verifyUserPin } from '@/services/scheduleService';
 import {
   checkPinLockout,
   recordPinFailure,
@@ -549,23 +549,43 @@ const confirmRemoveWithPin = async () => {
 
   await applyDelayIfRepeated(targetKey);
 
-  // 클라이언트 사전 검증: 대상 참가자의 PIN 또는 개설자의 PIN 둘 중 하나라도 맞으면 통과
-  const targetAttendee = props.dayItem.attendees?.find(a => a.name === removeTargetName.value);
-  if (targetAttendee) {
-    const inputHash = await hashPin(trimmed);
-    const matchesTarget = targetAttendee.pinHash && (targetAttendee.pinHash === inputHash || targetAttendee.pinHash === 'admin_bypass');
-    const matchesCreator = props.dayItem.creatorPinHash && (props.dayItem.creatorPinHash === inputHash);
+  // 서버 검증: 대상 참가자의 PIN 또는 개설자의 PIN 둘 중 하나라도 맞으면 통과
+  const month = props.dayItem.date.slice(0, 7);
+  let isValid = false;
 
-    if (targetAttendee.pinHash && !matchesTarget && !matchesCreator) {
-      const fail = recordPinFailure(targetKey);
-      if (fail.isLocked) {
-        removePinErrorMessage.value = `연속 5회 실패로 ${fail.remainingSeconds}초 동안 입력이 차단됩니다.`;
-      } else {
-        const remaining = 5 - (fail.failCount % 5);
-        removePinErrorMessage.value = `등록 PIN 또는 개설자 PIN이 일치하지 않습니다. (연속 ${remaining}회 더 실패 시 30초 잠금)`;
-      }
-      return;
+  // 1) 대상 참가자 PIN 검증
+  const verifyTarget = await verifyUserPin({
+    month,
+    date: props.dayItem.date,
+    name: removeTargetName.value,
+    pin: trimmed
+  });
+
+  if (verifyTarget.valid) {
+    isValid = true;
+  } else if (props.dayItem.creator) {
+    // 2) 만약 불일치 시 개설자 PIN 검증 시도
+    const verifyCreator = await verifyUserPin({
+      month,
+      date: props.dayItem.date,
+      name: props.dayItem.creator,
+      pin: trimmed,
+      isCreator: true
+    });
+    if (verifyCreator.valid) {
+      isValid = true;
     }
+  }
+
+  if (!isValid) {
+    const fail = recordPinFailure(targetKey);
+    if (fail.isLocked) {
+      removePinErrorMessage.value = `연속 5회 실패로 ${fail.remainingSeconds}초 동안 입력이 차단됩니다.`;
+    } else {
+      const remaining = 5 - (fail.failCount % 5);
+      removePinErrorMessage.value = `등록 PIN 또는 개설자 PIN이 일치하지 않습니다. (연속 ${remaining}회 더 실패 시 30초 잠금)`;
+    }
+    return;
   }
 
   recordPinSuccess(targetKey);

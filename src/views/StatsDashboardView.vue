@@ -71,10 +71,31 @@ const parseTabFromLocation = (): DashboardTab => {
 
 // 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule')
 const activeTab = ref<DashboardTab>(parseTabFromLocation());
+const tabsNavRef = ref<HTMLElement | null>(null);
+
+// 모바일/좁은 화면에서 선택된 탭이 잘리지 않도록 화면 중앙으로 자동 스크롤
+const scrollActiveTabIntoView = (smooth = true) => {
+  nextTick(() => {
+    if (!tabsNavRef.value) return;
+    const activeEl = tabsNavRef.value.querySelector('.tab-btn.active') as HTMLElement;
+    if (activeEl) {
+      activeEl.scrollIntoView({
+        behavior: smooth ? 'smooth' : 'auto',
+        inline: 'center',
+        block: 'nearest'
+      });
+    }
+  });
+};
+
+watch(activeTab, () => {
+  scrollActiveTabIntoView(true);
+});
 
 // 탭 전환 및 URL 동기화
 const switchTab = (tab: DashboardTab, updateUrl = true) => {
   activeTab.value = tab;
+  scrollActiveTabIntoView(true);
   if (updateUrl && typeof window !== 'undefined') {
     const pathname = window.location.pathname;
     const search = window.location.search;
@@ -91,6 +112,7 @@ const handleHashChange = () => {
   const current = parseTabFromLocation();
   if (activeTab.value !== current) {
     activeTab.value = current;
+    scrollActiveTabIntoView(true);
   }
 };
 
@@ -113,6 +135,10 @@ onMounted(() => {
   // 초기 URL 동기화
   const initial = parseTabFromLocation();
   switchTab(initial, initial !== 'ranking');
+  // 마운트 후 초기 활성 탭 스크롤
+  setTimeout(() => {
+    scrollActiveTabIntoView(false);
+  }, 100);
 });
 
 onUnmounted(() => {
@@ -1896,7 +1922,7 @@ const getRankClass = (rank: number) => {
     </header>
 
     <!-- 탭 네비게이션 (종합 랭킹 & 스탯) -->
-    <nav class="tabs-nav">
+    <nav ref="tabsNavRef" class="tabs-nav">
       <button 
         class="tab-btn" 
         :class="{ active: activeTab === 'ranking' }" 
@@ -4511,6 +4537,9 @@ html.dark .dist-avg-val {
   border-bottom: 1px solid var(--border-color, #eaeaea);
   padding-bottom: 6px;
   overflow-x: auto;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 .tab-btn {
   padding: 8px 16px;

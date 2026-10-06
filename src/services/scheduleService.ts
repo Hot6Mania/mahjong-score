@@ -31,6 +31,39 @@ export async function hashPin(pin: string): Promise<string> {
 }
 
 /**
+ * 서버에 PIN 일치 여부 확인 요청 (보안 강화: 클라이언트에 해시 노출 없음)
+ */
+export async function verifyUserPin(params: {
+  month: string;
+  date?: string;
+  name?: string;
+  pin: string;
+  isCreator?: boolean;
+}): Promise<{ success: boolean; valid: boolean; isNew?: boolean }> {
+  try {
+    const res = await fetch(`${getWorkerUrl()}/api/schedule/auth/verify-pin`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(params)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: data.success ?? false,
+        valid: data.valid ?? false,
+        isNew: data.isNew
+      };
+    }
+  } catch (err) {
+    console.warn('PIN 검증 API 실패:', err);
+  }
+  return { success: false, valid: false };
+}
+
+/**
  * 로컬에 저장된 사용자 PIN 맵 조회
  */
 export function getSavedPins(): Record<string, string> {
@@ -217,8 +250,7 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
       method: 'GET',
       cache: 'no-store',
       headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
+        'Accept': 'application/json'
       }
     });
 
@@ -495,7 +527,7 @@ export async function saveAdminScheduleDates(
   dates: ScheduleDayItem[],
   adminToken?: string,
   creatorPin?: string,
-  options?: { baseSessionNumber?: number; isClearAttendees?: boolean; targetDate?: string }
+  options?: { baseSessionNumber?: number; isClearAttendees?: boolean; isToggleConfirm?: boolean; targetDate?: string }
 ): Promise<{ success: boolean; data: ScheduleMonthData; error?: string }> {
   const payload: ScheduleMonthData = {
     month,
@@ -520,6 +552,7 @@ export async function saveAdminScheduleDates(
         dates,
         base_session_number: options?.baseSessionNumber,
         is_clear_attendees: options?.isClearAttendees,
+        is_toggle_confirm: options?.isToggleConfirm,
         target_date: options?.targetDate,
         creator_name: lastName,
         creator_pin: creatorPin,
