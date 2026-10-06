@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, type SessionMigrationBackup } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, isGoogleAuthError, type SessionMigrationBackup } from "@/utils/googleSheets"
 import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
@@ -272,6 +272,11 @@ const showErrorModal = (title: string, err: any) => {
   } else {
     errMsg = String(err);
   }
+
+  if (isGoogleAuthError(err)) {
+    errMsg = `[안내] 구글 인증 만료 또는 편집 권한(401/403) 오류입니다.\n로그인 문제일 수 있으니 상단 메뉴에서 재로그인 해주세요.\n\n-- 상세 로그 --\n${errMsg}`;
+  }
+
   errorModalState.message = errMsg;
   errorModalState.isOpen = true;
 }
@@ -2057,7 +2062,11 @@ const saveTodayMembersPool = async (names: string[]) => {
     await saveSessionMembers(googleInfo.spreadsheetId, sessionSheetName, names);
   } catch (err: any) {
     console.error("오늘의 멤버 풀 저장 실패:", err);
-    triggerToast(`멤버 풀 저장 실패: ${err?.message || err}`, "error");
+    if (isGoogleAuthError(err)) {
+      triggerToast("멤버 풀 저장 실패: 로그인 문제일 수 있습니다. 상단 메뉴에서 재로그인 해주세요.", "error");
+    } else {
+      triggerToast(`멤버 풀 저장 실패: ${err?.message || err}`, "error");
+    }
   } finally {
     isSaving.value = false;
   }
@@ -2498,7 +2507,7 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
     // 종료된 회차(과거 회차 또는 마감된 회차) 동기화 보호 가드
     if (isSessionClosed.value) {
       const sessName = currentSessionSheetName.value || "종료된 회차";
-      const isForceSync = await showConfirm(`⚠️ '${sessName}' 회차는 이미 종료된(과거) 회차입니다.\n과거 데이터 보호를 위해 동기화가 권장되지 않습니다.\n\n정말로 이 회차에 강제로 덮어쓰기 동기화를 진행하시겠습니까?`);
+      const isForceSync = await showConfirm(`[경고] '${sessName}' 회차는 이미 종료된(과거) 회차입니다.\n과거 데이터 보호를 위해 동기화가 권장되지 않습니다.\n\n정말로 이 회차에 강제로 덮어쓰기 동기화를 진행하시겠습니까?`);
       if (!isForceSync) {
         return false;
       }
@@ -2833,6 +2842,9 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
     }
   } catch (err) {
     console.error("일괄 동기화 실패:", err);
+    if (isGoogleAuthError(err)) {
+      triggerToast("동기화 실패: 로그인 문제일 수 있습니다. 상단 메뉴에서 재로그인 해주세요.");
+    }
     showErrorModal("일괄 동기화 오류", err);
     return false;
   } finally {
@@ -3740,7 +3752,7 @@ const addBackupGameToCurrent = (game: any) => {
       <div class="custom-prompt-card" style="max-width: 480px; width: 90%;">
         <div class="custom-prompt-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
           <h3 style="color: var(--color-negative, #c62828); display: flex; align-items: center; gap: 6px;">
-            ⚠️ {{ errorModalState.title }}
+            [오류] {{ errorModalState.title }}
           </h3>
         </div>
         <div class="custom-prompt-body" style="padding: 12px 0; display: flex; flex-direction: column; gap: 8px;">

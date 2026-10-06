@@ -216,6 +216,31 @@ export const logoutGoogle = (): void => {
 };
 
 /**
+ * 구글 API 에러가 401(미인증/만료) 또는 403(권한 없음)인지 판별합니다.
+ */
+export const isGoogleAuthError = (err: any): boolean => {
+  if (!err) return false;
+  if (err.status === 401 || err.status === 403) return true;
+  if (err.result?.error?.code === 401 || err.result?.error?.code === 403) return true;
+  const statusStr = (err.result?.error?.status || '').toUpperCase();
+  if (statusStr === 'UNAUTHENTICATED' || statusStr === 'PERMISSION_DENIED') return true;
+  const msg = (err.message || err.result?.error?.message || (typeof err === 'string' ? err : JSON.stringify(err))).toLowerCase();
+  if (
+    msg.includes('401') ||
+    msg.includes('403') ||
+    msg.includes('unauthenticated') ||
+    msg.includes('permission_denied') ||
+    msg.includes('permission denied') ||
+    msg.includes('expired or revoked') ||
+    msg.includes('invalid credentials') ||
+    msg.includes('the caller does not have permission')
+  ) {
+    return true;
+  }
+  return false;
+};
+
+/**
  * 자동 로그인을 시도합니다.
  */
 export const tryAutoLogin = async (onTokenCallback: (token: string) => void): Promise<void> => {
@@ -356,6 +381,7 @@ export const saveSessionMembers = async (spreadsheetId: string, memberSheetTitle
     console.log(`raw 시트(${rawTitle})의 A열에 참석 멤버 기입 완료.`);
   } catch (err) {
     console.error(`raw 시트(${rawTitle}) 멤버 기입 실패:`, err);
+    throw err;
   }
 };
 
@@ -399,7 +425,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
     existingSheets = resMetadata.result.sheets.map((s: any) => s.properties.title);
   } catch (e) {
     console.error("회차 시트 생성 전 메타데이터 로드 실패:", e);
-    return;
+    throw e;
   }
 
   // 1. 상세 기록용 시트 개설 (데이터 덤프용 숨김 시트)
@@ -438,6 +464,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
       });
     } catch (e) {
       console.error(`'${detailTitle}' 개설 및 헤더 입력 실패:`, e);
+      throw e;
     }
   }
 
@@ -524,6 +551,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
       console.log(`'${rawTitle}' 데이터 시트 개설 및 수식 적용 완료!`);
     } catch (createErr) {
       console.error(`'${rawTitle}' 개설 실패:`, createErr);
+      throw createErr;
     }
   }
 
@@ -637,6 +665,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
       await syncSessionUmaToStatsSheet(spreadsheetId, cleanTitle, todayMembers);
     } catch (dupErr) {
       console.error(`'${cleanTitle}' 공개용 시트 복제 개설 실패:`, dupErr);
+      throw dupErr;
     }
   }
 };
@@ -1246,6 +1275,7 @@ export const appendSessionSummaryRecords = async (spreadsheetId: string, sheetTi
     console.log(`${sheetTitle} 표시 시트 F${targetRow} 행부터 대국 요약 정보 ${summaryRows.length}개 적재 완료`);
   } catch (err) {
     console.error(`${sheetTitle} 요약 정보 적재 실패:`, err);
+    throw err;
   }
 };
 
@@ -1521,6 +1551,7 @@ export const addNewMembersToDb = async (spreadsheetId: string, names: string[]):
     await updateAlternatingColorsRange(spreadsheetId, totalMembers);
   } catch (err) {
     console.error("신규 멤버 구글 시트 추가 실패:", err);
+    throw err;
   }
 };
 

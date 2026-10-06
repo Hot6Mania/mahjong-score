@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mahjong-score-v5';
+const CACHE_NAME = 'mahjong-score-v6';
 const ASSETS = [
   '/',
   '/index.html',
@@ -33,6 +33,12 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
+  const url = new URL(e.request.url);
+  // 외부 도메인 API(구글 Sheets API, Cloudflare Workers, Google Auth 등)는 네이티브 네트워크로 직접 위임
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
   e.respondWith(
     fetch(e.request)
       .then((networkResponse) => {
@@ -45,9 +51,23 @@ self.addEventListener('fetch', (e) => {
         }
         return networkResponse;
       })
-      .catch(() => {
+      .catch(async () => {
         // 오프라인 상태이거나 네트워크 연결 실패 시 캐시 매칭 복원
-        return caches.match(e.request);
+        const matched = await caches.match(e.request);
+        if (matched) return matched;
+
+        // SPA 네비게이션 요청의 경우 오프라인 fallback으로 index.html 반환
+        if (e.request.mode === 'navigate') {
+          const indexFallback = (await caches.match('/index.html')) || (await caches.match('/'));
+          if (indexFallback) return indexFallback;
+        }
+
+        // 캐시에도 존재하지 않을 경우 안전한 Response 객체를 반환하여 TypeError 방지
+        return new Response('오프라인 상태입니다.', {
+          status: 503,
+          statusText: 'Service Unavailable',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+        });
       })
   );
 });

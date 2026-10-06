@@ -14,7 +14,7 @@ import {
   recordPinSuccess,
   applyDelayIfRepeated
 } from '@/utils/pinRateLimiter';
-import { createSessionSheetIfNotExist, saveSessionMembers } from '@/utils/googleSheets';
+import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError } from '@/utils/googleSheets';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -621,6 +621,12 @@ const handleCreateSessionSheetConfirm = async () => {
   const title = newSessionSheetTitle.value.trim();
   if (!spreadsheetId || !title) return;
 
+  const token = (window as any).gapi?.client?.getToken();
+  if (!token || !token.access_token) {
+    emit('toast', '회차 시트 생성 실패: 로그인 문제일 수 있습니다. 상단 메뉴에서 재로그인 해주세요.', 'error');
+    return;
+  }
+
   // 입력 모달은 닫고, 전체 화면 로딩 진행 모달 활성화
   isCreateSessionSheetModalOpen.value = false;
   isCreatingSessionSheet.value = true;
@@ -659,7 +665,11 @@ const handleCreateSessionSheetConfirm = async () => {
     emit('toast', `'${title}' 회차가 생성되고 연동 회차로 설정되었습니다.`, 'success');
   } catch (err: any) {
     console.error('회차 시트 생성 실패:', err);
-    emit('toast', `회차 시트 생성 실패: ${err?.message || err}`, 'error');
+    if (isGoogleAuthError(err)) {
+      emit('toast', '회차 시트 생성 실패: 로그인 문제일 수 있습니다. 상단 메뉴에서 재로그인 해주세요.', 'error');
+    } else {
+      emit('toast', `회차 시트 생성 실패: ${err?.message || err}`, 'error');
+    }
   } finally {
     isCreatingSessionSheet.value = false;
     sheetCreateProgress.value = 0;
@@ -1915,6 +1925,13 @@ html.dark .horizontal-timetable-scroll::-webkit-scrollbar-thumb {
   width: 88px;
   flex-shrink: 0;
   box-sizing: border-box;
+  position: sticky;
+  left: 0;
+  background: var(--bg-card, #ffffff);
+  z-index: 4;
+}
+html.dark .axis-spacer {
+  background: var(--bg-card, #1e293b);
 }
 
 .axis-ticks {
@@ -1988,6 +2005,8 @@ html.dark .horizontal-grid-line {
 }
 
 .row-user-label {
+  position: sticky;
+  left: 0;
   width: 88px;
   flex-shrink: 0;
   font-size: 12px;
@@ -1999,9 +2018,12 @@ html.dark .horizontal-grid-line {
   padding-right: 8px;
   box-sizing: border-box;
   overflow: hidden;
+  background: var(--bg-card, #ffffff);
+  z-index: 3;
 }
 html.dark .row-user-label {
   color: #cbd5e1;
+  background: var(--bg-card, #1e293b);
 }
 
 .user-name {
