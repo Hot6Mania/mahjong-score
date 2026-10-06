@@ -667,9 +667,13 @@ const verifyAdminPasscode = async () => {
   }
 };
 
-// 일정 데이터 로드 (silent: true일 경우 로딩 스피너 및 화면 깜빡임 없이 조용히 동기화)
-const loadSchedule = async (silent = false) => {
+// 일정 데이터 로드 (silent: true일 경우 토스트 팝업 및 불필요한 스피너 없이 조용히 동기화)
+const loadSchedule = async (silent = true) => {
   if (silent) {
+    const hasData = monthSchedule.value.dates && monthSchedule.value.dates.length > 0;
+    if (!hasData) {
+      isLoading.value = true;
+    }
     try {
       const data = await fetchMonthSchedule(currentMonth.value);
       // 데이터 변동 여부 정밀 대조 (변동 없을 시 리렌더링 원천 차단)
@@ -678,6 +682,10 @@ const loadSchedule = async (silent = false) => {
       }
     } catch (e) {
       console.warn('백그라운드 일정 동기화 실패:', e);
+    } finally {
+      if (!hasData) {
+        isLoading.value = false;
+      }
     }
     return;
   }
@@ -1198,7 +1206,7 @@ onMounted(async () => {
     document.removeEventListener('visibilitychange', handleVisibilityOrStorage);
   });
 
-  await loadSchedule();
+  await loadSchedule(true);
 });
 
 const setViewMode = (mode: 'calendar' | 'list') => {
