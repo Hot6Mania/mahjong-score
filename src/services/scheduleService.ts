@@ -1,4 +1,4 @@
-import type { ScheduleDayItem, ScheduleMonthData, ScheduleHistoryItem } from '@/types/schedule';
+import type { ScheduleDayItem, ScheduleMonthData, ScheduleHistoryItem, ScheduleCommitsResponse } from '@/types/schedule';
 import { computeSessionTimeFromAttendees } from '@/utils/timelineEngine';
 
 export function getWorkerUrl(): string {
@@ -1092,3 +1092,88 @@ export async function adminForceResetUserPin(
 
   return { success: true, data: localData };
 }
+
+/**
+ * Git 스타일 커밋 및 체크포인트 목록 조회
+ */
+export async function fetchScheduleCommits(month: string): Promise<ScheduleCommitsResponse> {
+  const workerUrl = getWorkerUrl();
+  try {
+    const res = await fetch(`${workerUrl}/api/schedule/admin/commits?month=${encodeURIComponent(month)}&_t=${Date.now()}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.success) {
+        return {
+          success: true,
+          commits: json.commits || [],
+          checkpoint: json.checkpoint || null
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('커밋 히스토리 조회 실패:', e);
+  }
+  return { success: false, commits: [], checkpoint: null };
+}
+
+/**
+ * Git 스타일 타임머신 롤백 (특정 커밋 또는 안전 체크포인트로 복원)
+ */
+export async function rollbackSchedule(
+  month: string,
+  commitId: string,
+  adminToken?: string
+): Promise<{ success: boolean; data?: ScheduleMonthData; message?: string; error?: string }> {
+  const workerUrl = getWorkerUrl();
+  const passcode = getAdminPasscode();
+  const token = adminToken || localStorage.getItem('google_access_token') || '';
+  const cipher = localStorage.getItem('google_refresh_cipher') || '';
+
+  try {
+    const res = await fetch(`${workerUrl}/api/schedule/admin/rollback`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : '',
+        'X-Admin-Passcode': passcode || ''
+      },
+      body: JSON.stringify({
+        month,
+        commitId,
+        admin_passcode: passcode || undefined,
+        access_token: token || undefined,
+        refresh_cipher: cipher || undefined
+      })
+    });
+
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.success) {
+      if (json.data) {
+        saveLocalMonthSchedule(json.data);
+      }
+      return {
+        success: true,
+        data: json.data,
+        message: json.message || '성공적으로 복원되었습니다.'
+      };
+    } else {
+      return {
+        success: false,
+        error: json.error || '롤백 처리에 실패했습니다.'
+      };
+    }
+  } catch (e: any) {
+    console.error('롤백 요청 에러:', e);
+    return {
+      success: false,
+      error: e.message || '서버와의 통신에 실패했습니다.'
+    };
+  }
+}
+

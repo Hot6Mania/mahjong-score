@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue';
-import type { ScheduleDayItem, SessionType, ScheduleHistoryItem, ScheduleActionType } from '@/types/schedule';
+import type { ScheduleDayItem, SessionType, ScheduleHistoryItem, ScheduleActionType, ScheduleCommitItem } from '@/types/schedule';
 import { parseScheduleNoticeText } from '@/utils/scheduleParser';
 import {
   fetchAdminPasscodes,
@@ -9,6 +9,8 @@ import {
   clearAllAdminPasscodes,
   adminForceResetUserPin,
   fetchScheduleHistory,
+  fetchScheduleCommits,
+  rollbackSchedule,
   type AdminPasscodeInfo
 } from '@/services/scheduleService';
 
@@ -25,7 +27,7 @@ const emit = defineEmits<{
   (e: 'save', dates: ScheduleDayItem[]): void;
 }>();
 
-const editMode = ref<'visual' | 'text' | 'passcode' | 'pin' | 'history'>('visual');
+const editMode = ref<'visual' | 'text' | 'passcode' | 'pin' | 'history' | 'rollback'>('visual');
 const rawText = ref('');
 const errorMessage = ref('');
 const registeredPasscodes = ref<AdminPasscodeInfo[]>([]);
@@ -230,6 +232,11 @@ watch(() => editMode.value, (mode) => {
   } else if (mode === 'history') {
     errorMessage.value = '';
     loadHistory();
+  } else if (mode === 'rollback') {
+    errorMessage.value = '';
+    rollbackSuccessMsg.value = '';
+    rollbackErrorMsg.value = '';
+    loadCommits();
   }
 });
 
@@ -532,6 +539,84 @@ const copyHistoryToClipboard = async () => {
     alert('클립보드 복사에 실패했습니다.');
   }
 };
+
+// ==========================================
+// 타임머신 / Git 델타 커밋 롤백 로직
+// ==========================================
+const commitsList = ref<ScheduleCommitItem[]>([]);
+const checkpointInfo = ref<{ timestamp: number; commitId?: string } | null>(null);
+const isLoadingCommits = ref(false);
+const isRollingBack = ref(false);
+const rollbackSuccessMsg = ref('');
+const rollbackErrorMsg = ref('');
+const expandedCommitIds = ref<Set<string>>(new Set());
+
+const toggleCommitDiff = (commitId: string) => {
+  if (expandedCommitIds.value.has(commitId)) {
+    expandedCommitIds.value.delete(commitId);
+  } else {
+    expandedCommitIds.value.add(commitId);
+  }
+};
+
+const loadCommits = async () => {
+  isLoadingCommits.value = true;
+  rollbackErrorMsg.value = '';
+  try {
+    const res = await fetchScheduleCommits(props.currentMonth);
+    if (res.success) {
+      commitsList.value = res.commits;
+      checkpointInfo.value = res.checkpoint || null;
+    }
+  } catch (err: any) {
+    rollbackErrorMsg.value = err.message || '커밋 목록을 불러오지 못했습니다.';
+  } finally {
+    isLoadingCommits.value = false;
+  }
+};
+
+const handleRollback = async (targetId: string, label: string) => {
+  if (!confirm(`정말 [${label}] 시점으로 일정을 복원(롤백)하시겠습니까?\n\n현재 상태도 새로운 백업 커밋으로 자동 저장되므로 언제든 다시 되돌릴 수 있습니다.`)) {
+    return;
+  }
+
+  isRollingBack.value = true;
+  rollbackSuccessMsg.value = '';
+  rollbackErrorMsg.value = '';
+
+  try {
+    const res = await rollbackSchedule(props.currentMonth, targetId, props.adminToken);
+    if (res.success && res.data) {
+      rollbackSuccessMsg.value = res.message || '일정이 성공적으로 복원되었습니다.';
+      if (res.data.dates) {
+        emit('save', res.data.dates);
+        // 달력 칩 상태 동기화
+        const map: Record<number, 'none' | SessionType> = {};
+        for (let d = 1; d <= daysInCurrentMonth.value; d++) map[d] = 'none';
+        for (const item of res.data.dates) {
+          const parts = item.date.split('-');
+          if (parts.length === 3) {
+            const d = parseInt(parts[2], 10);
+            if (d >= 1 && d <= daysInCurrentMonth.value) {
+              map[d] = item.adminSessionType || item.sessionType;
+            }
+          }
+        }
+        dayStatusMap.value = map;
+      }
+      await loadCommits();
+      setTimeout(() => {
+        rollbackSuccessMsg.value = '';
+      }, 3500);
+    } else {
+      rollbackErrorMsg.value = res.error || '복원 처리에 실패했습니다.';
+    }
+  } catch (err: any) {
+    rollbackErrorMsg.value = err.message || '복원 중 오류가 발생했습니다.';
+  } finally {
+    isRollingBack.value = false;
+  }
+};
 </script>
 
 <template>
@@ -594,6 +679,14 @@ const copyHistoryToClipboard = async () => {
               @click="editMode = 'history'"
             >
               변동 기록
+            </button>
+            <button
+              type="button"
+              class="segment-btn"
+              :class="{ active: editMode === 'rollback' }"
+              @click="editMode = 'rollback'"
+            >
+              ⏱️ 타임머신 복원
             </button>
           </div>
         </div>
@@ -1013,6 +1106,163 @@ const copyHistoryToClipboard = async () => {
               </div>
             </div>
           </div>
+
+          <!-- 6. 타임머신 복원 (Git 델타 커밋 & 체크포인트 롤백) 모드 -->
+          <div v-if="editMode === 'rollback'" class="rollback-view-container">
+            <div class="rollback-intro-card">
+              <div class="intro-icon">🛡️</div>
+              <div class="intro-content">
+                <div class="intro-title">Git 방식 델타 버전 관리 & 타임머신</div>
+                <div class="intro-desc">
+                  일정 수정이나 참석 변경 시 전체를 무겁게 덮어쓰지 않고 <strong>변화량(Diff)</strong>만 고속 저장합니다.
+                  오작동이나 실수로 일정이 삭제되었을 때 안전 체크포인트나 특정 커밋 시점으로 1초 만에 롤백할 수 있습니다.
+                </div>
+              </div>
+            </div>
+
+            <div class="rollback-toolbar">
+              <div class="rollback-toolbar-left">
+                <span class="commits-count-badge">기록된 커밋 {{ commitsList.length }}건</span>
+              </div>
+              <div class="rollback-toolbar-right">
+                <button
+                  type="button"
+                  class="btn-refresh-history"
+                  :disabled="isLoadingCommits || isRollingBack"
+                  @click="loadCommits"
+                >
+                  {{ isLoadingCommits ? '조회 중...' : '🔄 새로고침' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 성공 / 에러 배너 -->
+            <div v-if="rollbackSuccessMsg" class="rollback-success-banner">
+              ✅ {{ rollbackSuccessMsg }}
+            </div>
+            <div v-if="rollbackErrorMsg" class="error-banner">
+              ⚠️ {{ rollbackErrorMsg }}
+            </div>
+
+            <!-- 안전 체크포인트 배너 카드 (존재할 경우) -->
+            <div v-if="checkpointInfo" class="checkpoint-banner-card">
+              <div class="checkpoint-info">
+                <div class="checkpoint-header-row">
+                  <span class="checkpoint-badge">🛡️ 안전 체크포인트</span>
+                  <span class="checkpoint-time">{{ formatHistoryTime(checkpointInfo.timestamp) }} 생성</span>
+                </div>
+                <p class="checkpoint-desc">주요 일정 변경 시 KV에 안전하게 동결 보관된 풀 스냅샷입니다.</p>
+              </div>
+              <button
+                type="button"
+                class="btn-rollback-action highlight"
+                :disabled="isRollingBack"
+                @click="handleRollback('checkpoint', '안전 체크포인트')"
+              >
+                {{ isRollingBack ? '복원 중...' : '이 체크포인트로 복원' }}
+              </button>
+            </div>
+
+            <!-- 로딩 상태 -->
+            <div v-if="isLoadingCommits && commitsList.length === 0" class="history-loading">
+              <div class="history-spinner"></div>
+              <span>커밋 히스토리를 불러오는 중...</span>
+            </div>
+
+            <!-- 커밋 없음 -->
+            <div v-else-if="commitsList.length === 0" class="history-empty">
+              <span class="empty-icon">🌱</span>
+              <p class="empty-text">아직 기록된 커밋 내역이 없습니다. (일정 변경 시 자동 생성됩니다)</p>
+            </div>
+
+            <!-- 커밋 리스트 -->
+            <div v-else class="commits-list">
+              <div
+                v-for="commit in commitsList"
+                :key="commit.id"
+                class="commit-card"
+              >
+                <div class="commit-card-header">
+                  <span class="commit-id-badge">{{ commit.id.slice(0, 10) }}</span>
+                  <span
+                    class="history-action-badge"
+                    :style="{ backgroundColor: getActionColor(commit.action) }"
+                  >
+                    {{ getActionLabel(commit.action) }}
+                  </span>
+                  <span class="commit-time">{{ formatHistoryTime(commit.timestamp) }}</span>
+                </div>
+
+                <div class="commit-card-body">
+                  <p class="commit-summary">{{ commit.summary }}</p>
+
+                  <!-- 변경 세부 내역 (Diff) 토글 -->
+                  <button
+                    type="button"
+                    class="btn-toggle-diff"
+                    @click="toggleCommitDiff(commit.id)"
+                  >
+                    <span class="diff-arrow">{{ expandedCommitIds.has(commit.id) ? '▼' : '▶' }}</span>
+                    <span>{{ expandedCommitIds.has(commit.id) ? '변경 내역 접기' : '변화량(Diff) 상세 보기' }}</span>
+                  </button>
+
+                  <div v-if="expandedCommitIds.has(commit.id)" class="diff-details-panel">
+                    <!-- 추가된 날짜 -->
+                    <div v-if="commit.delta?.addedDates?.length" class="diff-row added">
+                      <span class="diff-tag plus">+ 날짜 추가</span>
+                      <span class="diff-content">
+                        <span v-for="d in commit.delta.addedDates" :key="d.date" class="diff-chip add">
+                          {{ d.date }} ({{ d.sessionType === 'overnight' ? '밤샘' : '당일' }})
+                        </span>
+                      </span>
+                    </div>
+
+                    <!-- 삭제된 날짜 -->
+                    <div v-if="commit.delta?.removedDates?.length" class="diff-row removed">
+                      <span class="diff-tag minus">- 날짜 삭제</span>
+                      <span class="diff-content">
+                        <span v-for="d in commit.delta.removedDates" :key="d.date" class="diff-chip del">
+                          {{ d.date }}
+                        </span>
+                      </span>
+                    </div>
+
+                    <!-- 수정된 날짜 -->
+                    <div v-if="commit.delta?.modifiedDates?.length" class="diff-row modified">
+                      <span class="diff-tag mod">~ 세부 변경</span>
+                      <div class="diff-mod-list">
+                        <div v-for="m in commit.delta.modifiedDates" :key="m.date" class="diff-mod-item">
+                          <span class="mod-date">{{ m.date }}</span>
+                          <span v-if="m.fieldDiff.sessionType" class="mod-field">
+                            유형: {{ m.fieldDiff.sessionType.before }} → <strong>{{ m.fieldDiff.sessionType.after }}</strong>
+                          </span>
+                          <span v-if="m.fieldDiff.isConfirmed" class="mod-field">
+                            확정: <strong>{{ m.fieldDiff.isConfirmed.after ? '출발 확정' : '대기중' }}</strong>
+                          </span>
+                          <span v-if="m.fieldDiff.attendees" class="mod-field">
+                            <span v-if="m.fieldDiff.attendees.added?.length" class="text-green">+{{ m.fieldDiff.attendees.added.join(', ') }}</span>
+                            <span v-if="m.fieldDiff.attendees.removed?.length" class="text-red"> -{{ m.fieldDiff.attendees.removed.join(', ') }}</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="commit-card-footer">
+                  <span class="commit-author">작성자: <strong>{{ commit.actorName }}</strong></span>
+                  <button
+                    type="button"
+                    class="btn-rollback-action"
+                    :disabled="isRollingBack"
+                    @click="handleRollback(commit.id, `${commit.summary}`)"
+                  >
+                    {{ isRollingBack ? '처리 중...' : '⏱️ 이 시점으로 롤백' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 푸터 버튼 -->
@@ -1020,7 +1270,7 @@ const copyHistoryToClipboard = async () => {
           <button type="button" class="btn-cancel" @click="emit('close')">
             닫기
           </button>
-          <button v-if="editMode !== 'passcode' && editMode !== 'pin' && editMode !== 'history'" type="button" class="btn-primary" @click="handleApply">
+          <button v-if="editMode !== 'passcode' && editMode !== 'pin' && editMode !== 'history' && editMode !== 'rollback'" type="button" class="btn-primary" @click="handleApply">
             {{ selectedCounts.total }}개 일정으로 적용
           </button>
           <button v-else type="button" class="btn-primary" @click="emit('close')">
@@ -1122,6 +1372,12 @@ const copyHistoryToClipboard = async () => {
 
 .mode-tabs-wrapper {
   padding: 12px 20px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.mode-tabs-wrapper::-webkit-scrollbar {
+  display: none;
 }
 
 .apple-segmented-control {
@@ -1131,19 +1387,21 @@ const copyHistoryToClipboard = async () => {
   border-radius: 12px;
   gap: 2px;
   border: 1px solid var(--border-color, #e2e8f0);
+  min-width: max-content;
 }
 
 .segment-btn {
   flex: 1;
   border: none;
   background: transparent;
-  padding: 7px 10px;
+  padding: 7px 12px;
   font-size: 13px;
   font-weight: 500;
   border-radius: 9px;
   color: var(--text-dimmed, #64748b);
   cursor: pointer;
   transition: all 0.15s ease;
+  white-space: nowrap;
 }
 .segment-btn.active {
   background: var(--card-bg-color, #ffffff);
@@ -2095,5 +2353,429 @@ html.dark .history-card-footer {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* ==========================================
+   타임머신 복원 (Git 델타 커밋) 스타일
+   ========================================== */
+.rollback-view-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rollback-intro-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+html.dark .rollback-intro-card {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.intro-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.intro-content {
+  flex: 1;
+}
+
+.intro-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2563eb;
+  margin-bottom: 2px;
+}
+
+html.dark .intro-title {
+  color: #60a5fa;
+}
+
+.intro-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-color, #334155);
+}
+
+html.dark .intro-desc {
+  color: #cbd5e1;
+}
+
+.rollback-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+.commits-count-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dimmed, #64748b);
+  background: var(--input-bg-color, #f1f5f9);
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+
+html.dark .commits-count-badge {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.rollback-success-banner {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  animation: fadeIn 0.2s ease;
+}
+
+html.dark .rollback-success-banner {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+
+.checkpoint-banner-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(6, 182, 212, 0.08) 100%);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+html.dark .checkpoint-banner-card {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(6, 182, 212, 0.12) 100%);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.checkpoint-info {
+  flex: 1;
+}
+
+.checkpoint-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.checkpoint-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #059669;
+  background: rgba(16, 185, 129, 0.2);
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+
+html.dark .checkpoint-badge {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.3);
+}
+
+.checkpoint-time {
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+  font-variant-numeric: tabular-nums;
+}
+
+.checkpoint-desc {
+  font-size: 12px;
+  color: var(--text-color, #334155);
+  margin: 0;
+  line-height: 1.4;
+}
+
+html.dark .checkpoint-desc {
+  color: #cbd5e1;
+}
+
+.commits-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.commit-card {
+  background: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: all 0.15s ease;
+}
+
+.commit-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.05);
+}
+
+html.dark .commit-card {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.commit-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.commit-id-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: #475569;
+  background: var(--input-bg-color, #f1f5f9);
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+
+html.dark .commit-id-badge {
+  color: #94a3b8;
+  background: #0f172a;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.commit-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dimmed, #94a3b8);
+  font-variant-numeric: tabular-nums;
+}
+
+.commit-summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color, #0f172a);
+  margin: 0 0 6px 0;
+  line-height: 1.4;
+}
+
+html.dark .commit-summary {
+  color: #f8fafc;
+}
+
+.btn-toggle-diff {
+  background: transparent;
+  border: none;
+  color: #3b82f6;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+html.dark .btn-toggle-diff {
+  color: #60a5fa;
+}
+
+.diff-arrow {
+  font-size: 9px;
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.diff-details-panel {
+  background: var(--input-bg-color, #f8fafc);
+  border: 1px dashed var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+html.dark .diff-details-panel {
+  background: #0f172a;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.diff-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.diff-tag {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.diff-tag.plus {
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+}
+
+.diff-tag.minus {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+.diff-tag.mod {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+
+.diff-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.diff-chip {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.diff-chip.add {
+  background: rgba(16, 185, 129, 0.1);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.diff-chip.del {
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.diff-mod-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.diff-mod-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.mod-date {
+  font-weight: 700;
+  color: var(--text-color, #1e293b);
+}
+
+html.dark .mod-date {
+  color: #f1f5f9;
+}
+
+.mod-field {
+  color: var(--text-dimmed, #64748b);
+}
+
+.text-green {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.text-red {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.commit-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px dashed var(--border-color, #f1f5f9);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+
+html.dark .commit-card-footer {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.commit-author {
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+}
+
+.btn-rollback-action {
+  background: var(--input-bg-color, #f1f5f9);
+  color: var(--text-color, #1e293b);
+  border: 1px solid var(--border-color, #cbd5e1);
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-rollback-action:hover:not(:disabled) {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+  transform: translateY(-1px);
+}
+
+.btn-rollback-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+html.dark .btn-rollback-action {
+  background: #334155;
+  color: #f1f5f9;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+html.dark .btn-rollback-action:hover:not(:disabled) {
+  background: #475569;
+}
+
+.btn-rollback-action.highlight {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  border: none;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+}
+
+.btn-rollback-action.highlight:hover:not(:disabled) {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.4);
 }
 </style>

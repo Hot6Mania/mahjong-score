@@ -73,3 +73,46 @@ export interface OverlapInterval {
   count: number;
   attendees: string[];
 }
+
+export interface ScheduleDeltaAttendeeDiff {
+  countBefore: number;
+  countAfter: number;
+  added: string[];
+  removed: string[];
+}
+
+export interface ScheduleDeltaModifiedDate {
+  date: string;
+  fieldDiff: {
+    sessionType?: { before: string; after: string };
+    isConfirmed?: { before: boolean; after: boolean };
+    sessionNumber?: { before?: number; after?: number };
+    time?: { before: string; after: string };
+    attendees?: ScheduleDeltaAttendeeDiff;
+    [key: string]: any;
+  };
+}
+
+export interface ScheduleDeltaData {
+  addedDates: Array<{ date: string; sessionType: string; customStartTime?: string; customEndTime?: string }>;
+  removedDates: Array<{ date: string; sessionType: string; attendeesCount?: number }>;
+  modifiedDates: ScheduleDeltaModifiedDate[];
+}
+
+export interface ScheduleCommitItem {
+  id: string;
+  timestamp: number;
+  action: string;
+  actorName: string;
+  summary: string;
+  delta: ScheduleDeltaData;
+  snapshotBefore?: ScheduleDayItem[] | null;
+  clientIp?: string | null;
+}
+
+export interface ScheduleCommitsResponse {
+  success: boolean;
+  commits: ScheduleCommitItem[];
+  checkpoint?: { timestamp: number; commitId?: string } | null;
+}
+
