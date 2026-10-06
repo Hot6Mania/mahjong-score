@@ -1516,10 +1516,10 @@ const handleRollback = async (targetId: string, label: string) => {
 
 /* 1차 상위 탭 (일정 관리 vs 운영 및 보안) */
 .primary-tabs-wrapper {
-  padding: 12px 20px 6px;
+  padding: 12px 20px 0;
 }
 
-.primary-control {
+.apple-segmented-control.primary-control {
   display: flex;
   background: rgba(0, 0, 0, 0.04);
   padding: 4px;
@@ -1528,13 +1528,14 @@ const handleRollback = async (targetId: string, label: string) => {
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
 }
 
-.primary-btn {
+.segment-btn.primary-btn {
   flex: 1;
   border: none;
   background: transparent;
-  padding: 8px 14px;
-  font-size: 13.5px;
-  font-weight: 600;
+  min-height: 52px;
+  padding: 12px 14px;
+  font-size: 15px;
+  font-weight: 700;
   border-radius: 9px;
   color: var(--text-dimmed, #64748b);
   cursor: pointer;
@@ -1543,16 +1544,18 @@ const handleRollback = async (targetId: string, label: string) => {
   text-align: center;
 }
 
-.primary-btn.active {
-  background: var(--card-bg-color, #ffffff);
-  color: #2563eb;
+.segment-btn.primary-btn.active {
+  background: #2563eb;
+  color: #ffffff;
   font-weight: 700;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 /* 2차 하위 서브 탭 (한 줄 정렬 유지) */
 .sub-tabs-wrapper {
-  padding: 0 20px 6px;
+  margin: 12px 20px 0;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -1561,18 +1564,19 @@ const handleRollback = async (targetId: string, label: string) => {
   display: none;
 }
 
-.sub-control {
+.apple-segmented-control.sub-control {
   display: flex;
-  background: var(--input-bg-color, #f8fafc);
-  padding: 3px;
-  border-radius: 10px;
-  gap: 3px;
-  border: 1px solid var(--border-color, #e2e8f0);
-  min-width: 100%;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  gap: 4px;
+  border: none;
+  min-width: max-content;
 }
 
-.sub-btn {
-  flex: 1;
+.segment-btn.sub-btn {
+  flex: 0 0 auto;
+  min-height: 36px;
   border: none;
   background: transparent;
   padding: 6px 10px;
@@ -1586,11 +1590,11 @@ const handleRollback = async (targetId: string, label: string) => {
   text-align: center;
 }
 
-.sub-btn.active {
-  background: var(--card-bg-color, #ffffff);
+.segment-btn.sub-btn.active {
+  background: var(--input-bg-color, #f1f5f9);
   color: var(--text-color, #0f172a);
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: none;
 }
 
 .mode-tabs-wrapper {
