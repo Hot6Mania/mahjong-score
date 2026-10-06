@@ -1003,7 +1003,7 @@ const getSignColor = (sign: number, x: boolean) => {
       <div v-if="googleInfo.isLoggedIn && googleInfo.spreadsheetId" class="session-status-card">
         <div class="session-status-row">
           <span class="session-status-label">연동 회차:</span>
-          <span class="session-status-val">{{ currentSessionSheetName || '회차 미지정 (로컬)' }}</span>
+          <span class="session-status-val">{{ currentSessionSheetName || '회차 미연동' }}</span>
         </div>
         <div class="session-status-row">
           <span class="session-status-sublabel">회차 상태:</span>

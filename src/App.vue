@@ -451,11 +451,6 @@ const loadGoogleSessions = async () => {
     validGoogleSessions.value = validList;
     if (validList.length > 0) {
       selectedSessionToLoad.value = validList[0];
-      // 현재 활성 회차가 없거나 유효하지 않다면 최신 회차를 기본값으로 포커싱
-      if (!currentSessionSheetName.value) {
-        currentSessionSheetName.value = validList[0];
-        localStorage.setItem("current_session_sheet_name", validList[0]);
-      }
     } else {
       selectedSessionToLoad.value = "";
     }
@@ -1972,9 +1967,11 @@ const loadMemberList = async () => {
 // 오늘의 대국 참여 멤버 로드
 const loadTodayMembers = async () => {
   if (googleInfo.syncMode !== 'google' || !googleInfo.isLoggedIn || !googleInfo.spreadsheetId) return;
+  // 회차 미연동 상태에서는 시트 멤버를 임의로 긁어오거나 회차를 자동 생성하지 않음
+  if (!currentSessionSheetName.value) return;
   try {
     await ensureValidToken();
-    const sessionSheetName = await getOrInitSessionSheetName();
+    const sessionSheetName = currentSessionSheetName.value;
     const pointsMap = await fetchSessionMembers(googleInfo.spreadsheetId, sessionSheetName);
     googleInfo.todayMembers = Object.keys(pointsMap);
   } catch (err) {
@@ -2304,11 +2301,16 @@ const googleLogout = () => {
   sessionStorage.removeItem("schedule_admin_attendee_name");
   sessionStorage.removeItem("schedule_admin_passcode");
 
+  // 활성 회차 상태만 '회차 미연동'으로 분리 (로컬 경기 기록 todayGamesHistory는 온전히 보존)
+  currentSessionSheetName.value = "";
+  localStorage.removeItem("current_session_sheet_name");
+
   // 동기화 모드를 강제로 로컬 모드로 리셋
   googleInfo.syncMode = "local";
   localStorage.setItem("sync_mode", "local");
 
   window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+  triggerToast("구글 로그아웃 완료 (로컬 경기 기록은 유지됩니다)");
 };
 
 // 설정 값 로컬 스토리지에 동기화
@@ -3001,6 +3003,15 @@ const confirmStartNewDay = async () => {
   isShowSessionChoosePopup.value = false;
   modalInfo.isOpen = false; // 설정 창도 닫아주기
   await startNewDay();
+};
+
+// 회차 미연동으로 시작 처리
+const dismissSessionChoosePopup = () => {
+  isShowSessionChoosePopup.value = false;
+  modalInfo.isOpen = false;
+  currentSessionSheetName.value = "";
+  localStorage.removeItem("current_session_sheet_name");
+  triggerToast("회차 미연동 상태로 시작합니다.");
 };
 
 // 총 우마 창에서 특정 대국 행을 클릭했을 때의 차트 팝업 기동
@@ -3748,7 +3759,7 @@ const addBackupGameToCurrent = (game: any) => {
 
   <!-- [팝업 2] 로그인 완료 직후 뜨는 기존 회차 이어하기 vs 신규 회차 시작 양자택일 분기 팝업 -->
   <Transition name="modal-fade">
-    <div v-if="isShowSessionChoosePopup" class="custom-prompt-overlay" v-backdrop-dismiss="() => isShowSessionChoosePopup = false">
+    <div v-if="isShowSessionChoosePopup" class="custom-prompt-overlay" v-backdrop-dismiss="dismissSessionChoosePopup">
       <div class="custom-prompt-card" style="max-width: 340px;">
         <div class="custom-prompt-header">
           <h3>회차 시작 방식 선택</h3>
@@ -3776,13 +3787,22 @@ const addBackupGameToCurrent = (game: any) => {
           >
             기존 회차 이어하기
           </button>
-          <!-- 신규 회차 시작 (아래, 빨간색) -->
+          <!-- 신규 회차 시작 (중간, 빨간색) -->
           <button 
             class="btn-prompt-cancel" 
             @click="confirmStartNewDay"
             style="width: 100%; margin: 0; padding: 10px; font-size: 14px; background-color: var(--color-negative); color: white; border: none;"
           >
             신규 회차 시작
+          </button>
+          <!-- 회차 미연동으로 시작 (아래, 회색 아웃라인) -->
+          <button 
+            type="button"
+            class="btn-prompt-dismiss" 
+            @click="dismissSessionChoosePopup"
+            style="width: 100%; margin: 0; padding: 10px; font-size: 14px; background: transparent; color: var(--color-subtext, #888); border: 1px solid var(--color-border, #ddd); border-radius: 4px; cursor: pointer;"
+          >
+            회차 미연동으로 시작
           </button>
         </div>
       </div>

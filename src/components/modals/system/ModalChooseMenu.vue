@@ -56,7 +56,7 @@ const handleSyncClick = () => {
     <div class="session_badge_left">
       <span class="session_dot" :class="{ online: googleInfo.isLoggedIn && googleInfo.syncMode === 'google' }"></span>
       <span class="session_title">연동 회차:</span>
-      <span class="session_name">{{ currentSessionSheetName || '회차 미지정 (로컬)' }}</span>
+      <span class="session_name">{{ currentSessionSheetName || '회차 미연동' }}</span>
     </div>
     <span v-if="isSessionClosed" class="session_closed_badge">🔒 종료됨</span>
   </div>
