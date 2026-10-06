@@ -93,6 +93,7 @@ html {
   -webkit-overflow-scrolling: touch;
   background-color: var(--bg-color);
   color: var(--text-color);
+  font-family: 'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif;
 }
 html.dark,
 html.dark body,
@@ -105,6 +106,7 @@ body {
   height: 3000px !important;
   background-color: var(--bg-color);
   color: var(--text-color);
+  font-family: 'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif;
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 body.stats-mode,
@@ -114,6 +116,11 @@ body:has(.stats-dashboard-container) {
 }
 body::-webkit-scrollbar {
   display: none;
+}
+
+/* 전역 폼 요소 글꼴 상속 강제 통일 */
+button, input, select, textarea {
+  font-family: inherit;
 }
 
 /* 배경화면 크기 및 글꼴 설정 */

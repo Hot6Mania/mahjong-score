@@ -55,7 +55,7 @@ export const initGis = (clientId: string, onTokenCallback: (token: string) => vo
   }
   tokenClient = window.google.accounts.oauth2.initTokenClient({
     client_id: clientId,
-    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email openid',
     callback: (tokenResponse: any) => {
       if (tokenResponse.error !== undefined) {
         console.error('Token Client Error:', tokenResponse);
@@ -86,7 +86,7 @@ export const initGisCodeClient = (
   const hasRefreshCipher = !!localStorage.getItem("google_refresh_cipher");
   codeClient = window.google.accounts.oauth2.initCodeClient({
     client_id: clientId,
-    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email openid',
     ux_mode: 'popup',
     ...(hasRefreshCipher ? {} : { prompt: 'consent' }),
     callback: async (response: any) => {
@@ -206,6 +206,8 @@ export const logoutGoogle = (): void => {
     }
     localStorage.removeItem("google_is_logged_in");
     localStorage.removeItem("google_refresh_cipher");
+    sessionStorage.removeItem("schedule_admin_verified");
+    sessionStorage.removeItem("schedule_admin_passcode");
   }
 };
 

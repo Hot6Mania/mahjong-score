@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
+import ScheduleTab from '@/components/schedule/ScheduleTab.vue';
 import {
   Chart as ChartJS,
   Title,
@@ -47,6 +48,51 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+const route = useRoute();
+
+// 탭 상태 타입 및 유효 탭 목록
+type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule';
+const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'schedule'];
+
+// URL 해시 및 쿼리 파라미터에서 현재 탭 추출 (기본값: 순수 /dashboard는 'ranking')
+const parseTabFromLocation = (): DashboardTab => {
+  if (typeof window !== 'undefined') {
+    const rawHash = window.location.hash.replace(/^#/, '').trim();
+    if (rawHash && VALID_TABS.includes(rawHash as DashboardTab)) {
+      return rawHash as DashboardTab;
+    }
+  }
+  const queryTab = route.query.tab as string;
+  if (queryTab && VALID_TABS.includes(queryTab as DashboardTab)) {
+    return queryTab as DashboardTab;
+  }
+  return 'ranking';
+};
+
+// 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule')
+const activeTab = ref<DashboardTab>(parseTabFromLocation());
+
+// 탭 전환 및 URL 동기화
+const switchTab = (tab: DashboardTab, updateUrl = true) => {
+  activeTab.value = tab;
+  if (updateUrl && typeof window !== 'undefined') {
+    const pathname = window.location.pathname;
+    const search = window.location.search;
+    if (tab === 'ranking') {
+      // 종합 랭킹은 해시 없이 깔끔한 /dashboard 유지
+      window.history.replaceState(null, '', `${pathname}${search}`);
+    } else {
+      window.history.replaceState(null, '', `${pathname}${search}#${tab}`);
+    }
+  }
+};
+
+const handleHashChange = () => {
+  const current = parseTabFromLocation();
+  if (activeTab.value !== current) {
+    activeTab.value = current;
+  }
+};
 
 // 테마 상태 실시간 감지
 const isDark = ref(typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : false);
@@ -60,12 +106,28 @@ onMounted(() => {
     });
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
   }
+
+  // 브라우저 뒤로가기 / 앞으로가기 및 URL 해시 변경 동기화
+  window.addEventListener('hashchange', handleHashChange);
+
+  // 초기 URL 동기화
+  const initial = parseTabFromLocation();
+  switchTab(initial, initial !== 'ranking');
 });
 
 onUnmounted(() => {
   if (themeObserver) {
     themeObserver.disconnect();
     themeObserver = null;
+  }
+  window.removeEventListener('hashchange', handleHashChange);
+});
+
+// Vue 라우트 변화 감시
+watch(() => [route.hash, route.query.tab], () => {
+  const target = parseTabFromLocation();
+  if (activeTab.value !== target) {
+    activeTab.value = target;
   }
 });
 
@@ -79,9 +141,6 @@ const toggleTheme = () => {
     localStorage.setItem('theme', 'light');
   }
 };
-
-// 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions')
-const activeTab = ref<'ranking' | 'rating' | 'matrix' | 'sessions'>('ranking');
 
 // 로딩 및 에러 상태
 const isLoading = ref(true);
@@ -314,7 +373,7 @@ const navigateToSession = (sessionColName: string) => {
   if (match) {
     selectedSession.value = match;
   }
-  activeTab.value = 'sessions';
+  switchTab('sessions');
 };
 
 const formatMatrixScore = (score: number | null | undefined): string => {
@@ -1644,7 +1703,8 @@ onMounted(() => {
 const copyDashboardLink = async () => {
   try {
     const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-    const url = `${window.location.origin}${base}/dashboard`;
+    const hash = activeTab.value === 'ranking' ? '' : `#${activeTab.value}`;
+    const url = `${window.location.origin}${base}/dashboard${hash}`;
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(url);
     } else {
@@ -1840,30 +1900,37 @@ const getRankClass = (rank: number) => {
       <button 
         class="tab-btn" 
         :class="{ active: activeTab === 'ranking' }" 
-        @click="activeTab = 'ranking'"
+        @click="switchTab('ranking')"
       >
         종합 랭킹
       </button>
       <button 
         class="tab-btn" 
         :class="{ active: activeTab === 'rating' }" 
-        @click="activeTab = 'rating'"
+        @click="switchTab('rating')"
       >
         레이팅
       </button>
       <button 
         class="tab-btn" 
         :class="{ active: activeTab === 'matrix' }" 
-        @click="activeTab = 'matrix'"
+        @click="switchTab('matrix')"
       >
         역대 회차별 전적
       </button>
       <button 
         class="tab-btn" 
         :class="{ active: activeTab === 'sessions' }" 
-        @click="activeTab = 'sessions'"
+        @click="switchTab('sessions')"
       >
         회차별 경기 상세
+      </button>
+      <button 
+        class="tab-btn" 
+        :class="{ active: activeTab === 'schedule' }" 
+        @click="switchTab('schedule')"
+      >
+        일정
       </button>
     </nav>
 
@@ -2669,6 +2736,14 @@ const getRankClass = (rank: number) => {
             </div>
           </template>
         </div>
+      </section>
+
+      <!-- 일정 탭 -->
+      <section v-else-if="activeTab === 'schedule'" class="tab-schedule">
+        <ScheduleTab
+          :members="allStats"
+          :availableSessions="availableSessions"
+        />
       </section>
     </main>
 
