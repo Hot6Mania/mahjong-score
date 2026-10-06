@@ -115,6 +115,10 @@ export const initGisCodeClient = (
         if (data.refresh_cipher) {
           localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
         }
+        if (data.attendeeName) {
+          sessionStorage.setItem("schedule_admin_attendee_name", data.attendeeName);
+        }
+        window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
         onTokensReceived(data);
       } catch (err) {
         console.error("Worker 토큰 교환 오류:", err);
@@ -638,6 +642,149 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
 };
 
 /**
+ * '통계' 시트의 서식(테두리, 글꼴, 정렬 등), B열 총합 수식, 필터 드롭다운 범위를 최신 멤버 행까지 자동 동기화합니다.
+ * Sheets API를 통한 업데이트는 스프레드시트의 onEdit을 트리거하지 않으므로,
+ * copyPaste(PASTE_FORMAT) 및 setBasicFilter batchUpdate 요청을 직접 전송하여 100% 무인 자동 동기화합니다.
+ */
+export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<void> => {
+  if (!spreadsheetId) return;
+
+  try {
+    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const sheets = resMetadata.result.sheets || [];
+    const statsSheet = sheets.find((s: any) => s.properties.title === '통계');
+    if (!statsSheet) return;
+
+    const sheetId = statsSheet.properties.sheetId;
+    const currentMaxRows = statsSheet.properties?.gridProperties?.rowCount || 100;
+
+    // 1. 1행 헤더 조회하여 유효 마지막 열(lastColIdx: 0-based) 파악
+    const headerRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "'통계'!1:1",
+    });
+    const headerRow: string[] = headerRes.result.values?.[0] || [];
+    let lastColIdx = 1; // 최소 B열(1)
+    for (let c = headerRow.length - 1; c >= 0; c--) {
+      if (headerRow[c] !== undefined && headerRow[c] !== null && String(headerRow[c]).trim() !== '') {
+        lastColIdx = Math.max(lastColIdx, c);
+        break;
+      }
+    }
+    const endColumnIndex = lastColIdx + 1; // 0-based exclusive
+
+    // 2. A열 및 B열 조회하여 마지막 데이터 행(lastDataRow: 1-based) 및 B열 수식 누락 행 파악
+    const rowsRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "'통계'!A1:B200",
+      valueRenderOption: 'FORMULA',
+    });
+    const rows: string[][] = rowsRes.result.values || [];
+
+    let lastDataRow = 1; // 1-based
+    for (let r = rows.length - 1; r >= 1; r--) {
+      const name = (rows[r]?.[0] || '').toString().trim();
+      if (name && !name.startsWith('#') && name !== '이름') {
+        lastDataRow = r + 1;
+        break;
+      }
+    }
+
+    if (lastDataRow < 2) {
+      console.log("'통계' 시트에 선수 데이터가 없어 서식 동기화를 건너뜁니다.");
+      return;
+    }
+
+    const requests: any[] = [];
+
+    // 3. 시트의 행 수가 부족할 경우 appendDimension으로 행 자동 추가
+    if (lastDataRow > currentMaxRows) {
+      const rowsToAdd = lastDataRow - currentMaxRows + 10;
+      requests.push({
+        appendDimension: {
+          sheetId,
+          dimension: 'ROWS',
+          length: rowsToAdd,
+        },
+      });
+    }
+
+    // 4. B열 수식이 비어있는 행이 있다면 =SUM(C{r}:ZZ{r}) 보충
+    const missingSumUpdates: { range: string; values: string[][] }[] = [];
+    for (let r = 2; r <= lastDataRow; r++) {
+      const name = (rows[r - 1]?.[0] || '').toString().trim();
+      const formula = (rows[r - 1]?.[1] || '').toString().trim();
+      if (name && (!formula || !formula.startsWith('='))) {
+        missingSumUpdates.push({
+          range: `'통계'!B${r}`,
+          values: [[`=SUM(C${r}:ZZ${r})`]],
+        });
+      }
+    }
+
+    if (missingSumUpdates.length > 0) {
+      await window.gapi.client.sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId,
+        resource: {
+          valueInputOption: 'USER_ENTERED',
+          data: missingSumUpdates,
+        },
+      });
+      console.log(`'통계' 시트 B열 누락 수식 보충 완료 (${missingSumUpdates.length}개 행)`);
+    }
+
+    // 5. 2행의 서식을 3행 ~ lastDataRow까지 copyPaste (PASTE_FORMAT)
+    // 2행이 대표 행 역할을 하여 테두리(Border), 글꼴, 정렬, 셀 서식을 일괄 상속
+    if (lastDataRow > 2) {
+      requests.push({
+        copyPaste: {
+          source: {
+            sheetId,
+            startRowIndex: 1, // 0-based: 2행
+            endRowIndex: 2,
+            startColumnIndex: 0,
+            endColumnIndex,
+          },
+          destination: {
+            sheetId,
+            startRowIndex: 2, // 0-based: 3행부터
+            endRowIndex: lastDataRow, // lastDataRow행까지
+            startColumnIndex: 0,
+            endColumnIndex,
+          },
+          pasteType: 'PASTE_FORMAT',
+        },
+      });
+    }
+
+    // 6. 기본 필터(BasicFilter) 범위를 1행(헤더)부터 lastDataRow행, lastColIdx열까지 확장
+    requests.push({
+      setBasicFilter: {
+        filter: {
+          range: {
+            sheetId,
+            startRowIndex: 0, // 1행 (헤더)
+            endRowIndex: lastDataRow,
+            startColumnIndex: 0,
+            endColumnIndex,
+          },
+        },
+      },
+    });
+
+    if (requests.length > 0) {
+      await window.gapi.client.sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        resource: { requests },
+      });
+      console.log(`'통계' 시트 서식/필터 자동 동기화 완료: 2~${lastDataRow}행, A~${getColumnLetter(lastColIdx)}열`);
+    }
+  } catch (err) {
+    console.warn("'통계' 시트 서식 및 필터 자동 동기화 중 오류 (무시 가능):", err);
+  }
+};
+
+/**
  * '통계' 시트(gid=0)에 해당 회차의 열을 확인/연동하고, 각 선수 행에 raw 시트 VLOOKUP 수식을 연결합니다.
  * raw 시트($A$2:$B$30)를 이름 기반 VLOOKUP으로 참조하므로,
  * 인원 변동 마이그레이션이나 10회전 단위 시트 확장(행 이동)에도 참조 무결성이 100% 안전하게 유지됩니다.
@@ -839,6 +986,9 @@ export const syncSessionUmaToStatsSheet = async (
         console.log(`'통계' 시트 ${sessionColLetter}열에 참가자(${updateData.length}명) VLOOKUP 연동 완료 (미참가자는 순수 빈 셀 유지)`);
       }
     }
+
+    // 5. '통계' 시트 서식(테두리, 서식 등), B열 수식 및 필터 범위 일괄 자동 동기화
+    await syncStatsSheetFormatting(spreadsheetId);
   } catch (err) {
     console.warn("'통계' 시트 최종우마 자동 연동 중 오류 (무시 가능):", err);
   }

@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick } from 'vue';
 import type { ScheduleDayItem, ScheduleAttendee } from '@/types/schedule';
 import type { MemberStatItem } from '@/services/publicStatsService';
+import { timeStringToMinutes } from '@/utils/timelineEngine';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -13,12 +14,13 @@ const props = defineProps<{
   isAdmin?: boolean;
   isManager?: boolean;
   creatorName?: string;
+  myAttendeeName?: string;
 }>();
 
 const isCreatorAddMode = computed(() => {
   if (props.isAdmin) return true;
   if (props.isManager) return true;
-  if (props.creatorName && props.dayItem?.creator && props.dayItem.creator === props.creatorName) return true;
+  if (props.myAttendeeName && props.dayItem?.creator && props.dayItem.creator === props.myAttendeeName) return true;
   return false;
 });
 
@@ -28,6 +30,7 @@ const isMultiSelectMode = computed(() => {
 
 const isOvernightAllowed = computed(() => {
   if (!props.dayItem) return true;
+  if (props.dayItem.adminSessionType === 'day') return false;
   return (
     props.dayItem.adminSessionType === 'overnight' ||
     props.dayItem.sessionType === 'overnight' ||
@@ -406,8 +409,8 @@ const handleSubmit = () => {
   const finalPin = pin.value.trim();
   const canBypassPin = !!(props.isAdmin || props.isManager || isCreatorAddMode.value);
 
-  if (!canBypassPin && (!finalPin || finalPin.length < 4)) {
-    errorMessage.value = '4자리 확인 PIN을 입력해주세요.';
+  if (!canBypassPin && (!finalPin || finalPin.length < 4 || finalPin.length > 8)) {
+    errorMessage.value = '확인 PIN(4~8자리)을 입력해주세요.';
     return;
   }
 
@@ -431,6 +434,18 @@ const handleSubmit = () => {
     startTime = customStartTime.value || '10:00';
     endTime = customEndTime.value || '22:00';
     isCustomTime = (startTime !== '10:00' || endTime !== '22:00');
+  }
+
+  // 당일 지정 날짜인 경우 밤샘 불가 및 종료시간 > 시작시간 검증
+  const isDayOnly = props.dayItem?.adminSessionType === 'day';
+  if (isDayOnly) {
+    const sMin = timeStringToMinutes(startTime);
+    const eMin = timeStringToMinutes(endTime);
+    if (eMin <= sMin) {
+      errorMessage.value = '당일 날짜는 종료 시간이 시작 시간보다 늦어야 합니다 (밤샘 불가).';
+      return;
+    }
+    isOvernight = false;
   }
 
   // 다중 참가자 일괄 추가 모드
@@ -496,8 +511,8 @@ const handleCancel = () => {
     errorMessage.value = '취소할 참가자 이름을 선택해주세요.';
     return;
   }
-  if (!canBypassPin && (!pin.value.trim() || pin.value.trim().length < 4)) {
-    errorMessage.value = '참석을 취소하려면 4자리 PIN이 필요합니다.';
+  if (!canBypassPin && (!pin.value.trim() || pin.value.trim().length < 4 || pin.value.trim().length > 8)) {
+    errorMessage.value = '참석을 취소하려면 확인 PIN(4~8자리)이 필요합니다.';
     return;
   }
   if (confirm(`'${selectedName.value}' 님의 참석 신청을 취소하시겠습니까?`)) {
@@ -511,7 +526,7 @@ const handleCancel = () => {
 
 <template>
   <Transition name="apple-modal-fade">
-    <div v-if="isOpen && dayItem" class="apple-modal-backdrop" @click.self="emit('close')">
+    <div v-if="isOpen && dayItem" class="apple-modal-backdrop" v-backdrop-dismiss="() => emit('close')">
       <div class="apple-modal-sheet">
         <!-- 헤더 -->
         <div class="sheet-header">
@@ -813,24 +828,27 @@ const handleCancel = () => {
             </Transition>
           </div>
 
-          <!-- 3. 본인 확인용 4자리 PIN -->
+          <!-- 3. 본인 확인용 PIN -->
           <div class="form-group">
             <div class="label-with-tip">
               <label class="form-label">
-                {{ isCreatorAddMode ? '참가자 확인 PIN (4자리)' : '확인 PIN (4자리)' }}
+                {{ isCreatorAddMode ? '참가자 확인 PIN (4~8자리)' : '확인 PIN (4~8자리)' }}
+                <span v-if="isAdmin" class="admin-no-pin-badge">관리자 (PIN 불필요)</span>
               </label>
-              <span v-if="isCreatorAddMode" class="input-tip">
+              <span v-if="!isAdmin && isCreatorAddMode" class="input-tip">
                 참가자가 직접 수정/취소 시 사용
               </span>
             </div>
             <input
               type="password"
-              maxlength="4"
+              maxlength="8"
               inputmode="numeric"
               pattern="[0-9]*"
               class="apple-input pin-input"
+              :class="{ 'input-disabled-admin': isAdmin }"
               v-model="pin"
-              placeholder="••••"
+              :disabled="isAdmin"
+              :placeholder="isAdmin ? '관리자 권한 (PIN 불필요)' : '••••'"
             />
           </div>
 
@@ -902,7 +920,7 @@ const handleCancel = () => {
   font-size: 12px;
   font-weight: 600;
 }
-:global(html.dark) .selected-tag {
+html.dark .selected-tag {
   background: rgba(59, 130, 246, 0.2);
   color: #93c5fd;
 }
@@ -963,12 +981,12 @@ const handleCancel = () => {
   border-color: #2563eb;
   font-weight: 600;
 }
-:global(html.dark) .quick-member-chip {
+html.dark .quick-member-chip {
   background: #1e293b;
   color: #cbd5e1;
   border-color: #334155;
 }
-:global(html.dark) .quick-member-chip.is-selected {
+html.dark .quick-member-chip.is-selected {
   background: #3b82f6;
   color: #ffffff;
   border-color: #3b82f6;
@@ -1107,7 +1125,7 @@ const handleCancel = () => {
   padding: 8px 12px;
   border-radius: 10px;
 }
-:global(html.dark) .creator-proxy-banner {
+html.dark .creator-proxy-banner {
   background: rgba(59, 130, 246, 0.15);
   border-color: rgba(59, 130, 246, 0.3);
 }
@@ -1128,7 +1146,7 @@ const handleCancel = () => {
   color: #1e40af;
   line-height: 1.4;
 }
-:global(html.dark) .creator-proxy-text {
+html.dark .creator-proxy-text {
   color: #93c5fd;
 }
 
@@ -1179,6 +1197,56 @@ const handleCancel = () => {
   max-width: 110px;
   text-align: center;
   font-size: 16px;
+}
+
+.pin-input.input-disabled-admin {
+  max-width: 220px;
+  letter-spacing: normal;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text-dimmed, #64748b);
+  border-color: var(--border-color, rgba(0, 0, 0, 0.1));
+  cursor: not-allowed;
+  user-select: none;
+}
+html.dark .pin-input.input-disabled-admin {
+  background: rgba(255, 255, 255, 0.05);
+  color: #94a3b8;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.admin-no-pin-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+html.dark .admin-no-pin-badge {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.input-tip.tip-admin {
+  color: #2563eb;
+  font-weight: 600;
+}
+html.dark .input-tip.tip-admin {
+  color: #60a5fa;
+}
+
+.admin-field-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #2563eb;
+  font-weight: 500;
+}
+html.dark .admin-field-hint {
+  color: #60a5fa;
 }
 
 .autocomplete-wrapper {
@@ -1261,11 +1329,11 @@ const handleCancel = () => {
   background: rgba(59, 130, 246, 0.12);
   color: #1d4ed8;
 }
-:global(html.dark) .dropdown-item.selected {
+html.dark .dropdown-item.selected {
   color: #93c5fd;
   background: rgba(59, 130, 246, 0.1);
 }
-:global(html.dark) .dropdown-item:hover, :global(html.dark) .dropdown-item.highlighted {
+html.dark .dropdown-item:hover, html.dark .dropdown-item.highlighted {
   background: rgba(59, 130, 246, 0.22);
   color: #60a5fa;
 }

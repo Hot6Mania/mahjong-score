@@ -349,8 +349,8 @@ function getRankLabelPos(stats: { p1: number; p2: number; p3: number; p4: number
 
   const rad = ((midPct / 100) * 360 - 90) * (Math.PI / 180);
   return {
-    x: Number((100 + 70 * Math.cos(rad)).toFixed(2)),
-    y: Number((100 + 70 * Math.sin(rad)).toFixed(2))
+    x: Number((100 + 73 * Math.cos(rad)).toFixed(2)),
+    y: Number((100 + 73 * Math.sin(rad)).toFixed(2))
   };
 }
 
@@ -1937,7 +1937,7 @@ const getRankClass = (rank: number) => {
     <!-- 로딩 상태 -->
     <div v-if="isLoading" class="loading-state">
       <div class="spinner"></div>
-      <p>통계 데이터를 불러오는 중입니다...</p>
+      <p>데이터를 불러오는 중입니다...</p>
     </div>
 
     <!-- 에러 상태 -->
@@ -2751,7 +2751,7 @@ const getRankClass = (rank: number) => {
     <!-- 플레이어 상세 정보 모달 (ModalStats.vue UI 완벽 일치) -->
     <!-- ============================================== -->
     <Transition name="modal-fade">
-      <div v-if="selectedPlayer" class="player-modal-overlay" @click.self="selectedPlayer = null">
+      <div v-if="selectedPlayer" class="player-modal-overlay" v-backdrop-dismiss="() => selectedPlayer = null">
         <div class="player-modal-card modal_content">
           <div class="container_stats_modal">
             <!-- 모달 헤더: 플레이어 셀렉터 및 닫기 버튼 -->
@@ -3157,21 +3157,21 @@ const getRankClass = (rank: number) => {
                               <circle 
                                 cx="100" 
                                 cy="100" 
-                                r="70" 
+                                r="73" 
                                 fill="none" 
                                 stroke="var(--border-color, rgba(0,0,0,0.08))" 
-                                stroke-width="24" 
+                                stroke-width="38" 
                               />
                               <g transform="rotate(-90 100 100)">
                                 <!-- 4위 (빨강) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p4 > 0"
-                                  cx="100" cy="100" r="70" 
+                                  cx="100" cy="100" r="73" 
                                   fill="none" 
                                   stroke="#ef4444" 
-                                  stroke-width="24" 
-                                  :stroke-dasharray="`${(currentSessionRankStats.p4 / 100) * 439.823} 439.823`"
-                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2 + currentSessionRankStats.p3) / 100) * 439.823}`"
+                                  stroke-width="38" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p4 / 100) * 458.672} 458.672`"
+                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2 + currentSessionRankStats.p3) / 100) * 458.672}`"
                                   class="donut_segment"
                                   :class="{ active: hoveredRank === 4 }"
                                   @mouseenter="hoveredRank = 4"
@@ -3180,12 +3180,12 @@ const getRankClass = (rank: number) => {
                                 <!-- 3위 (노랑/앰버) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p3 > 0"
-                                  cx="100" cy="100" r="70" 
+                                  cx="100" cy="100" r="73" 
                                   fill="none" 
                                   stroke="#f59e0b" 
-                                  stroke-width="24" 
-                                  :stroke-dasharray="`${(currentSessionRankStats.p3 / 100) * 439.823} 439.823`"
-                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2) / 100) * 439.823}`"
+                                  stroke-width="38" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p3 / 100) * 458.672} 458.672`"
+                                  :stroke-dashoffset="`-${((currentSessionRankStats.p1 + currentSessionRankStats.p2) / 100) * 458.672}`"
                                   class="donut_segment"
                                   :class="{ active: hoveredRank === 3 }"
                                   @mouseenter="hoveredRank = 3"
@@ -3194,12 +3194,12 @@ const getRankClass = (rank: number) => {
                                 <!-- 2위 (청록) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p2 > 0"
-                                  cx="100" cy="100" r="70" 
+                                  cx="100" cy="100" r="73" 
                                   fill="none" 
                                   stroke="#06b6d4" 
-                                  stroke-width="24" 
-                                  :stroke-dasharray="`${(currentSessionRankStats.p2 / 100) * 439.823} 439.823`"
-                                  :stroke-dashoffset="`-${(currentSessionRankStats.p1 / 100) * 439.823}`"
+                                  stroke-width="38" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p2 / 100) * 458.672} 458.672`"
+                                  :stroke-dashoffset="`-${(currentSessionRankStats.p1 / 100) * 458.672}`"
                                   class="donut_segment"
                                   :class="{ active: hoveredRank === 2 }"
                                   @mouseenter="hoveredRank = 2"
@@ -3208,11 +3208,11 @@ const getRankClass = (rank: number) => {
                                 <!-- 1위 (초록) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p1 > 0"
-                                  cx="100" cy="100" r="70" 
+                                  cx="100" cy="100" r="73" 
                                   fill="none" 
                                   stroke="#10b981" 
-                                  stroke-width="24" 
-                                  :stroke-dasharray="`${(currentSessionRankStats.p1 / 100) * 439.823} 439.823`"
+                                  stroke-width="38" 
+                                  :stroke-dasharray="`${(currentSessionRankStats.p1 / 100) * 458.672} 458.672`"
                                   stroke-dashoffset="0"
                                   class="donut_segment"
                                   :class="{ active: hoveredRank === 1 }"
@@ -3264,9 +3264,9 @@ const getRankClass = (rank: number) => {
                                 </text>
                               </g>
                               <!-- 중앙 텍스트 -->
-                              <text x="100" y="86" text-anchor="middle" class="chart_center_label">총 대국</text>
-                              <text x="100" y="104" text-anchor="middle" class="chart_center_value">{{ currentSessionRankStats.totalGames }}전</text>
-                              <text x="100" y="122" text-anchor="middle" class="chart_center_sub">평균 {{ (currentSessionPlayerStats.avgRank ?? 0).toFixed(3) }}위</text>
+                              <text x="100" y="87" text-anchor="middle" class="chart_center_label">총 대국</text>
+                              <text x="100" y="105" text-anchor="middle" class="chart_center_value">{{ currentSessionRankStats.totalGames }}전</text>
+                              <text x="100" y="123" text-anchor="middle" class="chart_center_sub">평균 {{ (currentSessionPlayerStats.avgRank ?? 0).toFixed(3) }}위</text>
                             </svg>
                           </div>
 
@@ -3750,22 +3750,22 @@ const getRankClass = (rank: number) => {
                     <circle 
                       cx="100" 
                       cy="100" 
-                      r="70" 
+                      r="73" 
                       fill="none" 
                       stroke="var(--border-color, rgba(0,0,0,0.08))" 
-                      stroke-width="24"
+                      stroke-width="38"
                     />
                     <!-- 조각 링 -->
                     <g transform="rotate(-90 100 100)">
                       <!-- 4위 (빨강) -->
                       <circle 
                         v-if="modalRankStats.p4 > 0"
-                        cx="100" cy="100" r="70" 
+                        cx="100" cy="100" r="73" 
                         fill="none" 
                         stroke="#ef4444" 
-                        stroke-width="24" 
-                        :stroke-dasharray="`${(modalRankStats.p4 / 100) * 439.823} 439.823`"
-                        :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2 + modalRankStats.p3) / 100) * 439.823}`"
+                        stroke-width="38" 
+                        :stroke-dasharray="`${(modalRankStats.p4 / 100) * 458.672} 458.672`"
+                        :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2 + modalRankStats.p3) / 100) * 458.672}`"
                         class="donut_segment"
                         :class="{ active: hoveredRank === 4 }"
                         @mouseenter="hoveredRank = 4"
@@ -3774,12 +3774,12 @@ const getRankClass = (rank: number) => {
                       <!-- 3위 (노랑/앰버) -->
                       <circle 
                         v-if="modalRankStats.p3 > 0"
-                        cx="100" cy="100" r="70" 
+                        cx="100" cy="100" r="73" 
                         fill="none" 
                         stroke="#f59e0b" 
-                        stroke-width="24" 
-                        :stroke-dasharray="`${(modalRankStats.p3 / 100) * 439.823} 439.823`"
-                        :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2) / 100) * 439.823}`"
+                        stroke-width="38" 
+                        :stroke-dasharray="`${(modalRankStats.p3 / 100) * 458.672} 458.672`"
+                        :stroke-dashoffset="`-${((modalRankStats.p1 + modalRankStats.p2) / 100) * 458.672}`"
                         class="donut_segment"
                         :class="{ active: hoveredRank === 3 }"
                         @mouseenter="hoveredRank = 3"
@@ -3788,12 +3788,12 @@ const getRankClass = (rank: number) => {
                       <!-- 2위 (청록) -->
                       <circle 
                         v-if="modalRankStats.p2 > 0"
-                        cx="100" cy="100" r="70" 
+                        cx="100" cy="100" r="73" 
                         fill="none" 
                         stroke="#06b6d4" 
-                        stroke-width="24" 
-                        :stroke-dasharray="`${(modalRankStats.p2 / 100) * 439.823} 439.823`"
-                        :stroke-dashoffset="`-${(modalRankStats.p1 / 100) * 439.823}`"
+                        stroke-width="38" 
+                        :stroke-dasharray="`${(modalRankStats.p2 / 100) * 458.672} 458.672`"
+                        :stroke-dashoffset="`-${(modalRankStats.p1 / 100) * 458.672}`"
                         class="donut_segment"
                         :class="{ active: hoveredRank === 2 }"
                         @mouseenter="hoveredRank = 2"
@@ -3802,11 +3802,11 @@ const getRankClass = (rank: number) => {
                       <!-- 1위 (초록) -->
                       <circle 
                         v-if="modalRankStats.p1 > 0"
-                        cx="100" cy="100" r="70" 
+                        cx="100" cy="100" r="73" 
                         fill="none" 
                         stroke="#10b981" 
-                        stroke-width="24" 
-                        :stroke-dasharray="`${(modalRankStats.p1 / 100) * 439.823} 439.823`"
+                        stroke-width="38" 
+                        :stroke-dasharray="`${(modalRankStats.p1 / 100) * 458.672} 458.672`"
                         stroke-dashoffset="0"
                         class="donut_segment"
                         :class="{ active: hoveredRank === 1 }"
@@ -3858,9 +3858,9 @@ const getRankClass = (rank: number) => {
                       </text>
                     </g>
                     <!-- 중앙 텍스트 -->
-                    <text x="100" y="86" text-anchor="middle" class="chart_center_label">총 대국</text>
-                    <text x="100" y="104" text-anchor="middle" class="chart_center_value">{{ modalRankStats.totalGames }}전</text>
-                    <text x="100" y="122" text-anchor="middle" class="chart_center_sub">평균 {{ (selectedPlayer?.avgRank ?? 0).toFixed(3) }}위</text>
+                    <text x="100" y="87" text-anchor="middle" class="chart_center_label">총 대국</text>
+                    <text x="100" y="105" text-anchor="middle" class="chart_center_value">{{ modalRankStats.totalGames }}전</text>
+                    <text x="100" y="123" text-anchor="middle" class="chart_center_sub">평균 {{ (selectedPlayer?.avgRank ?? 0).toFixed(3) }}위</text>
                   </svg>
                 </div>
 
@@ -3990,7 +3990,7 @@ const getRankClass = (rank: number) => {
       <div 
         v-if="selectedGameDetail" 
         class="game-detail-modal-overlay" 
-        @click.self="selectedGameDetail = null"
+        v-backdrop-dismiss="() => selectedGameDetail = null"
       >
         <div class="game-detail-modal-card">
           <!-- 모달 헤더 -->
@@ -4141,7 +4141,7 @@ const getRankClass = (rank: number) => {
       <div 
         v-if="isRatingTimelineModalOpen" 
         class="rating-modal-overlay" 
-        @click.self="isRatingTimelineModalOpen = false"
+        v-backdrop-dismiss="() => isRatingTimelineModalOpen = false"
       >
         <div class="rating-modal-card">
           <!-- 모달 헤더 -->
@@ -4239,6 +4239,12 @@ const getRankClass = (rank: number) => {
   max-width: 1200px;
   margin: 0 auto;
   box-sizing: border-box;
+}
+
+@media (max-width: 480px) {
+  .stats-dashboard-container {
+    padding: 12px 8px 32px;
+  }
 }
 
 .stats-dashboard-container button,

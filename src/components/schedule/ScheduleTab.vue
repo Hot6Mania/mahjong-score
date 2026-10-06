@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import type { ScheduleDayItem, ScheduleMonthData, SessionType } from '@/types/schedule';
 import type { MemberStatItem } from '@/services/publicStatsService';
 import {
@@ -15,11 +15,13 @@ import {
   hashPin
 } from '@/services/scheduleService';
 import { computeScheduleSessionNumbers } from '@/utils/sessionNumbering';
+import { timeStringToMinutes } from '@/utils/timelineEngine';
 import ScheduleCalendarView from './ScheduleCalendarView.vue';
 import ScheduleListView from './ScheduleListView.vue';
 import DateDetailModal from './DateDetailModal.vue';
 import AttendModal from './AttendModal.vue';
 import AdminScheduleModal from './AdminScheduleModal.vue';
+import UserPinLoginModal from './UserPinLoginModal.vue';
 
 const props = defineProps<{
   members: MemberStatItem[];
@@ -61,6 +63,25 @@ const isAttendModalOpen = ref<boolean>(false);
 const isAdminModalOpen = ref<boolean>(false);
 const isAdminAuthModalOpen = ref<boolean>(false);
 const adminPasscodeInput = ref<string>('');
+const isUserLoginModalOpen = ref<boolean>(false);
+
+const onUserLoginSuccess = (name: string, pin: string) => {
+  myAttendeeName.value = name;
+  setLastAttendeeName(name);
+  saveUserPin(name, pin, true);
+  showToast(`'${name}' 님으로 로그인되었습니다.`);
+};
+
+const onUserLogout = () => {
+  if (isAdmin.value) {
+    showToast('관리자 계정으로 로그인되어 있을 때는 로그아웃할 수 없습니다.', 'error');
+    return;
+  }
+  const prevName = myAttendeeName.value;
+  myAttendeeName.value = '';
+  localStorage.removeItem('mahjong_schedule_last_name');
+  showToast(prevName ? `'${prevName}' 님 계정에서 로그아웃되었습니다.` : '로그아웃되었습니다.');
+};
 
 // 일정 개설 모달 상태
 const isCreateScheduleModalOpen = ref<boolean>(false);
@@ -68,6 +89,8 @@ const createDate = ref<string>('');
 const createCreatorName = ref<string>('');
 const createCreatorPin = ref<string>('');
 const createSessionType = ref<SessionType>('day');
+const createAdminSessionType = ref<'day' | 'overnight' | undefined>(undefined);
+const isDayOnlyDate = computed(() => createAdminSessionType.value === 'day');
 const createStartTime = ref<string>('10:00');
 const createEndTime = ref<string>('22:00');
 const createIsOvernight = ref<boolean>(false);
@@ -171,6 +194,20 @@ const sessionMap = computed<Map<string, number>>(() => {
 const confirmedSessionsCount = computed(() => {
   return monthSchedule.value.dates.filter(d => !!d.isConfirmed).length;
 });
+
+// 확정된 회차/일정 목록 (예: 16회 23일)
+const confirmedSessionsList = computed(() => {
+  return monthSchedule.value.dates
+    .filter(d => !!d.isConfirmed)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(d => {
+      const sessNum = sessionMap.value.get(d.date);
+      const dayNum = parseInt(d.date.split('-')[2], 10);
+      const label = sessNum ? `${sessNum}회 ${dayNum}일` : `${dayNum}일`;
+      return { date: d.date, label, dayItem: d };
+    });
+});
+
 const myAttendingDaysCount = computed(() => {
   if (!myAttendeeName.value) return 0;
   return monthSchedule.value.dates.filter(d => 
@@ -178,19 +215,42 @@ const myAttendingDaysCount = computed(() => {
   ).length;
 });
 
+
 // 회차 개설 모달 오픈 (관리자가 등록한 가능한 날짜 대상)
 const openCreateScheduleModal = (dateStr: string, existingItem?: ScheduleDayItem) => {
   createDate.value = dateStr;
   createCreatorName.value = myAttendeeName.value || '';
   createCreatorPin.value = '';
-  createSessionType.value = existingItem?.sessionType || 'day';
+
+  const isDayOnly = existingItem?.adminSessionType === 'day' || (existingItem && !existingItem.adminSessionType && existingItem.sessionType === 'day');
+  createAdminSessionType.value = isDayOnly ? 'day' : (existingItem?.adminSessionType || (existingItem?.sessionType === 'overnight' ? 'overnight' : undefined));
+
+  const targetType = isDayOnly ? 'day' : (existingItem?.sessionType || 'day');
+  createSessionType.value = targetType;
   createStartTime.value = existingItem?.customStartTime || '10:00';
-  createEndTime.value = existingItem?.customEndTime || '22:00';
-  createIsOvernight.value = !!existingItem?.customIsOvernight;
+  createEndTime.value = isDayOnly
+    ? (existingItem?.customEndTime && existingItem.customEndTime !== '익일' ? existingItem.customEndTime : '22:00')
+    : (existingItem?.customEndTime || (existingItem?.sessionType === 'overnight' ? '익일' : '22:00'));
+  createIsOvernight.value = isDayOnly ? false : (!!existingItem?.customIsOvernight || existingItem?.sessionType === 'overnight');
   createMemo.value = '';
   createErrorMessage.value = '';
   isCreateDropdownOpen.value = false;
   isCreateScheduleModalOpen.value = true;
+};
+
+// 모임 시간 세그먼트 전환 핸들러 (밤샘 날짜에서 당일 클릭 시 오후 10:00 즉시 반영)
+const handleSelectCreateSessionType = (type: SessionType) => {
+  if (isDayOnlyDate.value && type === 'overnight') {
+    return;
+  }
+  createSessionType.value = type;
+  if (type === 'day') {
+    createEndTime.value = '22:00';
+    createIsOvernight.value = false;
+  } else if (type === 'overnight') {
+    createEndTime.value = '익일';
+    createIsOvernight.value = true;
+  }
 };
 
 // 미등록(빈) 날짜 클릭 핸들러 (관리자만 관리 모달 연계, 일반 유저는 안내)
@@ -213,9 +273,33 @@ const handleCreateScheduleSubmit = async () => {
     return;
   }
 
-  if (!isAdmin.value && (!creatorPin || creatorPin.length < 4)) {
-    createErrorMessage.value = '4자리 확인 PIN을 입력해주세요.';
+  if (!isAdmin.value && (!creatorPin || creatorPin.length < 4 || creatorPin.length > 8)) {
+    createErrorMessage.value = '확인 PIN(4~8자리)을 입력해주세요.';
     return;
+  }
+
+  // 사칭 방지: 개설자 이름이 이번 달 스케줄에 이미 등록되어 PIN 해시가 존재하는 경우, 본인 PIN 일치 필수 검증
+  if (!isAdmin.value) {
+    let existingCreatorPinHash: string | undefined;
+    for (const d of monthSchedule.value.dates) {
+      const att = d.attendees?.find(a => a.name === creatorName);
+      if (att?.pinHash && att.pinHash !== 'admin_bypass') {
+        existingCreatorPinHash = att.pinHash;
+        break;
+      }
+      if (d.creator === creatorName && d.creatorPinHash && d.creatorPinHash !== 'admin_bypass') {
+        existingCreatorPinHash = d.creatorPinHash;
+        break;
+      }
+    }
+
+    if (existingCreatorPinHash) {
+      const inputHash = await hashPin(creatorPin);
+      if (inputHash !== existingCreatorPinHash) {
+        createErrorMessage.value = `'${creatorName}' 이름으로 이미 등록된 일정이 있습니다. 본인의 기존 PIN을 입력해주세요. (사칭 방지)`;
+        return;
+      }
+    }
   }
 
   let isOvernight = false;
@@ -232,13 +316,29 @@ const handleCreateScheduleSubmit = async () => {
     isCustomTime = true;
     startTime = createStartTime.value;
     endTime = createEndTime.value;
-    isOvernight = createIsOvernight.value;
+    isOvernight = isDayOnlyDate.value ? false : createIsOvernight.value;
   } else {
     // '당일 (10~22)' - 시작 및 종료 시간 미세 조정 반영
     isOvernight = false;
     startTime = createStartTime.value || '10:00';
     endTime = createEndTime.value || '22:00';
     isCustomTime = (startTime !== '10:00' || endTime !== '22:00');
+  }
+
+  // 당일로 지정된 날짜에는 밤샘 회차 개설 금지
+  if (isDayOnlyDate.value && isOvernight) {
+    createErrorMessage.value = '당일로 설정된 날짜에는 밤샘 회차를 개설할 수 없습니다.';
+    return;
+  }
+
+  // 당일 날짜에서 커스텀 시간인 경우 종료 시간이 시작 시간보다 늦어야 함 (밤샘 방지)
+  if (isDayOnlyDate.value) {
+    const startMins = timeStringToMinutes(startTime);
+    const endMins = timeStringToMinutes(endTime);
+    if (endMins <= startMins) {
+      createErrorMessage.value = '당일 날짜는 종료 시간이 시작 시간보다 늦어야 합니다 (밤샘 불가).';
+      return;
+    }
   }
 
   const creatorPinHash = creatorPin && creatorPin.length >= 4
@@ -274,9 +374,16 @@ const handleCreateScheduleSubmit = async () => {
     ? [creatorAttendee]
     : [creatorAttendee, kimkayAttendee];
 
+  // 기존 날짜 중복 검사
+  const existingIdx = monthSchedule.value.dates.findIndex(d => d.date === createDate.value);
+  const existing = existingIdx !== -1 ? monthSchedule.value.dates[existingIdx] : undefined;
+
   const newDayItem: ScheduleDayItem = {
     date: createDate.value,
     sessionType: createSessionType.value,
+    adminSessionType: createSessionType.value === 'day'
+      ? 'day'
+      : (existing?.adminSessionType || (existing?.sessionType === 'overnight' ? 'overnight' : undefined)),
     customStartTime: startTime,
     customEndTime: endTime,
     customIsOvernight: isOvernight,
@@ -285,8 +392,6 @@ const handleCreateScheduleSubmit = async () => {
     attendees: initialAttendees
   };
 
-  // 기존 날짜 중복 검사
-  const existingIdx = monthSchedule.value.dates.findIndex(d => d.date === createDate.value);
   let updatedDates: ScheduleDayItem[];
   if (existingIdx !== -1) {
     updatedDates = [...monthSchedule.value.dates];
@@ -301,11 +406,18 @@ const handleCreateScheduleSubmit = async () => {
     const created = res.data.dates.find(d => d.date === createDate.value) || newDayItem;
     selectedDayItem.value = created;
 
-    // 개설자 확정 및 '나'로 고정 저장
-    myAttendeeName.value = creatorName;
-    setLastAttendeeName(creatorName);
-    if (creatorPin && creatorPin.length >= 4) {
-      saveUserPin(creatorName, creatorPin, true);
+    // 관리자가 다른 사람을 개설자로 대신 설정해준 경우, 관리자의 본인 로그인을 유지!
+    const isProxyCreate = !!(isAdmin.value && myAttendeeName.value && myAttendeeName.value !== creatorName);
+    if (!isProxyCreate) {
+      myAttendeeName.value = creatorName;
+      setLastAttendeeName(creatorName);
+      if (creatorPin && creatorPin.length >= 4) {
+        saveUserPin(creatorName, creatorPin, true);
+      }
+    } else {
+      if (creatorPin && creatorPin.length >= 4) {
+        saveUserPin(creatorName, creatorPin, false);
+      }
     }
 
     isCreateScheduleModalOpen.value = false;
@@ -328,6 +440,10 @@ const onOpenAdminOrAuth = async () => {
   if (res.isAdmin) {
     isAdmin.value = true;
     adminToken.value = res.adminToken;
+    if (res.attendeeName) {
+      myAttendeeName.value = res.attendeeName;
+      setLastAttendeeName(res.attendeeName);
+    }
     showToast('관리자 권한이 확인되었습니다.');
     isAdminModalOpen.value = true;
   } else {
@@ -351,6 +467,10 @@ const verifyAdminPasscode = async () => {
     isAdmin.value = true;
     sessionStorage.setItem('schedule_admin_verified', 'true');
     adminToken.value = res.adminToken;
+    if (res.attendeeName) {
+      myAttendeeName.value = res.attendeeName;
+      setLastAttendeeName(res.attendeeName);
+    }
     isAdminAuthModalOpen.value = false;
     showToast('관리자 권한이 활성화되었습니다.');
     isAdminModalOpen.value = true;
@@ -440,6 +560,17 @@ const onUpdateDateSessionType = async (payload: {
   const targetIdx = currentDates.findIndex(d => d.date === payload.dateStr);
   if (targetIdx === -1) return;
 
+  const existing = currentDates[targetIdx];
+  const isDayOnly = existing.adminSessionType === 'day' || existing.sessionType === 'day';
+  if (isDayOnly && payload.sessionType === 'overnight') {
+    showToast('당일로 개설된 회차는 밤샘으로 변경할 수 없습니다.', 'error');
+    return;
+  }
+  if (isDayOnly && payload.customIsOvernight) {
+    showToast('당일로 개설된 회차는 익일(밤샘)을 포함할 수 없습니다.', 'error');
+    return;
+  }
+
   currentDates[targetIdx] = {
     ...currentDates[targetIdx],
     sessionType: payload.sessionType,
@@ -477,7 +608,7 @@ const onToggleDateSessionType = async (dateStr: string) => {
   });
 };
 
-// 개설자 / 관리자: 모임 출발 확정 토글
+// 개설자 / 관리자: 모임 확정 토글
 const onToggleConfirmSession = async (dateStr: string) => {
   const currentDates = [...monthSchedule.value.dates];
   const targetIdx = currentDates.findIndex(d => d.date === dateStr);
@@ -488,7 +619,7 @@ const onToggleConfirmSession = async (dateStr: string) => {
 
   // 4인 미만인데 확정하려 할 경우 방어
   if (willConfirm && (item.attendees?.length || 0) < 4) {
-    showToast('참석 인원이 4인 이상 모여야 출발 확정할 수 있습니다.', 'info');
+    showToast('참석 인원이 4인 이상 모여야 확정할 수 있습니다.', 'info');
     return;
   }
 
@@ -502,7 +633,7 @@ const onToggleConfirmSession = async (dateStr: string) => {
     monthSchedule.value = res.data;
     const updated = res.data.dates.find(d => d.date === dateStr);
     if (updated) selectedDayItem.value = updated;
-    showToast(willConfirm ? '모임이 성공적으로 출발 확정되었습니다!' : '출발 확정이 해제되었습니다.');
+    showToast(willConfirm ? '모임이 성공적으로 확정되었습니다!' : '확정이 해제되었습니다.');
   } else {
     showToast(res.error || '상태 변경에 실패했습니다.', 'error');
   }
@@ -529,27 +660,38 @@ const toggleAmPm = (timeStr: string): string => {
   return `${String(h).padStart(2, '0')}:${m}`;
 };
 
-// 해당 회차 참가 인원 전체 비우기 (날짜는 가능한 일정으로 유지)
+// 해당 회차 참가 인원 전체 비우기 (날짜는 가능한 일정으로 유지 및 원래 관리자 속성으로 복원)
 const onClearAttendees = async (dateStr: string) => {
   const currentDates = [...monthSchedule.value.dates];
   const targetIdx = currentDates.findIndex(d => d.date === dateStr);
   if (targetIdx === -1) return;
 
+  const existing = currentDates[targetIdx];
+  // 원래 관리자가 지정했던 기본 세션 타입 (adminSessionType이 있으면 그것, 없으면 기존 sessionType 또는 'day')
+  const defaultSessionType = existing.adminSessionType || (existing.sessionType === 'overnight' ? 'overnight' : 'day');
+  const isOvernight = defaultSessionType === 'overnight';
+
   currentDates[targetIdx] = {
-    ...currentDates[targetIdx],
+    ...existing,
     attendees: [],
     creator: undefined,
-    creatorPinHash: undefined
+    creatorPinHash: undefined,
+    isConfirmed: false,
+    sessionType: defaultSessionType,
+    adminSessionType: existing.adminSessionType || defaultSessionType,
+    customStartTime: '10:00',
+    customEndTime: isOvernight ? '익일' : '22:00',
+    customIsOvernight: isOvernight
   };
 
   const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value);
   if (res.success) {
     monthSchedule.value = res.data;
-    const updated = res.data.dates.find(d => d.date === dateStr);
-    if (updated) selectedDayItem.value = updated;
-    showToast(`${dateStr} 회차의 참가 인원이 모두 초기화되었습니다.`);
+    isDetailModalOpen.value = false;
+    selectedDayItem.value = null;
+    showToast(`${dateStr} 회차가 취소되고 참가자 명단이 초기화되었습니다. (가능한 날짜로 유지)`);
   } else {
-    showToast(res.error || '참가 인원 초기화에 실패했습니다.', 'error');
+    showToast(res.error || '회차 취소에 실패했습니다.', 'error');
   }
 };
 
@@ -605,9 +747,10 @@ const onAttendSubmit = async (payload: {
 
   // 대리 등록 여부 판정:
   // 1) 관리자이거나
-  // 2) 회차 개설자가 다른 사람을 추가하는 경우이거나
-  // 3) 내 이름(myAttendeeName)이 설정되어 있고 등록 대상이 내가 아닌 경우
-  const isCreatorAddingOther = !!(selectedDayItem.value?.creator && payload.name !== selectedDayItem.value.creator);
+  // 2) 현재 사용자가 회차 개설자인데 다른 사람을 추가하는 경우이거나
+  // 3) 이미 내 이름(myAttendeeName)이 설정되어 있고 등록 대상이 내가 아닌 경우
+  const isCreator = !!(myAttendeeName.value && selectedDayItem.value?.creator === myAttendeeName.value);
+  const isCreatorAddingOther = isCreator && (payload.name !== myAttendeeName.value);
   const isProxyAdd = !!(isAdmin.value || isCreatorAddingOther || (myAttendeeName.value && myAttendeeName.value !== payload.name));
 
   const res = await submitAttendance(
@@ -639,6 +782,9 @@ const onAttendSubmit = async (payload: {
     if (updated) selectedDayItem.value = updated;
 
     isAttendModalOpen.value = false;
+    if (selectedDayItem.value) {
+      isDetailModalOpen.value = true;
+    }
     showToast(isProxyAdd ? `${payload.name} 님이 추가되었습니다.` : '참석 등록이 완료되었습니다.');
   } else {
     showToast(res.error || '참석 등록에 실패했습니다.', 'error');
@@ -674,6 +820,9 @@ const onAttendBatchSubmit = async (payload: {
     if (updated) selectedDayItem.value = updated;
 
     isAttendModalOpen.value = false;
+    if (selectedDayItem.value) {
+      isDetailModalOpen.value = true;
+    }
     showToast(`${payload.attendees.length}명의 참석자가 등록되었습니다.`);
   } else {
     showToast(res.error || '일괄 참석 등록에 실패했습니다.', 'error');
@@ -698,9 +847,20 @@ const onAttendCancel = async (payload: { name: string; pin: string }) => {
     if (updated) selectedDayItem.value = updated;
 
     isAttendModalOpen.value = false;
+    if (selectedDayItem.value) {
+      isDetailModalOpen.value = true;
+    }
     showToast('참석이 취소되었습니다.');
   } else {
     showToast(res.error || '참석 취소에 실패했습니다.', 'error');
+  }
+};
+
+// 참석 신청 모달 닫기 시 회차 상세 창 복원
+const onAttendModalClose = () => {
+  isAttendModalOpen.value = false;
+  if (selectedDayItem.value) {
+    isDetailModalOpen.value = true;
   }
 };
 
@@ -731,12 +891,26 @@ onMounted(async () => {
   if (sessionStorage.getItem('schedule_admin_verified') === 'true') {
     isAdmin.value = true;
   }
-  const adminRes = await checkAdminStatus();
-  if (adminRes.isAdmin) {
-    isAdmin.value = true;
-    adminToken.value = adminRes.adminToken;
-    sessionStorage.setItem('schedule_admin_verified', 'true');
-  }
+
+  const syncAdminAuth = async () => {
+    const adminRes = await checkAdminStatus();
+    if (adminRes.isAdmin) {
+      isAdmin.value = true;
+      adminToken.value = adminRes.adminToken;
+      sessionStorage.setItem('schedule_admin_verified', 'true');
+      if (adminRes.attendeeName) {
+        myAttendeeName.value = adminRes.attendeeName;
+        setLastAttendeeName(adminRes.attendeeName);
+      }
+    }
+  };
+
+  await syncAdminAuth();
+
+  window.addEventListener('mahjong_admin_auth_changed', syncAdminAuth);
+  onUnmounted(() => {
+    window.removeEventListener('mahjong_admin_auth_changed', syncAdminAuth);
+  });
 
   await loadSchedule();
 });
@@ -768,11 +942,41 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       <!-- 요약 칩들 (확정 m개, 내 참석 k개) -->
       <div class="stat-chips-group">
         <span class="stat-chip chip-confirmed">확정 {{ confirmedSessionsCount }}개</span>
+        <span
+          v-for="item in confirmedSessionsList"
+          :key="item.date"
+          class="stat-chip chip-confirmed-date"
+          @click="onSelectDay(item.dayItem)"
+          title="클릭하여 해당 회차 상세 보기"
+        >
+          {{ item.label }}
+        </span>
         <span v-if="myAttendingDaysCount > 0" class="stat-chip chip-me">내 참석 {{ myAttendingDaysCount }}개</span>
       </div>
 
       <!-- 우측 컨트롤 (뷰 모드 세그먼트 + 액션) -->
       <div class="header-actions">
+        <!-- 내 참석자 계정 로그인 / 프로필 버튼 (이모지 없음) -->
+        <button
+          v-if="myAttendeeName"
+          type="button"
+          class="btn-user-auth is-logged-in"
+          @click="isUserLoginModalOpen = true"
+          title="내 참석 계정 관리 및 전환"
+        >
+          <span class="auth-dot"></span>
+          <span class="user-auth-name">{{ myAttendeeName }}</span>
+        </button>
+        <button
+          v-else
+          type="button"
+          class="btn-user-auth"
+          @click="isUserLoginModalOpen = true"
+          title="내 참석자 PIN 로그인"
+        >
+          <span>로그인</span>
+        </button>
+
         <!-- Apple 스타일 캡슐 세그먼트 컨트롤 -->
         <div class="apple-segmented-control">
           <button
@@ -874,29 +1078,42 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       :isAdmin="isAdmin"
       :isManager="isAdmin || (!!myAttendeeName && selectedDayItem?.creator === myAttendeeName)"
       :creatorName="selectedDayItem?.creator || ''"
-      @close="isAttendModalOpen = false"
+      @close="onAttendModalClose"
       @submit="onAttendSubmit"
       @submitBatch="onAttendBatchSubmit"
       @cancel="onAttendCancel"
+    />
+
+    <UserPinLoginModal
+      :isOpen="isUserLoginModalOpen"
+      :currentMonth="currentMonth"
+      :currentAttendeeName="myAttendeeName"
+      :dates="monthSchedule.dates"
+      :members="props.members"
+      :isAdmin="isAdmin"
+      @close="isUserLoginModalOpen = false"
+      @loginSuccess="onUserLoginSuccess"
+      @logout="onUserLogout"
     />
 
     <AdminScheduleModal
       :isOpen="isAdminModalOpen"
       :currentMonth="currentMonth"
       :existingDates="monthSchedule.dates"
+      :sessionMap="sessionMap"
       :adminToken="adminToken"
       @close="isAdminModalOpen = false"
       @save="onAdminSaveDates"
     />
 
-    <!-- 일정 개설 모달 (일정 먼저 생성 후 인원 추가 흐름) -->
+    <!-- 일정 만들기 모달 (일정 먼저 생성 후 인원 추가 흐름) -->
     <Transition name="apple-modal-fade">
-      <div v-if="isCreateScheduleModalOpen" class="apple-modal-backdrop" @click.self="isCreateScheduleModalOpen = false">
+      <div v-if="isCreateScheduleModalOpen" class="apple-modal-backdrop" v-backdrop-dismiss="() => isCreateScheduleModalOpen = false">
         <div class="apple-modal-sheet">
           <div class="sheet-header">
             <div class="header-titles">
-              <span class="sheet-sub">새 모임 개설</span>
-              <h3 class="sheet-title">{{ createDate }} 일정 개설</h3>
+              <span class="sheet-sub">새 일정 만들기</span>
+              <h3 class="sheet-title">{{ createDate }} 일정 만들기</h3>
             </div>
             <button class="btn-close" @click="isCreateScheduleModalOpen = false">✕</button>
           </div>
@@ -958,7 +1175,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
                   type="button"
                   class="segment-btn"
                   :class="{ active: createSessionType === 'day' }"
-                  @click="createSessionType = 'day'"
+                  @click="handleSelectCreateSessionType('day')"
                 >
                   <svg class="theme_svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="5"></circle>
@@ -976,8 +1193,10 @@ const setViewMode = (mode: 'calendar' | 'list') => {
                 <button
                   type="button"
                   class="segment-btn"
-                  :class="{ active: createSessionType === 'overnight' }"
-                  @click="createSessionType = 'overnight'"
+                  :class="{ active: createSessionType === 'overnight', disabled: isDayOnlyDate }"
+                  :disabled="isDayOnlyDate"
+                  :title="isDayOnlyDate ? '관리자가 당일로 지정한 날짜에는 밤샘 회차를 개설할 수 없습니다.' : ''"
+                  @click="handleSelectCreateSessionType('overnight')"
                 >
                   <svg class="theme_svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
@@ -988,7 +1207,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
                   type="button"
                   class="segment-btn"
                   :class="{ active: createSessionType === 'custom' }"
-                  @click="createSessionType = 'custom'"
+                  @click="handleSelectCreateSessionType('custom')"
                 >
                   커스텀
                 </button>
@@ -1087,24 +1306,32 @@ const setViewMode = (mode: 'calendar' | 'list') => {
                     <input type="time" v-model="createEndTime" class="apple-time-input" />
                   </div>
                 </div>
-                <label class="overnight-check-label">
-                  <input type="checkbox" v-model="createIsOvernight" />
+                <label class="overnight-check-label" :class="{ 'disabled-label': isDayOnlyDate }">
+                  <input type="checkbox" v-model="createIsOvernight" :disabled="isDayOnlyDate" />
                   <span>익일(자정 이후) 포함</span>
+                  <span v-if="isDayOnlyDate" class="day-only-hint">(당일 날짜는 밤샘 불가)</span>
                 </label>
               </div>
             </div>
 
             <!-- 3. 확인 PIN -->
             <div class="form-group">
-              <label class="form-label">확인 PIN (4자리)</label>
+              <div class="label-with-tip">
+                <label class="form-label">
+                  확인 PIN (4~8자리)
+                  <span v-if="isAdmin" class="admin-no-pin-badge">관리자 (PIN 불필요)</span>
+                </label>
+              </div>
               <input
                 type="password"
-                maxlength="4"
+                maxlength="8"
                 inputmode="numeric"
                 pattern="[0-9]*"
                 class="apple-input pin-input"
+                :class="{ 'input-disabled-admin': isAdmin }"
                 v-model="createCreatorPin"
-                placeholder="••••"
+                :disabled="isAdmin"
+                :placeholder="isAdmin ? '관리자 권한 (PIN 불필요)' : '••••'"
               />
             </div>
 
@@ -1126,7 +1353,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
               취소
             </button>
             <button type="button" class="btn-primary" @click="handleCreateScheduleSubmit">
-              일정 개설하기
+              일정 만들기
             </button>
           </div>
         </div>
@@ -1135,7 +1362,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
 
     <!-- 관리자 인증 모달 -->
     <Transition name="apple-modal-fade">
-      <div v-if="isAdminAuthModalOpen" class="apple-modal-backdrop" @click.self="isAdminAuthModalOpen = false">
+      <div v-if="isAdminAuthModalOpen" class="apple-modal-backdrop" v-backdrop-dismiss="() => isAdminAuthModalOpen = false">
         <div class="apple-modal-sheet mini-sheet">
           <div class="sheet-header">
             <h3 class="sheet-title">관리자 인증</h3>
@@ -1195,15 +1422,18 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   display: flex;
   align-items: center;
   gap: 6px;
+  height: 32px;
 }
 
 .current-month-label {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--text-color, #0f172a);
   letter-spacing: -0.02em;
-  min-width: 90px;
+  min-width: 86px;
   text-align: center;
+  height: 32px;
+  line-height: 32px;
 }
 
 .btn-nav-month {
@@ -1212,14 +1442,15 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   color: var(--text-color, #0f172a);
   width: 32px;
   height: 32px;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
+  box-sizing: border-box;
 }
 .btn-nav-month:hover {
   background: var(--card-bg-color, #ffffff);
@@ -1229,11 +1460,16 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   background: transparent;
   border: 1px solid var(--border-color, #cbd5e1);
   color: var(--text-color, #0f172a);
-  padding: 5px 10px;
+  padding: 0 10px;
+  height: 32px;
   border-radius: 8px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   transition: all 0.15s;
 }
 .btn-today:hover {
@@ -1244,71 +1480,141 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   display: flex;
   align-items: center;
   gap: 6px;
+  height: 32px;
 }
 
 .stat-chip {
   font-size: 12px;
   font-weight: 600;
-  padding: 4px 10px;
+  height: 30px;
+  padding: 0 10px;
   border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  line-height: 1;
+  white-space: nowrap;
   background: var(--input-bg-color, #f1f5f9);
   color: var(--text-dimmed, #64748b);
   border: 1px solid var(--border-color, #e2e8f0);
 }
+/* 1) 확정 통계 뱃지: 에메랄드 그린 */
 .stat-chip.chip-confirmed {
   background: rgba(16, 185, 129, 0.12);
-  color: #059669;
-  border-color: rgba(16, 185, 129, 0.25);
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.3);
+  font-weight: 700;
 }
+html.dark .stat-chip.chip-confirmed {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+/* 2) 확정 회차 인터랙티브 칩: 인디고/퍼플 캡슐 (확정과 확연히 구별) */
+.stat-chip.chip-confirmed-date {
+  font-size: 11.5px;
+  font-weight: 600;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.1);
+  color: #4f46e5;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+}
+.stat-chip.chip-confirmed-date:hover {
+  background: rgba(99, 102, 241, 0.18);
+  color: #4338ca;
+  border-color: rgba(99, 102, 241, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 5px rgba(99, 102, 241, 0.15);
+}
+html.dark .stat-chip.chip-confirmed-date {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.45);
+}
+/* 3) 내 참석 통계 뱃지: 맑은 사파이어 블루 */
 .stat-chip.chip-me {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
-  border-color: rgba(59, 130, 246, 0.25);
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.25);
+  font-weight: 700;
+}
+html.dark .stat-chip.chip-me {
+  background: rgba(37, 99, 235, 0.2);
+  color: #60a5fa;
+  border-color: rgba(37, 99, 235, 0.4);
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 32px;
 }
 
 /* 캡슐형 세그먼트 컨트롤 */
 .apple-segmented-control {
-  display: flex;
+  display: inline-flex;
+  align-items: center;
   background: var(--input-bg-color, #f1f5f9);
-  padding: 3px;
-  border-radius: 12px;
+  padding: 2px;
+  border-radius: 9px;
   gap: 2px;
   border: 1px solid var(--border-color, #e2e8f0);
+  height: 32px;
+  box-sizing: border-box;
 }
 
 .segment-btn {
   border: none;
   background: transparent;
-  padding: 6px 14px;
-  font-size: 13px;
+  height: 26px;
+  line-height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
   font-weight: 500;
-  border-radius: 9px;
+  border-radius: 7px;
   color: var(--text-dimmed, #64748b);
   cursor: pointer;
   transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 .segment-btn.active {
   background: var(--card-bg-color, #ffffff);
   color: var(--text-color, #0f172a);
   font-weight: 600;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+.segment-btn:disabled,
+.segment-btn.disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .btn-action-outline {
   background: transparent;
   border: 1px solid var(--border-color, #cbd5e1);
   color: var(--text-color, #0f172a);
-  padding: 7px 14px;
-  border-radius: 10px;
-  font-size: 13px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
   transition: all 0.15s;
 }
 .btn-action-outline:hover {
@@ -1319,22 +1625,29 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   background: #0f172a;
   color: #ffffff;
   border: none;
-  padding: 7px 14px;
-  border-radius: 10px;
-  font-size: 13px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  box-sizing: border-box;
   transition: opacity 0.15s;
 }
 .btn-action-admin:hover {
-  opacity: 0.85;
+  opacity: 0.88;
+}
+html.dark .btn-action-admin {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
 }
 .admin-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #10b981;
 }
@@ -1364,6 +1677,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   border-radius: 20px;
   width: 100%;
   max-width: 520px;
+  max-height: 90vh;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
   display: flex;
   flex-direction: column;
@@ -1439,11 +1753,11 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   background: rgba(59, 130, 246, 0.12);
   color: #1d4ed8;
 }
-:global(html.dark) .dropdown-item.selected {
+html.dark .dropdown-item.selected {
   color: #93c5fd;
   background: rgba(59, 130, 246, 0.1);
 }
-:global(html.dark) .dropdown-item:hover, :global(html.dark) .dropdown-item.highlighted {
+html.dark .dropdown-item:hover, html.dark .dropdown-item.highlighted {
   background: rgba(59, 130, 246, 0.22);
   color: #60a5fa;
 }
@@ -1454,6 +1768,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
+  flex-shrink: 0;
 }
 
 .sheet-title {
@@ -1476,6 +1791,9 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .form-group {
@@ -1525,6 +1843,134 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   letter-spacing: 0.25em;
 }
 
+.pin-input.input-disabled-admin {
+  max-width: 220px;
+  letter-spacing: normal;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text-dimmed, #64748b);
+  border-color: var(--border-color, rgba(0, 0, 0, 0.1));
+  cursor: not-allowed;
+  user-select: none;
+}
+html.dark .pin-input.input-disabled-admin {
+  background: rgba(255, 255, 255, 0.05);
+  color: #94a3b8;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.label-with-tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.admin-no-pin-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+html.dark .admin-no-pin-badge {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.input-tip.tip-admin {
+  color: #2563eb;
+  font-weight: 600;
+  font-size: 11px;
+}
+html.dark .input-tip.tip-admin {
+  color: #60a5fa;
+}
+
+.admin-field-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #2563eb;
+  font-weight: 500;
+}
+html.dark .admin-field-hint {
+  color: #60a5fa;
+}
+
+.btn-user-auth {
+  height: 32px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  background: var(--input-bg-color, #f1f5f9);
+  border: 1px solid var(--border-color, #cbd5e1);
+  color: var(--text-dimmed, #475569);
+}
+.btn-user-auth:hover {
+  background: var(--card-bg-color, #ffffff);
+  border-color: #94a3b8;
+  color: var(--text-color, #0f172a);
+}
+/* 4) 로그인 상태 프로필: 차콜/슬레이트 캡슐 + 초록 점 (블루 통계와 완벽 구별) */
+.btn-user-auth.is-logged-in {
+  background: var(--card-bg-color, #ffffff);
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  color: var(--text-color, #0f172a);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.btn-user-auth.is-logged-in:hover {
+  border-color: rgba(0, 0, 0, 0.28);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
+}
+html.dark .btn-user-auth.is-logged-in {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #f1f5f9;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+html.dark .btn-user-auth.is-logged-in:hover {
+  border-color: rgba(255, 255, 255, 0.32);
+}
+.auth-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  flex-shrink: 0;
+}
+
+.user-auth-badge {
+  font-size: 9px;
+  font-weight: 800;
+  background: #2563eb;
+  color: #ffffff;
+  padding: 1px 4px;
+  border-radius: 4px;
+  letter-spacing: -0.02em;
+}
+html.dark .user-auth-badge {
+  background: #3b82f6;
+}
+
+.user-auth-name {
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .memo-input {
   width: 100%;
   box-sizing: border-box;
@@ -1540,6 +1986,27 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   align-items: center;
   gap: 10px;
   background: var(--card-bg-color, #ffffff);
+  flex-shrink: 0;
+}
+
+@media (max-height: 640px) {
+  .apple-modal-backdrop {
+    padding: 8px;
+  }
+  .apple-modal-sheet {
+    max-height: 95vh;
+    border-radius: 14px;
+  }
+  .sheet-header {
+    padding: 10px 16px 8px;
+  }
+  .sheet-body {
+    padding: 12px 16px;
+    gap: 10px;
+  }
+  .sheet-footer {
+    padding: 10px 16px 12px;
+  }
 }
 
 .quick-add-desc, .auth-desc {
@@ -1734,6 +2201,15 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   color: var(--text-color, #0f172a);
   font-family: inherit;
   margin-top: 2px;
+}
+.overnight-check-label.disabled-label {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.day-only-hint {
+  font-size: 11px;
+  color: #ef4444;
+  font-weight: 500;
 }
 
 @keyframes sheetPop {

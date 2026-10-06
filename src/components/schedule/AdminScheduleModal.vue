@@ -7,6 +7,7 @@ import {
   addAdminPasscode,
   deleteAdminPasscodeById,
   clearAllAdminPasscodes,
+  adminForceResetUserPin,
   type AdminPasscodeInfo
 } from '@/services/scheduleService';
 
@@ -14,6 +15,7 @@ const props = defineProps<{
   isOpen: boolean;
   currentMonth: string; // "YYYY-MM"
   existingDates: ScheduleDayItem[];
+  sessionMap?: Map<string, number>;
   adminToken?: string;
 }>();
 
@@ -22,13 +24,14 @@ const emit = defineEmits<{
   (e: 'save', dates: ScheduleDayItem[]): void;
 }>();
 
-const editMode = ref<'visual' | 'text' | 'passcode'>('visual');
+const editMode = ref<'visual' | 'text' | 'passcode' | 'pin'>('visual');
 const rawText = ref('');
 const errorMessage = ref('');
 const registeredPasscodes = ref<AdminPasscodeInfo[]>([]);
 const isLoadingPasscodes = ref(false);
 const newPasscodeLabel = ref('');
 const newPasscode = ref('');
+const showNewPasscode = ref(false);
 const passcodeSuccessMsg = ref('');
 const isUpdatingPasscode = ref(false);
 const isDeletingPasscode = ref(false);
@@ -211,6 +214,10 @@ watch(() => editMode.value, (mode) => {
     passcodeSuccessMsg.value = '';
     errorMessage.value = '';
     loadPasscodes();
+  } else if (mode === 'pin') {
+    pinSuccessMsg.value = '';
+    pinErrorMessage.value = '';
+    errorMessage.value = '';
   }
 });
 
@@ -289,11 +296,129 @@ const handleClearAllPasscodes = async () => {
     isDeletingPasscode.value = false;
   }
 };
+
+// ==========================================
+// 참가자 PIN 관리 로직
+// ==========================================
+const targetAttendeeName = ref('');
+const selectedAttendeeSelect = ref('');
+const targetPinResetDate = ref('');
+const targetNewPin = ref('');
+const targetNewPinConfirm = ref('');
+const isResettingPin = ref(false);
+const pinSuccessMsg = ref('');
+const pinErrorMessage = ref('');
+
+// 현재 월의 모든 참석자 및 개설자 고유 이름 목록 추출
+const attendeesWithPins = computed(() => {
+  const set = new Set<string>();
+  for (const item of props.existingDates) {
+    if (item.creator && item.creator.trim()) {
+      set.add(item.creator.trim());
+    }
+    if (item.attendees) {
+      for (const att of item.attendees) {
+        if (att.name && att.name.trim()) {
+          set.add(att.name.trim());
+        }
+      }
+    }
+  }
+  return Array.from(set).sort();
+});
+
+const onSelectAttendee = () => {
+  if (selectedAttendeeSelect.value) {
+    targetAttendeeName.value = selectedAttendeeSelect.value;
+  }
+};
+
+// 대상 참가자가 바뀌면 적용 대상 회차를 항상 전체 일괄 변경('')으로 자동 초기화
+watch(targetAttendeeName, () => {
+  targetPinResetDate.value = '';
+});
+
+// 선택된 참가자가 실제로 참석 신청했거나 개설한 회차 목록만 필터링
+const targetAttendeeExistingDates = computed(() => {
+  const name = targetAttendeeName.value.trim();
+  if (!name) return [];
+  return props.existingDates
+    .filter(d => (d.creator && d.creator.trim() === name) || d.attendees?.some(a => a.name?.trim() === name))
+    .sort((a, b) => a.date.localeCompare(b.date));
+});
+
+// 회차 번호 조회 헬퍼
+const getSessionNumber = (dateStr: string): number | null => {
+  return props.sessionMap?.get(dateStr) || null;
+};
+
+// 칩용 날짜 포맷 (예: 23일(금))
+const formatChipDate = (dateStr: string): string => {
+  const parts = dateStr.split('-');
+  if (parts.length < 3) return dateStr;
+  const [y, m, d] = parts.map(Number);
+  const dayOfWeekNames = ['일', '월', '화', '수', '목', '금', '토'];
+  const dow = dayOfWeekNames[new Date(y, m - 1, d).getDay()];
+  return `${d}일(${dow})`;
+};
+
+// 관리자 권한으로 참가자 PIN 강제 재설정
+const handleForceResetPin = async () => {
+  pinErrorMessage.value = '';
+  pinSuccessMsg.value = '';
+
+  const name = targetAttendeeName.value.trim();
+  const pin = targetNewPin.value.trim();
+  const confirmPin = targetNewPinConfirm.value.trim();
+
+  if (!name) {
+    pinErrorMessage.value = '대상 참가자 이름을 입력하거나 선택해주세요.';
+    return;
+  }
+  if (!pin || pin.length < 4 || pin.length > 8) {
+    pinErrorMessage.value = '새 PIN은 4~8자리 숫자여야 합니다.';
+    return;
+  }
+  if (!/^\d+$/.test(pin)) {
+    pinErrorMessage.value = 'PIN은 숫자만 입력 가능합니다.';
+    return;
+  }
+  if (pin !== confirmPin) {
+    pinErrorMessage.value = '새 PIN과 확인 입력이 일치하지 않습니다.';
+    return;
+  }
+
+  isResettingPin.value = true;
+  try {
+    const res = await adminForceResetUserPin(
+      props.currentMonth,
+      name,
+      pin,
+      props.adminToken,
+      targetPinResetDate.value || undefined
+    );
+    if (res.success) {
+      const scopeMsg = targetPinResetDate.value ? `${targetPinResetDate.value} 회차` : '이번 달 전체 회차';
+      pinSuccessMsg.value = `'${name}' 님의 ${scopeMsg} PIN이 성공적으로 변경되었습니다.`;
+      targetNewPin.value = '';
+      targetNewPinConfirm.value = '';
+      if (res.data?.dates) {
+        emit('save', res.data.dates);
+      }
+    } else {
+      pinErrorMessage.value = res.error || 'PIN 변경에 실패했습니다.';
+    }
+  } catch (err: any) {
+    pinErrorMessage.value = err.message || 'PIN 변경 중 오류가 발생했습니다.';
+  } finally {
+    isResettingPin.value = false;
+  }
+};
 </script>
 
 <template>
   <Transition name="apple-modal-fade">
-    <div v-if="isOpen" class="apple-modal-backdrop" @click.self="emit('close')">
+    <div v-if="isOpen" class="apple-modal-backdrop" v-backdrop-dismiss="() => emit('close')">
       <div class="apple-modal-sheet">
         <!-- 모달 헤더 -->
         <div class="sheet-header">
@@ -334,7 +459,15 @@ const handleClearAllPasscodes = async () => {
               :class="{ active: editMode === 'passcode' }"
               @click="editMode = 'passcode'"
             >
-              🔑 인증 코드 관리
+              인증 코드 관리
+            </button>
+            <button
+              type="button"
+              class="segment-btn"
+              :class="{ active: editMode === 'pin' }"
+              @click="editMode = 'pin'"
+            >
+              참가자 PIN 관리
             </button>
           </div>
         </div>
@@ -423,7 +556,7 @@ const handleClearAllPasscodes = async () => {
           </div>
 
           <!-- 3. 관리자 인증 코드 설정 모드 -->
-          <div v-else class="passcode-editor-container">
+          <div v-else-if="editMode === 'passcode'" class="passcode-editor-container">
             <p class="text-guide">
               관리자마다 개별 인증 코드를 발급할 수 있습니다. 등록된 코드가 하나도 없으면 <strong>구글 계정 로그인으로만</strong> 관리자 인증이 가능한 보안 모드가 됩니다.
             </p>
@@ -434,7 +567,7 @@ const handleClearAllPasscodes = async () => {
 
             <!-- 신규 관리자 코드 등록 폼 -->
             <div class="passcode-add-box">
-              <span class="sub-section-title">➕ 새 관리자 코드 발급</span>
+              <span class="sub-section-title">새 관리자 코드 발급</span>
               <div class="passcode-form-inputs">
                 <input
                   type="text"
@@ -443,14 +576,32 @@ const handleClearAllPasscodes = async () => {
                   placeholder="관리자 이름"
                   maxlength="20"
                 />
-                <input
-                  type="text"
-                  v-model="newPasscode"
-                  class="apple-input input-code"
-                  placeholder="인증 코드 (4자리 이상)"
-                  maxlength="24"
-                  @keyup.enter="handleAddPasscode"
-                />
+                <div class="passcode-input-wrap">
+                  <input
+                    :type="showNewPasscode ? 'text' : 'password'"
+                    v-model="newPasscode"
+                    class="apple-input input-code"
+                    placeholder="인증 코드 (4자리 이상)"
+                    maxlength="24"
+                    @keyup.enter="handleAddPasscode"
+                  />
+                  <button
+                    type="button"
+                    class="btn-toggle-mask"
+                    @click="showNewPasscode = !showNewPasscode"
+                    :title="showNewPasscode ? '코드 숨기기' : '코드 보기'"
+                    tabindex="-1"
+                  >
+                    <svg v-if="showNewPasscode" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                      <line x1="1" y1="1" x2="23" y2="23"></line>
+                    </svg>
+                    <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                  </button>
+                </div>
                 <button
                   type="button"
                   class="btn-passcode-save"
@@ -531,6 +682,126 @@ const handleClearAllPasscodes = async () => {
               보안 안내: 인증 코드는 Cloudflare KV에 안전하게 보관되며, 브라우저 로컬 저장소에는 기록되지 않습니다.
             </p>
           </div>
+
+          <!-- 4. 참가자 PIN 관리 모드 -->
+          <div v-else-if="editMode === 'pin'" class="pin-management-container">
+            <p class="text-guide">
+              관리자 권한으로 특정 참가자의 PIN을 강제로 변경할 수 있습니다. 변경된 PIN은 해당 참가자의 이번 달 모든 개설 및 참석 내역에 즉시 반영됩니다.
+            </p>
+
+            <div v-if="pinSuccessMsg" class="success-banner">
+              {{ pinSuccessMsg }}
+            </div>
+            <div v-if="pinErrorMessage" class="error-banner">
+              {{ pinErrorMessage }}
+            </div>
+
+            <div class="pin-form-card">
+              <div class="pin-field-row">
+                <label class="pin-field-label">대상 참가자</label>
+                <div class="pin-field-control">
+                  <select
+                    v-if="attendeesWithPins.length > 0"
+                    v-model="selectedAttendeeSelect"
+                    class="apple-input attendee-select"
+                    @change="onSelectAttendee"
+                  >
+                    <option value="">참가자 목록에서 선택 (또는 직접 입력)</option>
+                    <option v-for="name in attendeesWithPins" :key="name" :value="name">
+                      {{ name }}
+                    </option>
+                  </select>
+                  <input
+                    type="text"
+                    v-model="targetAttendeeName"
+                    class="apple-input attendee-name-input"
+                    placeholder="참가자 이름 직접 입력"
+                    maxlength="20"
+                  />
+                </div>
+              </div>
+
+              <div class="pin-field-row">
+                <label class="pin-field-label">적용 대상 회차</label>
+                <div class="pin-field-control">
+                  <div class="scope-chips-group">
+                    <!-- 전체 일괄 변경 칩 버튼 (기본 선택) -->
+                    <button
+                      type="button"
+                      class="btn-scope-chip"
+                      :class="{ active: targetPinResetDate === '' }"
+                      @click="targetPinResetDate = ''"
+                    >
+                      전체 일괄 변경
+                    </button>
+
+                    <!-- 해당 참가자가 실제로 참가한 회차 칩 버튼 목록 -->
+                    <button
+                      v-for="d in targetAttendeeExistingDates"
+                      :key="d.date"
+                      type="button"
+                      class="btn-scope-chip"
+                      :class="{
+                        active: targetPinResetDate === d.date,
+                        'is-confirmed': d.isConfirmed
+                      }"
+                      @click="targetPinResetDate = d.date"
+                    >
+                      <span v-if="d.isConfirmed && getSessionNumber(d.date)" class="chip-session-badge">
+                        제{{ getSessionNumber(d.date) }}회
+                      </span>
+                      <span class="chip-date-label">{{ formatChipDate(d.date) }}</span>
+                    </button>
+                  </div>
+
+                  <!-- 안내 문구 (참가 일정이 없는 경우) -->
+                  <p v-if="targetAttendeeName.trim() && targetAttendeeExistingDates.length === 0" class="empty-dates-hint">
+                    ※ 해당 참가자가 참석 신청한 특정 일정이 없습니다. (전체 일괄 변경만 가능)
+                  </p>
+                </div>
+              </div>
+
+              <div class="pin-field-row">
+                <label class="pin-field-label">새 PIN (4~8자리)</label>
+                <div class="pin-field-control">
+                  <input
+                    type="password"
+                    v-model="targetNewPin"
+                    class="apple-input pin-box-input"
+                    placeholder="••••"
+                    maxlength="8"
+                    inputmode="numeric"
+                  />
+                </div>
+              </div>
+
+              <div class="pin-field-row">
+                <label class="pin-field-label">새 PIN 확인</label>
+                <div class="pin-field-control">
+                  <input
+                    type="password"
+                    v-model="targetNewPinConfirm"
+                    class="apple-input pin-box-input"
+                    placeholder="••••"
+                    maxlength="8"
+                    inputmode="numeric"
+                    @keyup.enter="handleForceResetPin"
+                  />
+                </div>
+              </div>
+
+              <div class="pin-actions-row">
+                <button
+                  type="button"
+                  class="btn-pin-submit"
+                  :disabled="isResettingPin || !targetAttendeeName.trim() || !targetNewPin"
+                  @click="handleForceResetPin"
+                >
+                  {{ isResettingPin ? '변경 중...' : 'PIN 강제 변경 적용' }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 푸터 버튼 -->
@@ -538,7 +809,7 @@ const handleClearAllPasscodes = async () => {
           <button type="button" class="btn-cancel" @click="emit('close')">
             닫기
           </button>
-          <button v-if="editMode !== 'passcode'" type="button" class="btn-primary" @click="handleApply">
+          <button v-if="editMode !== 'passcode' && editMode !== 'pin'" type="button" class="btn-primary" @click="handleApply">
             {{ selectedCounts.total }}개 일정으로 적용
           </button>
           <button v-else type="button" class="btn-primary" @click="emit('close')">
@@ -576,14 +847,14 @@ const handleClearAllPasscodes = async () => {
   flex-direction: column;
   overflow: hidden;
   animation: sheetPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif;
 }
 
 .apple-modal-sheet button,
 .apple-modal-sheet input,
 .apple-modal-sheet select,
 .apple-modal-sheet textarea {
-  font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif;
 }
 
 @keyframes sheetPop {
@@ -730,7 +1001,7 @@ const handleClearAllPasscodes = async () => {
   font-size: 12px;
   font-weight: 700;
   color: var(--text-dimmed, #64748b);
-  font-family: 'Noto Sans KR', sans-serif !important;
+  font-family: 'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif !important;
 }
 .week-chip-title.sun {
   color: #ef4444;
@@ -767,7 +1038,7 @@ const handleClearAllPasscodes = async () => {
   gap: 3px;
   cursor: pointer;
   transition: all 0.15s ease;
-  font-family: 'Noto Sans KR', sans-serif !important;
+  font-family: 'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif !important;
 }
 .day-chip-btn:hover {
   transform: translateY(-1px);
@@ -987,6 +1258,38 @@ const handleClearAllPasscodes = async () => {
   min-width: 110px;
 }
 
+.passcode-input-wrap {
+  flex: 1;
+  min-width: 140px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.passcode-input-wrap .input-code {
+  width: 100%;
+  padding-right: 34px;
+}
+
+.btn-toggle-mask {
+  position: absolute;
+  right: 6px;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-dimmed, #94a3b8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: color 0.15s ease;
+}
+
+.btn-toggle-mask:hover {
+  color: var(--text-color, #0f172a);
+}
+
 .apple-input {
   padding: 9px 12px;
   border-radius: 9px;
@@ -1189,5 +1492,162 @@ const handleClearAllPasscodes = async () => {
   color: var(--text-dimmed, #64748b);
   line-height: 1.5;
   margin: 4px 0 0;
+}
+
+/* 참가자 PIN 관리 모드 */
+.pin-management-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pin-form-card {
+  background: var(--input-bg-color, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pin-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pin-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color, #0f172a);
+}
+
+.pin-field-control {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.attendee-select {
+  flex: 1.2;
+  min-width: 160px;
+  font-size: 13px;
+}
+
+.attendee-name-input {
+  flex: 1;
+  min-width: 120px;
+  font-size: 13px;
+}
+
+.pin-box-input {
+  width: 140px;
+  font-size: 14px;
+  letter-spacing: 0.25em;
+  text-align: center;
+}
+
+.pin-actions-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.btn-pin-submit {
+  background: #0071e3;
+  color: #ffffff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-pin-submit:hover:not(:disabled) {
+  background: #0077ed;
+  transform: translateY(-1px);
+}
+
+.btn-pin-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scope-chips-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+}
+
+.btn-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  background: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-color, #334155);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.btn-scope-chip:hover {
+  border-color: #3b82f6;
+  color: #2563eb;
+}
+
+.btn-scope-chip.active {
+  background: rgba(37, 99, 235, 0.1);
+  border-color: #2563eb;
+  color: #2563eb;
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.15);
+}
+
+html.dark .btn-scope-chip {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
+
+html.dark .btn-scope-chip.active {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
+.chip-session-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.12);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+html.dark .chip-session-badge {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.18);
+}
+
+.chip-date-label {
+  line-height: 1.3;
+}
+
+.empty-dates-hint {
+  font-size: 11.5px;
+  color: var(--text-dimmed, #64748b);
+  margin: 4px 0 0 0;
+  line-height: 1.4;
 }
 </style>

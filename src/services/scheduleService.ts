@@ -145,16 +145,19 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
  * 관리자 권한 확인 (Google 로그인 access_token / refresh_cipher 검증 및 관리자 인증 코드)
  * 관리자 이메일은 절대 클라이언트로 전송되지 않고 서버에서만 검증됩니다.
  */
-export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken?: string }> {
-  if (sessionStorage.getItem('schedule_admin_verified') === 'true') {
-    return { isAdmin: true };
-  }
+export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken?: string; attendeeName?: string }> {
+  const cachedAdmin = sessionStorage.getItem('schedule_admin_verified') === 'true';
+  const cachedAttendeeName = sessionStorage.getItem('schedule_admin_attendee_name') || undefined;
 
   const cipher = localStorage.getItem('google_refresh_cipher');
   const accessToken = localStorage.getItem('google_access_token');
   const passcode = getAdminPasscode();
   if (!cipher && !accessToken && !passcode) {
     return { isAdmin: false };
+  }
+
+  if (cachedAdmin && cachedAttendeeName) {
+    return { isAdmin: true, attendeeName: cachedAttendeeName };
   }
 
   try {
@@ -172,15 +175,26 @@ export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken
       const data = await res.json();
       if (data && data.success && data.isAdmin) {
         sessionStorage.setItem('schedule_admin_verified', 'true');
+        if (data.attendeeName) {
+          sessionStorage.setItem('schedule_admin_attendee_name', data.attendeeName);
+        }
         if (data.access_token) {
           localStorage.setItem('google_access_token', data.access_token);
           localStorage.setItem('google_token_expires_at', String(Date.now() + 3600 * 1000));
         }
-        return { isAdmin: true, adminToken: data.adminToken };
+        return {
+          isAdmin: true,
+          adminToken: data.adminToken,
+          attendeeName: data.attendeeName || cachedAttendeeName
+        };
       }
     }
   } catch (err) {
     console.warn('관리자 권한 확인 API 호출 실패:', err);
+  }
+
+  if (cachedAdmin) {
+    return { isAdmin: true, attendeeName: cachedAttendeeName };
   }
 
   return { isAdmin: false };
@@ -432,7 +446,32 @@ export async function submitAttendance(
     return { success: false, data: getLocalMonthSchedule(month), error: '4자리 확인 PIN을 입력해주세요.' };
   }
 
-  const pinHash = trimmedPin && trimmedPin.length >= 4 ? await hashPin(trimmedPin) : 'admin_bypass';
+  const pinHash = (trimmedPin && trimmedPin.length >= 4 && trimmedPin !== 'admin_bypass') ? await hashPin(trimmedPin) : '';
+
+  // 사칭 방지: 해당 참가자 이름이 이번 달에 이미 등록되어 PIN 해시가 존재하면 일치 여부 필수 확인
+  if (!isAdmin && !isProxy) {
+    const currentLocal = getLocalMonthSchedule(month);
+    let existingUserPinHash: string | undefined;
+    for (const d of currentLocal.dates) {
+      const match = d.attendees?.find(a => a.name === trimmedName);
+      if (match?.pinHash && match.pinHash !== 'admin_bypass') {
+        existingUserPinHash = match.pinHash;
+        break;
+      }
+      if (d.creator === trimmedName && d.creatorPinHash && d.creatorPinHash !== 'admin_bypass') {
+        existingUserPinHash = d.creatorPinHash;
+        break;
+      }
+    }
+    if (existingUserPinHash && pinHash !== existingUserPinHash) {
+      return {
+        success: false,
+        data: currentLocal,
+        error: `'${trimmedName}' 이름으로 이미 등록된 일정이 있습니다. 본인의 기존 PIN을 입력해주세요. (사칭 방지)`
+      };
+    }
+  }
+
   const cipher = localStorage.getItem('google_refresh_cipher');
   const lastName = getLastAttendeeName();
 
@@ -460,7 +499,7 @@ export async function submitAttendance(
     if (res.ok) {
       const json = await res.json();
       if (json && json.success && json.data) {
-        if (trimmedPin && trimmedPin.length >= 4) {
+        if (trimmedPin && trimmedPin.length >= 4 && trimmedPin !== 'admin_bypass') {
           saveUserPin(trimmedName, trimmedPin, !isProxy);
         }
         saveLocalMonthSchedule(json.data);
@@ -495,6 +534,10 @@ export async function submitAttendance(
     if (!canManage && existing.pinHash && existing.pinHash !== 'admin_bypass' && existing.pinHash !== pinHash) {
       return { success: false, data: currentData, error: 'PIN 비밀번호가 일치하지 않습니다.' };
     }
+    // 기존 참가자의 본인 고유 유효 PIN (과거 버그로 인한 개설자 핀 복사값 배제)
+    const existingValidPin = (existing.pinHash && existing.pinHash !== 'admin_bypass' && (existing.name === targetDay.creator || existing.pinHash !== targetDay.creatorPinHash)) ? existing.pinHash : '';
+    const finalPin = pinHash || existingValidPin || '';
+
     targetDay.attendees[existingIdx] = {
       ...existing,
       isOvernight: attendeeInput.isOvernight,
@@ -502,11 +545,11 @@ export async function submitAttendance(
       endTime: attendeeInput.endTime,
       isCustomTime: attendeeInput.isCustomTime,
       memo: attendeeInput.memo,
-      pinHash: (pinHash && pinHash !== 'admin_bypass') ? pinHash : (existing.pinHash || targetDay.creatorPinHash || 'admin_bypass'),
+      pinHash: finalPin,
       updatedAt: Date.now()
     };
   } else {
-    // 신규 참가자 추가 (인원수 제한 없이 무제한 추가)
+    // 신규 참가자 추가: 본인이 직접 유효 PIN을 입력하지 않은 경우(대리 등록 등)에는 빈 문자열('')로 격리 (기본 PIN이나 개설자 PIN 절대 상속 금지)
     targetDay.attendees.push({
       id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       name: trimmedName,
@@ -515,7 +558,7 @@ export async function submitAttendance(
       endTime: attendeeInput.endTime,
       isCustomTime: attendeeInput.isCustomTime,
       memo: attendeeInput.memo,
-      pinHash: (pinHash && pinHash !== 'admin_bypass') ? pinHash : (targetDay.creatorPinHash || 'admin_bypass'),
+      pinHash: pinHash || '',
       updatedAt: Date.now()
     });
   }
@@ -563,15 +606,20 @@ export async function submitBatchAttendance(
     return { success: false, data: getLocalMonthSchedule(month), error: '4자리 확인 PIN을 입력해주세요.' };
   }
 
-  const pinHash = trimmedPin && trimmedPin.length >= 4 ? await hashPin(trimmedPin) : 'admin_bypass';
+  const pinHash = (trimmedPin && trimmedPin.length >= 4 && trimmedPin !== 'admin_bypass') ? await hashPin(trimmedPin) : '';
   const cipher = localStorage.getItem('google_refresh_cipher');
   const lastName = getLastAttendeeName();
 
-  const formattedAttendees = attendeesInput.map(a => ({
-    ...a,
-    name: a.name.trim(),
-    pinHash
-  }));
+  const formattedAttendees = attendeesInput.map(a => {
+    const trimmed = a.name.trim();
+    // 일괄 등록 시 작성자 본인에게만 입력된 PIN 해시를 적용하고, 타인은 PIN 미설정('') 상태로 등록
+    const attPin = (trimmed === lastName && pinHash) ? pinHash : '';
+    return {
+      ...a,
+      name: trimmed,
+      pinHash: attPin
+    };
+  });
 
   try {
     const res = await fetch(`${getWorkerUrl()}/api/schedule/attend`, {
@@ -628,6 +676,9 @@ export async function submitBatchAttendance(
       if (!canManage && existing.pinHash && existing.pinHash !== 'admin_bypass' && existing.pinHash !== pinHash) {
         continue;
       }
+      const existingValidPin = (existing.pinHash && existing.pinHash !== 'admin_bypass' && (existing.name === targetDay.creator || existing.pinHash !== targetDay.creatorPinHash)) ? existing.pinHash : '';
+      const finalPin = (trimmedName === lastName && pinHash) ? pinHash : (existingValidPin || '');
+
       targetDay.attendees[existingIdx] = {
         ...existing,
         isOvernight: attendeeInput.isOvernight,
@@ -635,10 +686,11 @@ export async function submitBatchAttendance(
         endTime: attendeeInput.endTime,
         isCustomTime: attendeeInput.isCustomTime,
         memo: attendeeInput.memo,
-        pinHash: (pinHash && pinHash !== 'admin_bypass') ? pinHash : (existing.pinHash || targetDay.creatorPinHash || 'admin_bypass'),
+        pinHash: finalPin,
         updatedAt: Date.now()
       };
     } else {
+      const finalPin = (trimmedName === lastName && pinHash) ? pinHash : '';
       targetDay.attendees.push({
         id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         name: trimmedName,
@@ -647,7 +699,7 @@ export async function submitBatchAttendance(
         endTime: attendeeInput.endTime,
         isCustomTime: attendeeInput.isCustomTime,
         memo: attendeeInput.memo,
-        pinHash: (pinHash && pinHash !== 'admin_bypass') ? pinHash : (targetDay.creatorPinHash || 'admin_bypass'),
+        pinHash: finalPin,
         updatedAt: Date.now()
       });
     }
@@ -732,12 +784,11 @@ export async function cancelAttendance(
     return { success: false, data: currentData, error: '등록된 참석 정보를 찾을 수 없습니다.' };
   }
 
-  const isLocalCreator = isCreator || !!(targetDay.creator && targetDay.creator === lastName);
-  const canManage = !!(isAdmin || isLocalCreator);
+  // 개설자 권한 검증: 개설자 이름뿐 아니라 개설자 PIN 해시가 일치해야 진정한 개설자 권한으로 인정
+  const isCreatorAuthorized = isCreator && targetDay.creatorPinHash && (targetDay.creatorPinHash === pinHash || pin === 'admin_bypass');
+  const canManage = !!(isAdmin || isCreatorAuthorized);
 
-  const isPinMatch = (existing.pinHash === pinHash) ||
-    (targetDay.creatorPinHash && targetDay.creatorPinHash === pinHash) ||
-    (existing.pinHash === 'admin_bypass');
+  const isPinMatch = !!(existing.pinHash && existing.pinHash !== 'admin_bypass' && existing.pinHash === pinHash);
 
   if (!canManage && !isPinMatch) {
     return { success: false, data: currentData, error: 'PIN 비밀번호가 일치하지 않습니다.' };
@@ -756,4 +807,94 @@ export async function cancelAttendance(
   saveLocalMonthSchedule(currentData);
 
   return { success: true, data: currentData };
+}
+
+/**
+ * 관리자 권한으로 특정 인원의 PIN을 강제 변경합니다.
+ * targetDate가 주어지면 해당 날짜(회차)만 변경하고, 생략되면 해당 월의 모든 참석 및 개설 PIN 해시를 일괄 갱신합니다.
+ */
+export async function adminForceResetUserPin(
+  month: string,
+  targetName: string,
+  newPin: string,
+  adminToken?: string,
+  targetDate?: string
+): Promise<{ success: boolean; data: ScheduleMonthData; error?: string }> {
+  const trimmedName = targetName.trim();
+  const trimmedPin = newPin.trim();
+
+  if (!trimmedName) {
+    const currentData = getLocalMonthSchedule(month);
+    return { success: false, data: currentData, error: '대상 참가자 이름이 올바르지 않습니다.' };
+  }
+
+  if (!trimmedPin || trimmedPin.length < 4 || trimmedPin.length > 8) {
+    const currentData = getLocalMonthSchedule(month);
+    return { success: false, data: currentData, error: '새 PIN은 4~8자리 숫자여야 합니다.' };
+  }
+
+  const newPinHash = await hashPin(trimmedPin);
+
+  // 로컬 스토리지 PIN 캐시도 갱신
+  saveUserPin(trimmedName, trimmedPin, false);
+
+  // 1. Worker API 시도
+  const workerUrl = getWorkerUrl();
+  const passcode = getAdminPasscode();
+  if (workerUrl && (adminToken || passcode)) {
+    try {
+      // 최신 스케줄 조회
+      const currentRes = await fetchMonthSchedule(month);
+      const dates = currentRes.dates;
+
+      let changed = false;
+      dates.forEach(d => {
+        if (targetDate && d.date !== targetDate) return;
+        if (d.attendees) {
+          d.attendees.forEach(a => {
+            if (a.name === trimmedName) {
+              a.pinHash = newPinHash;
+              changed = true;
+            }
+          });
+        }
+        if (d.creator === trimmedName) {
+          d.creatorPinHash = newPinHash;
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        const saveRes = await saveAdminScheduleDates(month, dates, adminToken);
+        if (saveRes.success) {
+          return { success: true, data: saveRes.data };
+        }
+      } else {
+        return { success: true, data: currentRes };
+      }
+    } catch (e: any) {
+      console.warn('Worker PIN 재설정 실패, 로컬 처리 진행:', e);
+    }
+  }
+
+  // 2. 로컬 스케줄 갱신
+  const localData = getLocalMonthSchedule(month);
+  localData.dates.forEach(d => {
+    if (targetDate && d.date !== targetDate) return;
+    if (d.attendees) {
+      d.attendees.forEach(a => {
+        if (a.name === trimmedName) {
+          a.pinHash = newPinHash;
+        }
+      });
+    }
+    if (d.creator === trimmedName) {
+      d.creatorPinHash = newPinHash;
+    }
+  });
+
+  localData.updatedAt = Date.now();
+  saveLocalMonthSchedule(localData);
+
+  return { success: true, data: localData };
 }

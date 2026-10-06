@@ -39,26 +39,26 @@ export function minutesToTimeString(totalMinutes: number): string {
 /**
  * 참석자의 시작/종료 시각을 [시작분, 종료분] 범위로 변환합니다.
  */
-export function getAttendeeInterval(attendee: ScheduleAttendee): [number, number] {
+export function getAttendeeInterval(attendee: ScheduleAttendee, isDayOnly: boolean = false): [number, number] {
   // 기본값 처리
   let startMinutes = 600; // 10:00
-  let endMinutes = attendee.isOvernight ? 1800 : 1320; // 익일 06:00(1800분) 또는 22:00(1320분)
+  let endMinutes = (!isDayOnly && attendee.isOvernight) ? 1800 : 1320; // 22:00(1320분)
 
   if (attendee.startTime) {
     startMinutes = timeStringToMinutes(attendee.startTime, false);
   }
 
   if (attendee.endTime) {
-    if (attendee.endTime === '익일' || attendee.endTime.includes('밤샘')) {
+    if (!isDayOnly && (attendee.endTime === '익일' || attendee.endTime.includes('밤샘'))) {
       endMinutes = 1800; // 익일 06:00
     } else {
-      const isNextDay = attendee.isOvernight || attendee.endTime.startsWith('익일');
+      const isNextDay = !isDayOnly && (attendee.isOvernight || attendee.endTime.startsWith('익일'));
       endMinutes = timeStringToMinutes(attendee.endTime, isNextDay);
     }
   }
 
-  // 시작이 종료보다 늦으면 다음날로 보정
-  if (endMinutes <= startMinutes) {
+  // 시작이 종료보다 늦으면 다음날로 보정 (단, 당일 모드가 아닐 때만)
+  if (!isDayOnly && endMinutes <= startMinutes) {
     endMinutes += 1440;
   }
 
@@ -69,13 +69,13 @@ export function getAttendeeInterval(attendee: ScheduleAttendee): [number, number
  * 해당 날짜의 참석자들을 바탕으로 4인 이상 겹치는 시간대 구간을 계산합니다.
  * 반환값: 예 "14:00 ~ 22:00" 또는 "10:00 ~ 익일" 또는 null
  */
-export function computeEffectiveOverlapRange(attendees: ScheduleAttendee[] = []): string | null {
+export function computeEffectiveOverlapRange(attendees: ScheduleAttendee[] = [], isDayOnly: boolean = false): string | null {
   if (!attendees || attendees.length < 4) {
     return null;
   }
 
   // 모든 시작/종료 분 포인트 수집
-  const intervals = attendees.map(a => getAttendeeInterval(a));
+  const intervals = attendees.map(a => getAttendeeInterval(a, isDayOnly));
   
   // 10분 단위로 카운트 샘플링 (10:00 ~ 익일 12:00)
   const startCheck = 600; // 10:00
@@ -131,20 +131,17 @@ export function computeSessionTimeFromAttendees(
     };
   }
 
-  const intervals = attendees.map(a => getAttendeeInterval(a));
+  const isDayOnly = baseSessionType === 'day';
+  const intervals = attendees.map(a => getAttendeeInterval(a, isDayOnly));
   const earliestMin = Math.min(...intervals.map(([s]) => s));
   const latestMin = Math.max(...intervals.map(([, e]) => e));
 
   const customStartTime = minutesToTimeString(earliestMin);
   const customEndTime = minutesToTimeString(latestMin);
-  const customIsOvernight = latestMin > 1440 || attendees.some(a => a.isOvernight);
+  const customIsOvernight = isDayOnly ? false : (latestMin > 1440 || attendees.some(a => a.isOvernight));
 
-  let sessionType: SessionType = 'custom';
-  if (customIsOvernight && customStartTime === '10:00') {
-    sessionType = 'overnight';
-  } else if (!customIsOvernight && customStartTime === '10:00' && customEndTime === '22:00') {
-    sessionType = 'day';
-  }
+  // 당일로 지정된 날짜는 무조건 'day', 그 외에는 익일 포함 여부에 따라 'overnight' 결정
+  const sessionType: SessionType = isDayOnly ? 'day' : (customIsOvernight ? 'overnight' : 'day');
 
   return {
     customStartTime,

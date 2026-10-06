@@ -67,6 +67,18 @@ const isUserAttending = (day: ScheduleDayItem) => {
   return day.attendees.some(a => a.name === props.myAttendeeName);
 };
 
+const isEmptyDate = (day: ScheduleDayItem) => {
+  return !day.attendees || day.attendees.length === 0;
+};
+
+const handleActionClick = (item: ScheduleDayItem) => {
+  if (!isUserAttending(item) && isEmptyDate(item)) {
+    emit('selectDay', item);
+  } else {
+    emit('openAttend', item);
+  }
+};
+
 const getOverlapRange = (day: ScheduleDayItem) => {
   return computeEffectiveOverlapRange(day.attendees);
 };
@@ -98,7 +110,11 @@ const getOverlapRange = (day: ScheduleDayItem) => {
               제{{ sessionMap.get(item.date) }}회
             </span>
             <span v-else class="session-badge badge-recruiting">
-              {{ (item.attendees?.length || 0) >= 4 ? '확정 대기' : '모집중' }}
+              <span v-if="(item.attendees?.length || 0) >= 4">
+                <span class="txt-long">확정 대기</span>
+                <span class="txt-short">대기</span>
+              </span>
+              <span v-else>모집중</span>
             </span>
             <span 
               class="type-pill"
@@ -159,6 +175,7 @@ const getOverlapRange = (day: ScheduleDayItem) => {
         <!-- 카드 하단 버튼 -->
         <div class="card-footer">
           <button 
+            v-if="!isEmptyDate(item)"
             type="button" 
             class="btn-detail"
             @click="emit('selectDay', item)"
@@ -168,10 +185,13 @@ const getOverlapRange = (day: ScheduleDayItem) => {
           <button 
             type="button" 
             class="btn-attend"
-            :class="{ 'btn-attend-edit': isUserAttending(item) }"
-            @click="emit('openAttend', item)"
+            :class="{ 
+              'btn-attend-edit': isUserAttending(item),
+              'btn-attend-create': !isUserAttending(item) && isEmptyDate(item)
+            }"
+            @click="handleActionClick(item)"
           >
-            {{ isUserAttending(item) ? '내 참석 수정' : '참석 신청' }}
+            {{ isUserAttending(item) ? '내 참석 수정' : (isEmptyDate(item) ? '개설' : '참석 신청') }}
           </button>
         </div>
       </div>
@@ -182,7 +202,7 @@ const getOverlapRange = (day: ScheduleDayItem) => {
 <style scoped>
 .schedule-list-container,
 .schedule-list-container * {
-  font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Noto Serif KR', 'Noto Serif JP', 'Noto Serif', serif;
 }
 
 .schedule-list-container {
@@ -285,7 +305,7 @@ const getOverlapRange = (day: ScheduleDayItem) => {
   color: #2563eb;
   border: 1px solid rgba(37, 99, 235, 0.25);
 }
-:global(html.dark) .session-badge.badge-confirmed {
+html.dark .session-badge.badge-confirmed {
   background: rgba(59, 130, 246, 0.22);
   color: #60a5fa;
   border-color: rgba(59, 130, 246, 0.4);
@@ -294,7 +314,7 @@ const getOverlapRange = (day: ScheduleDayItem) => {
   background: rgba(245, 158, 11, 0.15);
   color: #d97706;
 }
-:global(html.dark) .session-badge.badge-recruiting {
+html.dark .session-badge.badge-recruiting {
   background: rgba(245, 158, 11, 0.22);
   color: #fbbf24;
 }
@@ -470,5 +490,17 @@ const getOverlapRange = (day: ScheduleDayItem) => {
 
 .btn-attend.btn-attend-edit {
   background: #059669;
+}
+
+.txt-short {
+  display: none;
+}
+@media (max-width: 640px) {
+  .txt-long {
+    display: none;
+  }
+  .txt-short {
+    display: inline;
+  }
 }
 </style>

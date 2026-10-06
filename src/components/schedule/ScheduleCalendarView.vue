@@ -116,6 +116,40 @@ const todayStr = (() => {
 
 <template>
   <div class="calendar-container">
+    <!-- 달력 모바일 SVG 아이콘 및 점 범례(Legend) 가이드 바 -->
+    <div class="calendar-legend-bar">
+      <div class="legend-item">
+        <span class="legend-icon icon-sun-wrap">
+          <svg class="icon-sun" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+          </svg>
+        </span>
+        <span class="legend-text">당일</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-icon icon-moon-wrap">
+          <svg class="icon-moon" width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </span>
+        <span class="legend-text">밤샘</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-icon icon-clock-wrap">
+          <svg class="icon-clock" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+        </span>
+        <span class="legend-text">커스텀</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot"></span>
+        <span class="legend-text">내 참석</span>
+      </div>
+    </div>
+
     <!-- 요일 헤더 -->
     <div class="calendar-week-header">
       <div 
@@ -160,7 +194,22 @@ const todayStr = (() => {
                 'pill-day': !cell.scheduleItem.sessionType || cell.scheduleItem.sessionType === 'day'
               }"
             >
-              {{ cell.scheduleItem.sessionType === 'overnight' ? '밤샘' : (cell.scheduleItem.sessionType === 'custom' ? '커스텀' : '당일') }}
+              <span class="type-text">
+                {{ cell.scheduleItem.sessionType === 'overnight' ? '밤샘' : (cell.scheduleItem.sessionType === 'custom' ? '커스텀' : '당일') }}
+              </span>
+              <span class="type-icon" :title="cell.scheduleItem.sessionType === 'overnight' ? '밤샘' : (cell.scheduleItem.sessionType === 'custom' ? '커스텀' : '당일')">
+                <svg v-if="cell.scheduleItem.sessionType === 'overnight'" class="icon-moon" width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+                <svg v-else-if="cell.scheduleItem.sessionType === 'custom'" class="icon-clock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <svg v-else class="icon-sun" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+                </svg>
+              </span>
             </span>
           </div>
           <div class="cell-top-right">
@@ -187,8 +236,19 @@ const todayStr = (() => {
                 'pill-recruiting': !cell.scheduleItem.isConfirmed && (cell.scheduleItem.attendees?.length || 0) < 4
               }"
             >
-              <span v-if="cell.scheduleItem.isConfirmed && cell.sessionNumber" class="session-label">제{{ cell.sessionNumber }}회</span>
-              <span v-else class="status-label">{{ (cell.scheduleItem.attendees?.length || 0) >= 4 ? '확정 대기' : '모집중' }}</span>
+              <span v-if="cell.scheduleItem.isConfirmed && cell.sessionNumber" class="session-label">
+                <span class="session-prefix txt-long">제</span>{{ cell.sessionNumber }}회
+              </span>
+              <span v-else class="status-label">
+                <span v-if="(cell.scheduleItem.attendees?.length || 0) >= 4">
+                  <span class="txt-long">확정 대기</span>
+                  <span class="txt-short">대기</span>
+                </span>
+                <span v-else>
+                  <span class="txt-long">모집중</span>
+                  <span class="txt-short">모집</span>
+                </span>
+              </span>
               <span class="count-label">{{ cell.scheduleItem.attendees?.length || 0 }}명</span>
             </div>
 
@@ -212,6 +272,12 @@ const todayStr = (() => {
         <div v-else-if="cell.isCurrentMonth && isAdmin" class="cell-empty-action">
           <span class="empty-add-icon" title="관리자 일정 등록">+</span>
         </div>
+        <!-- 모바일 좁은 화면용 우하단 내 참석 인디케이터 점 -->
+        <span
+          v-if="isUserAttending(cell.scheduleItem)"
+          class="my-attend-corner-dot"
+          title="내가 참석한 모임"
+        ></span>
       </div>
     </div>
   </div>
@@ -229,6 +295,53 @@ const todayStr = (() => {
   border-radius: 18px;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+}
+
+/* 달력 상단 모바일 SVG 범례 바 (데스크톱 및 넓은 화면에서는 숨김) */
+.calendar-legend-bar {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--input-bg-color, #f8fafc);
+  border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.legend-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-sun-wrap {
+  color: #ea580c;
+}
+.icon-moon-wrap {
+  color: #9333ea;
+}
+.icon-clock-wrap {
+  color: #059669;
+}
+.legend-dot {
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 3px rgba(37, 99, 235, 0.5);
+}
+html.dark .legend-dot {
+  background: #60a5fa;
+}
+.legend-text {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
 .cell-uncreated-box {
@@ -266,7 +379,7 @@ const todayStr = (() => {
 
 .calendar-week-header {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   background: var(--input-bg-color, #f8fafc);
   border-bottom: 1px solid var(--border-color, #e2e8f0);
 }
@@ -278,6 +391,8 @@ const todayStr = (() => {
   font-weight: 600;
   color: var(--text-dimmed, #64748b);
   font-family: inherit;
+  min-width: 0;
+  overflow: hidden;
 }
 .week-day-name.day-sun {
   color: #ef4444;
@@ -288,7 +403,7 @@ const todayStr = (() => {
 
 .calendar-days-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   grid-auto-rows: minmax(96px, 1fr);
 }
 
@@ -304,6 +419,8 @@ const todayStr = (() => {
   transition: background 0.15s ease, box-shadow 0.15s ease;
   background: transparent;
   font-family: inherit;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .calendar-cell:nth-child(7n) {
@@ -339,22 +456,22 @@ const todayStr = (() => {
   background: rgba(16, 185, 129, 0.09);
 }
 
-:global(html.dark) .calendar-cell.session-day {
+html.dark .calendar-cell.session-day {
   background: rgba(59, 130, 246, 0.08);
 }
-:global(html.dark) .calendar-cell.session-day:hover {
+html.dark .calendar-cell.session-day:hover {
   background: rgba(59, 130, 246, 0.14);
 }
-:global(html.dark) .calendar-cell.session-overnight {
+html.dark .calendar-cell.session-overnight {
   background: rgba(139, 92, 246, 0.09);
 }
-:global(html.dark) .calendar-cell.session-overnight:hover {
+html.dark .calendar-cell.session-overnight:hover {
   background: rgba(139, 92, 246, 0.16);
 }
-:global(html.dark) .calendar-cell.session-custom {
+html.dark .calendar-cell.session-custom {
   background: rgba(16, 185, 129, 0.08);
 }
-:global(html.dark) .calendar-cell.session-custom:hover {
+html.dark .calendar-cell.session-custom:hover {
   background: rgba(16, 185, 129, 0.14);
 }
 
@@ -366,8 +483,22 @@ const todayStr = (() => {
 }
 
 .calendar-cell.is-today {
-  background: rgba(59, 130, 246, 0.07);
-  box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.55);
+  box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.65);
+}
+.calendar-cell.clickable.is-today:hover {
+  box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.85);
+}
+.calendar-cell.session-day.is-today {
+  background: rgba(59, 130, 246, 0.05);
+}
+html.dark .calendar-cell.is-today {
+  box-shadow: inset 0 0 0 2px rgba(96, 165, 250, 0.7);
+}
+html.dark .calendar-cell.clickable.is-today:hover {
+  box-shadow: inset 0 0 0 2px rgba(96, 165, 250, 0.9);
+}
+html.dark .calendar-cell.session-day.is-today {
+  background: rgba(59, 130, 246, 0.1);
 }
 
 .cell-top {
@@ -488,14 +619,18 @@ const todayStr = (() => {
 .status-pill {
   font-size: 11px;
   font-weight: 700;
-  padding: 2px 6px;
+  padding: 2px 4px;
   border-radius: 6px;
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
-  line-height: 1.2;
+  gap: 2px;
+  line-height: 1.15;
   font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .status-pill.pill-confirmed {
@@ -503,7 +638,7 @@ const todayStr = (() => {
   color: #2563eb;
   border: 1px solid rgba(37, 99, 235, 0.25);
 }
-:global(html.dark) .status-pill.pill-confirmed {
+html.dark .status-pill.pill-confirmed {
   background: rgba(59, 130, 246, 0.22);
   color: #60a5fa;
   border-color: rgba(59, 130, 246, 0.4);
@@ -513,7 +648,7 @@ const todayStr = (() => {
   background: rgba(245, 158, 11, 0.14);
   color: #d97706;
 }
-:global(html.dark) .status-pill.pill-pending {
+html.dark .status-pill.pill-pending {
   background: rgba(245, 158, 11, 0.2);
   color: #fbbf24;
 }
@@ -522,7 +657,7 @@ const todayStr = (() => {
   background: rgba(148, 163, 184, 0.12);
   color: #64748b;
 }
-:global(html.dark) .status-pill.pill-recruiting {
+html.dark .status-pill.pill-recruiting {
   background: rgba(148, 163, 184, 0.18);
   color: #94a3b8;
 }
@@ -561,25 +696,144 @@ const todayStr = (() => {
   line-height: 1;
 }
 
+.txt-short {
+  display: none;
+}
+
+.type-icon {
+  display: none;
+}
+
+.my-attend-corner-dot {
+  display: none;
+}
+
 @media (max-width: 640px) {
+  .txt-long {
+    display: none;
+  }
+  .txt-short {
+    display: inline;
+  }
   .calendar-days-grid {
     grid-auto-rows: minmax(70px, 1fr);
   }
   .calendar-cell {
-    padding: 4px;
+    padding: 3px 2px;
     gap: 2px;
   }
   .type-pill {
     font-size: 9px;
   }
   .status-pill {
-    font-size: 10px;
-    padding: 1px 4px;
-    flex-direction: column;
-    align-items: flex-start;
+    font-size: 9.5px;
+    padding: 1px 2px;
+    gap: 1px;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    align-items: center;
   }
-  .session-label {
+  .session-label,
+  .status-label,
+  .count-label {
+    font-size: 9px;
+    letter-spacing: -0.04em;
+    white-space: nowrap;
+    line-height: 1.1;
+  }
+}
+
+@media (max-width: 480px) {
+  .calendar-container {
+    border-radius: 12px;
+  }
+  .calendar-legend-bar {
+    display: flex;
+    padding: 6px 10px;
+    gap: 8px;
+    font-size: 10px;
+  }
+  .legend-text {
+    font-size: 10px;
+  }
+  .week-day-name {
+    padding: 6px 1px;
+    font-size: 11px;
+  }
+  .calendar-days-grid {
+    grid-auto-rows: minmax(62px, 1fr);
+  }
+  .calendar-cell {
+    padding: 2px 1px;
+    gap: 1px;
+  }
+  .cell-day-num {
+    font-size: 11px;
+  }
+
+  /* 모바일 해/달/시계 SVG 아이콘 전용 노출 */
+  .type-text {
     display: none;
+  }
+  .type-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .type-pill {
+    padding: 1px 2px;
+    border-radius: 4px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .today-badge {
+    display: none; /* 2px 파란색 테두리와 볼드 날짜로 대체 */
+  }
+  .cell-top-right .my-attend-dot {
+    display: none; /* 상단에서 숨기고 우하단 코너 점으로 대체 */
+  }
+
+  /* 좁은 화면 셀 우하단 내 참석 인디케이터 점 */
+  .my-attend-corner-dot {
+    display: block;
+    position: absolute;
+    bottom: 3px;
+    right: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #2563eb;
+    box-shadow: 0 0 0 1.5px #ffffff;
+    z-index: 2;
+  }
+  html.dark .my-attend-corner-dot {
+    background: #60a5fa;
+    box-shadow: 0 0 0 1.5px #1e293b;
+  }
+
+  .status-pill {
+    padding: 1px 2px;
+    font-size: 8.5px;
+    gap: 1px;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .session-label,
+  .status-label,
+  .count-label {
+    font-size: 8.5px;
+    letter-spacing: -0.04em;
+    white-space: nowrap;
+    line-height: 1.1;
+  }
+  .cell-att-name {
+    font-size: 9px;
+    padding: 0 1px;
   }
 }
 </style>

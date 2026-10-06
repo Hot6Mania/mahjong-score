@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, type SessionMigrationBackup } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, type SessionMigrationBackup } from "@/utils/googleSheets"
 import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
@@ -402,7 +402,7 @@ const restoreGoogleSessionIfValid = async () => {
 const chartPlayers = ref<any[]>([])
 const chartRecords = ref<any>({ score: [], time: [] })
 
-// 구글 스프레드시트로부터 회차 목록(기본/raw/데이터 탭이 모두 완비된 리스트) 수집
+// 구글 스프레드시트로부터 회차 목록(기본/raw 탭이 완비된 리스트) 수집
 const loadGoogleSessions = async () => {
   if (!googleInfo.isLoggedIn || !googleInfo.spreadsheetId) {
     validGoogleSessions.value = [];
@@ -415,24 +415,40 @@ const loadGoogleSessions = async () => {
     });
     const sheetTitles: string[] = res.result.sheets.map((s: any) => s.properties.title);
     
-    // 1. '제n회 YYMMDD' 패턴의 기본 탭 이름들 필터링
-    const candidates = sheetTitles.filter(t => /^제\d+회\s+\d{6}$/.test(t));
-    
-    // 2. (raw)와 (데이터) 탭이 둘 다 완비된 탭만 활성화
+    // 1. 모든 시트 탭 명칭에서 접미사 (raw, 데이터, 멤버, 상세기록)를 제거하여 순수 회차 타이틀 후보군 도출
+    const titleCandidates = new Set<string>();
+    sheetTitles.forEach((t: string) => {
+      const clean = t.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/gi, '').trim();
+      if (/^제\s*\d+\s*회(?:\s*\d{6,8})?$/i.test(clean)) {
+        titleCandidates.add(clean);
+      }
+    });
+
+    // 2. 각 회차 후보 중 (raw) 시트 또는 메인 시트가 존재하는 유효 탭 수집
     const validList: string[] = [];
-    candidates.forEach(cleanTitle => {
-      const rawTitle = `${cleanTitle} (raw)`;
-      const detailTitle = `${cleanTitle} (데이터)`;
-      if (sheetTitles.includes(rawTitle) && sheetTitles.includes(detailTitle)) {
+    titleCandidates.forEach(cleanTitle => {
+      const hasRaw = sheetTitles.some((t: string) => {
+        const cleanT = t.replace(/\s+/g, ' ').trim().toLowerCase();
+        return cleanT === `${cleanTitle} (raw)`.toLowerCase() ||
+               cleanT === `${cleanTitle}(raw)`.toLowerCase();
+      });
+      const hasMain = sheetTitles.includes(cleanTitle);
+
+      if (hasRaw || hasMain) {
         validList.push(cleanTitle);
       }
     });
     
-    // 최신 회차가 위로 오도록 숫자 기준 정렬 (제15회 > 제9회)
+    // 3. 최신 회차가 위로 오도록 숫자 기준 내림차순 정렬 (제16회 > 제9회)
     validList.sort(compareSessionDesc);
     validGoogleSessions.value = validList;
     if (validList.length > 0) {
       selectedSessionToLoad.value = validList[0];
+      // 현재 활성 회차가 없거나 유효하지 않다면 최신 회차를 기본값으로 포커싱
+      if (!currentSessionSheetName.value) {
+        currentSessionSheetName.value = validList[0];
+        localStorage.setItem("current_session_sheet_name", validList[0]);
+      }
     } else {
       selectedSessionToLoad.value = "";
     }
@@ -609,6 +625,16 @@ onMounted(async () => {
   await router.isReady();
   changeLocale();
   seatTile.value = secureShuffle(seatTile.value);
+
+  // 회차 상세 모달 등에서 신규 구글 시트 회차가 개설되었을 때 실시간 동기화
+  window.addEventListener('mahjong_session_sheet_changed', async (e: any) => {
+    const newTitle = e.detail?.sheetName || localStorage.getItem('current_session_sheet_name');
+    if (newTitle) {
+      currentSessionSheetName.value = newTitle;
+      await loadGoogleSessions();
+      await loadTodayMembers();
+    }
+  });
   
   // 테마 설정 초기화
   const savedTheme = localStorage.getItem("theme");
@@ -1790,6 +1816,7 @@ const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) =
       // 3. 전체 멤버별 통계 로드 (95%)
       syncProgress.value = 95;
       try {
+        await syncStatsSheetFormatting(googleInfo.spreadsheetId);
         await repairStatsSheetSpillError(googleInfo.spreadsheetId);
         const stats = await fetchMemberStats(googleInfo.spreadsheetId);
         googleMemberStats.value = stats;
@@ -3603,7 +3630,7 @@ const addBackupGameToCurrent = (game: any) => {
 
   <!-- 스프레드시트 주소 입력을 위한 커스텀 모달 팝업 -->
   <Transition name="modal-fade">
-    <div v-if="isShowSpreadsheetIdPrompt" class="custom-prompt-overlay" @click.self="handlePromptCancel">
+    <div v-if="isShowSpreadsheetIdPrompt" class="custom-prompt-overlay" v-backdrop-dismiss="handlePromptCancel">
       <div class="custom-prompt-card">
         <div class="custom-prompt-header">
           <h3>구글 스프레드시트 주소 입력</h3>
@@ -3627,7 +3654,7 @@ const addBackupGameToCurrent = (game: any) => {
 
   <!-- [팝업 1] 설정창에서 기존 회차를 누를 때 띄워주는 이어하기 전용 팝업 -->
   <Transition name="modal-fade">
-    <div v-if="isShowChooseSessionPopup" class="custom-prompt-overlay" @click.self="isShowChooseSessionPopup = false">
+    <div v-if="isShowChooseSessionPopup" class="custom-prompt-overlay" v-backdrop-dismiss="() => isShowChooseSessionPopup = false">
       <div class="custom-prompt-card">
         <div class="custom-prompt-header">
           <h3>기존 회차 이어하기</h3>
@@ -3653,7 +3680,7 @@ const addBackupGameToCurrent = (game: any) => {
 
   <!-- [팝업 2] 로그인 완료 직후 뜨는 기존 회차 이어하기 vs 신규 회차 시작 양자택일 분기 팝업 -->
   <Transition name="modal-fade">
-    <div v-if="isShowSessionChoosePopup" class="custom-prompt-overlay" @click.self="isShowSessionChoosePopup = false">
+    <div v-if="isShowSessionChoosePopup" class="custom-prompt-overlay" v-backdrop-dismiss="() => isShowSessionChoosePopup = false">
       <div class="custom-prompt-card" style="max-width: 340px;">
         <div class="custom-prompt-header">
           <h3>회차 시작 방식 선택</h3>
@@ -3709,7 +3736,7 @@ const addBackupGameToCurrent = (game: any) => {
 
   <!-- [디버그/오류 팝업] 구글 API 및 연동 오류 상세 출력 및 복사용 모달 -->
   <Transition name="modal-fade">
-    <div v-if="errorModalState.isOpen" class="custom-prompt-overlay" @click.self="errorModalState.isOpen = false">
+    <div v-if="errorModalState.isOpen" class="custom-prompt-overlay" v-backdrop-dismiss="() => errorModalState.isOpen = false">
       <div class="custom-prompt-card" style="max-width: 480px; width: 90%;">
         <div class="custom-prompt-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
           <h3 style="color: var(--color-negative, #c62828); display: flex; align-items: center; gap: 6px;">
