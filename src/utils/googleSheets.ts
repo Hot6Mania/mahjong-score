@@ -204,14 +204,52 @@ export const logoutGoogle = (): void => {
     } catch (e) {
       console.warn("Revoke token error:", e);
     }
-    accessToken = null;
-    if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-      window.gapi.client.setToken(null);
+  }
+  accessToken = null;
+  if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+    window.gapi.client.setToken(null);
+  }
+  localStorage.removeItem("google_is_logged_in");
+  localStorage.removeItem("google_refresh_cipher");
+  localStorage.removeItem("google_access_token");
+  localStorage.removeItem("google_token_expires_at");
+  sessionStorage.removeItem("schedule_admin_verified");
+  sessionStorage.removeItem("schedule_admin_attendee_name");
+  sessionStorage.removeItem("schedule_admin_passcode");
+
+  window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+};
+
+/**
+ * 지정된 이름의 스프레드시트 탭을 영구 삭제합니다.
+ */
+export const deleteSessionSheetByName = async (spreadsheetId: string, sheetTitle: string): Promise<boolean> => {
+  if (!spreadsheetId || !sheetTitle) return false;
+  try {
+    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const sheets = resMetadata.result.sheets || [];
+    const targetSheet = sheets.find((s: any) => s.properties.title === sheetTitle);
+    if (!targetSheet) {
+      console.warn(`삭제할 시트 '${sheetTitle}'를 찾을 수 없습니다.`);
+      return false;
     }
-    localStorage.removeItem("google_is_logged_in");
-    localStorage.removeItem("google_refresh_cipher");
-    sessionStorage.removeItem("schedule_admin_verified");
-    sessionStorage.removeItem("schedule_admin_passcode");
+
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: [
+          {
+            deleteSheet: {
+              sheetId: targetSheet.properties.sheetId
+            }
+          }
+        ]
+      }
+    });
+    return true;
+  } catch (err) {
+    console.error(`시트 '${sheetTitle}' 삭제 실패:`, err);
+    throw err;
   }
 };
 

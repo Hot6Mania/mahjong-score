@@ -14,7 +14,7 @@ import {
   recordPinSuccess,
   applyDelayIfRepeated
 } from '@/utils/pinRateLimiter';
-import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError } from '@/utils/googleSheets';
+import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName } from '@/utils/googleSheets';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -30,11 +30,13 @@ const emit = defineEmits<{
   (e: 'toggleSessionType', dateStr: string): void;
   (e: 'updateSessionType', payload: {
     dateStr: string;
-    sessionType: SessionType;
+    sessionType?: SessionType;
     adminSessionType?: 'day' | 'overnight';
     customStartTime?: string;
     customEndTime?: string;
     customIsOvernight?: boolean;
+    sessionNumber?: number;
+    sheetTitle?: string;
   }): void;
   (e: 'deleteDate', dateStr: string, pin?: string): void;
   (e: 'removeAttendee', dateStr: string, attendeeName: string, pin?: string): void;
@@ -217,7 +219,7 @@ const attendeeCount = computed(() => props.dayItem?.attendees?.length || 0);
 
 const isDayOnly = computed(() => {
   if (!props.dayItem) return false;
-  return props.dayItem.adminSessionType === 'day' || props.dayItem.sessionType === 'day';
+  return props.dayItem.adminSessionType === 'day';
 });
 
 const overlapTimeRange = computed(() => {
@@ -386,7 +388,7 @@ const changeSession = (type: 'day' | 'overnight') => {
   emit('updateSessionType', {
     dateStr: props.dayItem.date,
     sessionType: type,
-    adminSessionType: props.dayItem.adminSessionType || (isDayOnly.value ? 'day' : undefined)
+    adminSessionType: props.dayItem.adminSessionType
   });
 };
 
@@ -403,7 +405,7 @@ const saveCustomSession = () => {
   emit('updateSessionType', {
     dateStr: props.dayItem.date,
     sessionType: 'custom',
-    adminSessionType: props.dayItem.adminSessionType || (isDayOnly.value ? 'day' : undefined),
+    adminSessionType: props.dayItem.adminSessionType,
     customStartTime: customStartInput.value,
     customEndTime: customEndInput.value,
     customIsOvernight: isDayOnly.value ? false : customOvernightInput.value
@@ -658,6 +660,21 @@ const handleCreateSessionSheetConfirm = async () => {
 
     window.dispatchEvent(new CustomEvent('mahjong_session_sheet_changed', { detail: { sheetName: title } }));
 
+    if (props.dayItem) {
+      props.dayItem.sheetTitle = title;
+      const m = title.match(/제\s*(\d+)\s*회/i);
+      const parsedNum = m ? parseInt(m[1], 10) : undefined;
+      if (parsedNum && !isNaN(parsedNum)) {
+        props.dayItem.sessionNumber = parsedNum;
+      }
+      emit('updateSessionType', {
+        dateStr: props.dayItem.date,
+        sessionType: props.dayItem.sessionType,
+        sessionNumber: parsedNum,
+        sheetTitle: title
+      });
+    }
+
     sheetCreateProgress.value = 100;
     sheetCreateStatusText.value = '회차 생성 및 연동 완료!';
     await new Promise(resolve => setTimeout(resolve, 350));
@@ -811,9 +828,38 @@ ${getAttendeesShareText()}
   }
 };
 
-const onConfirmSessionClick = () => {
+const isUnconfirmSheetModalOpen = ref(false);
+const linkedSheetToDelete = ref<string>('');
+const isDeletingSheetOnUnconfirm = ref(false);
+
+const onConfirmSessionClick = async () => {
   if (!props.dayItem) return;
   if (props.dayItem.isConfirmed) {
+    let foundSheetTitle = props.dayItem.sheetTitle || '';
+    const spreadsheetId = localStorage.getItem('google_spreadsheet_id') || '';
+
+    // sheetTitle이 없더라도 현재 스프레드시트에서 날짜 패턴(YYMMDD) 회차 탭 검색
+    if (!foundSheetTitle && spreadsheetId && isGoogleAdminLoggedIn.value && typeof window.gapi !== 'undefined' && window.gapi.client?.sheets) {
+      try {
+        const rawDate = props.dayItem.date.replace(/-/g, '');
+        const yymmdd = rawDate.length === 8 ? rawDate.slice(2) : rawDate;
+        const res = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+        const sheets: string[] = res.result.sheets.map((s: any) => s.properties.title);
+        const matched = sheets.find(t => t.includes(yymmdd));
+        if (matched) {
+          foundSheetTitle = matched;
+        }
+      } catch (e) {
+        console.warn('스프레드시트 탭 검색 실패:', e);
+      }
+    }
+
+    if (foundSheetTitle && isGoogleAdminLoggedIn.value) {
+      linkedSheetToDelete.value = foundSheetTitle;
+      isUnconfirmSheetModalOpen.value = true;
+      return;
+    }
+
     if (confirm('모임 확정을 해제하시겠습니까? (다시 미확정 상태로 전환됩니다)')) {
       emit('toggleConfirm', props.dayItem.date);
     }
@@ -824,6 +870,42 @@ const onConfirmSessionClick = () => {
     }
     emit('toggleConfirm', props.dayItem.date);
   }
+};
+
+const handleUnconfirmAndDeleteSheet = async () => {
+  if (!props.dayItem) return;
+  const spreadsheetId = localStorage.getItem('google_spreadsheet_id') || '';
+  const sheetTitle = linkedSheetToDelete.value;
+  isDeletingSheetOnUnconfirm.value = true;
+  try {
+    if (spreadsheetId && sheetTitle) {
+      await deleteSessionSheetByName(spreadsheetId, sheetTitle);
+      emit('toast', `'${sheetTitle}' 시트 탭이 삭제되었습니다.`, 'success');
+      if (localStorage.getItem('current_session_sheet_name') === sheetTitle) {
+        localStorage.removeItem('current_session_sheet_name');
+        currentSessionSheetName.value = '';
+      }
+    }
+    props.dayItem.sheetTitle = undefined;
+    emit('updateSessionType', {
+      dateStr: props.dayItem.date,
+      sessionType: props.dayItem.sessionType,
+      sheetTitle: ''
+    });
+    emit('toggleConfirm', props.dayItem.date);
+    isUnconfirmSheetModalOpen.value = false;
+  } catch (err: any) {
+    console.error('시트 삭제 실패:', err);
+    emit('toast', `시트 삭제 중 오류가 발생했습니다: ${err?.message || err}`, 'error');
+  } finally {
+    isDeletingSheetOnUnconfirm.value = false;
+  }
+};
+
+const handleUnconfirmKeepSheet = () => {
+  if (!props.dayItem) return;
+  emit('toggleConfirm', props.dayItem.date);
+  isUnconfirmSheetModalOpen.value = false;
 };
 </script>
 
@@ -1511,6 +1593,38 @@ const onConfirmSessionClick = () => {
         <div class="pin-modal-footer">
           <button type="button" class="btn-modal-cancel" @click="isDeleteDatePinModalOpen = false">취소</button>
           <button type="button" class="btn-modal-confirm btn-danger" @click="confirmDeleteDateWithPin">회차 취소 확인</button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- 확정 해제 시 연동 시트 삭제 여부 확인 모달 -->
+  <Transition name="apple-modal-fade">
+    <div v-if="isUnconfirmSheetModalOpen && dayItem" class="pin-modal-backdrop" v-backdrop-dismiss="() => !isDeletingSheetOnUnconfirm && (isUnconfirmSheetModalOpen = false)">
+      <div class="pin-modal-sheet">
+        <div class="pin-modal-header">
+          <h4 class="pin-modal-title">확정 해제 및 연동 시트 관리</h4>
+          <button type="button" class="btn-close" :disabled="isDeletingSheetOnUnconfirm" @click="isUnconfirmSheetModalOpen = false">✕</button>
+        </div>
+        <div class="pin-modal-body">
+          <p class="pin-modal-desc">
+            <strong>{{ dayItem.date }}</strong> 일정의 모임 확정을 해제합니다.<br>
+            현재 이 일정과 연동된 구글 시트 탭 <strong>'{{ linkedSheetToDelete }}'</strong>이(가) 존재합니다.
+          </p>
+          <p class="pin-modal-subdesc" style="color: #ef4444; font-size: 13px; margin-top: 8px;">
+            ※ 확정을 취소할 때 해당 구글 스프레드시트 탭을 함께 삭제하시겠습니까?
+          </p>
+        </div>
+        <div class="pin-modal-footer" style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;">
+          <button type="button" class="btn-modal-cancel" :disabled="isDeletingSheetOnUnconfirm" @click="isUnconfirmSheetModalOpen = false">
+            취소
+          </button>
+          <button type="button" class="btn-modal-confirm" :disabled="isDeletingSheetOnUnconfirm" @click="handleUnconfirmKeepSheet">
+            시트 유지하고 확정만 해제
+          </button>
+          <button type="button" class="btn-modal-confirm btn-danger" :disabled="isDeletingSheetOnUnconfirm" @click="handleUnconfirmAndDeleteSheet">
+            {{ isDeletingSheetOnUnconfirm ? '시트 삭제 중...' : '🗑️ 시트 삭제하고 확정 해제' }}
+          </button>
         </div>
       </div>
     </div>

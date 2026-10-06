@@ -36,3 +36,4 @@ docs/game_scoring_logic*
 # Serverless backend and scripts (managed on Cloudflare / local only)
 cloudflare-worker/
 scripts/
+.worker-backups/

@@ -25,7 +25,29 @@ export interface ScheduleDayItem {
   note?: string; // 관리자/개설자 메모
   isClosed?: boolean; // 마감 여부
   isConfirmed?: boolean; // 개설자/관리자의 출발 확정 여부
+  sessionNumber?: number; // DB에 영구 기록된 확정 회차 번호 (예: 16)
+  sheetTitle?: string; // 연동된 구글 스프레드시트 탭 이름
   attendees: ScheduleAttendee[];
+}
+
+export type ScheduleActionType =
+  | 'CREATE_SESSION'
+  | 'CLEAR_ATTENDEES'
+  | 'DELETE_SESSION'
+  | 'ATTEND'
+  | 'CANCEL_ATTEND'
+  | 'TOGGLE_CONFIRM'
+  | 'UPDATE_SESSION_TYPE'
+  | 'UPDATE_DATES';
+
+export interface ScheduleHistoryItem {
+  id: string;
+  timestamp: number;
+  action: ScheduleActionType;
+  targetDate?: string;
+  actorName: string;
+  details: string;
+  clientIp?: string;
 }
 
 export interface ScheduleMonthData {

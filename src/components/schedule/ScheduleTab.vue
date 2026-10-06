@@ -12,9 +12,10 @@ import {
   getLastAttendeeName,
   setLastAttendeeName,
   saveUserPin,
-  hashPin
+  hashPin,
+  logScheduleHistory
 } from '@/services/scheduleService';
-import { computeScheduleSessionNumbers } from '@/utils/sessionNumbering';
+import { computeScheduleSessionNumbers, getMaxCompletedSessionNumber } from '@/utils/sessionNumbering';
 import { timeStringToMinutes } from '@/utils/timelineEngine';
 import ScheduleCalendarView from './ScheduleCalendarView.vue';
 import ScheduleListView from './ScheduleListView.vue';
@@ -184,6 +185,14 @@ const onCreateKeyDown = (e: KeyboardEvent) => {
     isCreateDropdownOpen.value = false;
   }
 };
+
+// 이번 달 스케줄 날짜와 일치하지 않는 순수 과거 완료 회차의 최대 번호
+const currentBaseSessionNumber = computed(() => {
+  const sorted = monthSchedule.value.dates || [];
+  const currentYymmdd = sorted.map(d => d.date.replace(/-/g, '').slice(2));
+  const pastSessions = (props.availableSessions || []).filter(s => !currentYymmdd.some(y => s && s.includes(y)));
+  return getMaxCompletedSessionNumber(pastSessions);
+});
 
 // 역대 회차 기반 이번 달 확정 일정의 자동 회차(제N회) 맵
 const sessionMap = computed<Map<string, number>>(() => {
@@ -378,12 +387,15 @@ const handleCreateScheduleSubmit = async () => {
   const existingIdx = monthSchedule.value.dates.findIndex(d => d.date === createDate.value);
   const existing = existingIdx !== -1 ? monthSchedule.value.dates[existingIdx] : undefined;
 
+  const preservedAdminSessionType = existing?.adminSessionType
+    || createAdminSessionType.value
+    || (existing?.sessionType === 'overnight' ? 'overnight' : (existing?.sessionType === 'day' ? 'day' : undefined))
+    || (createSessionType.value === 'overnight' ? 'overnight' : 'day');
+
   const newDayItem: ScheduleDayItem = {
     date: createDate.value,
     sessionType: createSessionType.value,
-    adminSessionType: createSessionType.value === 'day'
-      ? 'day'
-      : (existing?.adminSessionType || (existing?.sessionType === 'overnight' ? 'overnight' : undefined)),
+    adminSessionType: preservedAdminSessionType,
     customStartTime: startTime,
     customEndTime: endTime,
     customIsOvernight: isOvernight,
@@ -400,11 +412,20 @@ const handleCreateScheduleSubmit = async () => {
     updatedDates = [...monthSchedule.value.dates, newDayItem].sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  const res = await saveAdminScheduleDates(currentMonth.value, updatedDates, adminToken.value);
+  const res = await saveAdminScheduleDates(currentMonth.value, updatedDates, adminToken.value, undefined, {
+    baseSessionNumber: currentBaseSessionNumber.value
+  });
   if (res.success) {
     monthSchedule.value = res.data;
     const created = res.data.dates.find(d => d.date === createDate.value) || newDayItem;
     selectedDayItem.value = created;
+
+    logScheduleHistory(currentMonth.value, {
+      action: 'CREATE_SESSION',
+      targetDate: createDate.value,
+      actorName: creatorName,
+      details: `${createDate.value} 회차 개설 (${createSessionType.value === 'overnight' ? '밤샘' : (createSessionType.value === 'custom' ? '커스텀' : '당일')}, 개설자: ${creatorName})`
+    });
 
     // 관리자가 다른 사람을 개설자로 대신 설정해준 경우, 관리자의 본인 로그인을 유지!
     const isProxyCreate = !!(isAdmin.value && myAttendeeName.value && myAttendeeName.value !== creatorName);
@@ -550,37 +571,43 @@ const onOpenAttendModal = (dayItem?: ScheduleDayItem, targetName?: string) => {
 // 관리자/개설자: 날짜 세션 타입 및 커스텀 시간 변경
 const onUpdateDateSessionType = async (payload: {
   dateStr: string;
-  sessionType: SessionType;
+  sessionType?: SessionType;
   adminSessionType?: 'day' | 'overnight';
   customStartTime?: string;
   customEndTime?: string;
   customIsOvernight?: boolean;
+  sessionNumber?: number;
+  sheetTitle?: string;
 }) => {
   const currentDates = [...monthSchedule.value.dates];
   const targetIdx = currentDates.findIndex(d => d.date === payload.dateStr);
   if (targetIdx === -1) return;
 
   const existing = currentDates[targetIdx];
-  const isDayOnly = existing.adminSessionType === 'day' || existing.sessionType === 'day';
+  const isDayOnly = existing.adminSessionType === 'day';
   if (isDayOnly && payload.sessionType === 'overnight') {
-    showToast('당일로 개설된 회차는 밤샘으로 변경할 수 없습니다.', 'error');
+    showToast('당일로 설정된 날짜는 밤샘으로 변경할 수 없습니다.', 'error');
     return;
   }
   if (isDayOnly && payload.customIsOvernight) {
-    showToast('당일로 개설된 회차는 익일(밤샘)을 포함할 수 없습니다.', 'error');
+    showToast('당일로 설정된 날짜는 익일(밤샘)을 포함할 수 없습니다.', 'error');
     return;
   }
 
   currentDates[targetIdx] = {
     ...currentDates[targetIdx],
-    sessionType: payload.sessionType,
-    adminSessionType: payload.adminSessionType || currentDates[targetIdx].adminSessionType,
-    customStartTime: payload.customStartTime,
-    customEndTime: payload.customEndTime,
-    customIsOvernight: payload.customIsOvernight
+    sessionType: payload.sessionType || currentDates[targetIdx].sessionType,
+    adminSessionType: currentDates[targetIdx].adminSessionType || payload.adminSessionType,
+    customStartTime: payload.customStartTime !== undefined ? payload.customStartTime : currentDates[targetIdx].customStartTime,
+    customEndTime: payload.customEndTime !== undefined ? payload.customEndTime : currentDates[targetIdx].customEndTime,
+    customIsOvernight: payload.customIsOvernight !== undefined ? payload.customIsOvernight : currentDates[targetIdx].customIsOvernight,
+    sessionNumber: payload.sessionNumber !== undefined ? payload.sessionNumber : currentDates[targetIdx].sessionNumber,
+    sheetTitle: payload.sheetTitle !== undefined ? (payload.sheetTitle || undefined) : currentDates[targetIdx].sheetTitle
   };
 
-  const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value);
+  const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, undefined, {
+    baseSessionNumber: currentBaseSessionNumber.value
+  });
   if (res.success) {
     monthSchedule.value = res.data;
     const updated = res.data.dates.find(d => d.date === payload.dateStr);
@@ -588,6 +615,14 @@ const onUpdateDateSessionType = async (payload: {
     const label = payload.sessionType === 'overnight'
       ? '밤샘 (10:00 ~ 익일)'
       : (payload.sessionType === 'custom' ? `커스텀 (${payload.customStartTime || '10:00'} ~ ${payload.customEndTime || '22:00'})` : '당일 (10:00 ~ 22:00)');
+    
+    logScheduleHistory(currentMonth.value, {
+      action: 'UPDATE_SESSION_TYPE',
+      targetDate: payload.dateStr,
+      actorName: myAttendeeName.value || (isAdmin.value ? '관리자' : '개설자'),
+      details: `${payload.dateStr} 모임 시간 변경 (${label})`
+    });
+
     showToast(`${payload.dateStr}: ${label}(으)로 변경되었습니다.`);
   } else {
     showToast(res.error || '모임 시간 변경에 실패했습니다.', 'error');
@@ -604,7 +639,8 @@ const onToggleDateSessionType = async (dateStr: string) => {
   const newType = currentType === 'overnight' ? 'day' : 'overnight';
   await onUpdateDateSessionType({
     dateStr,
-    sessionType: newType
+    sessionType: newType,
+    adminSessionType: newType
   });
 };
 
@@ -623,16 +659,36 @@ const onToggleConfirmSession = async (dateStr: string) => {
     return;
   }
 
+  let allocatedSessionNum: number | undefined = undefined;
+  if (willConfirm) {
+    if (item.sessionNumber && item.sessionNumber > 0) {
+      allocatedSessionNum = item.sessionNumber;
+    } else {
+      allocatedSessionNum = sessionMap.value.get(dateStr) || undefined;
+    }
+  }
+
   currentDates[targetIdx] = {
     ...item,
-    isConfirmed: willConfirm
+    isConfirmed: willConfirm,
+    sessionNumber: willConfirm ? allocatedSessionNum : undefined
   };
 
-  const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value);
+  const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, undefined, {
+    baseSessionNumber: currentBaseSessionNumber.value
+  });
   if (res.success) {
     monthSchedule.value = res.data;
     const updated = res.data.dates.find(d => d.date === dateStr);
     if (updated) selectedDayItem.value = updated;
+
+    logScheduleHistory(currentMonth.value, {
+      action: 'TOGGLE_CONFIRM',
+      targetDate: dateStr,
+      actorName: myAttendeeName.value || (isAdmin.value ? '관리자' : '개설자'),
+      details: `${dateStr} 모임 ${willConfirm ? '출발 확정' : '확정 해제 (대기 전환)'}`
+    });
+
     showToast(willConfirm ? '모임이 성공적으로 확정되었습니다!' : '확정이 해제되었습니다.');
   } else {
     showToast(res.error || '상태 변경에 실패했습니다.', 'error');
@@ -684,11 +740,23 @@ const onClearAttendees = async (dateStr: string) => {
     customIsOvernight: isOvernight
   };
 
-  const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value);
+  const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, undefined, {
+    isClearAttendees: true,
+    targetDate: dateStr,
+    baseSessionNumber: currentBaseSessionNumber.value
+  });
   if (res.success) {
     monthSchedule.value = res.data;
     isDetailModalOpen.value = false;
     selectedDayItem.value = null;
+
+    logScheduleHistory(currentMonth.value, {
+      action: 'CLEAR_ATTENDEES',
+      targetDate: dateStr,
+      actorName: myAttendeeName.value || (isAdmin.value ? '관리자' : '개설자'),
+      details: `${dateStr} 참가자 전체 비우기 및 회차 취소 (가능한 날짜로 유지)`
+    });
+
     showToast(`${dateStr} 회차가 취소되고 참가자 명단이 초기화되었습니다. (가능한 날짜로 유지)`);
   } else {
     showToast(res.error || '회차 취소에 실패했습니다.', 'error');
@@ -698,11 +766,21 @@ const onClearAttendees = async (dateStr: string) => {
 // 관리자 또는 개설자 PIN: 후보 일정 삭제 핸들러 (가능한 날짜에서 완전 삭제)
 const onDeleteCandidateDate = async (dateStr: string, pin?: string) => {
   const currentDates = monthSchedule.value.dates.filter(d => d.date !== dateStr);
-  const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, pin);
+  const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, pin, {
+    baseSessionNumber: currentBaseSessionNumber.value
+  });
   if (res.success) {
     monthSchedule.value = res.data;
     isDetailModalOpen.value = false;
     selectedDayItem.value = null;
+
+    logScheduleHistory(currentMonth.value, {
+      action: 'DELETE_SESSION',
+      targetDate: dateStr,
+      actorName: myAttendeeName.value || (isAdmin.value ? '관리자' : '개설자'),
+      details: `${dateStr} 일정 완전 삭제`
+    });
+
     showToast(`${dateStr} 일정이 성공적으로 삭제되었습니다.`);
   } else {
     showToast(res.error || '일정 삭제에 실패했습니다.', 'error');
@@ -866,7 +944,9 @@ const onAttendModalClose = () => {
 
 // 관리자 후보 일정 일괄 등록/수정
 const onAdminSaveDates = async (newDates: ScheduleDayItem[]) => {
-  const res = await saveAdminScheduleDates(currentMonth.value, newDates, adminToken.value);
+  const res = await saveAdminScheduleDates(currentMonth.value, newDates, adminToken.value, undefined, {
+    baseSessionNumber: currentBaseSessionNumber.value
+  });
   if (res.success) {
     monthSchedule.value = res.data;
     isAdminModalOpen.value = false;
@@ -888,11 +968,28 @@ onMounted(async () => {
   localStorage.removeItem('schedule_admin_verified');
   localStorage.removeItem('schedule_admin_passcode');
 
-  if (sessionStorage.getItem('schedule_admin_verified') === 'true') {
+  const isGoogleLoggedIn = localStorage.getItem('google_is_logged_in') === 'true';
+  const hasAdminPasscode = !!sessionStorage.getItem('schedule_admin_passcode');
+  if (!isGoogleLoggedIn && !hasAdminPasscode) {
+    sessionStorage.removeItem('schedule_admin_verified');
+    sessionStorage.removeItem('schedule_admin_attendee_name');
+    isAdmin.value = false;
+  } else if (sessionStorage.getItem('schedule_admin_verified') === 'true') {
     isAdmin.value = true;
   }
 
   const syncAdminAuth = async () => {
+    const googleLoggedIn = localStorage.getItem('google_is_logged_in') === 'true';
+    const passcodePresent = !!sessionStorage.getItem('schedule_admin_passcode');
+
+    if (!googleLoggedIn && !passcodePresent) {
+      isAdmin.value = false;
+      adminToken.value = undefined;
+      sessionStorage.removeItem('schedule_admin_verified');
+      sessionStorage.removeItem('schedule_admin_attendee_name');
+      return;
+    }
+
     const adminRes = await checkAdminStatus();
     if (adminRes.isAdmin) {
       isAdmin.value = true;
@@ -902,14 +999,41 @@ onMounted(async () => {
         myAttendeeName.value = adminRes.attendeeName;
         setLastAttendeeName(adminRes.attendeeName);
       }
+    } else {
+      isAdmin.value = false;
+      adminToken.value = undefined;
+      sessionStorage.removeItem('schedule_admin_verified');
+      sessionStorage.removeItem('schedule_admin_attendee_name');
     }
   };
 
   await syncAdminAuth();
 
+  let pollingTimer: any = null;
+
+  const handleVisibilityOrStorage = () => {
+    syncAdminAuth();
+    if (typeof document !== 'undefined' && !document.hidden) {
+      loadSchedule();
+    }
+  };
+
   window.addEventListener('mahjong_admin_auth_changed', syncAdminAuth);
+  window.addEventListener('storage', handleVisibilityOrStorage);
+  document.addEventListener('visibilitychange', handleVisibilityOrStorage);
+
+  // 다른 기기 변경 사항을 조용히 반영하기 위한 45초 백그라운드 폴링
+  pollingTimer = setInterval(() => {
+    if (typeof document !== 'undefined' && !document.hidden && !isLoading.value) {
+      loadSchedule();
+    }
+  }, 45000);
+
   onUnmounted(() => {
+    if (pollingTimer) clearInterval(pollingTimer);
     window.removeEventListener('mahjong_admin_auth_changed', syncAdminAuth);
+    window.removeEventListener('storage', handleVisibilityOrStorage);
+    document.removeEventListener('visibilitychange', handleVisibilityOrStorage);
   });
 
   await loadSchedule();
@@ -937,6 +1061,16 @@ const setViewMode = (mode: 'calendar' | 'list') => {
         <button type="button" class="btn-nav-month" @click="prevMonth" title="이전 달">‹</button>
         <span class="current-month-label">{{ currentMonth }}</span>
         <button type="button" class="btn-nav-month" @click="nextMonth" title="다음 달">›</button>
+        <button
+          type="button"
+          class="btn-nav-refresh"
+          :class="{ 'is-loading': isLoading }"
+          :disabled="isLoading"
+          @click="loadSchedule"
+          title="일정 최신 동기화"
+        >
+          🔄
+        </button>
       </div>
 
       <!-- 요약 칩들 (확정 m개, 내 참석 k개) -->
@@ -1454,6 +1588,34 @@ const setViewMode = (mode: 'calendar' | 'list') => {
 }
 .btn-nav-month:hover {
   background: var(--card-bg-color, #ffffff);
+}
+
+.btn-nav-refresh {
+  background: var(--input-bg-color, #f1f5f9);
+  border: 1px solid var(--border-color, #e2e8f0);
+  color: var(--text-color, #0f172a);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  box-sizing: border-box;
+  margin-left: 2px;
+}
+.btn-nav-refresh:hover:not(:disabled) {
+  background: var(--card-bg-color, #ffffff);
+  border-color: #3b82f6;
+}
+.btn-nav-refresh.is-loading {
+  animation: spinRefresh 0.8s linear infinite;
+  opacity: 0.7;
+}
+@keyframes spinRefresh {
+  to { transform: rotate(360deg); }
 }
 
 .btn-today {

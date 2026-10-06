@@ -2249,10 +2249,16 @@ const googleLogout = () => {
   localStorage.removeItem("google_access_token");
   localStorage.removeItem("google_token_expires_at");
   localStorage.removeItem("google_refresh_cipher");
-  
+  localStorage.removeItem("google_is_logged_in");
+  sessionStorage.removeItem("schedule_admin_verified");
+  sessionStorage.removeItem("schedule_admin_attendee_name");
+  sessionStorage.removeItem("schedule_admin_passcode");
+
   // 동기화 모드를 강제로 로컬 모드로 리셋
   googleInfo.syncMode = "local";
   localStorage.setItem("sync_mode", "local");
+
+  window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
 };
 
 // 설정 값 로컬 스토리지에 동기화

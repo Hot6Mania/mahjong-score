@@ -25,25 +25,76 @@ export function getMaxCompletedSessionNumber(sessions: string[] = []): number {
 /**
  * 역대 완료 회차와 일정 데이터를 대조하여,
  * 4인 이상 모인 날짜에 날짜 오름차순으로 순차적인 '제N회' 회차 번호를 매깁니다.
+ * - 1순위: DB에 영구 기록된 item.sessionNumber 사용 (기기 간 불일치 원천 차단)
+ * - 2순위: 연동된 시트 타이틀(sheetTitle) 또는 이번 달 날짜와 일치하는 시트 탭의 회차 번호 사용
+ * - 3순위: 미할당 확정 일정에 과거 완료 회차 이후의 고유 번호 순차 부여
  */
 export function computeScheduleSessionNumbers(
   availableSessions: string[] = [],
   scheduleDates: ScheduleDayItem[] = []
 ): Map<string, number> {
-  const maxCompleted = getMaxCompletedSessionNumber(availableSessions);
   const sessionMap = new Map<string, number>();
-
-  // 날짜 오름차순 정렬
   const sorted = [...scheduleDates].sort((a, b) => a.date.localeCompare(b.date));
 
-  let nextSessionNum = maxCompleted + 1;
+  // 현재 일정들의 YYMMDD 패턴 목록 생성 (예: "2026-04-23" -> "260423")
+  const currentScheduleYymmddList = sorted.map(item => {
+    const raw = item.date.replace(/-/g, '');
+    return raw.length === 8 ? raw.slice(2) : raw;
+  });
 
+  // 이번 달 일정과 연동된 시트 탭(예: "제16회 260423")은 과거 완료 회차 목록에서 제외
+  const pastSessions = availableSessions.filter(s => {
+    if (!s) return false;
+    return !currentScheduleYymmddList.some(yymmdd => s.includes(yymmdd));
+  });
+
+  const maxCompleted = getMaxCompletedSessionNumber(pastSessions);
+  const usedNumbers = new Set<number>();
+
+  // 1차 패스: 이미 고정된 회차 번호(DB의 sessionNumber 또는 sheetTitle) 우선 등록
   for (const item of sorted) {
     const count = item.attendees ? item.attendees.length : 0;
-    // 4인 이상 충족 및 개설자/관리자 출발 확정(isConfirmed) 시에만 순차적인 회차 번호 부여
     if (count >= 4 && item.isConfirmed) {
-      sessionMap.set(item.date, nextSessionNum);
-      nextSessionNum++;
+      if (typeof item.sessionNumber === 'number' && item.sessionNumber > 0) {
+        sessionMap.set(item.date, item.sessionNumber);
+        usedNumbers.add(item.sessionNumber);
+        continue;
+      }
+
+      // 시트 타이틀에서 회차 번호 추출 시도
+      let matchedNum: number | null = null;
+      if (item.sheetTitle) {
+        const m = item.sheetTitle.match(/제\s*(\d+)\s*회/i);
+        if (m) matchedNum = parseInt(m[1], 10);
+      }
+
+      if (!matchedNum) {
+        const yymmdd = item.date.replace(/-/g, '').slice(2);
+        const matchedSheet = availableSessions.find(s => s && s.includes(yymmdd));
+        if (matchedSheet) {
+          const m = matchedSheet.match(/제\s*(\d+)\s*회/i);
+          if (m) matchedNum = parseInt(m[1], 10);
+        }
+      }
+
+      if (matchedNum && !isNaN(matchedNum)) {
+        sessionMap.set(item.date, matchedNum);
+        usedNumbers.add(matchedNum);
+      }
+    }
+  }
+
+  // 2차 패스: 아직 회차 번호가 없는 확정 일정에 순차 번호 부여
+  let candidateNum = maxCompleted + 1;
+  for (const item of sorted) {
+    const count = item.attendees ? item.attendees.length : 0;
+    if (count >= 4 && item.isConfirmed && !sessionMap.has(item.date)) {
+      while (usedNumbers.has(candidateNum)) {
+        candidateNum++;
+      }
+      sessionMap.set(item.date, candidateNum);
+      usedNumbers.add(candidateNum);
+      candidateNum++;
     }
   }
 

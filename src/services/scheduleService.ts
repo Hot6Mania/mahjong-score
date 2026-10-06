@@ -1,4 +1,4 @@
-import type { ScheduleDayItem, ScheduleMonthData } from '@/types/schedule';
+import type { ScheduleDayItem, ScheduleMonthData, ScheduleHistoryItem } from '@/types/schedule';
 import { computeSessionTimeFromAttendees } from '@/utils/timelineEngine';
 
 export function getWorkerUrl(): string {
@@ -15,6 +15,7 @@ export function getWorkerUrl(): string {
 
 // 로컬 스토리지 키 정의
 const STORAGE_SCHEDULE_PREFIX = 'mahjong_schedule_';
+const STORAGE_HISTORY_PREFIX = 'mahjong_schedule_history_';
 const STORAGE_PIN_MAP = 'mahjong_schedule_pins';
 const STORAGE_LAST_NAME = 'mahjong_schedule_last_name';
 
@@ -103,6 +104,102 @@ function saveLocalMonthSchedule(data: ScheduleMonthData): void {
 }
 
 /**
+ * 로컬 스토리지 감사 로그 조회
+ */
+export function getLocalScheduleHistory(month: string): ScheduleHistoryItem[] {
+  try {
+    const raw = localStorage.getItem(`${STORAGE_HISTORY_PREFIX}${month}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 로컬 스토리지 감사 로그 저장
+ */
+export function saveLocalScheduleHistory(month: string, history: ScheduleHistoryItem[]): void {
+  try {
+    localStorage.setItem(`${STORAGE_HISTORY_PREFIX}${month}`, JSON.stringify(history.slice(0, 100)));
+  } catch (e) {
+    console.warn('로컬 감사 로그 저장 실패:', e);
+  }
+}
+
+/**
+ * 일정 변동 감사 로그 기록 (로컬 및 Worker 동시 전송)
+ */
+export async function logScheduleHistory(
+  month: string,
+  entry: Omit<ScheduleHistoryItem, 'id' | 'timestamp'> & { id?: string; timestamp?: number }
+): Promise<void> {
+  const item: ScheduleHistoryItem = {
+    id: entry.id || `hist_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: entry.timestamp || Date.now(),
+    action: entry.action,
+    targetDate: entry.targetDate,
+    actorName: entry.actorName,
+    details: entry.details,
+    clientIp: entry.clientIp
+  };
+
+  // 1. 로컬 스토리지 즉시 반영
+  const current = getLocalScheduleHistory(month);
+  current.unshift(item);
+  saveLocalScheduleHistory(month, current);
+
+  // 2. Worker 비동기 전송
+  try {
+    await fetch(`${getWorkerUrl()}/api/schedule/admin/history/log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month, entry: item })
+    });
+  } catch (e) {
+    console.warn('Worker 감사 로그 전송 실패:', e);
+  }
+}
+
+/**
+ * 일정 변동 감사 로그 조회 (Worker API 우선, 로컬 폴백)
+ */
+export async function fetchScheduleHistory(month: string, adminToken?: string): Promise<ScheduleHistoryItem[]> {
+  const localList = getLocalScheduleHistory(month);
+  const passcode = getAdminPasscode();
+  const token = adminToken || localStorage.getItem('google_access_token') || '';
+
+  try {
+    const res = await fetch(`${getWorkerUrl()}/api/schedule/admin/history?month=${encodeURIComponent(month)}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : '',
+        'X-Admin-Passcode': passcode || ''
+      }
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.success && Array.isArray(json.data)) {
+        // 서버 로그와 로컬 로그 병합 (id 기준 중복 제거)
+        const map = new Map<string, ScheduleHistoryItem>();
+        for (const item of json.data) map.set(item.id, item);
+        for (const item of localList) {
+          if (!map.has(item.id)) map.set(item.id, item);
+        }
+        const merged = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
+        saveLocalScheduleHistory(month, merged);
+        return merged;
+      }
+    }
+  } catch (err) {
+    console.warn('Worker 감사 로그 조회 실패, 로컬 캐시 사용:', err);
+  }
+
+  return localList;
+}
+
+/**
  * 세션 스토리지에 저장된 관리자 인증 코드 조회
  */
 export function getAdminPasscode(): string {
@@ -116,9 +213,13 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
   const local = getLocalMonthSchedule(month);
 
   try {
-    const res = await fetch(`${getWorkerUrl()}/api/schedule?month=${encodeURIComponent(month)}`, {
+    const res = await fetch(`${getWorkerUrl()}/api/schedule?month=${encodeURIComponent(month)}&_t=${Date.now()}`, {
       method: 'GET',
-      headers: { 'Accept': 'application/json' }
+      cache: 'no-store',
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
+      }
     });
 
     if (res.ok) {
@@ -146,18 +247,16 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
  * 관리자 이메일은 절대 클라이언트로 전송되지 않고 서버에서만 검증됩니다.
  */
 export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken?: string; attendeeName?: string }> {
-  const cachedAdmin = sessionStorage.getItem('schedule_admin_verified') === 'true';
-  const cachedAttendeeName = sessionStorage.getItem('schedule_admin_attendee_name') || undefined;
-
+  const isGoogleLoggedIn = localStorage.getItem('google_is_logged_in') === 'true';
   const cipher = localStorage.getItem('google_refresh_cipher');
   const accessToken = localStorage.getItem('google_access_token');
   const passcode = getAdminPasscode();
-  if (!cipher && !accessToken && !passcode) {
-    return { isAdmin: false };
-  }
 
-  if (cachedAdmin && cachedAttendeeName) {
-    return { isAdmin: true, attendeeName: cachedAttendeeName };
+  // 구글 로그인이 명시적으로 풀려있고 관리자 패스코드도 없는 경우 즉시 관리자 해제
+  if (!isGoogleLoggedIn && !cipher && !accessToken && !passcode) {
+    sessionStorage.removeItem('schedule_admin_verified');
+    sessionStorage.removeItem('schedule_admin_attendee_name');
+    return { isAdmin: false };
   }
 
   try {
@@ -185,18 +284,28 @@ export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken
         return {
           isAdmin: true,
           adminToken: data.adminToken,
-          attendeeName: data.attendeeName || cachedAttendeeName
+          attendeeName: data.attendeeName
         };
+      } else {
+        // 서버에서 관리자 아님 판정: 세션 스토리지 파기
+        sessionStorage.removeItem('schedule_admin_verified');
+        sessionStorage.removeItem('schedule_admin_attendee_name');
+        return { isAdmin: false };
       }
     }
   } catch (err) {
     console.warn('관리자 권한 확인 API 호출 실패:', err);
   }
 
-  if (cachedAdmin) {
+  // API 호출이 일시적 네트워크 장애로 실패했을 때, 구글 로그인이 실제로 유지되어 있고 캐시가 있을 때만 한정 폴백
+  const cachedAdmin = sessionStorage.getItem('schedule_admin_verified') === 'true';
+  const cachedAttendeeName = sessionStorage.getItem('schedule_admin_attendee_name') || undefined;
+  if ((isGoogleLoggedIn || passcode) && cachedAdmin) {
     return { isAdmin: true, attendeeName: cachedAttendeeName };
   }
 
+  sessionStorage.removeItem('schedule_admin_verified');
+  sessionStorage.removeItem('schedule_admin_attendee_name');
   return { isAdmin: false };
 }
 
@@ -364,7 +473,8 @@ export async function saveAdminScheduleDates(
   month: string,
   dates: ScheduleDayItem[],
   adminToken?: string,
-  creatorPin?: string
+  creatorPin?: string,
+  options?: { baseSessionNumber?: number; isClearAttendees?: boolean; targetDate?: string }
 ): Promise<{ success: boolean; data: ScheduleMonthData; error?: string }> {
   const payload: ScheduleMonthData = {
     month,
@@ -387,6 +497,9 @@ export async function saveAdminScheduleDates(
       body: JSON.stringify({
         month,
         dates,
+        base_session_number: options?.baseSessionNumber,
+        is_clear_attendees: options?.isClearAttendees,
+        target_date: options?.targetDate,
         creator_name: lastName,
         creator_pin: creatorPin,
         pin: creatorPin,
@@ -576,6 +689,13 @@ export async function submitAttendance(
   }
   saveLocalMonthSchedule(currentData);
 
+  logScheduleHistory(month, {
+    action: 'ATTEND',
+    targetDate: date,
+    actorName: isProxy ? (lastName || '관리자/개설자') : trimmedName,
+    details: `'${trimmedName}' 참석 등록/수정 (${attendeeInput.startTime}~${attendeeInput.endTime}${attendeeInput.isOvernight ? ' 익일' : ''})`
+  });
+
   return { success: true, data: currentData };
 }
 
@@ -715,6 +835,13 @@ export async function submitBatchAttendance(
   currentData.updatedAt = Date.now();
   saveLocalMonthSchedule(currentData);
 
+  logScheduleHistory(month, {
+    action: 'ATTEND',
+    targetDate: date,
+    actorName: lastName || '관리자/개설자',
+    details: `${attendeesInput.map(a => a.name).join(', ')} (${attendeesInput.length}명) 일괄 참석 등록`
+  });
+
   return { success: true, data: currentData };
 }
 
@@ -796,6 +923,12 @@ export async function cancelAttendance(
 
   targetDay.attendees = targetDay.attendees.filter(a => a.name !== trimmedName);
 
+  if (!targetDay.attendees || targetDay.attendees.length === 0) {
+    targetDay.creator = undefined;
+    targetDay.creatorPinHash = undefined;
+    targetDay.isConfirmed = false;
+  }
+
   // 참가자 취소 후 모임 시간 유동적 동기화
   const updatedSession = computeSessionTimeFromAttendees(targetDay.attendees, targetDay.adminSessionType || targetDay.sessionType);
   targetDay.customStartTime = updatedSession.customStartTime;
@@ -805,6 +938,13 @@ export async function cancelAttendance(
 
   currentData.updatedAt = Date.now();
   saveLocalMonthSchedule(currentData);
+
+  logScheduleHistory(month, {
+    action: 'CANCEL_ATTEND',
+    targetDate: date,
+    actorName: lastName || trimmedName,
+    details: `'${trimmedName}' 참석 취소`
+  });
 
   return { success: true, data: currentData };
 }

@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "backup:worker": "node scripts/backup-worker.mjs",
+    "deploy:worker": "node scripts/backup-worker.mjs && cd cloudflare-worker && npx wrangler deploy",
+    "watch:worker": "node scripts/watch-worker.mjs",
+    "setup:hooks": "node scripts/setup-git-hooks.mjs"
   },
   "dependencies": {
     "chart.js": "^4.5.0",

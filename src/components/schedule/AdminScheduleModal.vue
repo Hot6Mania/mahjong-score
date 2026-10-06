@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue';
-import type { ScheduleDayItem, SessionType } from '@/types/schedule';
+import type { ScheduleDayItem, SessionType, ScheduleHistoryItem, ScheduleActionType } from '@/types/schedule';
 import { parseScheduleNoticeText } from '@/utils/scheduleParser';
 import {
   fetchAdminPasscodes,
@@ -8,6 +8,7 @@ import {
   deleteAdminPasscodeById,
   clearAllAdminPasscodes,
   adminForceResetUserPin,
+  fetchScheduleHistory,
   type AdminPasscodeInfo
 } from '@/services/scheduleService';
 
@@ -24,7 +25,7 @@ const emit = defineEmits<{
   (e: 'save', dates: ScheduleDayItem[]): void;
 }>();
 
-const editMode = ref<'visual' | 'text' | 'passcode' | 'pin'>('visual');
+const editMode = ref<'visual' | 'text' | 'passcode' | 'pin' | 'history'>('visual');
 const rawText = ref('');
 const errorMessage = ref('');
 const registeredPasscodes = ref<AdminPasscodeInfo[]>([]);
@@ -35,6 +36,11 @@ const showNewPasscode = ref(false);
 const passcodeSuccessMsg = ref('');
 const isUpdatingPasscode = ref(false);
 const isDeletingPasscode = ref(false);
+
+// 일정 변동 기록 (감사 로그) 상태
+const historyList = ref<ScheduleHistoryItem[]>([]);
+const isLoadingHistory = ref(false);
+const historyFilter = ref<string>('all');
 
 // 이번 달 일수 계산
 const daysInCurrentMonth = computed(() => {
@@ -178,6 +184,9 @@ const handleApply = () => {
         creatorPinHash: prev?.creatorPinHash,
         note: prev?.note || '',
         isClosed: prev?.isClosed || false,
+        isConfirmed: prev?.isConfirmed || false,
+        sessionNumber: prev?.sessionNumber,
+        sheetTitle: prev?.sheetTitle,
         attendees: prev ? [...prev.attendees] : []
       });
     }
@@ -218,6 +227,9 @@ watch(() => editMode.value, (mode) => {
     pinSuccessMsg.value = '';
     pinErrorMessage.value = '';
     errorMessage.value = '';
+  } else if (mode === 'history') {
+    errorMessage.value = '';
+    loadHistory();
   }
 });
 
@@ -414,6 +426,68 @@ const handleForceResetPin = async () => {
     isResettingPin.value = false;
   }
 };
+
+// --- 감사 로그 (일정 변동 기록) 로직 ---
+const loadHistory = async () => {
+  isLoadingHistory.value = true;
+  errorMessage.value = '';
+  try {
+    const list = await fetchScheduleHistory(props.currentMonth, props.adminToken);
+    historyList.value = list;
+  } catch (e: any) {
+    console.error('일정 변동 기록 로드 실패:', e);
+    errorMessage.value = e.message || '일정 변동 기록을 불러오는데 실패했습니다.';
+  } finally {
+    isLoadingHistory.value = false;
+  }
+};
+
+const filteredHistory = computed(() => {
+  if (historyFilter.value === 'all') {
+    return historyList.value;
+  }
+  return historyList.value.filter(item => item.action === historyFilter.value);
+});
+
+const getActionLabel = (action: ScheduleActionType | string): string => {
+  switch (action) {
+    case 'ATTEND': return '참석 신청';
+    case 'CANCEL_ATTEND': return '참석 취소';
+    case 'CLEAR_ATTENDEES': return '전체 비우기';
+    case 'DELETE_SESSION': return '회차 삭제';
+    case 'UPDATE_SESSION_TYPE': return '시간/속성 변경';
+    case 'TOGGLE_CONFIRM': return '확정 / 해제';
+    case 'CREATE_SESSION': return '회차 개설';
+    case 'UPDATE_DATES': return '후보 일정 수정';
+    default: return action;
+  }
+};
+
+const getActionColor = (action: ScheduleActionType | string): string => {
+  switch (action) {
+    case 'ATTEND': return '#10b981'; // Green
+    case 'CANCEL_ATTEND': return '#f59e0b'; // Amber
+    case 'CLEAR_ATTENDEES': return '#ef4444'; // Red
+    case 'DELETE_SESSION': return '#b91c1c'; // Dark Red
+    case 'UPDATE_SESSION_TYPE': return '#3b82f6'; // Blue
+    case 'TOGGLE_CONFIRM': return '#8b5cf6'; // Purple
+    case 'CREATE_SESSION': return '#06b6d4'; // Cyan
+    case 'UPDATE_DATES': return '#6366f1'; // Indigo
+    default: return '#64748b';
+  }
+};
+
+const formatHistoryTime = (timestamp: number | string): string => {
+  if (!timestamp) return '';
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return String(timestamp);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const sec = String(d.getSeconds()).padStart(2, '0');
+  return `${m}-${day} ${h}:${min}:${sec}`;
+};
 </script>
 
 <template>
@@ -467,7 +541,15 @@ const handleForceResetPin = async () => {
               :class="{ active: editMode === 'pin' }"
               @click="editMode = 'pin'"
             >
-              참가자 PIN 관리
+              참가자 PIN
+            </button>
+            <button
+              type="button"
+              class="segment-btn"
+              :class="{ active: editMode === 'history' }"
+              @click="editMode = 'history'"
+            >
+              변동 기록
             </button>
           </div>
         </div>
@@ -802,6 +884,70 @@ const handleForceResetPin = async () => {
               </div>
             </div>
           </div>
+
+          <!-- 5. 변동 기록 (감사 로그) 모드 -->
+          <div v-if="editMode === 'history'" class="history-view-container">
+            <div class="history-toolbar">
+              <div class="history-filter-group">
+                <select v-model="historyFilter" class="apple-select history-filter-select">
+                  <option value="all">전체 내역 ({{ historyList.length }}건)</option>
+                  <option value="ATTEND">참석 신청</option>
+                  <option value="CANCEL_ATTEND">참석 취소</option>
+                  <option value="CLEAR_ATTENDEES">전체 비우기</option>
+                  <option value="DELETE_SESSION">회차 삭제</option>
+                  <option value="TOGGLE_CONFIRM">확정 / 해제</option>
+                  <option value="UPDATE_SESSION_TYPE">시간/속성 변경</option>
+                  <option value="CREATE_SESSION">회차 개설</option>
+                  <option value="UPDATE_DATES">후보 일정 수정</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                class="btn-refresh-history"
+                :disabled="isLoadingHistory"
+                @click="loadHistory"
+              >
+                {{ isLoadingHistory ? '조회 중...' : '🔄 새로고침' }}
+              </button>
+            </div>
+
+            <div v-if="isLoadingHistory && historyList.length === 0" class="history-loading">
+              <div class="history-spinner"></div>
+              <span>변동 기록을 불러오는 중...</span>
+            </div>
+
+            <div v-else-if="filteredHistory.length === 0" class="history-empty">
+              <span class="empty-icon">📋</span>
+              <p class="empty-text">해당 조건의 변동 기록이 없습니다.</p>
+            </div>
+
+            <div v-else class="history-list">
+              <div
+                v-for="item in filteredHistory"
+                :key="item.id"
+                class="history-card"
+              >
+                <div class="history-card-header">
+                  <span
+                    class="history-action-badge"
+                    :style="{ backgroundColor: getActionColor(item.action) }"
+                  >
+                    {{ getActionLabel(item.action) }}
+                  </span>
+                  <span v-if="item.targetDate" class="history-date-tag">{{ item.targetDate }}</span>
+                  <span class="history-time">{{ formatHistoryTime(item.timestamp) }}</span>
+                </div>
+                <div class="history-card-body">
+                  <p class="history-detail">{{ item.details }}</p>
+                </div>
+                <div class="history-card-footer">
+                  <span class="history-user-info">
+                    <span class="user-label">실행:</span> <strong>{{ item.actorName || '익명' }}</strong>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 푸터 버튼 -->
@@ -809,7 +955,7 @@ const handleForceResetPin = async () => {
           <button type="button" class="btn-cancel" @click="emit('close')">
             닫기
           </button>
-          <button v-if="editMode !== 'passcode' && editMode !== 'pin'" type="button" class="btn-primary" @click="handleApply">
+          <button v-if="editMode !== 'passcode' && editMode !== 'pin' && editMode !== 'history'" type="button" class="btn-primary" @click="handleApply">
             {{ selectedCounts.total }}개 일정으로 적용
           </button>
           <button v-else type="button" class="btn-primary" @click="emit('close')">
@@ -1649,5 +1795,191 @@ html.dark .chip-session-badge {
   color: var(--text-dimmed, #64748b);
   margin: 4px 0 0 0;
   line-height: 1.4;
+}
+
+/* 감사 로그 (일정 변동 기록) 스타일 */
+.history-view-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.history-filter-select {
+  padding: 6px 12px;
+  font-size: 13px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #1e293b);
+}
+
+.btn-refresh-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--input-bg-color, #f1f5f9);
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-color, #334155);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-refresh-history:hover:not(:disabled) {
+  background: var(--card-bg-color, #ffffff);
+  border-color: #3b82f6;
+  color: #2563eb;
+}
+
+.history-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  gap: 12px;
+  color: var(--text-dimmed, #64748b);
+  font-size: 13px;
+}
+
+.history-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(59, 130, 246, 0.2);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.history-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  gap: 8px;
+  color: var(--text-dimmed, #64748b);
+}
+
+.history-empty .empty-icon {
+  font-size: 28px;
+}
+
+.history-empty .empty-text {
+  font-size: 13px;
+  margin: 0;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.history-card {
+  background: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: border-color 0.15s ease;
+}
+
+.history-card:hover {
+  border-color: #cbd5e1;
+}
+
+html.dark .history-card {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.history-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-action-badge {
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  letter-spacing: -0.01em;
+}
+
+.history-date-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-color, #1e293b);
+}
+
+html.dark .history-date-tag {
+  color: #f1f5f9;
+}
+
+.history-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dimmed, #94a3b8);
+  font-variant-numeric: tabular-nums;
+}
+
+.history-card-body {
+  margin: 0;
+}
+
+.history-detail {
+  font-size: 12.5px;
+  color: var(--text-color, #334155);
+  margin: 0;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+html.dark .history-detail {
+  color: #cbd5e1;
+}
+
+.history-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+  border-top: 1px dashed var(--border-color, #f1f5f9);
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+html.dark .history-card-footer {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.history-user-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 </style>
