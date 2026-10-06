@@ -1204,7 +1204,6 @@ const handleRollback = async (targetId: string, label: string) => {
           <!-- 6. 타임머신 복원 (Git 델타 커밋 & 체크포인트 롤백) 모드 -->
           <div v-if="editMode === 'rollback'" class="rollback-view-container">
             <div class="rollback-intro-card">
-              <div class="intro-icon">🛡️</div>
               <div class="intro-content">
                 <div class="intro-title">타임머신 복원</div>
                 <div class="intro-desc">
@@ -1241,7 +1240,7 @@ const handleRollback = async (targetId: string, label: string) => {
             <div v-if="checkpointInfo" class="checkpoint-banner-card">
               <div class="checkpoint-info">
                 <div class="checkpoint-header-row">
-                  <span class="checkpoint-badge">🛡️ 안전 체크포인트</span>
+                  <span class="checkpoint-badge">안전 체크포인트</span>
                   <span class="checkpoint-time">{{ formatHistoryTime(checkpointInfo.timestamp) }} 생성</span>
                 </div>
                 <p class="checkpoint-desc">주요 일정 변경 시 KV에 안전하게 동결 보관된 풀 스냅샷입니다.</p>

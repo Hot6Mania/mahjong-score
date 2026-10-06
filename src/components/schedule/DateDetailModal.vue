@@ -240,19 +240,37 @@ const getDayOfWeek = (dateStr: string) => {
 
 // 타임테이블 전체 윈도우 계산 (시작분, 종료분, 전체분)
 const timetableWindow = computed(() => {
-  if (!props.dayItem || !props.dayItem.attendees || props.dayItem.attendees.length === 0) {
-    return { startMin: 600, endMin: 1380, totalMin: 780, isOvernight: false };
-  }
-  const attendees = props.dayItem.attendees;
-  const isOvernight = !isDayOnly.value && (
-    props.dayItem.sessionType === 'overnight' ||
-    props.dayItem.customIsOvernight ||
-    props.dayItem.adminSessionType === 'overnight' ||
-    attendees.some(a => a.isOvernight)
+  const day = props.dayItem;
+  // 실제 밤샘 여부 판정:
+  // adminSessionType은 관리자의 후보 날짜 속성이므로 제외.
+  // 실제 세션이 밤샘이거나, 커스텀 익일이거나, 참가자 중 밤샘 참가자가 있을 때만 밤샘으로 판정.
+  const isOvernight = !isDayOnly.value && !!(
+    day?.sessionType === 'overnight' ||
+    (day?.sessionType === 'custom' && !!day?.customIsOvernight) ||
+    (day?.attendees && day.attendees.some(a => a.isOvernight))
   );
 
-  let minStart = 600; // 10:00
-  let maxEnd = isOvernight ? 1800 : 1380; // 익일 06:00 (1800분) 또는 23:00 (1380분)
+  if (!day || !day.attendees || day.attendees.length === 0) {
+    const defaultEndMin = isOvernight ? 1860 : 1440;
+    return { startMin: 600, endMin: defaultEndMin, totalMin: defaultEndMin - 600, isOvernight };
+  }
+
+  const attendees = day.attendees;
+
+  // 세션의 기본 시작/종료 시각 파싱
+  const sessionStartMin = day.customStartTime
+    ? timeStringToMinutes(day.customStartTime, false)
+    : 600; // 기본 10:00
+
+  let sessionEndMin = 1320; // 당일 기본 22:00 (1320분)
+  if (isOvernight) {
+    sessionEndMin = 1800; // 밤샘 기본 익일 06:00 (1800분)
+  } else if (day.customEndTime) {
+    sessionEndMin = timeStringToMinutes(day.customEndTime, false);
+  }
+
+  let minStart = sessionStartMin;
+  let maxEnd = sessionEndMin;
 
   for (const a of attendees) {
     const [s, e] = getAttendeeInterval(a, isDayOnly.value);
@@ -261,7 +279,10 @@ const timetableWindow = computed(() => {
   }
 
   const windowStart = Math.floor(minStart / 60) * 60;
-  const safeEndMin = maxEnd + 60;
+
+  // 당일 모임이면 종료 시각에 +2시간(120분) 여유(22시 종료 시 24시 자정까지), 밤샘 모임이면 +1시간(60분) 여유
+  const bufferMin = isOvernight ? 60 : 120;
+  const safeEndMin = maxEnd + bufferMin;
   const windowEnd = Math.ceil(safeEndMin / 60) * 60;
 
   return {
