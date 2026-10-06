@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { ScheduleDayItem } from '@/types/schedule';
+import {
+  getKSTTodayString,
+  getKSTDayOfWeek,
+  getKSTDaysInMonth,
+  getKSTFirstDayOfWeek,
+  KST_DAYS_HEADER
+} from '@/utils/kstTime';
 
 const props = defineProps<{
   currentMonth: string; // "YYYY-MM"
@@ -9,8 +16,6 @@ const props = defineProps<{
   myAttendeeName?: string;
   isAdmin?: boolean;
 }>();
-
-
 
 interface CalendarCell {
   dayNumber: number;
@@ -26,9 +31,11 @@ const calendarGrid = computed<CalendarCell[]>(() => {
   const year = parseInt(yearStr, 10);
   const month = parseInt(monthStr, 10); // 1-indexed
 
-  const firstDayOfWeek = new Date(year, month - 1, 1).getDay(); // 0 ~ 6
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const daysInPrevMonth = new Date(year, month - 1, 0).getDate();
+  const firstDayOfWeek = getKSTFirstDayOfWeek(year, month); // 0 ~ 6
+  const daysInMonth = getKSTDaysInMonth(year, month);
+  const prevMonthNum = month === 1 ? 12 : month - 1;
+  const prevYearNum = month === 1 ? year - 1 : year;
+  const daysInPrevMonth = getKSTDaysInMonth(prevYearNum, prevMonthNum);
 
   // 날짜 매핑 딕셔너리
   const dateMap = new Map<string, ScheduleDayItem>();
@@ -41,14 +48,12 @@ const calendarGrid = computed<CalendarCell[]>(() => {
   // 1. 이전 달 날짜 패딩
   for (let i = firstDayOfWeek - 1; i >= 0; i--) {
     const day = daysInPrevMonth - i;
-    const prevMonthNum = month === 1 ? 12 : month - 1;
-    const prevYearNum = month === 1 ? year - 1 : year;
     const dateStr = `${prevYearNum}-${String(prevMonthNum).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     cells.push({
       dayNumber: day,
       dateStr,
       isCurrentMonth: false,
-      dayOfWeek: new Date(prevYearNum, prevMonthNum - 1, day).getDay()
+      dayOfWeek: getKSTDayOfWeek(dateStr)
     });
   }
 
@@ -61,7 +66,7 @@ const calendarGrid = computed<CalendarCell[]>(() => {
       dayNumber: d,
       dateStr,
       isCurrentMonth: true,
-      dayOfWeek: new Date(year, month - 1, d).getDay(),
+      dayOfWeek: getKSTDayOfWeek(dateStr),
       scheduleItem,
       sessionNumber
     });
@@ -69,15 +74,15 @@ const calendarGrid = computed<CalendarCell[]>(() => {
 
   // 3. 다음 달 날짜 패딩 (7의 배수 맞춤)
   const remaining = (7 - (cells.length % 7)) % 7;
+  const nextMonthNum = month === 12 ? 1 : month + 1;
+  const nextYearNum = month === 12 ? year + 1 : year;
   for (let d = 1; d <= remaining; d++) {
-    const nextMonthNum = month === 12 ? 1 : month + 1;
-    const nextYearNum = month === 12 ? year + 1 : year;
     const dateStr = `${nextYearNum}-${String(nextMonthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     cells.push({
       dayNumber: d,
       dateStr,
       isCurrentMonth: false,
-      dayOfWeek: new Date(nextYearNum, nextMonthNum - 1, d).getDay()
+      dayOfWeek: getKSTDayOfWeek(dateStr)
     });
   }
 
@@ -103,15 +108,9 @@ const handleCellClick = (cell: CalendarCell) => {
   }
 };
 
-const daysHeader = ['일', '월', '화', '수', '목', '금', '토'];
+const daysHeader = KST_DAYS_HEADER;
 
-const todayStr = (() => {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-})();
+const todayStr = getKSTTodayString();
 </script>
 
 <template>

@@ -7,6 +7,7 @@ import {
   replayAllHistoricalGames
 } from './ratingEngine';
 import { LEGACY_CONSOLIDATED_RAW } from '@/services/publicStatsService';
+import { getKSTNowParts, getKSTTodayString, formatKSTTimestamp } from '@/utils/kstTime';
 
 let tokenClient: any = null;
 let codeClient: any = null;
@@ -1344,10 +1345,8 @@ export const deleteGameFromSheets = async (spreadsheetId: string, gameId: string
     return;
   }
 
-  const yy = new Date(timestamp).getFullYear().toString().slice(-2);
-  const mm = (new Date(timestamp).getMonth() + 1).toString().padStart(2, '0');
-  const dd = new Date(timestamp).getDate().toString().padStart(2, '0');
-  const yymmdd = `${yy}${mm}${dd}`;
+  const p = getKSTNowParts(timestamp);
+  const yymmdd = `${p.yearStr.slice(-2)}${p.monthStr}${p.dayStr}`;
 
   const targets = [
     { title: '전체 국별기록 (데이터)', col: 'B' }
@@ -1428,13 +1427,13 @@ export const deleteGameFromSheets = async (spreadsheetId: string, gameId: string
  * 스프레드시트의 기존 시트 목록을 파악하여 다음 회차 시트 이름(예: '제10회 260711')을 생성합니다.
  */
 export const getNextSessionSheetName = async (spreadsheetId: string): Promise<string> => {
+  const getKSTYymmdd = () => {
+    const p = getKSTNowParts();
+    return `${p.yearStr.slice(-2)}${p.monthStr}${p.dayStr}`;
+  };
+
   if (!spreadsheetId) {
-    const now = new Date();
-    const yy = now.getFullYear().toString().slice(-2);
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const yymmdd = `${yy}${mm}${dd}`;
-    return `제1회 ${yymmdd}`;
+    return `제1회 ${getKSTYymmdd()}`;
   }
 
   try {
@@ -1455,21 +1454,10 @@ export const getNextSessionSheetName = async (spreadsheetId: string): Promise<st
     });
 
     const nextN = maxN + 1;
-    const now = new Date();
-    const yy = now.getFullYear().toString().slice(-2);
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const yymmdd = `${yy}${mm}${dd}`;
-
-    return `제${nextN}회 ${yymmdd}`;
+    return `제${nextN}회 ${getKSTYymmdd()}`;
   } catch (err) {
     console.error("다음 회차 시트 이름 결정 실패:", err);
-    const now = new Date();
-    const yy = now.getFullYear().toString().slice(-2);
-    const mm = (now.getMonth() + 1).toString().padStart(2, '0');
-    const dd = now.getDate().toString().padStart(2, '0');
-    const yymmdd = `${yy}${mm}${dd}`;
-    return `제1회 ${yymmdd}`;
+    return `제1회 ${getKSTYymmdd()}`;
   }
 };
 
@@ -1786,11 +1774,8 @@ export const migrateSessionSheetToNewMembers = async (
   const cleanTitle = sessionTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
   const rawTitle = `${cleanTitle} (raw)`;
 
-  const now = new Date();
-  const HH = String(now.getHours()).padStart(2, '0');
-  const mm = String(now.getMinutes()).padStart(2, '0');
-  const ss = String(now.getSeconds()).padStart(2, '0');
-  const backupTitle = `${cleanTitle}_백업_${HH}${mm}_${ss}`;
+  const p = getKSTNowParts();
+  const backupTitle = `${cleanTitle}_백업_${p.hourStr}${p.minuteStr}_${p.secondStr}`;
 
   // 1. 현재 스프레드시트 메타데이터 조회
   const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
@@ -1945,8 +1930,8 @@ export const migrateSessionSheetToNewMembers = async (
   // 8. 로컬 스토리지에 백업 이력 저장
   const backupRecord: SessionMigrationBackup = {
     id: `migration_${Date.now()}`,
-    timestamp: now.getTime(),
-    timeStr: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${HH}:${mm}:${ss}`,
+    timestamp: Date.now(),
+    timeStr: formatKSTTimestamp(Date.now(), true),
     sessionSheetName: cleanTitle,
     backupSheetTitle: backupTitle,
     oldMembers: [...oldMembers],
@@ -1980,11 +1965,8 @@ export const backupSessionSheet = async (
 
   const cleanTitle = sessionTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
 
-  const now = new Date();
-  const HH = String(now.getHours()).padStart(2, '0');
-  const mm = String(now.getMinutes()).padStart(2, '0');
-  const ss = String(now.getSeconds()).padStart(2, '0');
-  const backupTitle = `${cleanTitle}_수동백업_${HH}${mm}_${ss}`;
+  const p = getKSTNowParts();
+  const backupTitle = `${cleanTitle}_수동백업_${p.hourStr}${p.minuteStr}_${p.secondStr}`;
 
   const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
   const sheets = resMetadata.result.sheets || [];
@@ -2010,8 +1992,8 @@ export const backupSessionSheet = async (
 
   const backupRecord: SessionMigrationBackup = {
     id: `manual_${Date.now()}`,
-    timestamp: now.getTime(),
-    timeStr: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${HH}:${mm}:${ss}`,
+    timestamp: Date.now(),
+    timeStr: formatKSTTimestamp(Date.now(), true),
     sessionSheetName: cleanTitle,
     backupSheetTitle: backupTitle,
     oldMembers: [...currentMembers],
@@ -2451,7 +2433,7 @@ export const updateMatchRatingsInSheet = async (
   const currentRatings = await fetchRatingsFromSheet(spreadsheetId);
 
   // 2. 4명에 대해 OpenSkill 레이팅 계산
-  const todayStr = new Date().toLocaleDateString('ko-KR');
+  const todayStr = getKSTTodayString();
   const { updatedRatings, matchDeltas } = calculateMatchRatings(matchPlayers, currentRatings, {
     sessionLabel,
     date: todayStr,

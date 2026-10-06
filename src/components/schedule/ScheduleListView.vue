@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import type { ScheduleDayItem } from '@/types/schedule';
 import { computeEffectiveOverlapRange } from '@/utils/timelineEngine';
+import { getKSTDayOfWeekName } from '@/utils/kstTime';
 
 const props = defineProps<{
   dates: ScheduleDayItem[];
@@ -47,9 +48,7 @@ const sortedDates = computed(() => {
 });
 
 const getDayOfWeek = (dateStr: string) => {
-  const d = new Date(dateStr);
-  const days = ['일', '월', '화', '수', '목', '금', '토'];
-  return days[d.getDay()] || '';
+  return getKSTDayOfWeekName(dateStr);
 };
 
 const formatDateLabel = (dateStr: string) => {

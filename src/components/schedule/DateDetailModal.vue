@@ -15,6 +15,7 @@ import {
   applyDelayIfRepeated
 } from '@/utils/pinRateLimiter';
 import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName } from '@/utils/googleSheets';
+import { getKSTDayOfWeekName } from '@/utils/kstTime';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -233,9 +234,7 @@ const isUserAttending = computed(() => {
 });
 
 const getDayOfWeek = (dateStr: string) => {
-  const d = new Date(dateStr);
-  const days = ['일', '월', '화', '수', '목', '금', '토'];
-  return days[d.getDay()] || '';
+  return getKSTDayOfWeekName(dateStr);
 };
 
 // 타임테이블 전체 윈도우 계산 (시작분, 종료분, 전체분)

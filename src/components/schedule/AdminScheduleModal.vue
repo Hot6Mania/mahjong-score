@@ -14,6 +14,15 @@ import {
   type AdminPasscodeInfo
 } from '@/services/scheduleService';
 import { logoutGoogle } from '@/utils/googleSheets';
+import {
+  getKSTDaysInMonth,
+  getKSTFirstDayOfWeek,
+  getKSTDayOfWeek,
+  getKSTDayOfWeekName,
+  isKSTToday,
+  formatKSTDateOnly,
+  getKSTNowParts
+} from '@/utils/kstTime';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -88,33 +97,30 @@ const historyList = ref<ScheduleHistoryItem[]>([]);
 const isLoadingHistory = ref(false);
 const historyFilter = ref<string>('all');
 
-// 이번 달 일수 계산
+// 이번 달 일수 계산 (KST 기준)
 const daysInCurrentMonth = computed(() => {
   const [y, m] = props.currentMonth.split('-').map(Number);
-  return new Date(y, m, 0).getDate();
+  return getKSTDaysInMonth(y, m);
 });
 
-// 이번 달 1일의 시작 요일 (0: 일, 1: 월, ..., 6: 토)
+// 이번 달 1일의 시작 요일 (0: 일, 1: 월, ..., 6: 토, KST 기준)
 const firstDayOfWeek = computed(() => {
   const [y, m] = props.currentMonth.split('-').map(Number);
-  return new Date(y, m - 1, 1).getDay();
+  return getKSTFirstDayOfWeek(y, m);
 });
 
-// 특정 일자 d의 요일 인덱스
+// 특정 일자 d의 요일 인덱스 (KST 기준)
 const getDayOfWeek = (d: number) => {
   const [y, m] = props.currentMonth.split('-').map(Number);
-  return new Date(y, m - 1, d).getDay();
+  const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  return getKSTDayOfWeek(dateStr);
 };
 
-// 오늘 날짜 여부 확인
+// 오늘 날짜 여부 확인 (KST 기준)
 const isToday = (d: number) => {
-  const now = new Date();
   const [y, m] = props.currentMonth.split('-').map(Number);
-  return (
-    now.getFullYear() === y &&
-    now.getMonth() + 1 === m &&
-    now.getDate() === d
-  );
+  const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  return isKSTToday(dateStr);
 };
 
 // 날짜별 상태 맵 (1 ~ 31): 'none' | SessionType
@@ -420,10 +426,9 @@ const getSessionNumber = (dateStr: string): number | null => {
 const formatChipDate = (dateStr: string): string => {
   const parts = dateStr.split('-');
   if (parts.length < 3) return dateStr;
-  const [y, m, d] = parts.map(Number);
-  const dayOfWeekNames = ['일', '월', '화', '수', '목', '금', '토'];
-  const dow = dayOfWeekNames[new Date(y, m - 1, d).getDay()];
-  return `${d}일(${dow})`;
+  const d = parts[2];
+  const dow = getKSTDayOfWeekName(dateStr);
+  return `${parseInt(d, 10)}일(${dow})`;
 };
 
 // 관리자 권한으로 참가자 PIN 강제 재설정
@@ -531,14 +536,8 @@ const getActionColor = (action: ScheduleActionType | string): string => {
 
 const formatHistoryTime = (timestamp: number | string): string => {
   if (!timestamp) return '';
-  const d = new Date(timestamp);
-  if (isNaN(d.getTime())) return String(timestamp);
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const h = String(d.getHours()).padStart(2, '0');
-  const min = String(d.getMinutes()).padStart(2, '0');
-  const sec = String(d.getSeconds()).padStart(2, '0');
-  return `${m}-${day} ${h}:${min}:${sec}`;
+  const p = getKSTNowParts(timestamp);
+  return `${p.monthStr}-${p.dayStr} ${p.hourStr}:${p.minuteStr}:${p.secondStr}`;
 };
 
 const copySuccessMsg = ref('');
@@ -958,7 +957,7 @@ const handleRollback = async (targetId: string, label: string) => {
                       <strong class="item-name">{{ item.label }}</strong>
                     </div>
                     <span class="item-date">
-                      등록일: {{ new Date(item.createdAt).toLocaleDateString('ko-KR') }}
+                      등록일: {{ formatKSTDateOnly(item.createdAt) }}
                     </span>
                   </div>
                   <button

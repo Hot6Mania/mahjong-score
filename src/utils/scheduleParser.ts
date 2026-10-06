@@ -1,4 +1,5 @@
 import type { ParsedNoticeDates, ScheduleDayItem, SessionType } from '@/types/schedule';
+import { getKSTDaysInMonth } from '@/utils/kstTime';
 
 /**
  * "1일 6일 8~10일 13일 16-18일" 같은 문자열에서 일자 숫자 목록을 추출합니다.
@@ -107,8 +108,8 @@ export function mergeParsedIntoMonthDays(
     existingMap.set(item.date, item);
   }
 
-  // 이번 달 일수 확인
-  const lastDay = new Date(year, month, 0).getDate();
+  // 이번 달 일수 확인 (KST 기준)
+  const lastDay = getKSTDaysInMonth(year, month);
   const allParsedDayNumbers = [
     ...parsed.dayDates.map(d => ({ day: d, type: 'day' as SessionType })),
     ...parsed.overnightDates.map(d => ({ day: d, type: 'overnight' as SessionType }))

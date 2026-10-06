@@ -20,6 +20,7 @@ import {
 import { isScheduleDataEqual } from '@/utils/scheduleComparator';
 import { computeScheduleSessionNumbers, getMaxCompletedSessionNumber } from '@/utils/sessionNumbering';
 import { timeStringToMinutes } from '@/utils/timelineEngine';
+import { getKSTCurrentMonth } from '@/utils/kstTime';
 import ScheduleCalendarView from './ScheduleCalendarView.vue';
 import ScheduleListView from './ScheduleListView.vue';
 import DateDetailModal from './DateDetailModal.vue';
@@ -43,11 +44,8 @@ const getInitialMonth = (): string => {
       return mParam;
     }
   }
-  // 2. 현재 오늘 날짜 기준 (항상 오늘이 속한 달로 기본 포커싱, 예: 2026-10)
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  return `${y}-${m}`;
+  // 2. 현재 KST 오늘 날짜 기준 (항상 한국 표준시 기준 오늘이 속한 달로 기본 포커싱, 예: 2026-10)
+  return getKSTCurrentMonth();
 };
 
 const currentMonth = ref<string>(getInitialMonth());
@@ -717,18 +715,16 @@ const loadSchedule = async (silent = false) => {
 // 월 이동
 const prevMonth = () => {
   const [y, m] = currentMonth.value.split('-').map(Number);
-  const prevDate = new Date(y, m - 2, 1);
-  const nextY = prevDate.getFullYear();
-  const nextM = String(prevDate.getMonth() + 1).padStart(2, '0');
-  currentMonth.value = `${nextY}-${nextM}`;
+  const prevM = m === 1 ? 12 : m - 1;
+  const prevY = m === 1 ? y - 1 : y;
+  currentMonth.value = `${prevY}-${String(prevM).padStart(2, '0')}`;
 };
 
 const nextMonth = () => {
   const [y, m] = currentMonth.value.split('-').map(Number);
-  const nextDate = new Date(y, m, 1);
-  const nextY = nextDate.getFullYear();
-  const nextM = String(nextDate.getMonth() + 1).padStart(2, '0');
-  currentMonth.value = `${nextY}-${nextM}`;
+  const nextM = m === 12 ? 1 : m + 1;
+  const nextY = m === 12 ? y + 1 : y;
+  currentMonth.value = `${nextY}-${String(nextM).padStart(2, '0')}`;
 };
 
 watch(currentMonth, (newMonth) => {
