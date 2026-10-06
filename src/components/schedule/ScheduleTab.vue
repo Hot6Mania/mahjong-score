@@ -14,7 +14,8 @@ import {
   setLastAttendeeName,
   saveUserPin,
   hashPin,
-  logScheduleHistory
+  logScheduleHistory,
+  getWorkerUrl
 } from '@/services/scheduleService';
 import { isScheduleDataEqual } from '@/utils/scheduleComparator';
 import { computeScheduleSessionNumbers, getMaxCompletedSessionNumber } from '@/utils/sessionNumbering';
@@ -25,7 +26,7 @@ import DateDetailModal from './DateDetailModal.vue';
 import AttendModal from './AttendModal.vue';
 import AdminScheduleModal from './AdminScheduleModal.vue';
 import UserPinLoginModal from './UserPinLoginModal.vue';
-import { initGis, loginGoogle, logoutGoogle } from '@/utils/googleSheets';
+import { initGis, loginGoogle, logoutGoogle, refreshAccessTokenViaWorker } from '@/utils/googleSheets';
 
 const props = defineProps<{
   members: MemberStatItem[];
@@ -488,6 +489,17 @@ const handleCreateScheduleSubmit = async () => {
   }
 };
 
+// 구글 로그인 세션 완전 정리 헬퍼 (토큰 만료 / 권한 실패 시 껍데기 잔존 방지)
+const clearGoogleSession = () => {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('google_is_logged_in');
+  localStorage.removeItem('google_access_token');
+  localStorage.removeItem('google_token_expires_at');
+  localStorage.removeItem('google_refresh_cipher');
+  isGoogleLoggedIn.value = false;
+  window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+};
+
 // 관리자 버튼 클릭 핸들러
 const onOpenAdminOrAuth = async () => {
   await loadSchedule(true);
@@ -496,7 +508,24 @@ const onOpenAdminOrAuth = async () => {
     return;
   }
 
-  // Google 로그인 또는 기존 인증 코드로 백그라운드 재확인
+  // 1. 만약 구글 로그인이 되어 있고 refresh_cipher가 있다면 즉시 자가 소생(Self-Healing) 시도
+  const cipher = typeof window !== 'undefined' ? localStorage.getItem('google_refresh_cipher') : null;
+  if (cipher) {
+    try {
+      const refreshRes = await refreshAccessTokenViaWorker(getWorkerUrl(), cipher);
+      if (refreshRes && refreshRes.access_token) {
+        localStorage.setItem('google_access_token', refreshRes.access_token);
+        const newExpiresAt = Date.now() + (refreshRes.expires_in || 3600) * 1000;
+        localStorage.setItem('google_token_expires_at', String(newExpiresAt));
+        localStorage.setItem('google_is_logged_in', 'true');
+        isGoogleLoggedIn.value = true;
+      }
+    } catch (e) {
+      console.warn('토큰 자가 치유 시도 실패:', e);
+    }
+  }
+
+  // 2. Google 로그인 또는 기존 인증 코드로 백그라운드 재확인
   const res = await checkAdminStatus();
   if (res.isAdmin) {
     isAdmin.value = true;
@@ -508,6 +537,11 @@ const onOpenAdminOrAuth = async () => {
     showToast('관리자 권한이 확인되었습니다.');
     isAdminModalOpen.value = true;
   } else {
+    // 관리자 인증 실패: 만약 구글 로그인이 껍데기로 남아있다면 즉시 완전 로그아웃 처리!
+    // -> 모달이 열렸을 때 "로그아웃" 대신 "관리자 구글 계정 로그인" 파란색 버튼이 바로 표시됨!
+    if (isGoogleLoggedIn.value) {
+      clearGoogleSession();
+    }
     isAdminAuthModalOpen.value = true;
   }
 };
@@ -531,6 +565,24 @@ const syncAdminAuth = async () => {
     return;
   }
 
+  // 만약 구글 로그인은 켜져 있으나 토큰이 만료되었거나 임박(1분 이내)하고 refresh_cipher가 있다면 선제적 갱신
+  if (googleLoggedIn && typeof window !== 'undefined') {
+    const expiresAt = Number(localStorage.getItem('google_token_expires_at') || 0);
+    const cipher = localStorage.getItem('google_refresh_cipher');
+    if (cipher && (expiresAt === 0 || Date.now() >= expiresAt - 60000)) {
+      try {
+        const refreshRes = await refreshAccessTokenViaWorker(getWorkerUrl(), cipher);
+        if (refreshRes && refreshRes.access_token) {
+          localStorage.setItem('google_access_token', refreshRes.access_token);
+          const newExpiresAt = Date.now() + (refreshRes.expires_in || 3600) * 1000;
+          localStorage.setItem('google_token_expires_at', String(newExpiresAt));
+        }
+      } catch (e) {
+        console.warn('백그라운드 선제 토큰 갱신 실패:', e);
+      }
+    }
+  }
+
   const adminRes = await checkAdminStatus();
   if (adminRes.isAdmin) {
     isAdmin.value = true;
@@ -545,6 +597,11 @@ const syncAdminAuth = async () => {
     adminToken.value = undefined;
     sessionStorage.removeItem('schedule_admin_verified');
     sessionStorage.removeItem('schedule_admin_attendee_name');
+
+    // 서버 인증 실패 시, 만약 구글 로그인이 껍데기로 남아있다면 완전 자동 로그아웃 처리!
+    if (googleLoggedIn) {
+      clearGoogleSession();
+    }
   }
 };
 
@@ -575,12 +632,11 @@ const handleGoogleLogin = () => {
 // 관리자 구글 계정 로그아웃 트리거
 const handleGoogleLogout = () => {
   logoutGoogle();
-  isGoogleLoggedIn.value = false;
+  clearGoogleSession();
   isAdmin.value = false;
   adminToken.value = undefined;
   sessionStorage.removeItem('schedule_admin_verified');
   sessionStorage.removeItem('schedule_admin_attendee_name');
-  window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
   showToast("관리자 구글 계정에서 로그아웃되었습니다.", "info");
 };
 

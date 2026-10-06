@@ -305,6 +305,7 @@ const setupAutoRefreshTimer = () => {
         const newExpiresAt = Date.now() + (res.expires_in || 3600) * 1000;
         localStorage.setItem("google_token_expires_at", newExpiresAt.toString());
         console.log("Worker를 통한 구글 토큰 백그라운드 자동 갱신 완료.");
+        window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
       }
     }
   }, 60 * 1000); // 1분마다 주기적 체크
@@ -368,6 +369,7 @@ const restoreGoogleSessionIfValid = async () => {
       }
       setupAutoRefreshTimer();
       console.log("Worker를 통한 구글 세션 백그라운드 자동 복원 완료.");
+      window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
       return;
     }
   }
