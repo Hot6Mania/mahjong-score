@@ -723,9 +723,9 @@ const handleRollback = async (targetId: string, label: string) => {
         </div>
 
         <!-- 2차 하위 서브 탭 네비게이션 (한 줄 정렬) -->
-        <div class="sub-tabs-wrapper">
+        <div class="sub-tabs-wrapper" :class="{ 'is-schedule': primaryTab === 'schedule' }">
           <!-- 1) 일정 관리 하위 탭 -->
-          <div v-if="primaryTab === 'schedule'" class="apple-segmented-control sub-control">
+          <div v-if="primaryTab === 'schedule'" class="apple-segmented-control sub-control schedule-sub-control">
             <button
               type="button"
               class="segment-btn sub-btn"
@@ -1393,6 +1393,7 @@ const handleRollback = async (targetId: string, label: string) => {
   border-radius: 20px;
   width: 100%;
   max-width: 520px;
+  max-height: calc(100dvh - 32px);
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
   display: flex;
   flex-direction: column;
@@ -1560,6 +1561,9 @@ const handleRollback = async (targetId: string, label: string) => {
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
+.sub-tabs-wrapper.is-schedule {
+  overflow-x: visible;
+}
 .sub-tabs-wrapper::-webkit-scrollbar {
   display: none;
 }
@@ -1572,6 +1576,36 @@ const handleRollback = async (targetId: string, label: string) => {
   gap: 4px;
   border: none;
   min-width: max-content;
+}
+
+/* 일정 관리 하위 탭 (달력 칩 / 텍스트로 입력): 50:50 균등 분할 및 중앙 정렬 */
+.apple-segmented-control.sub-control.schedule-sub-control {
+  width: 100%;
+  min-width: 0;
+  background: var(--input-bg-color, #f1f5f9);
+  padding: 3px;
+  border-radius: 10px;
+  gap: 4px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  box-sizing: border-box;
+}
+
+.apple-segmented-control.sub-control.schedule-sub-control .segment-btn.sub-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 13px;
+  text-align: center;
+  justify-content: center;
+  border-radius: 7px;
+}
+
+.apple-segmented-control.sub-control.schedule-sub-control .segment-btn.sub-btn.active {
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #0f172a);
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .segment-btn.sub-btn {
@@ -1642,7 +1676,8 @@ const handleRollback = async (targetId: string, label: string) => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-height: 65vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -3026,5 +3061,112 @@ html.dark .btn-admin-logout {
   background: rgba(239, 68, 68, 0.15);
   border-color: rgba(239, 68, 68, 0.3);
   color: #f87171;
+}
+html.dark .apple-segmented-control.sub-control.schedule-sub-control {
+  background: #1e293b;
+  border-color: #334155;
+}
+html.dark .apple-segmented-control.sub-control.schedule-sub-control .segment-btn.sub-btn.active {
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+/* 375x667(iPhone SE) 등 소형/세로가 짧은 모바일 화면 대응 컴팩트 모드 */
+@media (max-height: 720px), (max-width: 480px) {
+  .apple-modal-backdrop {
+    padding: 8px;
+  }
+  .apple-modal-sheet {
+    max-height: calc(100dvh - 16px);
+    border-radius: 16px;
+  }
+  .sheet-header {
+    padding: 10px 14px 8px;
+    gap: 8px;
+  }
+  .sheet-title {
+    font-size: 16px;
+  }
+  .sheet-sub {
+    font-size: 11px;
+  }
+  .btn-admin-logout {
+    padding: 3px 6px;
+    font-size: 11px;
+    gap: 3px;
+  }
+  .btn-close {
+    font-size: 14px;
+    padding: 2px;
+  }
+  .primary-tabs-wrapper {
+    padding: 8px 14px 0;
+  }
+  .apple-segmented-control.primary-control {
+    padding: 3px;
+    gap: 3px;
+    border-radius: 10px;
+  }
+  .segment-btn.primary-btn {
+    min-height: 38px;
+    padding: 8px 10px;
+    font-size: 13.5px;
+    border-radius: 8px;
+  }
+  .sub-tabs-wrapper {
+    margin: 8px 14px 0;
+    padding: 0 0 8px;
+  }
+  .apple-segmented-control.sub-control.schedule-sub-control .segment-btn.sub-btn {
+    min-height: 30px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+  .segment-btn.sub-btn {
+    min-height: 30px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+  .sheet-body {
+    padding: 8px 14px;
+    gap: 8px;
+  }
+  .guide-bar {
+    margin-bottom: 4px;
+    font-size: 11px;
+    gap: 4px;
+  }
+  .calendar-chips-week-header {
+    margin-bottom: 4px;
+    gap: 4px;
+  }
+  .week-chip-title {
+    font-size: 11px;
+  }
+  .day-chips-grid {
+    gap: 4px;
+  }
+  .day-chip-btn, .day-chip-empty {
+    min-height: 40px;
+    padding: 3px 2px;
+    border-radius: 8px;
+    gap: 2px;
+  }
+  .chip-day-number {
+    font-size: 12px;
+  }
+  .chip-badge {
+    font-size: 10px;
+    padding: 1px 3px;
+  }
+  .sheet-footer {
+    padding: 10px 14px 12px;
+    gap: 8px;
+  }
+  .btn-primary, .btn-cancel {
+    padding: 8px 14px;
+    font-size: 13px;
+    border-radius: 10px;
+  }
 }
 </style>

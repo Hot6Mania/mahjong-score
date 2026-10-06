@@ -236,14 +236,21 @@ const confirmedSessionsCount = computed(() => {
 
 // 확정된 회차/일정 목록 (예: 16회 23일)
 const confirmedSessionsList = computed(() => {
+  const myName = myAttendeeName.value;
   return monthSchedule.value.dates
     .filter(d => !!d.isConfirmed)
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(d => {
       const sessNum = sessionMap.value.get(d.date);
       const dayNum = parseInt(d.date.split('-')[2], 10);
-      const label = sessNum ? `${sessNum}회 ${dayNum}일` : `${dayNum}일`;
-      return { date: d.date, label, dayItem: d };
+      const isAttending = !!(myName && d.attendees?.some(a => a.name === myName));
+      return {
+        date: d.date,
+        sessionNumber: sessNum,
+        dayNumber: dayNum,
+        isAttending,
+        dayItem: d
+      };
     });
 });
 
@@ -1207,10 +1214,13 @@ const setViewMode = (mode: 'calendar' | 'list') => {
           v-for="item in confirmedSessionsList"
           :key="item.date"
           class="stat-chip chip-confirmed-date"
+          :class="{ 'has-session': !!item.sessionNumber, 'is-my-session': item.isAttending }"
           @click="onSelectDay(item.dayItem)"
-          title="클릭하여 해당 회차 상세 보기"
+          :title="item.isAttending ? '내 참석 확정 회차 (클릭하여 상세 보기)' : '클릭하여 해당 회차 상세 보기'"
         >
-          {{ item.label }}
+          <span v-if="item.sessionNumber" class="inner-session-badge">{{ item.sessionNumber }}회</span>
+          <span class="inner-date-label">{{ item.dayNumber }}일</span>
+          <span v-if="item.isAttending" class="my-att-dot" title="내 참석"></span>
         </span>
         <span v-if="myAttendingDaysCount > 0" class="stat-chip chip-me">내 참석 {{ myAttendingDaysCount }}개</span>
       </div>
@@ -1894,7 +1904,7 @@ html.dark .stat-chip.chip-confirmed {
   font-size: 11.5px;
   font-weight: 600;
   height: 30px;
-  padding: 0 9px;
+  padding: 0 8px 0 4px;
   border-radius: 8px;
   background: rgba(99, 102, 241, 0.1);
   color: #4f46e5;
@@ -1903,8 +1913,36 @@ html.dark .stat-chip.chip-confirmed {
   transition: all 0.15s ease;
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   box-sizing: border-box;
 }
+
+/* 회차 번호 없는 경우 패딩 보정 */
+.stat-chip.chip-confirmed-date:not(.has-session) {
+  padding: 0 9px;
+}
+
+/* 뱃지 안의 뱃지 (마이크로 뱃지) */
+.inner-session-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2.5px 6px;
+  border-radius: 5px;
+  background: rgba(99, 102, 241, 0.18);
+  color: #4338ca;
+  letter-spacing: -0.01em;
+}
+
+.inner-date-label {
+  display: inline-block;
+  line-height: 1;
+  font-weight: 600;
+}
+
 .stat-chip.chip-confirmed-date:hover {
   background: rgba(99, 102, 241, 0.18);
   color: #4338ca;
@@ -1912,10 +1950,76 @@ html.dark .stat-chip.chip-confirmed {
   transform: translateY(-1px);
   box-shadow: 0 2px 5px rgba(99, 102, 241, 0.15);
 }
+
 html.dark .stat-chip.chip-confirmed-date {
   background: rgba(99, 102, 241, 0.2);
   color: #a5b4fc;
   border-color: rgba(99, 102, 241, 0.45);
+}
+html.dark .inner-session-badge {
+  background: rgba(99, 102, 241, 0.35);
+  color: #c7d2fe;
+}
+
+/* ===== 스타일 C: 내가 참석하는 회차 강조 (사파이어 링 + 활성 도트) ===== */
+.stat-chip.chip-confirmed-date.is-my-session {
+  border: 1.5px solid #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+
+.stat-chip.chip-confirmed-date.is-my-session .inner-session-badge {
+  background: rgba(37, 99, 235, 0.16);
+  color: #1e40af;
+}
+
+.stat-chip.chip-confirmed-date.is-my-session .inner-date-label {
+  font-weight: 700;
+  color: #1e40af;
+}
+
+.stat-chip.chip-confirmed-date.is-my-session:hover {
+  background: rgba(37, 99, 235, 0.15);
+  border-color: #1d4ed8;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+}
+
+/* 내 참석 발광 블루 활성 도트 */
+.my-att-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* 다크모드 내 참석 회차 */
+html.dark .stat-chip.chip-confirmed-date.is-my-session {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+  color: #7dd3fc;
+}
+
+html.dark .stat-chip.chip-confirmed-date.is-my-session .inner-session-badge {
+  background: rgba(56, 189, 248, 0.25);
+  color: #e0f2fe;
+}
+
+html.dark .stat-chip.chip-confirmed-date.is-my-session .inner-date-label {
+  color: #bae6fd;
+}
+
+html.dark .stat-chip.chip-confirmed-date.is-my-session:hover {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #7dd3fc;
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3);
+}
+
+html.dark .stat-chip.chip-confirmed-date.is-my-session .my-att-dot {
+  background-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.35);
 }
 /* 3) 내 참석 통계 뱃지: 맑은 사파이어 블루 */
 .stat-chip.chip-me {

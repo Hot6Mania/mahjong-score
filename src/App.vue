@@ -3842,16 +3842,18 @@ const addBackupGameToCurrent = (game: any) => {
 /* 동기화 진행률 모달 스타일 */
 .sync-loader-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 9999;
+  padding: 16px;
+  box-sizing: border-box;
 }
 .sync-loader-card {
   background: var(--bg-modal, #1e1e1e);
@@ -3961,23 +3963,27 @@ const addBackupGameToCurrent = (game: any) => {
 /* 커스텀 스프레드시트 주소 입력 프롬프트 모달 스타일 */
 .custom-prompt-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   background-color: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 2100;
   backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  padding: 16px;
+  box-sizing: border-box;
 }
 .custom-prompt-card {
   background-color: #ffffff;
   border: 1px solid #e0e0e0;
   border-radius: 12px;
   width: 460px;
-  max-width: 90vw;
+  max-width: 100%;
+  max-height: 90%;
+  overflow-y: auto;
   padding: 24px;
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
   box-sizing: border-box;
@@ -4059,16 +4065,18 @@ const addBackupGameToCurrent = (game: any) => {
 /* 커스텀 컨펌 모달 스타일 */
 .custom-confirm-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   background-color: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 9999;
+  padding: 16px;
+  box-sizing: border-box;
 }
 .custom-confirm-card {
   background-color: var(--modal-bg-color, #ffffff);
@@ -4076,6 +4084,8 @@ const addBackupGameToCurrent = (game: any) => {
   padding: 24px;
   width: 90%;
   max-width: 340px;
+  max-height: 90%;
+  overflow-y: auto;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
   display: flex;
   flex-direction: column;
