@@ -908,66 +908,97 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
     return cachedRatings;
   }
 
-  const sId = spreadsheetId || await resolveSpreadsheetId();
-  if (sId) {
-    // 1. Google GViz를 통해 '레이팅' 시트 직접 조회 시도
+  const workerUrl = getWorkerUrl();
+  let table: any = null;
+
+  // A. Worker 시도 (서버가 자체 Secret에서 스프레드시트 ID 복호화)
+  if (workerUrl) {
     try {
-      const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('레이팅')}`;
-      const res = await fetch(gvizUrl);
+      const res = await fetch(`${workerUrl}/api/public/ratings`);
       if (res.ok) {
-        const text = await res.text();
-        const data = parseGVizResponse(text);
-        if (data && data.table && data.table.rows && data.table.rows.length > 0) {
-          // '레이팅' 시트가 없을 경우 GViz가 첫 번째 시트(통계 등)를 반환하므로 헤더를 검증
-          const isRatingSheet = data.table.cols && data.table.cols.some((c: any) => c && (c.label === '순위' || c.label === '레이팅'));
-          const isRatingRow0 = data.table.rows[0] && data.table.rows[0].c && data.table.rows[0].c.some((c: any) => {
-            const s = getCellStr(c).trim();
-            return s === '순위' || s === '레이팅' || s === 'μ (실력)';
-          });
-          if (!isRatingSheet && !isRatingRow0) {
-            throw new Error("'레이팅' 시트가 존재하지 않아 기본 시트가 반환되었습니다.");
-          }
-
-          const map: Record<string, PlayerRating> = {};
-          data.table.rows.forEach((r: any) => {
-            if (!r.c) return;
-            const name = getCellStr(r.c[1]).trim();
-            if (!name || name === '이름') return;
-
-            const ordinal = Number(getCellNum(r.c[2])) || 1320;
-            const mu = Number(getCellNum(r.c[3])) || 1500;
-            const sigma = Number(getCellNum(r.c[4])) || 120;
-            const games = Number(getCellNum(r.c[5])) || 0;
-            const peak = Number(getCellNum(r.c[6])) || ordinal;
-            const lowest = Number(getCellNum(r.c[7])) || ordinal;
-            const recentDelta = Number(String(getCellStr(r.c[8]) || '').replace('+', '')) || 0;
-            const lastUpdated = getCellStr(r.c[9]).trim();
-
-            map[name] = {
-              name,
-              ordinal,
-              mu,
-              sigma,
-              games,
-              peakOrdinal: peak,
-              lowestOrdinal: lowest,
-              recentDelta,
-              lastUpdated
-            };
-          });
-
-          if (Object.keys(map).length > 0) {
-            cachedRatings = map;
-            return map;
-          }
-        }
+        const data = await res.json();
+        if (data.table) table = data.table;
       }
     } catch (e) {
-      console.warn("'레이팅' 시트 GViz 조회 실패, 온디맨드 리플레이 폴백 사용:", e);
+      console.warn("Worker ratings request failed, falling back to direct GViz:", e);
     }
   }
 
-  // 2. 만약 '레이팅' 시트가 아직 생성되지 않았거나 비어있는 경우:
+  // B. Google GViz 폴백 (클라이언트 암호화 토큰 복호화 ID 사용)
+  if (!table) {
+    const sId = spreadsheetId || await resolveSpreadsheetId();
+    if (sId) {
+      try {
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('레이팅')}`;
+        const res = await fetch(gvizUrl);
+        if (res.ok) {
+          const text = await res.text();
+          const data = parseGVizResponse(text);
+          if (data && data.table) table = data.table;
+        }
+      } catch (e) {
+        console.warn("'레이팅' 시트 GViz 조회 실패:", e);
+      }
+    }
+  }
+
+  // C. 조회된 '레이팅' 테이블 파싱
+  if (table && table.rows && table.rows.length > 0) {
+    const isRatingSheet = table.cols && table.cols.some((c: any) => c && (c.label === '순위' || c.label === '레이팅'));
+    const isRatingRow0 = table.rows[0] && table.rows[0].c && table.rows[0].c.some((c: any) => {
+      const s = getCellStr(c).trim();
+      return s === '순위' || s === '레이팅' || s === 'μ (실력)';
+    });
+
+    if (isRatingSheet || isRatingRow0) {
+      const hasLowestCol = table.cols?.some((c: any) => c && c.label === '최저 레이팅') ||
+                           (table.rows[0]?.c && table.rows[0].c.some((c: any) => getCellStr(c).trim() === '최저 레이팅'));
+
+      const map: Record<string, PlayerRating> = {};
+      table.rows.forEach((r: any) => {
+        if (!r.c) return;
+        const name = getCellStr(r.c[1]).trim();
+        if (!name || name === '이름') return;
+
+        const ordinal = Number(getCellNum(r.c[2])) || 1320;
+        const mu = Number(getCellNum(r.c[3])) || 1500;
+        const sigma = Number(getCellNum(r.c[4])) || 120;
+        const games = Number(getCellNum(r.c[5])) || 0;
+        const peak = Number(getCellNum(r.c[6])) || ordinal;
+        let lowest = ordinal;
+        let recentDelta = 0;
+        let lastUpdated = '';
+
+        if (hasLowestCol) {
+          lowest = Number(getCellNum(r.c[7])) || ordinal;
+          recentDelta = Number(String(getCellStr(r.c[8]) || '').replace('+', '')) || 0;
+          lastUpdated = getCellStr(r.c[9]).trim();
+        } else {
+          recentDelta = Number(String(getCellStr(r.c[7]) || '').replace('+', '')) || 0;
+          lastUpdated = getCellStr(r.c[8]).trim();
+        }
+
+        map[name] = {
+          name,
+          ordinal,
+          mu,
+          sigma,
+          games,
+          peakOrdinal: peak,
+          lowestOrdinal: lowest,
+          recentDelta,
+          lastUpdated
+        };
+      });
+
+      if (Object.keys(map).length > 0) {
+        cachedRatings = map;
+        return map;
+      }
+    }
+  }
+
+  // D. 만약 '레이팅' 시트가 아직 생성되지 않았거나 비어있는 경우:
   // 내장된 1~8회차 레거시 데이터를 바탕으로 안전 폴백 레이팅 생성
   const { finalRatings } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, []);
   cachedRatings = finalRatings;
@@ -1817,89 +1848,110 @@ export async function fetchPublicRatingHistoryRecords(spreadsheetId?: string): P
 export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise<AllPlayersRatingTrajectory> {
   if (cachedRatingTrajectory) return cachedRatingTrajectory;
 
-  const sId = spreadsheetId || await resolveSpreadsheetId();
-  if (sId) {
+  const workerUrl = getWorkerUrl();
+  let table: any = null;
+
+  // A. Worker 시도 (서버가 자체 Secret에서 스프레드시트 ID 복호화)
+  if (workerUrl) {
     try {
-      const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('레이팅 이력')}`;
-      const res = await fetch(gvizUrl);
+      const res = await fetch(`${workerUrl}/api/public/rating-history`);
       if (res.ok) {
-        const text = await res.text();
-        const data = parseGVizResponse(text);
-        if (data && data.table && data.table.rows && data.table.rows.length > 0) {
-          // '레이팅 이력' 시트가 없을 경우 GViz가 첫 번째 시트를 반환하므로 헤더를 검증
-          const isHistorySheet = data.table.cols && data.table.cols.some((c: any) => c && (c.label === '대국 번호' || c.label === '1위 이름' || c.label === '1위 점수' || c.label === '1위'));
-          const isHistoryRow0 = data.table.rows[0] && data.table.rows[0].c && data.table.rows[0].c.some((c: any) => {
-            const s = getCellStr(c).trim();
-            return s === '대국 번호' || s === '1위 이름' || s === '1위 점수' || s === '1위';
-          });
-          if (!isHistorySheet && !isHistoryRow0) {
-            throw new Error("'레이팅 이력' 시트가 존재하지 않아 기본 시트가 반환되었습니다.");
-          }
-
-          const historyRecords: GameRatingHistoryRecord[] = [];
-          data.table.rows.forEach((r: any) => {
-            if (!r.c) return;
-            const gameIdx = Number(getCellNum(r.c[0])) || 0;
-            const sessLabel = getCellStr(r.c[1]).trim();
-            const dateStr = getCellStr(r.c[2]).trim();
-            if (!sessLabel || sessLabel === '회차') return;
-
-            // 5열(우마 포함) 또는 4열(점수만) 규격 자동 판별
-            const is5Col = r.c.length >= 23 || (r.c[5] && typeof r.c[5].v === 'number' && Math.abs(Number(r.c[5].v)) <= 150 && r.c[6] && Number(r.c[6].v) > 800);
-            const stride = is5Col ? 5 : 4;
-
-            const pList: any[] = [];
-            for (let i = 0; i < 4; i++) {
-              const baseCol = 3 + i * stride;
-              const pName = getCellStr(r.c[baseCol]).trim();
-              if (pName) {
-                const pScore = Number(getCellNum(r.c[baseCol + 1])) || 0;
-                let pUma = 0;
-                let pOrd = 1320;
-                let pDelta = 0;
-                if (is5Col) {
-                  pUma = Number(getCellNum(r.c[baseCol + 2])) || 0;
-                  pOrd = Number(getCellNum(r.c[baseCol + 3])) || 1320;
-                  pDelta = Number(String(getCellStr(r.c[baseCol + 4]) || '').replace('+', '')) || 0;
-                } else {
-                  pOrd = Number(getCellNum(r.c[baseCol + 2])) || 1320;
-                  pDelta = Number(String(getCellStr(r.c[baseCol + 3]) || '').replace('+', '')) || 0;
-                }
-                pList.push({
-                  name: pName,
-                  rank: i + 1,
-                  score: pScore,
-                  uma: pUma,
-                  ordinal: pOrd,
-                  delta: pDelta
-                });
-              }
-            }
-
-            if (pList.length === 4) {
-              historyRecords.push({
-                gameIndex: gameIdx || (historyRecords.length + 1),
-                sessionLabel: sessLabel,
-                date: dateStr,
-                players: pList
-              });
-            }
-          });
-
-          if (historyRecords.length > 0) {
-            cachedRatingHistoryRecords = historyRecords;
-            const traj = calculateAllPlayersRatingTrajectory(historyRecords);
-            cachedRatingTrajectory = traj;
-            return traj;
-          }
-        }
+        const data = await res.json();
+        if (data.table) table = data.table;
       }
     } catch (e) {
-      console.warn("'레이팅 이력' 시트 조회 실패, 온디맨드 리플레이 폴백 사용:", e);
+      console.warn("Worker rating history request failed, falling back to direct GViz:", e);
     }
   }
 
-  // 폴백: 내장 레거시 데이터 리플레이
+  // B. Google GViz 폴백 (클라이언트 암호화 토큰 복호화 ID 사용)
+  if (!table) {
+    const sId = spreadsheetId || await resolveSpreadsheetId();
+    if (sId) {
+      try {
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('레이팅 이력')}`;
+        const res = await fetch(gvizUrl);
+        if (res.ok) {
+          const text = await res.text();
+          const data = parseGVizResponse(text);
+          if (data && data.table) table = data.table;
+        }
+      } catch (e) {
+        console.warn("'레이팅 이력' 시트 조회 실패, 온디맨드 리플레이 폴백 사용:", e);
+      }
+    }
+  }
+
+  // C. 조회된 '레이팅 이력' 테이블 파싱
+  if (table && table.rows && table.rows.length > 0) {
+    // '레이팅 이력' 시트가 없을 경우 GViz가 첫 번째 시트를 반환하므로 헤더를 검증
+    const isHistorySheet = table.cols && table.cols.some((c: any) => c && (c.label === '대국 번호' || c.label === '1위 이름' || c.label === '1위 점수' || c.label === '1위'));
+    const isHistoryRow0 = table.rows[0] && table.rows[0].c && table.rows[0].c.some((c: any) => {
+      const s = getCellStr(c).trim();
+      return s === '대국 번호' || s === '1위 이름' || s === '1위 점수' || s === '1위';
+    });
+
+    if (isHistorySheet || isHistoryRow0) {
+      const historyRecords: GameRatingHistoryRecord[] = [];
+      table.rows.forEach((r: any) => {
+        if (!r.c) return;
+        const gameIdx = Number(getCellNum(r.c[0])) || 0;
+        const sessLabel = getCellStr(r.c[1]).trim();
+        const dateStr = getCellStr(r.c[2]).trim();
+        if (!sessLabel || sessLabel === '회차') return;
+
+        // 5열(우마 포함) 또는 4열(점수만) 규격 자동 판별
+        const is5Col = r.c.length >= 23 || (r.c[5] && typeof r.c[5].v === 'number' && Math.abs(Number(r.c[5].v)) <= 150 && r.c[6] && Number(r.c[6].v) > 800);
+        const stride = is5Col ? 5 : 4;
+
+        const pList: any[] = [];
+        for (let i = 0; i < 4; i++) {
+          const baseCol = 3 + i * stride;
+          const pName = getCellStr(r.c[baseCol]).trim();
+          if (pName) {
+            const pScore = Number(getCellNum(r.c[baseCol + 1])) || 0;
+            let pUma = 0;
+            let pOrd = 1320;
+            let pDelta = 0;
+            if (is5Col) {
+              pUma = Number(getCellNum(r.c[baseCol + 2])) || 0;
+              pOrd = Number(getCellNum(r.c[baseCol + 3])) || 1320;
+              pDelta = Number(String(getCellStr(r.c[baseCol + 4]) || '').replace('+', '')) || 0;
+            } else {
+              pOrd = Number(getCellNum(r.c[baseCol + 2])) || 1320;
+              pDelta = Number(String(getCellStr(r.c[baseCol + 3]) || '').replace('+', '')) || 0;
+            }
+            pList.push({
+              name: pName,
+              rank: i + 1,
+              score: pScore,
+              uma: pUma,
+              ordinal: pOrd,
+              delta: pDelta
+            });
+          }
+        }
+
+        if (pList.length === 4) {
+          historyRecords.push({
+            gameIndex: gameIdx || (historyRecords.length + 1),
+            sessionLabel: sessLabel,
+            date: dateStr,
+            players: pList
+          });
+        }
+      });
+
+      if (historyRecords.length > 0) {
+        cachedRatingHistoryRecords = historyRecords;
+        const traj = calculateAllPlayersRatingTrajectory(historyRecords);
+        cachedRatingTrajectory = traj;
+        return traj;
+      }
+    }
+  }
+
+  // D. 폴백: 내장 레거시 데이터 리플레이
   const { matchHistory } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, []);
   cachedRatingHistoryRecords = matchHistory;
   const traj = calculateAllPlayersRatingTrajectory(matchHistory);
