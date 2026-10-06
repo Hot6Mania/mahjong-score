@@ -225,9 +225,30 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
     if (res.ok) {
       const json = await res.json();
       if (json && json.success && json.data) {
-        // 만약 서버에서 반환된 dates가 비어있고, 로컬에 저장된 일정이 이미 있다면 (KV 미연결 등) 로컬 일정을 우선 보존
+        // 만약 서버에서 반환된 dates가 비어있고, 로컬에 저장된 일정이 이미 있다면 (KV 미연결 등) 로컬 일정을 우선 보존 및 서버 KV 자동 복구
         if ((!json.data.dates || json.data.dates.length === 0) && local.dates && local.dates.length > 0) {
-          console.info('서버 일정이 비어 있어 로컬에 저장된 일정을 우선 유지합니다.');
+          console.info('서버 일정이 비어 있어 로컬에 저장된 일정을 우선 유지하며, 서버 KV로 자동 복원 동기화를 시도합니다.');
+          // 백그라운드 서버 KV 자동 복원 시도
+          setTimeout(async () => {
+            try {
+              const cipher = localStorage.getItem('google_refresh_cipher');
+              const accessToken = localStorage.getItem('google_access_token');
+              const passcode = getAdminPasscode();
+              await fetch(`${getWorkerUrl()}/api/schedule/admin/dates`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  month,
+                  dates: local.dates,
+                  refresh_cipher: cipher,
+                  access_token: accessToken,
+                  admin_passcode: passcode
+                })
+              });
+            } catch (syncErr) {
+              console.warn('서버 KV 자동 복원 동기화 실패:', syncErr);
+            }
+          }, 300);
           return local;
         }
 
