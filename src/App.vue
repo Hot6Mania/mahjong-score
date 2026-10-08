@@ -292,14 +292,16 @@ let autoRefreshTimer: any = null;
 const setupAutoRefreshTimer = () => {
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
   autoRefreshTimer = setInterval(async () => {
-    if (!googleInfo.isLoggedIn || !googleInfo.workerUrl) return;
+    const isLogged = localStorage.getItem("google_is_logged_in") === "true";
+    const workerUrl = googleInfo.workerUrl || DEFAULT_WORKER_URL;
+    if (!isLogged || !workerUrl) return;
     const cipher = localStorage.getItem("google_refresh_cipher");
     if (!cipher) return;
     const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
     // 만료 10분 전(또는 이미 지난 경우) 백그라운드 갱신
-    if (expiresAt > 0 && Date.now() > expiresAt - 10 * 60 * 1000) {
-      console.log("토큰 만료 임박(10분 전): Worker를 통해 백그라운드 무인 갱신 시도...");
-      const res = await refreshAccessTokenViaWorker(googleInfo.workerUrl, cipher);
+    if (expiresAt === 0 || Date.now() > expiresAt - 10 * 60 * 1000) {
+      console.log("토큰 만료 임박(10분 전) 또는 만료됨: Worker를 통해 백그라운드 무인 갱신 시도...");
+      const res = await refreshAccessTokenViaWorker(workerUrl, cipher);
       if (res && res.access_token) {
         localStorage.setItem("google_access_token", res.access_token);
         const newExpiresAt = Date.now() + (res.expires_in || 3600) * 1000;
@@ -732,6 +734,7 @@ onMounted(async () => {
     if (googleInfo.isLoggedIn !== isLogged) {
       googleInfo.isLoggedIn = isLogged;
       if (isLogged) {
+        setupAutoRefreshTimer();
         if (googleInfo.spreadsheetId) {
           try {
             await loadMemberList();

@@ -27,7 +27,7 @@ import DateDetailModal from './DateDetailModal.vue';
 import AttendModal from './AttendModal.vue';
 import AdminScheduleModal from './AdminScheduleModal.vue';
 import UserPinLoginModal from './UserPinLoginModal.vue';
-import { initGis, loginGoogle, logoutGoogle, refreshAccessTokenViaWorker } from '@/utils/googleSheets';
+import { initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, refreshAccessTokenViaWorker } from '@/utils/googleSheets';
 
 const props = defineProps<{
   members: MemberStatItem[];
@@ -535,11 +535,6 @@ const onOpenAdminOrAuth = async () => {
     showToast('관리자 권한이 확인되었습니다.');
     isAdminModalOpen.value = true;
   } else {
-    // 관리자 인증 실패: 만약 구글 로그인이 껍데기로 남아있다면 즉시 완전 로그아웃 처리!
-    // -> 모달이 열렸을 때 "로그아웃" 대신 "관리자 구글 계정 로그인" 파란색 버튼이 바로 표시됨!
-    if (isGoogleLoggedIn.value) {
-      clearGoogleSession();
-    }
     isAdminAuthModalOpen.value = true;
   }
 };
@@ -595,36 +590,64 @@ const syncAdminAuth = async () => {
     adminToken.value = undefined;
     sessionStorage.removeItem('schedule_admin_verified');
     sessionStorage.removeItem('schedule_admin_attendee_name');
-
-    // 서버 인증 실패 시, 만약 구글 로그인이 껍데기로 남아있다면 완전 자동 로그아웃 처리!
-    if (googleLoggedIn) {
-      clearGoogleSession();
-    }
   }
 };
 
-// 관리자 구글 계정 로그인 트리거 (사용자 클릭 직통 호출로 팝업 차단 원천 방지)
+// 관리자 구글 계정 로그인 트리거 (Worker를 통한 Refresh Token 획득으로 1시간 만료 방지)
 const handleGoogleLogin = () => {
   const clientId = localStorage.getItem("google_client_id") || "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com";
+  const workerUrl = getWorkerUrl();
 
-  initGis(clientId, async (token: string) => {
-    localStorage.setItem("google_access_token", token);
-    localStorage.setItem("google_token_expires_at", String(Date.now() + 3600 * 1000));
-    localStorage.setItem("google_is_logged_in", "true");
-    isGoogleLoggedIn.value = true;
-    window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+  if (workerUrl) {
+    initGisCodeClient(
+      clientId,
+      workerUrl,
+      async (data) => {
+        localStorage.setItem("google_access_token", data.access_token);
+        const newExpiresAt = Date.now() + (data.expires_in || 3600) * 1000;
+        localStorage.setItem("google_token_expires_at", String(newExpiresAt));
+        localStorage.setItem("google_is_logged_in", "true");
+        if (data.refresh_cipher) {
+          localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
+        }
+        localStorage.setItem("google_auth_mode", "worker");
+        isGoogleLoggedIn.value = true;
+        window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
 
-    await syncAdminAuth();
-    if (isAdmin.value) {
-      showToast("관리자 구글 계정 인증이 완료되었습니다.", "success");
-      isAdminAuthModalOpen.value = false;
-      isAdminModalOpen.value = true;
-    } else {
-      showToast("구글 로그인이 완료되었습니다.", "info");
-    }
-  });
-
-  loginGoogle();
+        await syncAdminAuth();
+        if (isAdmin.value) {
+          showToast("관리자 구글 계정 인증이 완료되었습니다.", "success");
+          isAdminAuthModalOpen.value = false;
+          isAdminModalOpen.value = true;
+        } else {
+          showToast("구글 로그인이 완료되었습니다.", "info");
+        }
+      },
+      (err: any) => {
+        console.warn("Worker 인증 서버 연결 실패, 기본 모드로 전환:", err);
+        initGis(clientId, async (token: string) => {
+          localStorage.setItem("google_access_token", token);
+          localStorage.setItem("google_token_expires_at", String(Date.now() + 3600 * 1000));
+          localStorage.setItem("google_is_logged_in", "true");
+          isGoogleLoggedIn.value = true;
+          window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+          await syncAdminAuth();
+        });
+        loginGoogle();
+      }
+    );
+    loginGoogleWithCode();
+  } else {
+    initGis(clientId, async (token: string) => {
+      localStorage.setItem("google_access_token", token);
+      localStorage.setItem("google_token_expires_at", String(Date.now() + 3600 * 1000));
+      localStorage.setItem("google_is_logged_in", "true");
+      isGoogleLoggedIn.value = true;
+      window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+      await syncAdminAuth();
+    });
+    loginGoogle();
+  }
 };
 
 // 관리자 구글 계정 로그아웃 트리거
@@ -1703,23 +1726,23 @@ const setViewMode = (mode: 'calendar' | 'list') => {
             <button class="btn-close" @click="isAdminAuthModalOpen = false">✕</button>
           </div>
           <div class="sheet-body auth-modal-body">
-            <!-- 관리자 구글 계정 로그인 / 로그아웃 버튼 (담백한 단일 버튼) -->
+            <!-- 관리자 구글 계정 로그인 / 로그아웃 버튼 -->
             <div class="auth-google-section">
               <button
-                v-if="!isGoogleLoggedIn"
                 type="button"
                 class="btn-g-auth btn-g-login"
                 @click="handleGoogleLogin"
               >
-                관리자 구글 계정 로그인
+                {{ isGoogleLoggedIn ? '관리자 구글 계정으로 재인증 / 변경' : '관리자 구글 계정 로그인' }}
               </button>
               <button
-                v-else
+                v-if="isGoogleLoggedIn"
                 type="button"
                 class="btn-g-auth btn-g-logout"
+                style="margin-top: 8px;"
                 @click="handleGoogleLogout"
               >
-                관리자 구글 계정 로그아웃
+                구글 계정 로그아웃
               </button>
             </div>
 

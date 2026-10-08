@@ -84,12 +84,11 @@ export const initGisCodeClient = (
     console.error('Google Identity SDK not loaded yet.');
     return;
   }
-  const hasRefreshCipher = !!localStorage.getItem("google_refresh_cipher");
   codeClient = window.google.accounts.oauth2.initCodeClient({
     client_id: clientId,
     scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email openid',
     ux_mode: 'popup',
-    ...(hasRefreshCipher ? {} : { prompt: 'consent' }),
+    prompt: 'consent',
     callback: async (response: any) => {
       if (response.error !== undefined) {
         console.error('Code Client Error:', response);
