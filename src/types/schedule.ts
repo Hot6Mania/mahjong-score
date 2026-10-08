@@ -39,10 +39,12 @@ export type ScheduleActionType =
   | 'CLEAR_ATTENDEES'
   | 'DELETE_SESSION'
   | 'ATTEND'
+  | 'UPDATE_ATTEND'
   | 'CANCEL_ATTEND'
   | 'TOGGLE_CONFIRM'
   | 'UPDATE_SESSION_TYPE'
-  | 'UPDATE_DATES';
+  | 'UPDATE_DATES'
+  | 'ROLLBACK';
 
 export interface ScheduleHistoryItem {
   id: string;
@@ -51,6 +53,8 @@ export interface ScheduleHistoryItem {
   targetDate?: string;
   actorName: string;
   details: string;
+  summary?: string;
+  delta?: ScheduleDeltaData;
   clientIp?: string;
 }
 

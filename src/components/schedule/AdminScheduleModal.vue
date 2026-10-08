@@ -210,6 +210,11 @@ const selectedCounts = computed(() => {
   };
 });
 
+// 후보 일정 삭제 안전장치 상태
+const isDeleteConfirmModalOpen = ref(false);
+const datesPendingDeletion = ref<ScheduleDayItem[]>([]);
+const pendingSaveDates = ref<ScheduleDayItem[]>([]);
+
 // 저장 적용
 const handleApply = () => {
   const [yStr, mStr] = props.currentMonth.split('-');
@@ -245,7 +250,36 @@ const handleApply = () => {
     }
   }
 
+  // 삭제될 기존 후보 날짜 안전 탐지 (모바일 터치 오조작 등으로 인한 무단 삭제 방어)
+  const removedDates: ScheduleDayItem[] = [];
+  const resultSet = new Set(result.map(r => r.date));
+  for (const prev of props.existingDates) {
+    if (!resultSet.has(prev.date)) {
+      removedDates.push(prev);
+    }
+  }
+
+  if (removedDates.length > 0) {
+    pendingSaveDates.value = result;
+    datesPendingDeletion.value = removedDates;
+    isDeleteConfirmModalOpen.value = true;
+    return;
+  }
+
   emit('save', result);
+};
+
+const confirmApplyWithDeletion = () => {
+  isDeleteConfirmModalOpen.value = false;
+  emit('save', pendingSaveDates.value);
+  pendingSaveDates.value = [];
+  datesPendingDeletion.value = [];
+};
+
+const cancelDeleteConfirm = () => {
+  isDeleteConfirmModalOpen.value = false;
+  pendingSaveDates.value = [];
+  datesPendingDeletion.value = [];
 };
 
 const clearAll = () => {
@@ -485,12 +519,71 @@ const handleForceResetPin = async () => {
 };
 
 // --- 감사 로그 (일정 변동 기록) 로직 ---
+const expandedHistoryIds = ref<Set<string>>(new Set());
+
+const toggleHistoryDiff = (historyId: string) => {
+  if (expandedHistoryIds.value.has(historyId)) {
+    expandedHistoryIds.value.delete(historyId);
+  } else {
+    expandedHistoryIds.value.add(historyId);
+  }
+};
+
+const hasDiff = (item: ScheduleHistoryItem): boolean => {
+  if (!item.delta) return false;
+  return Boolean(
+    (item.delta.addedDates && item.delta.addedDates.length > 0) ||
+    (item.delta.removedDates && item.delta.removedDates.length > 0) ||
+    (item.delta.modifiedDates && item.delta.modifiedDates.length > 0)
+  );
+};
+
 const loadHistory = async () => {
   isLoadingHistory.value = true;
   errorMessage.value = '';
   try {
-    const list = await fetchScheduleHistory(props.currentMonth, props.adminToken);
-    historyList.value = list;
+    const [historyData, commitsRes] = await Promise.all([
+      fetchScheduleHistory(props.currentMonth, props.adminToken),
+      fetchScheduleCommits(props.currentMonth).catch(() => ({ success: false, commits: [] }))
+    ]);
+
+    const commits = (commitsRes && commitsRes.success && Array.isArray(commitsRes.commits))
+      ? commitsRes.commits
+      : [];
+
+    // 과거 커밋 및 최신 커밋의 델타(Diff)를 변동 기록 아이템에 정밀 매핑
+    const enrichedList = historyData.map((item) => {
+      if (item.delta && hasDiff(item)) {
+        return item;
+      }
+      // 커밋 목록에서 매칭 탐색 (ID 일치 또는 타임스탬프 근접 <= 3.5초 및 액션 일치)
+      const matchedCommit = commits.find((c) => {
+        if (c.id === item.id) return true;
+        const timeDiff = Math.abs(c.timestamp - item.timestamp);
+        if (timeDiff <= 3500) {
+          if (c.action === item.action) return true;
+          if (
+            (c.action === 'ATTEND' || c.action === 'UPDATE_ATTEND') &&
+            (item.action === 'ATTEND' || item.action === 'UPDATE_ATTEND')
+          ) {
+            return true;
+          }
+          if (c.action === 'UPDATE_DATES' && item.action === 'UPDATE_DATES') return true;
+        }
+        return false;
+      });
+
+      if (matchedCommit && matchedCommit.delta) {
+        return {
+          ...item,
+          delta: matchedCommit.delta,
+          summary: matchedCommit.summary || item.summary
+        };
+      }
+      return item;
+    });
+
+    historyList.value = enrichedList;
   } catch (e: any) {
     console.error('일정 변동 기록 로드 실패:', e);
     errorMessage.value = e.message || '일정 변동 기록을 불러오는데 실패했습니다.';
@@ -516,6 +609,8 @@ const getActionLabel = (action: ScheduleActionType | string): string => {
     case 'TOGGLE_CONFIRM': return '확정 / 해제';
     case 'CREATE_SESSION': return '일정 생성';
     case 'UPDATE_DATES': return '후보 일정 수정';
+    case 'UPDATE_ATTEND': return '참석 정보 수정';
+    case 'ROLLBACK': return '타임머신 롤백';
     default: return action;
   }
 };
@@ -523,6 +618,7 @@ const getActionLabel = (action: ScheduleActionType | string): string => {
 const getActionColor = (action: ScheduleActionType | string): string => {
   switch (action) {
     case 'ATTEND': return '#10b981'; // Green
+    case 'UPDATE_ATTEND': return '#059669'; // Emerald
     case 'CANCEL_ATTEND': return '#f59e0b'; // Amber
     case 'CLEAR_ATTENDEES': return '#ef4444'; // Red
     case 'DELETE_SESSION': return '#b91c1c'; // Dark Red
@@ -530,6 +626,7 @@ const getActionColor = (action: ScheduleActionType | string): string => {
     case 'TOGGLE_CONFIRM': return '#8b5cf6'; // Purple
     case 'CREATE_SESSION': return '#06b6d4'; // Cyan
     case 'UPDATE_DATES': return '#6366f1'; // Indigo
+    case 'ROLLBACK': return '#ec4899'; // Pink
     default: return '#64748b';
   }
 };
@@ -1186,6 +1283,59 @@ const handleRollback = async (targetId: string, label: string) => {
                 </div>
                 <div class="history-card-body">
                   <p class="history-detail">{{ item.details }}</p>
+
+                  <!-- 변경 세부 내역 (Diff) 토글 -->
+                  <button
+                    v-if="hasDiff(item)"
+                    type="button"
+                    class="btn-toggle-diff"
+                    @click="toggleHistoryDiff(item.id)"
+                  >
+                    <span class="diff-arrow">{{ expandedHistoryIds.has(item.id) ? '▼' : '▶' }}</span>
+                    <span>{{ expandedHistoryIds.has(item.id) ? '변경 내역 접기' : '변화량(Diff) 상세 보기' }}</span>
+                  </button>
+
+                  <div v-if="hasDiff(item) && expandedHistoryIds.has(item.id)" class="diff-details-panel">
+                    <!-- 추가된 날짜 -->
+                    <div v-if="item.delta?.addedDates?.length" class="diff-row added">
+                      <span class="diff-tag plus">+ 날짜 추가</span>
+                      <span class="diff-content">
+                        <span v-for="d in item.delta.addedDates" :key="d.date" class="diff-chip add">
+                          {{ d.date }} ({{ d.sessionType === 'overnight' ? '밤샘' : '당일' }})
+                        </span>
+                      </span>
+                    </div>
+
+                    <!-- 삭제된 날짜 -->
+                    <div v-if="item.delta?.removedDates?.length" class="diff-row removed">
+                      <span class="diff-tag minus">- 날짜 삭제</span>
+                      <span class="diff-content">
+                        <span v-for="d in item.delta.removedDates" :key="d.date" class="diff-chip del">
+                          {{ d.date }}
+                        </span>
+                      </span>
+                    </div>
+
+                    <!-- 수정된 날짜 -->
+                    <div v-if="item.delta?.modifiedDates?.length" class="diff-row modified">
+                      <span class="diff-tag mod">~ 세부 변경</span>
+                      <div class="diff-mod-list">
+                        <div v-for="m in item.delta.modifiedDates" :key="m.date" class="diff-mod-item">
+                          <span class="mod-date">{{ m.date }}</span>
+                          <span v-if="m.fieldDiff.sessionType" class="mod-field">
+                            유형: {{ m.fieldDiff.sessionType.before }} → <strong>{{ m.fieldDiff.sessionType.after }}</strong>
+                          </span>
+                          <span v-if="m.fieldDiff.isConfirmed" class="mod-field">
+                            확정: <strong>{{ m.fieldDiff.isConfirmed.after ? '출발 확정' : '대기중' }}</strong>
+                          </span>
+                          <span v-if="m.fieldDiff.attendees" class="mod-field">
+                            <span v-if="m.fieldDiff.attendees.added?.length" class="text-green">+{{ m.fieldDiff.attendees.added.join(', ') }}</span>
+                            <span v-if="m.fieldDiff.attendees.removed?.length" class="text-red"> -{{ m.fieldDiff.attendees.removed.join(', ') }}</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="history-card-footer">
                   <span class="history-user-info">
@@ -1361,6 +1511,52 @@ const handleRollback = async (targetId: string, label: string) => {
           </button>
           <button v-else type="button" class="btn-primary" @click="emit('close')">
             완료
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- 후보 일정 삭제 안전장치 확인 모달 -->
+  <Transition name="apple-modal-fade">
+    <div v-if="isDeleteConfirmModalOpen" class="delete-guard-backdrop" @click.self="cancelDeleteConfirm">
+      <div class="delete-guard-card">
+        <div class="delete-guard-header">
+          <span class="delete-guard-icon">⚠️</span>
+          <div class="delete-guard-titles">
+            <h4 class="delete-guard-title">후보 일정 삭제 확인</h4>
+            <p class="delete-guard-sub">기존에 등록되어 있던 후보 일정이 삭제 목록에 포함되어 있습니다.</p>
+          </div>
+        </div>
+
+        <div class="delete-guard-body">
+          <p class="delete-guard-desc">
+            적용 시 다음 <strong>{{ datesPendingDeletion.length }}개</strong>의 후보 일정이 완전히 삭제됩니다:
+          </p>
+          <div class="delete-dates-list">
+            <div v-for="d in datesPendingDeletion" :key="d.date" class="delete-date-item">
+              <div class="delete-date-main">
+                <span class="delete-date-tag">{{ d.date }}</span>
+                <span class="delete-type-chip" :class="d.adminSessionType || d.sessionType">
+                  {{ (d.adminSessionType || d.sessionType) === 'overnight' ? '밤샘' : '당일' }}
+                </span>
+              </div>
+              <div v-if="d.attendees && d.attendees.length > 0" class="delete-attendees-warning">
+                ⚠️ 참석자 {{ d.attendees.length }}명 ({{ d.attendees.map(a => a.name).join(', ') }})
+              </div>
+            </div>
+          </div>
+          <p class="delete-guard-notice">
+            의도치 않게 터치되어 삭제된 것이라면 <strong>'취소 (일정 유지)'</strong>를 누르고 달력 칩을 다시 확인해주세요.
+          </p>
+        </div>
+
+        <div class="delete-guard-footer">
+          <button type="button" class="btn-cancel" @click="cancelDeleteConfirm">
+            취소 (일정 유지)
+          </button>
+          <button type="button" class="btn-danger-confirm" @click="confirmApplyWithDeletion">
+            삭제 확인 및 적용
           </button>
         </div>
       </div>
@@ -3057,6 +3253,213 @@ html.dark .btn-admin-logout {
   background: rgba(239, 68, 68, 0.15);
   border-color: rgba(239, 68, 68, 0.3);
   color: #f87171;
+}
+
+/* ==========================================
+   후보 일정 삭제 안전장치 확인 모달 스타일
+   ========================================== */
+.delete-guard-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10050;
+  padding: 16px;
+}
+
+.delete-guard-card {
+  width: 100%;
+  max-width: 440px;
+  background: #ffffff;
+  border-radius: 20px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: appleModalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.delete-guard-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  background: #fff5f5;
+  border-bottom: 1px solid #fee2e2;
+}
+
+.delete-guard-icon {
+  font-size: 24px;
+}
+
+.delete-guard-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #991b1b;
+}
+
+.delete-guard-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+.delete-guard-body {
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.delete-guard-desc {
+  margin: 0;
+  font-size: 14px;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.delete-dates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.delete-date-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #ffffff;
+  border-radius: 8px;
+  border: 1px solid #f3f4f6;
+}
+
+.delete-date-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.delete-date-tag {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+  font-family: monospace;
+}
+
+.delete-type-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.delete-type-chip.day {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.delete-type-chip.overnight {
+  background: #fdf2f8;
+  color: #db2777;
+}
+
+.delete-attendees-warning {
+  font-size: 11px;
+  font-weight: 600;
+  color: #dc2626;
+  background: #fee2e2;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.delete-guard-notice {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.delete-guard-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  background: #f9fafb;
+  border-top: 1px solid #e5e7eb;
+}
+
+.btn-danger-confirm {
+  background: #dc2626;
+  color: #ffffff;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-danger-confirm:hover {
+  background: #b91c1c;
+}
+
+html.dark .delete-guard-card {
+  background: #1e293b;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+}
+
+html.dark .delete-guard-header {
+  background: rgba(239, 68, 68, 0.15);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+html.dark .delete-guard-title {
+  color: #fca5a5;
+}
+
+html.dark .delete-guard-sub {
+  color: #f87171;
+}
+
+html.dark .delete-guard-desc {
+  color: #e2e8f0;
+}
+
+html.dark .delete-dates-list {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+html.dark .delete-date-item {
+  background: #1e293b;
+  border-color: #334155;
+}
+
+html.dark .delete-date-tag {
+  color: #f1f5f9;
+}
+
+html.dark .delete-guard-notice {
+  color: #94a3b8;
+}
+
+html.dark .delete-guard-footer {
+  background: #1e293b;
+  border-top-color: #334155;
 }
 
 /* 375x667(iPhone SE) 등 소형/세로가 짧은 모바일 화면 대응 컴팩트 모드 */
