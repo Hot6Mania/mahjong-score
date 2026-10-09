@@ -1856,15 +1856,22 @@ const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) =
         }
       }
 
-      // 2. 전체 멤버 목록 로드 (70%)
+      // 2. 구글 스프레드시트 Spill 에러 자가 치유(Self-Healing) 및 서식 동기화 (70%)
       syncProgress.value = 70;
+      try {
+        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
+        await syncStatsSheetFormatting(googleInfo.spreadsheetId);
+      } catch (selfHealingErr) {
+        console.warn("스프레드시트 Spill 복구/서식 동기화 중 오류 (무시 가능):", selfHealingErr);
+      }
+
+      // 3. 전체 멤버 목록 로드 (85%)
+      syncProgress.value = 85;
       await loadMemberList();
 
-      // 3. 전체 멤버별 통계 로드 (95%)
+      // 4. 전체 멤버별 통계 로드 (95%)
       syncProgress.value = 95;
       try {
-        await syncStatsSheetFormatting(googleInfo.spreadsheetId);
-        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
         const stats = await fetchMemberStats(googleInfo.spreadsheetId);
         googleMemberStats.value = stats;
       } catch (statsErr) {
@@ -2805,44 +2812,49 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       await updateSessionMemberPoints(googleInfo.spreadsheetId, sessionSheetName, deltaMap);
       syncProgress.value = 65;
 
-      // [1] '전체 국별기록 (데이터)' 일괄 업데이트
+      // [1] 대국 데이터 적재 병렬화 (전체 국별기록 + 회차별 상세 + 가로 대국 요약 동시 전송으로 네트워크 시간 대폭 단축)
+      const uploadTasks: Promise<any>[] = [];
+
+      // 1-1. 전체 국별기록 (데이터)
       if (allRoundRows.length > 0) {
-        await appendRoundRecords(googleInfo.spreadsheetId, '전체 국별기록 (데이터)', allRoundRows, googleInfo.todayMembers);
+        uploadTasks.push(
+          appendRoundRecords(googleInfo.spreadsheetId, '전체 국별기록 (데이터)', allRoundRows, googleInfo.todayMembers, true)
+        );
       }
-      syncProgress.value = 75;
-      
-      // [2] 회차별 상세 시트에 국별기록 일괄 업데이트
+
+      // 1-2. 회차별 상세 시트 (데이터)
       if (allRoundRows.length > 0) {
-        await appendRoundRecords(googleInfo.spreadsheetId, sessionSheetName + " (데이터)", allRoundRows, googleInfo.todayMembers);
+        uploadTasks.push(
+          appendRoundRecords(googleInfo.spreadsheetId, sessionSheetName + " (데이터)", allRoundRows, googleInfo.todayMembers, true)
+        );
       }
-      syncProgress.value = 85;
-      
-      // [3] 회차별 가로 대국 요약 데이터 일괄 적재
-      try {
-        const summaryRows: any[][] = [];
-        todayGamesHistory.forEach(game => {
-          const gameId = new Date(game.timestamp).getTime().toString();
-          const timestamp = new Date(game.timestamp).toLocaleString('ko-KR');
-          
-          if (uploadedGameIds.has(gameId)) return;
-          
-          const rawResults = [...game.results];
-          summaryRows.push([
-            gameId,
-            timestamp,
-            rawResults[0]?.name || "", rawResults[0]?.rank || 4, rawResults[0]?.score || 0, rawResults[0]?.uma || 0,
-            rawResults[1]?.name || "", rawResults[1]?.rank || 4, rawResults[1]?.score || 0, rawResults[1]?.uma || 0,
-            rawResults[2]?.name || "", rawResults[2]?.rank || 4, rawResults[2]?.score || 0, rawResults[2]?.uma || 0,
-            rawResults[3]?.name || "", rawResults[3]?.rank || 4, rawResults[3]?.score || 0, rawResults[3]?.uma || 0
-          ]);
-        });
-        if (summaryRows.length > 0) {
-          await appendSessionSummaryRecords(googleInfo.spreadsheetId, sessionSheetName + " (raw)", summaryRows);
-        }
-      } catch (sumErr) {
-        console.warn("일괄 대국 요약 적재 실패:", sumErr);
+
+      // 1-3. 회차별 가로 대국 요약 데이터 (raw)
+      const summaryRows: any[][] = [];
+      todayGamesHistory.forEach(game => {
+        const gameId = new Date(game.timestamp).getTime().toString();
+        const timestamp = new Date(game.timestamp).toLocaleString('ko-KR');
+        if (uploadedGameIds.has(gameId)) return;
+        const rawResults = [...game.results];
+        summaryRows.push([
+          gameId,
+          timestamp,
+          rawResults[0]?.name || "", rawResults[0]?.rank || 4, rawResults[0]?.score || 0, rawResults[0]?.uma || 0,
+          rawResults[1]?.name || "", rawResults[1]?.rank || 4, rawResults[1]?.score || 0, rawResults[1]?.uma || 0,
+          rawResults[2]?.name || "", rawResults[2]?.rank || 4, rawResults[2]?.score || 0, rawResults[2]?.uma || 0,
+          rawResults[3]?.name || "", rawResults[3]?.rank || 4, rawResults[3]?.score || 0, rawResults[3]?.uma || 0
+        ]);
+      });
+      if (summaryRows.length > 0) {
+        uploadTasks.push(
+          appendSessionSummaryRecords(googleInfo.spreadsheetId, sessionSheetName + " (raw)", summaryRows)
+        );
       }
-      syncProgress.value = 92;
+
+      if (uploadTasks.length > 0) {
+        await Promise.all(uploadTasks);
+      }
+      syncProgress.value = 90;
       
       // [4] 회차별 변동추이 Upsert 일괄 적재
       try {

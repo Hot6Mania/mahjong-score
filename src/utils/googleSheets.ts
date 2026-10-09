@@ -302,6 +302,9 @@ export const tryAutoLogin = async (onTokenCallback: (token: string) => void): Pr
  */
 export const fetchMemberList = async (spreadsheetId: string): Promise<string[]> => {
   if (!spreadsheetId) return [];
+
+  // 1순위: '전체 멤버별 통계'!A:A
+  let list1: string[] = [];
   try {
     const range = "'전체 멤버별 통계'!A:A";
     const response = await window.gapi.client.sheets.spreadsheets.values.get({
@@ -310,19 +313,44 @@ export const fetchMemberList = async (spreadsheetId: string): Promise<string[]> 
     });
     const values = response.result.values;
     if (values && values.length > 1) {
-      const list = values
+      list1 = values
         .slice(1)
         .map((row: any) => row[0]?.toString().trim())
         .filter((name: string) => name && name !== '' && !name.startsWith('#') && name !== '이름');
-      if (list.length > 0) {
-        return Array.from(new Set(list));
-      }
     }
   } catch (e) {
     console.warn("fetchMemberList '전체 멤버별 통계' 조회 실패, 폴백 시도:", e);
   }
 
-  // 1차 폴백: '전체 멤버목록 (데이터)'!A:A
+  // 2순위: '통계'!A2:A (원본 마스터 명단)
+  let statsList: string[] = [];
+  try {
+    const statsRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "'통계'!A2:A",
+    });
+    const statsValues = statsRes.result.values;
+    if (statsValues && statsValues.length > 0) {
+      statsList = statsValues
+        .map((row: any) => row[0]?.toString().trim())
+        .filter((name: string) => name && name !== '' && !name.startsWith('#') && name !== '이름');
+    }
+  } catch (e2) {
+    console.warn("fetchMemberList '통계' 조회 실패:", e2);
+  }
+
+  // Spill Error 등으로 '전체 멤버별 통계'의 멤버 수가 '통계' 시트보다 적어진 경우, 완전한 '통계' 시트 명단 반환
+  if (statsList.length > list1.length) {
+    return Array.from(new Set(statsList));
+  }
+  if (list1.length > 0) {
+    return Array.from(new Set(list1));
+  }
+  if (statsList.length > 0) {
+    return Array.from(new Set(statsList));
+  }
+
+  // 3순위 폴백: '전체 멤버목록 (데이터)'!A:A
   try {
     const fb1Res = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId,
@@ -340,25 +368,6 @@ export const fetchMemberList = async (spreadsheetId: string): Promise<string[]> 
     }
   } catch (e1) {
     console.warn("fetchMemberList '전체 멤버목록 (데이터)' 폴백 실패:", e1);
-  }
-
-  // 2차 폴백: '통계'!A2:A
-  try {
-    const fb2Res = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'통계'!A2:A",
-    });
-    const fb2Values = fb2Res.result.values;
-    if (fb2Values && fb2Values.length > 0) {
-      const list = fb2Values
-        .map((row: any) => row[0]?.toString().trim())
-        .filter((name: string) => name && name !== '' && !name.startsWith('#') && name !== '이름');
-      if (list.length > 0) {
-        return Array.from(new Set(list));
-      }
-    }
-  } catch (e2) {
-    console.warn("fetchMemberList '통계' 폴백 실패:", e2);
   }
 
   return [];
@@ -702,9 +711,6 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
         }
       });
       console.log(`복제 시트의 '${targetCell}' 셀에 '${rawTitle}' 데이터 연결 완료`);
-
-      // '통계' 시트(gid=0)에 해당 회차 열 개설 및 raw 시트 기반 VLOOKUP 최종 우마 수식 연결
-      await syncSessionUmaToStatsSheet(spreadsheetId, cleanTitle, todayMembers);
     } catch (dupErr) {
       console.error(`'${cleanTitle}' 공개용 시트 복제 개설 실패:`, dupErr);
       throw dupErr;
@@ -1058,8 +1064,10 @@ export const syncSessionUmaToStatsSheet = async (
       }
     }
 
-    // 5. '통계' 시트 서식(테두리, 서식 등), B열 수식 및 필터 범위 일괄 자동 동기화
-    await syncStatsSheetFormatting(spreadsheetId);
+    // 5. 신규 멤버가 추가된 경우에만 '통계' 시트 서식(테두리, 서식 등), B열 수식 및 필터 범위 자동 동기화 (평소 동기화 시간 대폭 단축)
+    if (newMembersToAdd.length > 0) {
+      await syncStatsSheetFormatting(spreadsheetId);
+    }
   } catch (err) {
     console.warn("'통계' 시트 최종우마 자동 연동 중 오류 (무시 가능):", err);
   }
@@ -1254,13 +1262,19 @@ export const expandSessionSheetRowsIfNeeded = async (
 /**
  * 대국 로그(Tidy Data)를 시트에 추가합니다.
  */
-export const appendRoundRecords = async (spreadsheetId: string, sheetTitle: string, roundDataRows: any[][], todayMembers?: string[]): Promise<void> => {
+export const appendRoundRecords = async (
+  spreadsheetId: string,
+  sheetTitle: string,
+  roundDataRows: any[][],
+  todayMembers?: string[],
+  skipEnsureSheet = false
+): Promise<void> => {
   if (!spreadsheetId || roundDataRows.length === 0) return;
 
   const isGlobalLog = sheetTitle === '전체 국별기록 (데이터)';
   const range = `'${sheetTitle}'!A:T`;
 
-  if (!isGlobalLog) {
+  if (!isGlobalLog && !skipEnsureSheet) {
     const baseTitle = sheetTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
     const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
     const existing = resMetadata.result.sheets.map((s: any) => s.properties.title);
@@ -1521,62 +1535,180 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
  * 하위 셀(A3:A500)의 하드코딩된 값으로 인해 #REF! Spill Error(확장 충돌)를 일으키지 않도록
  * A3:A500 범위를 자동으로 클리어하여 수식을 즉각 복구합니다.
  */
+/**
+ * '전체 멤버목록 (데이터)' 및 '전체 멤버별 통계' 시트의 A2 셀에 걸려있는 동적 배열 수식이
+ * 하위 셀(A3:A500)의 하드코딩된 값으로 인해 #REF! Spill Error(확장 충돌)를 일으키지 않도록
+ * 하위 범위를 자동으로 클리어하여 동적 수식을 즉각 복구(Self-Healing)합니다.
+ */
 export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise<boolean> => {
   if (!spreadsheetId) return false;
   try {
-    await window.gapi.client.sheets.spreadsheets.values.clear({
-      spreadsheetId,
-      range: "'전체 멤버별 통계'!A3:A500",
-    });
-    console.log("'전체 멤버별 통계' 시트 A3:A500 클리어 완료 (Spill 에러 자동 복구)");
+    // 1) '전체 멤버목록 (데이터)' 시트의 A3:A500 클리어 (Spill 충돌 원천 해소)
+    try {
+      await window.gapi.client.sheets.spreadsheets.values.clear({
+        spreadsheetId,
+        range: "'전체 멤버목록 (데이터)'!A3:A500",
+      });
+      console.log("'전체 멤버목록 (데이터)' 시트 A3:A500 클리어 완료 (Spill 에러 복구)");
+    } catch (e1) {
+      console.warn("'전체 멤버목록 (데이터)' A3:A500 클리어 중 오류:", e1);
+    }
+
+    // 2) 혹시 '전체 멤버목록 (데이터)' A2의 수식이 지워졌거나 텍스트로 오염된 경우 원래 수식으로 자동 복원
+    try {
+      const a2Res = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "'전체 멤버목록 (데이터)'!A2",
+        valueRenderOption: 'FORMULA',
+      });
+      const a2Val = (a2Res.result.values?.[0]?.[0] || '').toString().trim();
+      if (!a2Val.startsWith('=')) {
+        await window.gapi.client.sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: "'전체 멤버목록 (데이터)'!A2",
+          valueInputOption: 'USER_ENTERED',
+          resource: {
+            values: [["=FILTER('통계'!A2:A1006, '통계'!A2:A1006<>\"\")"]],
+          },
+        });
+        console.log("'전체 멤버목록 (데이터)' A2 수식(=FILTER('통계'!A2:A1006...)) 자동 복원 완료");
+      }
+    } catch (eFormula) {
+      console.warn("'전체 멤버목록 (데이터)' A2 수식 검증/복구 중 오류:", eFormula);
+    }
+
+    // 3) '전체 멤버별 통계' 시트의 A3:A500 클리어
+    try {
+      await window.gapi.client.sheets.spreadsheets.values.clear({
+        spreadsheetId,
+        range: "'전체 멤버별 통계'!A3:A500",
+      });
+      console.log("'전체 멤버별 통계' 시트 A3:A500 클리어 완료 (Spill 에러 복구)");
+    } catch (e2) {
+      console.warn("'전체 멤버별 통계' A3:A500 클리어 중 오류:", e2);
+    }
+
+    // 4) 혹시 '전체 멤버별 통계' A2 수식이 깨진 경우에도 자동 복원
+    try {
+      const statsA2Res = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "'전체 멤버별 통계'!A2",
+        valueRenderOption: 'FORMULA',
+      });
+      const statsA2Val = (statsA2Res.result.values?.[0]?.[0] || '').toString().trim();
+      if (!statsA2Val.startsWith('=')) {
+        await window.gapi.client.sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: "'전체 멤버별 통계'!A2",
+          valueInputOption: 'USER_ENTERED',
+          resource: {
+            values: [["=UNIQUE(FILTER('전체 멤버목록 (데이터)'!A:A, '전체 멤버목록 (데이터)'!A:A <> \"\", '전체 멤버목록 (데이터)'!A:A <> \"이름\"))"]],
+          },
+        });
+        console.log("'전체 멤버별 통계' A2 수식(=UNIQUE(FILTER(...))) 자동 복원 완료");
+      }
+    } catch (eStatsFormula) {
+      console.warn("'전체 멤버별 통계' A2 수식 검증 중 오류:", eStatsFormula);
+    }
+
     return true;
   } catch (err) {
-    console.warn("'전체 멤버별 통계' 시트 Spill 복구 중 오류 (무시 가능):", err);
+    console.warn("통계 시트 Spill 복구 중 오류 (무시 가능):", err);
     return false;
   }
 };
 
 /**
- * '전체 멤버별 통계' 시트에 신규 임시 멤버를 영구 추가하고 교차 색상 범위를 갱신합니다.
- * A2에 동적 배열 수식이 걸려있는 경우 직접 값을 입력하면 #REF! Spill Error가 발생하므로,
- * A3:A500을 클리어하여 수식 확장을 보장하고 교차 색상만 갱신합니다.
+ * 신규 임시 멤버를 영구 데이터베이스에 등록하고 교차 색상 범위를 갱신합니다.
+ * '전체 멤버목록 (데이터)' 시트의 A2는 '=FILTER('통계'!A2:A1006...)' 수식으로 채워지므로,
+ * 여기에 직접 append를 하면 #REF! Spill Error가 발생합니다.
+ * 따라서 신규 멤버는 동적 배열 수식의 원천인 '통계' 시트 A열에 안전하게 등록합니다.
  */
 export const addNewMembersToDb = async (spreadsheetId: string, names: string[]): Promise<void> => {
   if (!spreadsheetId || names.length === 0) return;
   try {
-    // 1. 원본 데이터 소스인 '전체 멤버목록 (데이터)'!A:A 에 신규 멤버 추가
-    const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'전체 멤버목록 (데이터)'!A:A",
-    });
-    const masterValues: string[][] = masterRes.result.values || [];
-    const masterExisting = new Set<string>();
-    for (let i = 0; i < masterValues.length; i++) {
-      const val = masterValues[i]?.[0]?.toString().trim();
-      if (val) masterExisting.add(val);
-    }
-    const toAddToMaster = names
-      .map(n => n?.trim())
-      .filter((n): n is string => !!n && !masterExisting.has(n));
-
-    if (toAddToMaster.length > 0) {
-      await window.gapi.client.sheets.spreadsheets.values.append({
+    // 1. '전체 멤버목록 (데이터)' A2 셀의 수식 여부 확인
+    let isMasterDynamicFormula = true;
+    try {
+      const a2Res = await window.gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: "'전체 멤버목록 (데이터)'!A:A",
+        range: "'전체 멤버목록 (데이터)'!A2",
+        valueRenderOption: 'FORMULA',
+      });
+      const a2Val = (a2Res.result.values?.[0]?.[0] || '').toString().trim();
+      isMasterDynamicFormula = a2Val.startsWith('=') || a2Val === '#REF!';
+    } catch (e) {
+      console.warn("A2 수식 확인 실패, 동적 수식으로 간주:", e);
+    }
+
+    // 2. 신규 멤버가 '통계' 시트에 있는지 확인 후 '통계' 시트 A열에 등록
+    const statsSheetRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "'통계'!A1:B100",
+    });
+    const statsValues: string[][] = statsSheetRes.result.values || [];
+    const statsExisting = new Set<string>();
+    for (let i = 1; i < statsValues.length; i++) {
+      const val = statsValues[i]?.[0]?.toString().trim();
+      if (val) statsExisting.add(val);
+    }
+    const toAddToStats = names
+      .map(n => n?.trim())
+      .filter((n): n is string => !!n && !statsExisting.has(n));
+
+    if (toAddToStats.length > 0) {
+      const startRow = statsValues.length + 1;
+      const endRow = startRow + toAddToStats.length - 1;
+      const combinedRows = toAddToStats.map((name, idx) => [
+        name,
+        `=IFERROR(SUM(C${startRow + idx}:ZZ${startRow + idx}), 0)`
+      ]);
+
+      await window.gapi.client.sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'통계'!A${startRow}:B${endRow}`,
         valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
         resource: {
-          values: toAddToMaster.map(n => [n]),
+          values: combinedRows,
         },
       });
-      console.log(`'전체 멤버목록 (데이터)'에 신규 멤버 [${toAddToMaster.join(', ')}] 추가 완료`);
+      console.log(`'통계' 시트에 신규 멤버 [${toAddToStats.join(', ')}] 등록 완료 (A${startRow}:B${endRow})`);
     }
 
-    // 2. '전체 멤버별 통계' 시트의 Spill 복구 (A3:A500 클리어하여 A2 배열 수식이 막힘없이 확장되도록 보장)
+    // 3. 만약 마스터 시트가 수식이 아닌 순수 텍스트 시트라면 마스터 시트에 append
+    if (!isMasterDynamicFormula) {
+      const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "'전체 멤버목록 (데이터)'!A:A",
+      });
+      const masterValues: string[][] = masterRes.result.values || [];
+      const masterExisting = new Set<string>();
+      for (let i = 0; i < masterValues.length; i++) {
+        const val = masterValues[i]?.[0]?.toString().trim();
+        if (val) masterExisting.add(val);
+      }
+      const toAddToMaster = names
+        .map(n => n?.trim())
+        .filter((n): n is string => !!n && !masterExisting.has(n));
+
+      if (toAddToMaster.length > 0) {
+        await window.gapi.client.sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: "'전체 멤버목록 (데이터)'!A:A",
+          valueInputOption: 'USER_ENTERED',
+          insertDataOption: 'INSERT_ROWS',
+          resource: {
+            values: toAddToMaster.map(n => [n]),
+          },
+        });
+      }
+    }
+
+    // 4. Spill 충돌을 방지하기 위해 항상 A3:A500을 클리어 (자가 치유 보장)
     await repairStatsSheetSpillError(spreadsheetId);
 
-    // 3. 교차 색상 범위 갱신
-    const totalMembers = masterExisting.size + toAddToMaster.length;
+    // 5. 교차 색상 범위 갱신
+    const totalMembers = statsExisting.size + toAddToStats.length;
     await updateAlternatingColorsRange(spreadsheetId, totalMembers);
   } catch (err) {
     console.error("신규 멤버 구글 시트 추가 실패:", err);
@@ -1585,9 +1717,9 @@ export const addNewMembersToDb = async (spreadsheetId: string, names: string[]):
 };
 
 /**
- * '전체 멤버목록 (데이터)' 마스터 시트에서 특정 멤버 이름을 찾아 삭제 처리하고,
- * '전체 멤버별 통계' 시트의 Spill 복구를 수행합니다.
- * ('전체 멤버별 통계' 시트의 행을 직접 삭제하면 수식 구조가 파괴되므로 마스터 시트에서 삭제)
+ * 멤버를 영구 데이터베이스에서 삭제 처리하고 Spill 복구를 수행합니다.
+ * '전체 멤버목록 (데이터)' 시트의 A2는 수식이므로, 원본인 '통계' 시트에서 멤버 행을 삭제하거나,
+ * 마스터 시트에 하드코딩된 행이 있는 경우 함께 삭제합니다.
  */
 export const deleteMemberFromDb = async (spreadsheetId: string, name: string): Promise<void> => {
   if (!spreadsheetId || !name || !name.trim()) return;
@@ -1596,44 +1728,74 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
     const spreadsheet = await window.gapi.client.sheets.spreadsheets.get({
       spreadsheetId,
     });
+    
+    // 1. '통계' 시트에서 해당 멤버 행 삭제
+    const statsSheet = spreadsheet.result.sheets.find(
+      (s: any) => s.properties.title === '통계'
+    );
+    if (statsSheet) {
+      const statsRes = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "'통계'!A:A",
+      });
+      const statsValues: string[][] = statsRes.result.values || [];
+      const sRowIndex = statsValues.findIndex((r: any) => r[0] && r[0].toString().trim() === name.trim());
+      if (sRowIndex !== -1) {
+        await window.gapi.client.sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          resource: {
+            requests: [
+              {
+                deleteDimension: {
+                  range: {
+                    sheetId: statsSheet.properties.sheetId,
+                    dimension: 'ROWS',
+                    startIndex: sRowIndex,
+                    endIndex: sRowIndex + 1,
+                  },
+                },
+              },
+            ],
+          },
+        });
+        console.log(`'통계' 시트에서 멤버 '${name}' 삭제 완료`);
+      }
+    }
+
+    // 2. 만약 '전체 멤버목록 (데이터)' 시트에 하드코딩된 행이 있다면 삭제
     const mSheet = spreadsheet.result.sheets.find(
       (s: any) => s.properties.title === '전체 멤버목록 (데이터)'
     );
-    if (!mSheet) {
-      console.warn("'전체 멤버목록 (데이터)' 시트가 존재하지 않아 삭제가 불가능합니다.");
-      return;
-    }
-
-    const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'전체 멤버목록 (데이터)'!A:A",
-    });
-    const masterValues: string[][] = masterRes.result.values || [];
-    const mRowIndex = masterValues.findIndex((r: any) => r[0] && r[0].toString().trim() === name.trim());
-    if (mRowIndex !== -1) {
-      await window.gapi.client.sheets.spreadsheets.batchUpdate({
+    if (mSheet) {
+      const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId,
-        resource: {
-          requests: [
-            {
-              deleteDimension: {
-                range: {
-                  sheetId: mSheet.properties.sheetId,
-                  dimension: 'ROWS',
-                  startIndex: mRowIndex,
-                  endIndex: mRowIndex + 1,
+        range: "'전체 멤버목록 (데이터)'!A:A",
+      });
+      const masterValues: string[][] = masterRes.result.values || [];
+      const mRowIndex = masterValues.findIndex((r: any) => r[0] && r[0].toString().trim() === name.trim());
+      if (mRowIndex !== -1 && mRowIndex > 0) { // A1 헤더 제외
+        await window.gapi.client.sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          resource: {
+            requests: [
+              {
+                deleteDimension: {
+                  range: {
+                    sheetId: mSheet.properties.sheetId,
+                    dimension: 'ROWS',
+                    startIndex: mRowIndex,
+                    endIndex: mRowIndex + 1,
+                  },
                 },
               },
-            },
-          ],
-        },
-      });
-      console.log(`'전체 멤버목록 (데이터)'에서 멤버 '${name}' 삭제 완료`);
-    } else {
-      console.log(`삭제하려는 멤버 '${name}'이 마스터 시트에 존재하지 않습니다.`);
+            ],
+          },
+        });
+        console.log(`'전체 멤버목록 (데이터)'에서 멤버 '${name}' 삭제 완료`);
+      }
     }
 
-    // Spill 복구
+    // 3. Spill 복구 수행
     await repairStatsSheetSpillError(spreadsheetId);
   } catch (err) {
     console.error("구글 시트에서 멤버 삭제 실패:", err);
