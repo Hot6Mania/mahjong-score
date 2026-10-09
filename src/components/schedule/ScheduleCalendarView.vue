@@ -431,28 +431,28 @@ html.dark .legend-dot {
   background: rgba(0, 0, 0, 0.01);
 }
 
-/* 당일만 되는 날: 옅은 스카이블루 블럭 */
+/* 당일만 되는 날: 선명하고 부드러운 스카이블루 블럭 */
 .calendar-cell.session-day {
-  background: rgba(59, 130, 246, 0.04);
+  background: rgba(59, 130, 246, 0.14);
 }
 .calendar-cell.session-day:hover {
-  background: rgba(59, 130, 246, 0.09);
+  background: rgba(59, 130, 246, 0.22);
 }
 
-/* 밤샘만 되는 날: 옅은 퍼플 블럭 */
+/* 밤샘만 되는 날: 선명하고 부드러운 퍼플 블럭 */
 .calendar-cell.session-overnight {
-  background: rgba(139, 92, 246, 0.05);
+  background: rgba(139, 92, 246, 0.15);
 }
 .calendar-cell.session-overnight:hover {
-  background: rgba(139, 92, 246, 0.11);
+  background: rgba(139, 92, 246, 0.24);
 }
 
-/* 커스텀 일정인 날: 옅은 에메랄드 블럭 */
+/* 커스텀 일정인 날: 선명하고 부드러운 에메랄드 블럭 */
 .calendar-cell.session-custom {
-  background: rgba(16, 185, 129, 0.04);
+  background: rgba(16, 185, 129, 0.13);
 }
 .calendar-cell.session-custom:hover {
-  background: rgba(16, 185, 129, 0.09);
+  background: rgba(16, 185, 129, 0.22);
 }
 
 html.dark .calendar-cell.session-day {
@@ -488,7 +488,7 @@ html.dark .calendar-cell.session-custom:hover {
   box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.85);
 }
 .calendar-cell.session-day.is-today {
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(59, 130, 246, 0.18);
 }
 html.dark .calendar-cell.is-today {
   box-shadow: inset 0 0 0 2px rgba(96, 165, 250, 0.7);
@@ -497,7 +497,7 @@ html.dark .calendar-cell.clickable.is-today:hover {
   box-shadow: inset 0 0 0 2px rgba(96, 165, 250, 0.9);
 }
 html.dark .calendar-cell.session-day.is-today {
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(59, 130, 246, 0.12);
 }
 
 .cell-top {
@@ -569,16 +569,29 @@ html.dark .calendar-cell.session-day.is-today {
   font-family: inherit;
 }
 .pill-day {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  background: rgba(37, 99, 235, 0.18);
+  color: #1d4ed8;
 }
 .pill-overnight {
-  background: rgba(139, 92, 246, 0.14);
-  color: #7c3aed;
+  background: rgba(124, 58, 237, 0.18);
+  color: #6d28d9;
 }
 .pill-custom {
-  background: rgba(16, 185, 129, 0.12);
-  color: #059669;
+  background: rgba(16, 185, 129, 0.18);
+  color: #047857;
+}
+
+html.dark .pill-day {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+html.dark .pill-overnight {
+  background: rgba(139, 92, 246, 0.22);
+  color: #c084fc;
+}
+html.dark .pill-custom {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
 }
 
 .cell-attendees-list {
