@@ -1398,43 +1398,50 @@ const codeforcesTierBandsPlugin = {
     const yScale = scales.y;
     const { left, right, top, bottom } = chartArea;
 
-    // 티어 구간 정의 (Codeforces 가로 밴드 스타일)
-    // 혼천(1700+ 하늘), 작성(1600~1700 로즈/빨강), 작호(1500~1600 주황), 작걸(1400~1500 골드), 작사(1300~1400 초록), 초심(<1300 올리브)
-    const tiers = [
-      { name: '혼천', min: 1700, max: 2400, color: '#38BEDA' },
-      { name: '작성', min: 1600, max: 1700, color: '#CD4A62' },
-      { name: '작호', min: 1500, max: 1600, color: '#E88640' },
-      { name: '작걸', min: 1400, max: 1500, color: '#E5B800' },
-      { name: '작사', min: 1300, max: 1400, color: '#21A73C' },
-      { name: '초심', min: 800,  max: 1300, color: '#98B324' }
+    /**
+     * 레이팅 100단위 배경 밴드 정의
+     * [중요 원칙] 등급/티어 명칭(작걸, 작사, 작호, 작성, 혼천, 초심 등)은 클럽 정책상 어떤 경우에도
+     * UI 텍스트로 노출하지 않으며, 오직 100단위 고유 색상 밴드와 경계선만 적용합니다.
+     */
+    const ratingBands = [
+      { min: 1700, max: 2400, color: '#38BEDA' }, // 1700 이상
+      { min: 1600, max: 1700, color: '#CD4A62' }, // 1600대
+      { min: 1500, max: 1600, color: '#E88640' }, // 1500대
+      { min: 1400, max: 1500, color: '#E5B800', alphaBoost: 0.02 }, // 1400대 (골드 고명도 보정)
+      { min: 1300, max: 1400, color: '#21A73C' }, // 1300대
+      { min: 1200, max: 1300, color: '#98B324' }, // 1200대
+      { min: 1100, max: 1200, color: '#7E941E' }, // 1100대
+      { min: 800,  max: 1100, color: '#687B16' }  // 1100 미만
     ];
 
     const dark = isDark.value;
-    const bandAlpha = dark ? 0.05 : 0.038;
-    const lineAlpha = dark ? 0.22 : 0.16;
+    // 저대비 디스플레이에서도 100단위 구역이 확실히 분간되도록 불투명도 대폭 상향 (기존 3.8% -> 12.5%)
+    const baseBandAlpha = dark ? 0.11 : 0.125;
+    const lineAlpha = dark ? 0.46 : 0.40;
 
     ctx.save();
-    for (const tier of tiers) {
-      const yMaxPixel = yScale.getPixelForValue(tier.max);
-      const yMinPixel = yScale.getPixelForValue(tier.min);
+    for (const band of ratingBands) {
+      const yMaxPixel = yScale.getPixelForValue(band.max);
+      const yMinPixel = yScale.getPixelForValue(band.min);
 
       const yTop = Math.max(top, Math.min(bottom, yMaxPixel));
       const yBottom = Math.min(bottom, Math.max(top, yMinPixel));
 
       if (yBottom > yTop) {
-        // 부드러운 가로 배경 밴드
-        ctx.fillStyle = hexToRgba(tier.color, bandAlpha);
+        // 부드럽고 확연한 100단위 가로 배경 밴드
+        const effectiveAlpha = baseBandAlpha + (band.alphaBoost || 0);
+        ctx.fillStyle = hexToRgba(band.color, effectiveAlpha);
         ctx.fillRect(left, yTop, right - left, yBottom - yTop);
       }
 
-      // 티어 경계선 (점선)
-      if (tier.min > 800) {
-        const boundaryY = yScale.getPixelForValue(tier.min);
+      // 100단위 경계선 (점선: 1200, 1300, 1400, 1500, 1600, 1700 등)
+      if (band.min >= 1100) {
+        const boundaryY = yScale.getPixelForValue(band.min);
         if (boundaryY >= top && boundaryY <= bottom) {
           ctx.beginPath();
-          ctx.setLineDash([4, 4]);
-          ctx.lineWidth = 1;
-          ctx.strokeStyle = hexToRgba(tier.color, lineAlpha);
+          ctx.setLineDash([5, 4]);
+          ctx.lineWidth = 1.2;
+          ctx.strokeStyle = hexToRgba(band.color, lineAlpha);
           ctx.moveTo(left, boundaryY);
           ctx.lineTo(right, boundaryY);
           ctx.stroke();
