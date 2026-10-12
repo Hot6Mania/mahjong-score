@@ -1089,8 +1089,6 @@ const renderKatex = (latex: string, displayMode = true) => {
   }
 };
 
-const renderKatexInline = (latex: string) => renderKatex(latex, false);
-
 // 줌 배율 초기화
 const resetRatingChartZoom = () => {
   if (ratingEmbeddedChartRef.value?.chart) {
@@ -2369,60 +2367,66 @@ const getRankClass = (rank: number) => {
         <!-- 3. 레이팅 시스템 산출 원리 및 공식 안내 -->
         <div class="rating-guide-card">
           <div class="guide-header">
-            <h2 class="rating-section-title">레이팅 산출 원리 및 파라미터</h2>
-            <span class="rating-section-desc">베이지안 추론 기반 4인 다자간 경쟁(Plackett-Luce) 모델 규격입니다.</span>
+            <h2 class="rating-section-title">레이팅 산출 원리 및 핵심 규칙</h2>
+            <span class="rating-section-desc">대국 결과(우마), 상대와의 레이팅 격차, 누적 대국 수를 바탕으로 산출됩니다.</span>
           </div>
 
           <div class="formula-cards-grid">
             <div class="formula-box">
-              <div class="formula-tag">1. 실력 분포 모델</div>
-              <div class="formula-latex" v-html="renderKatex('S_i \\sim \\mathcal{N}(\\mu_i, \\, \\sigma_i^2)')"></div>
-              <p class="formula-explanation">플레이어의 실력은 평균(μ)과 불확실도(σ)를 모수로 하는 정규분포로 정의됩니다.</p>
+              <div class="formula-tag">1. 시작 레이팅과 실제 기준</div>
+              <div class="formula-latex" v-html="renderKatex('R_0 = 1320 \\;\\longrightarrow\\; 1500')"></div>
+              <p class="formula-explanation">실제 기준 실력은 1500이며 초기값 1320은 대국 수가 적을 때의 임시 표기값(허상)입니다. 판수를 거듭할수록 실제 레이팅에 근접합니다.</p>
             </div>
 
             <div class="formula-box">
-              <div class="formula-tag">2. 우마(Uma) 기반 레이팅 갱신</div>
-              <div class="formula-latex" v-html="renderKatex('\\Delta \\mu_i = \\left(\\frac{\\sigma_i}{\\sigma_0}\\right) \\times \\left( \\text{Uma}_i + \\frac{\\bar{R} - R_i}{40} \\times 2.0 \\right)')"></div>
-              <p class="formula-explanation">경기 결과 획득한 순수 우마(Uma)와 상대 테이블 평균 레이팅과의 격차를 직접 반영하여 실력 평균을 갱신합니다.</p>
+              <div class="formula-tag">2. 상대 실력차 가감</div>
+              <div class="formula-latex" v-html="renderKatex('\\Delta R \\propto \\text{Uma} + (\\bar{R}_{\\text{테이블}} - R_i)')"></div>
+              <p class="formula-explanation">레이팅이 높은 상대와 대국해 이기면 더 많이 얻고, 레이팅이 낮은 상대에게 패배하면 더 많이 잃습니다.</p>
             </div>
 
             <div class="formula-box">
-              <div class="formula-tag">3. 레이팅(R) 산출</div>
-              <div class="formula-latex" v-html="renderKatex('R = \\mathrm{round}(\\mu - 1.5 \\times \\sigma)')"></div>
-              <p class="formula-explanation">불확실도를 차감하여 대국 수가 적은 상태에서의 랭킹 과대평가를 완충합니다.</p>
+              <div class="formula-tag">3. 판수 누적과 변화량 안정화</div>
+              <div class="formula-latex" v-html="renderKatex('N \\ge 40 \\;\\Longrightarrow\\; \\Delta R \\text{ 안정화}')"></div>
+              <p class="formula-explanation">초기에는 판당 변화량이 크며, 판수가 쌓일수록 변화량이 점차 작아져 약 40판 이후에는 변동폭이 동일하게 유지됩니다.</p>
             </div>
           </div>
 
-          <!-- 레이팅 완충 및 자연 수렴 원리 안내 카드 -->
+          <!-- 레이팅 핵심 원리 요약 안내 카드 -->
           <div class="rating-buffer-callout">
             <div class="rbc-header">
               <span class="rbc-icon">💡</span>
-              <h3 class="rbc-title">왜 시작 레이팅은 1500(μ₀)이 아니라 1320(R₀)으로 표기되나요?</h3>
+              <h3 class="rbc-title">레이팅 산출 핵심 요약</h3>
             </div>
             <div class="rbc-body">
               <div class="rbc-step">
                 <div class="rbc-step-header">
                   <span class="rbc-step-badge">원리 1</span>
-                  <span class="rbc-step-title">초반 랭킹 과대평가(거품) 방지 완충 장치</span>
+                  <span class="rbc-step-title">시작 레이팅(1320)과 실제 기준 실력(1500)</span>
                 </div>
                 <p>
-                  시스템 내부에서 모든 참가자의 잠재 실력 기댓값은 기준점인 <span v-html="renderKatexInline('\\mu_0 = 1500')"></span>에서 출발합니다. 
-                  그러나 신규 참가자가 초반 1~2판 우연한 행운으로 상위권을 독점하는 과대평가를 방지하기 위해, 
-                  초기 불확실도(<span v-html="renderKatexInline('\\sigma_0 = 120')"></span>)의 1.5배인 <strong>180점의 완충 버퍼(<span v-html="renderKatexInline('1.5 \\times \\sigma_0')"></span>)를 차감</strong>하여 공식 표기 레이팅을 <span v-html="renderKatexInline('R_0 = 1320')"></span>으로 시작합니다.
+                  시스템 내부의 실제 기준 실력치는 <strong>1500</strong>입니다.
+                  신규 플레이어의 시작 레이팅은 <strong>1320</strong>으로 표기되지만, 이는 판수가 적은 상태의 초기값(허상)일 뿐입니다.
+                  본전 성적(우마 0pt)만 유지하더라도 대국을 거듭할수록 불확실성이 줄어들며 본래 실력 기준치인 1500을 향해 자연스럽게 근접합니다.
                 </p>
               </div>
               <div class="rbc-step">
                 <div class="rbc-step-header">
                   <span class="rbc-step-badge">원리 2</span>
-                  <span class="rbc-step-title">대국 수(시행) 누적에 따른 1320과 1500의 갭 자연 축소(수렴)</span>
+                  <span class="rbc-step-title">상대 레이팅에 따른 변동폭 가감 (상대 실력차 보정)</span>
                 </div>
                 <p>
-                  대국을 거듭할수록 시스템은 선수의 실력을 점점 더 신뢰하게 되어 불확실도(<span v-html="renderKatexInline('\\sigma')"></span>)가 초기 120에서 <strong>40~50 수준으로 대폭 감소</strong>합니다. 
-                  이에 따라 차감 완충액(<span v-html="renderKatexInline('1.5 \\times \\sigma')"></span>) 역시 <strong>180점에서 60~75점 수준으로 축소</strong>됩니다.
+                  나보다 레이팅이 높은 상대들과 대국해서 이기면 보너스를 받아 더 많은 레이팅을 얻고, 나보다 레이팅이 낮은 상대들에게 패배하면 페널티로 더 많은 레이팅을 잃습니다.
+                  대국 테이블 4인의 평균 레이팅과 내 레이팅의 격차가 대국 결과(우마)에 직접 보정치로 반영됩니다.
                 </p>
-                <p class="rbc-highlight">
-                  즉, 선수가 2위권(우마 0pt)의 본전 성적을 유지하며 대국 수만 꾸준히 쌓더라도, 
-                  불확실성이 해소되는 것만으로 표기 레이팅(<span v-html="renderKatexInline('R')"></span>)은 1320에서 본래의 기준 실력치인 1500을 향해 <strong>자연 수렴(상승)</strong>하게 됩니다.
+              </div>
+              <div class="rbc-step">
+                <div class="rbc-step-header">
+                  <span class="rbc-step-badge">원리 3</span>
+                  <span class="rbc-step-title">판수 누적에 따른 변화량 안정화 (약 40판 기준)</span>
+                </div>
+                <p>
+                  대국 초반(1~40판가량)에는 빠른 실력 측정을 위해 판당 레이팅 변화량(등락폭)이 큽니다.
+                  판수를 거듭할수록 판당 변화량이 점차 작아져 안정화되며, <strong>약 40판 이후</strong>부터는 최소 변동폭 기준에 도달하여 이후 대국부터는 변화량 스케일이 일정하게 동일하게 유지됩니다.
                 </p>
               </div>
             </div>
@@ -2434,31 +2438,34 @@ const getRankClass = (rank: number) => {
                 <tr>
                   <th>파라미터</th>
                   <th>설정값</th>
-                  <th>의미 및 역할</th>
+                  <th>설명</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
-                  <td><span class="param-math" v-html="renderKatexInline('\\mu_0')"></span></td>
+                  <td><strong>기준 실력치</strong></td>
                   <td><strong>1500</strong></td>
-                  <td>초기 실력 기댓값 기준점 (모든 참가자의 본래 잠재 실력)</td>
+                  <td>모든 참가자의 시스템 실제 기준 실력 (판수 누적 시 수렴하는 목표점)</td>
                 </tr>
                 <tr>
-                  <td><span class="param-math" v-html="renderKatexInline('\\sigma_0')"></span></td>
-                  <td><strong>120</strong></td>
-                  <td>초기 불확실도 (대국 시행이 거듭될수록 120에서 40~50으로 감소)</td>
-                </tr>
-                <tr>
-                  <td><span class="param-math" v-html="renderKatexInline('R_0')"></span></td>
+                  <td><strong>시작 레이팅</strong></td>
                   <td><strong>1320</strong></td>
-                  <td>
-                    시작 표기 레이팅 (<span v-html="renderKatexInline('R_0 = \\mu_0 - 1.5 \\times \\sigma_0 = 1500 - 180 = 1320')"></span>)
-                  </td>
+                  <td>신규 참가자의 초기 표기값 (대국 수가 적을 때의 임시 표기값)</td>
                 </tr>
                 <tr>
-                  <td><span class="param-math" v-html="renderKatexInline('\\beta')"></span></td>
-                  <td><strong>60</strong></td>
-                  <td>경기 내 환경 및 확률적 변동성을 감안한 스케일 완충 계수</td>
+                  <td><strong>변화량 안정화</strong></td>
+                  <td><strong>약 40판</strong></td>
+                  <td>초반의 큰 변화량이 점차 줄어들어 판당 등락폭 기준이 동일해지는 판수</td>
+                </tr>
+                <tr>
+                  <td><strong>대국 결과 (우마)</strong></td>
+                  <td><strong>경기 우마</strong></td>
+                  <td>대국 순위 및 최종 점수에 따라 획득한 우마(Uma)가 기본 변동값으로 반영</td>
+                </tr>
+                <tr>
+                  <td><strong>상대 실력차 보정</strong></td>
+                  <td><strong>테이블 평균 대비</strong></td>
+                  <td>나보다 높은 테이블에서 승리 시 가산점, 낮은 테이블에서 패배 시 추가 감점</td>
                 </tr>
               </tbody>
             </table>
