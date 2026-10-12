@@ -793,7 +793,22 @@ const onOpenAttendModal = (dayItem?: ScheduleDayItem, targetName?: string) => {
   if (dayItem) {
     selectedDayItem.value = dayItem;
   }
-  attendTargetName.value = targetName || '';
+  const item = dayItem || selectedDayItem.value;
+  let finalTargetName = targetName || '';
+  if (!finalTargetName && item && myAttendeeName.value && item.attendees?.some(a => a.name === myAttendeeName.value)) {
+    finalTargetName = myAttendeeName.value;
+  }
+
+  // 확정된 일정 방어: 관리자가 아니며, 기존 참석자 수정이 아닌 신규 신청인 경우 차단
+  if (item?.isConfirmed && !isAdmin.value) {
+    const isEditingExisting = !!(finalTargetName && item.attendees?.some(a => a.name === finalTargetName));
+    if (!isEditingExisting) {
+      showToast('이미 확정된 모임에는 새로 참석 신청할 수 없습니다.', 'error');
+      return;
+    }
+  }
+
+  attendTargetName.value = finalTargetName;
   isDetailModalOpen.value = false;
   isAttendModalOpen.value = true;
 };
@@ -1055,6 +1070,15 @@ const onAttendSubmit = async (payload: {
 }) => {
   if (!selectedDayItem.value) return;
 
+  // 확정된 일정 방어: 관리자가 아니며, 기존 참석자 목록에 없는 신규 신청인 경우 차단
+  if (selectedDayItem.value.isConfirmed && !isAdmin.value) {
+    const isAlreadyIn = selectedDayItem.value.attendees?.some(a => a.name === payload.name);
+    if (!isAlreadyIn) {
+      showToast('이미 확정된 모임에는 새로 참석 신청할 수 없습니다.', 'error');
+      return;
+    }
+  }
+
   // 대리 등록 여부 판정:
   // 1) 관리자이거나
   // 2) 현재 사용자가 회차 개설자인데 다른 사람을 추가하는 경우이거나
@@ -1114,6 +1138,15 @@ const onAttendBatchSubmit = async (payload: {
   pin: string;
 }) => {
   if (!selectedDayItem.value) return;
+
+  // 확정된 일정 방어: 관리자가 아닌 경우 신규 신청 포함 시 차단
+  if (selectedDayItem.value.isConfirmed && !isAdmin.value) {
+    const hasNew = payload.attendees.some(att => !selectedDayItem.value?.attendees?.some(a => a.name === att.name));
+    if (hasNew) {
+      showToast('이미 확정된 모임에는 새로 참석 신청할 수 없습니다.', 'error');
+      return;
+    }
+  }
 
   const res = await submitBatchAttendance(
     currentMonth.value,

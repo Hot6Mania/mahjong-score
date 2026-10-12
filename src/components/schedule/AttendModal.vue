@@ -19,12 +19,20 @@ const props = defineProps<{
 
 const isCreatorAddMode = computed(() => {
   if (props.isAdmin) return true;
+  if (props.dayItem?.isConfirmed) return false;
   if (props.isManager) return true;
   if (props.myAttendeeName && props.dayItem?.creator && props.dayItem.creator === props.myAttendeeName) return true;
   return false;
 });
 
+const isNameReadOnly = computed(() => {
+  if (props.isAdmin) return false;
+  if (props.dayItem?.isConfirmed) return true;
+  return false;
+});
+
 const isMultiSelectMode = computed(() => {
+  if (props.dayItem?.isConfirmed && !props.isAdmin) return false;
   return isCreatorAddMode.value && !props.targetAttendeeName;
 });
 
@@ -134,9 +142,14 @@ const sortedMembers = computed(() => {
 
 // 검색 필터링된 멤버 목록
 const filteredMembers = computed(() => {
+  let list = sortedMembers.value;
+  if (props.dayItem?.isConfirmed && !props.isAdmin) {
+    const attendeeNames = new Set(props.dayItem.attendees?.map(a => a.name) || []);
+    list = list.filter(m => attendeeNames.has(m.name));
+  }
   const q = nameSearchQuery.value.trim().toLowerCase();
-  if (!q) return sortedMembers.value;
-  return sortedMembers.value.filter(m => m.name.toLowerCase().includes(q));
+  if (!q) return list;
+  return list.filter(m => m.name.toLowerCase().includes(q));
 });
 
 // 현재 선택된 날짜에 이미 등록된 본인 정보가 있는지 확인
@@ -461,6 +474,15 @@ const handleSubmit = () => {
       return;
     }
 
+    // 확정된 일정 신규 참가 신청 방어
+    if (props.dayItem?.isConfirmed && !props.isAdmin) {
+      const nonAttending = namesToSubmit.filter(name => !props.dayItem?.attendees?.some(a => a.name === name));
+      if (nonAttending.length > 0) {
+        errorMessage.value = '이미 확정된 일정에는 새로 참석 신청할 수 없습니다.';
+        return;
+      }
+    }
+
     if (namesToSubmit.length > 1) {
       emit('submitBatch', {
         attendees: namesToSubmit.map(name => ({
@@ -492,6 +514,15 @@ const handleSubmit = () => {
   if (!finalName) {
     errorMessage.value = '참가자 이름을 선택하거나 입력해주세요.';
     return;
+  }
+
+  // 확정된 일정 신규 참가 신청 방어
+  if (props.dayItem?.isConfirmed && !props.isAdmin) {
+    const isAlreadyAttending = props.dayItem.attendees?.some(a => a.name === finalName);
+    if (!isAlreadyAttending) {
+      errorMessage.value = '이미 확정된 일정에는 새로 참석 신청할 수 없습니다.';
+      return;
+    }
   }
 
   emit('submit', {
@@ -545,6 +576,9 @@ const handleCancel = () => {
         <div v-if="errorMessage" class="error-banner">
           {{ errorMessage }}
         </div>
+        <div v-else-if="dayItem.isConfirmed && !isAdmin && !existingAttendee" class="error-banner">
+          이미 출발 확정된 모임으로 신규 참석 신청이 마감되었습니다.
+        </div>
 
         <div class="sheet-body">
           <!-- 개설자/관리자 권한 안내 배너 -->
@@ -597,13 +631,15 @@ const handleCancel = () => {
                 type="text"
                 class="apple-input"
                 :value="nameSearchQuery"
-                @input="onSearchInput"
-                @focus="openDropdown"
-                @keydown="onKeyDown"
+                :readonly="isNameReadOnly"
+                @input="isNameReadOnly ? null : onSearchInput($event)"
+                @focus="isNameReadOnly ? null : openDropdown()"
+                @keydown="isNameReadOnly ? null : onKeyDown($event)"
                 @keydown.enter.prevent="isMultiSelectMode ? addCustomName() : null"
-                :placeholder="isMultiSelectMode ? '이름 검색 후 선택 또는 엔터로 추가' : '이름 검색 또는 직접 입력'"
+                :placeholder="isNameReadOnly ? '확정된 모임 (이름 변경 불가)' : (isMultiSelectMode ? '이름 검색 후 선택 또는 엔터로 추가' : '이름 검색 또는 직접 입력')"
               />
               <button 
+                v-if="!isNameReadOnly"
                 type="button" 
                 class="dropdown-toggle-btn"
                 @click="isDropdownOpen ? (isDropdownOpen = false) : openDropdown()"
@@ -878,9 +914,10 @@ const handleCancel = () => {
           <button
             type="button"
             class="btn-primary"
+            :disabled="dayItem.isConfirmed && !isAdmin && !existingAttendee"
             @click="handleSubmit"
           >
-            {{ isMultiSelectMode && selectedNames.length > 1 ? `${selectedNames.length}명 일괄 등록` : (existingAttendee ? '수정 완료' : '등록') }}
+            {{ isMultiSelectMode && selectedNames.length > 1 ? `${selectedNames.length}명 일괄 등록` : (existingAttendee ? '수정 완료' : (dayItem.isConfirmed && !isAdmin ? '신청 마감' : '등록')) }}
           </button>
         </div>
       </div>
@@ -1547,6 +1584,16 @@ html.dark .dropdown-item:hover, html.dark .dropdown-item.highlighted {
 }
 .btn-primary:hover {
   opacity: 0.9;
+}
+.btn-primary:disabled {
+  background: var(--border-color, #e2e8f0);
+  color: var(--text-dimmed, #94a3b8);
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+html.dark .btn-primary:disabled {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.4);
 }
 
 .btn-danger-outline {

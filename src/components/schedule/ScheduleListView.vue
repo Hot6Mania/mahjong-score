@@ -71,6 +71,9 @@ const isEmptyDate = (day: ScheduleDayItem) => {
 };
 
 const handleActionClick = (item: ScheduleDayItem) => {
+  if (item.isConfirmed && !isUserAttending(item)) {
+    return;
+  }
   if (!isUserAttending(item) && isEmptyDate(item)) {
     emit('selectDay', item);
   } else {
@@ -107,6 +110,9 @@ const getOverlapRange = (day: ScheduleDayItem) => {
             </h4>
             <span v-if="sessionMap.get(item.date)" class="session-badge badge-confirmed">
               제{{ sessionMap.get(item.date) }}회
+            </span>
+            <span v-else-if="item.isConfirmed" class="session-badge badge-confirmed">
+              출발 확정
             </span>
             <span v-else class="session-badge badge-recruiting">
               <span v-if="(item.attendees?.length || 0) >= 4">
@@ -186,11 +192,13 @@ const getOverlapRange = (day: ScheduleDayItem) => {
             class="btn-attend"
             :class="{ 
               'btn-attend-edit': isUserAttending(item),
-              'btn-attend-create': !isUserAttending(item) && isEmptyDate(item)
+              'btn-attend-create': !isUserAttending(item) && isEmptyDate(item),
+              'btn-attend-closed': item.isConfirmed && !isUserAttending(item)
             }"
+            :disabled="item.isConfirmed && !isUserAttending(item)"
             @click="handleActionClick(item)"
           >
-            {{ isUserAttending(item) ? '내 참석 수정' : (isEmptyDate(item) ? '개설' : '참석 신청') }}
+            {{ isUserAttending(item) ? '내 참석 수정' : (item.isConfirmed ? '신청 마감' : (isEmptyDate(item) ? '개설' : '참석 신청')) }}
           </button>
         </div>
       </div>
@@ -489,6 +497,19 @@ html.dark .session-badge.badge-recruiting {
 
 .btn-attend.btn-attend-edit {
   background: #059669;
+}
+
+.btn-attend:disabled,
+.btn-attend.btn-attend-closed {
+  background: var(--border-color, #e2e8f0);
+  color: var(--text-dimmed, #94a3b8);
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+html.dark .btn-attend:disabled,
+html.dark .btn-attend.btn-attend-closed {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.4);
 }
 
 .txt-short {

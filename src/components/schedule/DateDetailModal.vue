@@ -947,6 +947,14 @@ const handleUnconfirmKeepSheet = () => {
   emit('toggleConfirm', props.dayItem.date);
   isUnconfirmSheetModalOpen.value = false;
 };
+
+const onFooterAttendClick = () => {
+  if (props.dayItem?.isConfirmed && !isUserAttending.value && !props.isAdmin) {
+    emit('toast', '이미 확정된 모임에는 새로 참석 신청할 수 없습니다.', 'error');
+    return;
+  }
+  emit('openAttend', isUserAttending.value ? props.myAttendeeName : undefined);
+};
 </script>
 
 <template>
@@ -959,8 +967,9 @@ const handleUnconfirmKeepSheet = () => {
             <div class="header-title-box">
               <h3 class="sheet-title">{{ dayItem.date }} ({{ getDayOfWeek(dayItem.date) }})</h3>
               <div class="title-badge-row">
-                <span v-if="dayItem.isConfirmed && sessionNumber" class="session-badge badge-confirmed">
-                  제{{ sessionNumber }}회
+                <span v-if="dayItem.isConfirmed" class="session-badge badge-confirmed">
+                  <template v-if="sessionNumber">제{{ sessionNumber }}회</template>
+                  <template v-else>출발 확정</template>
                 </span>
                 <span v-else class="session-badge badge-recruiting">
                   <span v-if="attendeeCount >= 4">
@@ -1171,6 +1180,7 @@ const handleUnconfirmKeepSheet = () => {
                     전체 비우기
                   </button>
                   <button
+                    v-if="!dayItem.isConfirmed || isAdmin"
                     type="button"
                     class="btn-add-attendee"
                     @click="emit('openAttend')"
@@ -1461,7 +1471,12 @@ const handleUnconfirmKeepSheet = () => {
             <!-- 참가자가 아직 없는 경우의 타임테이블 Empty State -->
             <div v-else class="empty-timetable-card">
               <p class="empty-timetable-text">아직 참가 신청한 인원이 없어 타임테이블이 생성되지 않았습니다.</p>
-              <button type="button" class="btn-empty-attend" @click="emit('openAttend')">
+              <button
+                v-if="!dayItem.isConfirmed"
+                type="button"
+                class="btn-empty-attend"
+                @click="emit('openAttend')"
+              >
                 첫 번째로 참석 신청하기
               </button>
             </div>
@@ -1470,8 +1485,14 @@ const handleUnconfirmKeepSheet = () => {
 
         <!-- 푸터 -->
         <div class="sheet-footer">
-          <button type="button" class="btn-primary" @click="emit('openAttend', isUserAttending ? myAttendeeName : undefined)">
-            {{ isUserAttending ? '내 참석 정보 수정' : '참석 신청하기' }}
+          <button
+            type="button"
+            class="btn-primary"
+            :class="{ 'btn-closed': dayItem.isConfirmed && !isUserAttending }"
+            :disabled="dayItem.isConfirmed && !isUserAttending"
+            @click="onFooterAttendClick"
+          >
+            {{ isUserAttending ? '내 참석 정보 수정' : (dayItem.isConfirmed ? '신청 마감 (출발 확정)' : '참석 신청하기') }}
           </button>
         </div>
       </div>
@@ -3320,6 +3341,18 @@ html.dark .attendee-memo {
 }
 .btn-primary:hover {
   opacity: 0.9;
+}
+.btn-primary:disabled,
+.btn-primary.btn-closed {
+  background: var(--border-color, #e2e8f0);
+  color: var(--text-dimmed, #94a3b8);
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+html.dark .btn-primary:disabled,
+html.dark .btn-primary.btn-closed {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.4);
 }
 
 /* 참석 취소 PIN 입력 미니 모달 */

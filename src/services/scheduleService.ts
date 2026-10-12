@@ -640,6 +640,19 @@ export async function submitAttendance(
     }
   }
 
+  const currentLocal = getLocalMonthSchedule(month);
+  const targetDayLocal = currentLocal.dates.find(d => d.date === date);
+  if (targetDayLocal?.isConfirmed && !isAdmin) {
+    const isAlreadyAttending = targetDayLocal.attendees?.some(a => a.name === trimmedName);
+    if (!isAlreadyAttending) {
+      return {
+        success: false,
+        data: currentLocal,
+        error: '이미 확정된 모임에는 새로 참석 신청할 수 없습니다.'
+      };
+    }
+  }
+
   const cipher = localStorage.getItem('google_refresh_cipher');
   const lastName = getLastAttendeeName();
 
@@ -717,6 +730,10 @@ export async function submitAttendance(
       updatedAt: Date.now()
     };
   } else {
+    // 확정 모임 신규 참가자 추가 방어
+    if (targetDay.isConfirmed && !isAdmin) {
+      return { success: false, data: currentData, error: '이미 확정된 모임에는 새로 참석 신청할 수 없습니다.' };
+    }
     // 신규 참가자 추가: 본인이 직접 유효 PIN을 입력하지 않은 경우(대리 등록 등)에는 빈 문자열('')로 격리 (기본 PIN이나 개설자 PIN 절대 상속 금지)
     targetDay.attendees.push({
       id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -782,6 +799,19 @@ export async function submitBatchAttendance(
   }
 
   const pinHash = (trimmedPin && trimmedPin.length >= 4 && trimmedPin !== 'admin_bypass') ? await hashPin(trimmedPin) : '';
+  const currentLocal = getLocalMonthSchedule(month);
+  const targetDayLocal = currentLocal.dates.find(d => d.date === date);
+  if (targetDayLocal?.isConfirmed && !isAdmin) {
+    const hasNewAttendee = attendeesInput.some(att => !targetDayLocal.attendees?.some(a => a.name === att.name.trim()));
+    if (hasNewAttendee) {
+      return {
+        success: false,
+        data: currentLocal,
+        error: '이미 확정된 모임에는 새로 참석 신청할 수 없습니다.'
+      };
+    }
+  }
+
   const cipher = localStorage.getItem('google_refresh_cipher');
   const lastName = getLastAttendeeName();
 
@@ -865,6 +895,9 @@ export async function submitBatchAttendance(
         updatedAt: Date.now()
       };
     } else {
+      if (targetDay.isConfirmed && !isAdmin) {
+        continue;
+      }
       const finalPin = (trimmedName === lastName && pinHash) ? pinHash : '';
       targetDay.attendees.push({
         id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
