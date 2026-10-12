@@ -1162,79 +1162,49 @@ const ratingChartData = computed(() => {
   if (!ratingTimeline.value) {
     return { labels: [], datasets: [] };
   }
-  const datasets = ratingTimeline.value.datasets.map((d) => ({
-    label: d.name,
-    data: d.data,
-    borderColor: d.color,
-    backgroundColor: d.color,
-    borderWidth: 1.5,
-    // 미출전 수평 구간 자연스러운 그라디언트 페이드인/아웃 전환 (기본 불투명도 0.52로 상향)
-    segment: {
-      borderColor: (ctx: any) => {
-        const p0Idx = ctx.p0DataIndex;
-        const p1Idx = ctx.p1DataIndex;
-        const isMatchSegment = d.played?.[p1Idx];
-        if (isMatchSegment) {
-          return d.color; // 실제 대국 변동 구간: 선명한 100% 원색
+
+  const isDarkTheme = isDark.value;
+  const datasets = ratingTimeline.value.datasets.map((d) => {
+    // 1. 색상 사전 계산 (매 선분마다 정규식 파싱하는 오버헤드 제거)
+    // 원색(출전 대국 구간)과 반투명 색상(미출전 유지 구간)을 미리 준비
+    const matchColor = d.color;
+    const idleColor = hexToRgba(d.color, isDarkTheme ? 0.35 : 0.40);
+
+    // 2. 포인트 반경 사전 계산 (매 프레임 함수 동적 평가 제거)
+    // 시작(인덱스 0)과 끝 지점, 그리고 실제 출전한 대국 지점만 점을 표시하고 평상시 미출전 구간은 0
+    const pointRadii = d.data.map((_, idx) => {
+      if (idx === 0) return 2.0;
+      if (idx === d.data.length - 1) return 2.2;
+      return d.played?.[idx] ? 1.4 : 0;
+    });
+
+    return {
+      label: d.name,
+      data: d.data,
+      borderColor: matchColor,
+      backgroundColor: matchColor,
+      borderWidth: 1.6,
+      // 3. 선분별 스타일: 동일 색상 문자열을 반환하여 Chart.js의 Path 일괄 배칭(단일 stroke) 보장
+      // (기존의 매 프레임 수천 개 createLinearGradient 생성 및 CanvasGradient 할당을 완전히 제거)
+      segment: {
+        borderColor: (ctx: any) => {
+          return d.played?.[ctx.p1DataIndex] ? matchColor : idleColor;
         }
-
-        const justPlayed = d.played?.[p0Idx];
-        const willPlaySoon = d.played?.[p1Idx + 1];
-
-        const chartCtx = ctx.chart?.ctx;
-        if (chartCtx && ctx.p0 && ctx.p1 && (ctx.p0.x !== ctx.p1.x || ctx.p0.y !== ctx.p1.y)) {
-          try {
-            const grad = chartCtx.createLinearGradient(ctx.p0.x, ctx.p0.y, ctx.p1.x, ctx.p1.y);
-            if (justPlayed && willPlaySoon) {
-              // 경기 사이 짧은 휴식: 0.90 -> 0.80 선명 유지
-              grad.addColorStop(0, hexToRgba(d.color, 0.90));
-              grad.addColorStop(1, hexToRgba(d.color, 0.80));
-            } else if (justPlayed) {
-              // 대국 직후: 0.92 -> 0.52 부드러운 페이드아웃
-              grad.addColorStop(0, hexToRgba(d.color, 0.92));
-              grad.addColorStop(1, hexToRgba(d.color, 0.52));
-            } else if (willPlaySoon) {
-              // 대국 직전: 0.52 -> 0.85 점진적 페이드인
-              grad.addColorStop(0, hexToRgba(d.color, 0.52));
-              grad.addColorStop(1, hexToRgba(d.color, 0.85));
-            } else {
-              // 깊은 수평 구간: 52% 불투명도로 선명하게 식별 가능
-              grad.addColorStop(0, hexToRgba(d.color, 0.52));
-              grad.addColorStop(1, hexToRgba(d.color, 0.52));
-            }
-            return grad;
-          } catch (_) {}
-        }
-
-        if (justPlayed) return hexToRgba(d.color, 0.70);
-        if (willPlaySoon) return hexToRgba(d.color, 0.70);
-        return hexToRgba(d.color, 0.52);
       },
-      borderWidth: (ctx: any) => {
-        const p0Idx = ctx.p0DataIndex;
-        const p1Idx = ctx.p1DataIndex;
-        if (d.played?.[p1Idx]) return 1.8;
-        if (d.played?.[p0Idx] || d.played?.[p1Idx + 1]) return 1.45;
-        return 1.25; // 1.1px -> 1.25px로 소폭 상향하여 선의 굵기감 확보
-      }
-    },
-    pointRadius: (ctx: any) => {
-      const idx = ctx.dataIndex;
-      if (idx === 0) return 1.6;
-      if (idx === d.data.length - 1) return 1.8;
-      return d.played?.[idx] ? 1.2 : 0;
-    },
-    pointHoverRadius: 4.5,
-    pointHitRadius: 8,
-    played: d.played,
-    deltas: d.deltas,
-    umas: d.umas,
-    ranks: d.ranks,
-    hasMarker: d.hasMarker,
-    tension: 0.15,
-    fill: false,
-    hidden: hiddenRatingPlayerNames.value.has(d.name)
-  }));
+      pointRadius: pointRadii,
+      pointHoverRadius: 5,
+      pointHitRadius: 8,
+      played: d.played,
+      deltas: d.deltas,
+      umas: d.umas,
+      ranks: d.ranks,
+      hasMarker: d.hasMarker,
+      tension: 0, // 3차 베지에 스플라인 연산 부하 제거 및 표준 레이팅 그래프 스타일 적용
+      fill: false,
+      spanGaps: true,
+      hidden: hiddenRatingPlayerNames.value.has(d.name)
+    };
+  });
 
   return {
     labels: ratingTimeline.value.labels,
@@ -1242,9 +1212,30 @@ const ratingChartData = computed(() => {
   };
 });
 
+// 차트가 현재 초기 배율(제일 펼쳐진 상태)인지 판별하는 헬퍼
+const isChartFullyUnzoomed = (chart: any) => {
+  if (!chart) return true;
+  if (typeof chart.isZoomedOrPanned === 'function' && !chart.isZoomedOrPanned()) {
+    return true;
+  }
+  if (typeof chart.getZoomLevel === 'function' && chart.getZoomLevel() <= 1.02) {
+    return true;
+  }
+  const xScale = chart.scales?.x;
+  const initialBounds = typeof chart.getInitialScaleBounds === 'function' ? chart.getInitialScaleBounds() : null;
+  if (xScale && initialBounds?.x) {
+    const isAtMin = Math.abs(xScale.min - initialBounds.x.min) < 0.5 || xScale.min <= initialBounds.x.min;
+    const isAtMax = Math.abs(xScale.max - initialBounds.x.max) < 0.5 || xScale.max >= initialBounds.x.max;
+    if (isAtMin && isAtMax) return true;
+  }
+  return false;
+};
+
 const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
   responsive: true,
   maintainAspectRatio: false,
+  animation: false, // 줌/팬 및 필터 전환 시 프레임 딜레이 없는 즉각 렌더링
+  normalized: true, // 이미 X축 순차 인덱스 데이터이므로 Chart.js 내부 정렬/파싱 생략
   plugins: {
     legend: {
       position: 'top',
@@ -1274,6 +1265,28 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
     tooltip: {
       mode: 'index',
       intersect: false,
+      // 툴팁 최적화: 출전하지 않은 26명의 (미참가) 줄 도배를 방지하고 실제 출전 4인 위주로 컴팩트하게 노출
+      filter: (item, index, items) => {
+        if (item.dataIndex === 0) {
+          return index < 6;
+        }
+        const ds = item.dataset as any;
+        if (ds.played?.[item.dataIndex]) {
+          return true;
+        }
+        // 만약 선택된 표시 선수 중 아무도 해당 대국에 출전하지 않은 경우, 첫 번째 항목이라도 보여줌
+        const anyPlayed = items.some(it => (it.dataset as any).played?.[item.dataIndex]);
+        if (!anyPlayed && index === 0) {
+          return true;
+        }
+        return false;
+      },
+      itemSort: (a, b) => {
+        // 출전 4인 중 1위 -> 4위 순서로 보기 쉽게 정렬
+        const rankA = (a.dataset as any).ranks?.[a.dataIndex] ?? 99;
+        const rankB = (b.dataset as any).ranks?.[b.dataIndex] ?? 99;
+        return rankA - rankB;
+      },
       callbacks: {
         label: (context) => {
           const val = context.parsed.y;
@@ -1299,19 +1312,39 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
       }
     },
     zoom: {
+      limits: {
+        x: {
+          min: 'original',
+          max: 'original',
+          minRange: 5
+        }
+      },
       pan: {
         enabled: true,
         mode: 'x',
+        threshold: 8,
       },
       zoom: {
         wheel: {
           enabled: true,
-          speed: 0.1,
+          speed: 0.08,
         },
         pinch: {
           enabled: true,
         },
         mode: 'x',
+        onZoomStart: ({ chart, event }: any) => {
+          // 데스크톱 마우스 휠 이벤트 처리
+          if (event && event.deltaY !== undefined) {
+            const isZoomingOut = event.deltaY > 0;
+            // 줌이 제일 펼쳐져 있는 상태(초기 배율)에서 아래로 스크롤(줌아웃 시도)할 경우:
+            // false를 반환하여 preventDefault()를 막고, 브라우저 기본 페이지 스크롤이 정상 작동하도록 허용
+            if (isZoomingOut && isChartFullyUnzoomed(chart)) {
+              return false;
+            }
+          }
+          return true;
+        }
       }
     }
   },
@@ -2279,7 +2312,7 @@ const getRankClass = (rank: number) => {
 
           <!-- 차트 캔버스 영역 -->
           <div class="rating-inline-chart-wrapper">
-            <div v-if="ratingChartData.datasets.length > 0" class="rating-inline-chart-inner">
+            <div v-if="ratingChartData.datasets.length > 0" v-show="!isRatingTimelineModalOpen" class="rating-inline-chart-inner">
               <LineChart 
                 id="rating-inline-chart-canvas"
                 ref="ratingEmbeddedChartRef" 
@@ -7115,5 +7148,13 @@ html.dark .btn-zoom-reset:hover {
   bottom: 0;
   width: 100%;
   height: 100%;
+}
+
+/* 모바일 환경에서 차트 터치 시 세로 스크롤 허용 (Hammer.js touch-action: none 무력화) */
+.rating-inline-chart-inner :deep(canvas),
+.rating-modal-chart-inner :deep(canvas),
+#rating-inline-chart-canvas,
+#rating-modal-chart-canvas {
+  touch-action: pan-y !important;
 }
 </style>
