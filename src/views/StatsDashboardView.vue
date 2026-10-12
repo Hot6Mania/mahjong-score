@@ -2367,27 +2367,27 @@ const getRankClass = (rank: number) => {
         <!-- 3. 레이팅 시스템 산출 원리 및 공식 안내 -->
         <div class="rating-guide-card">
           <div class="guide-header">
-            <h2 class="rating-section-title">레이팅 산출 원리 및 핵심 규칙</h2>
-            <span class="rating-section-desc">대국 결과(우마), 상대와의 레이팅 격차, 누적 대국 수를 바탕으로 산출됩니다.</span>
+            <h2 class="rating-section-title">레이팅 산출 원리 및 상세 계산식</h2>
+            <span class="rating-section-desc">대국 결과(우마), 상대 테이블과의 레이팅 격차, 판수 스케일을 반영한 공식 산출식입니다.</span>
           </div>
 
           <div class="formula-cards-grid">
             <div class="formula-box">
-              <div class="formula-tag">1. 시작 레이팅과 실제 기준</div>
-              <div class="formula-latex" v-html="renderKatex('R_0 = 1320 \\;\\longrightarrow\\; 1500')"></div>
-              <p class="formula-explanation">실제 기준 실력은 1500이며 초기값 1320은 대국 수가 적을 때의 임시 표기값(허상)입니다. 판수를 거듭할수록 실제 레이팅에 근접합니다.</p>
+              <div class="formula-tag">1. 표시 레이팅 산출 공식</div>
+              <div class="formula-latex" v-html="renderKatex('R = \\mathrm{round}(\\mu - 1.5 \\times \\sigma)')"></div>
+              <p class="formula-explanation">기본 실력(μ=1500)과 불확실도(σ=120)로 시작해 초기값은 1320이 되며, 판수가 쌓여 σ가 감소할수록 실제 레이팅에 근접합니다.</p>
             </div>
 
             <div class="formula-box">
-              <div class="formula-tag">2. 상대 실력차 가감</div>
-              <div class="formula-latex" v-html="renderKatex('\\Delta R \\propto \\text{Uma} + (\\bar{R}_{\\text{테이블}} - R_i)')"></div>
-              <p class="formula-explanation">레이팅이 높은 상대와 대국해 이기면 더 많이 얻고, 레이팅이 낮은 상대에게 패배하면 더 많이 잃습니다.</p>
+              <div class="formula-tag">2. 경기 실력 갱신 공식 (Δμ)</div>
+              <div class="formula-latex" v-html="renderKatex('\\Delta \\mu = \\left(\\frac{\\sigma}{120}\\right) \\times \\left( \\text{Uma} + \\frac{\\bar{R}_{\\text{table}} - R}{20} \\right)')"></div>
+              <p class="formula-explanation">우마(Uma)와 상대 테이블 평균 격차 보정값을 합산한 뒤, 판수 스케일(σ/120)을 곱하여 최종 변동치를 계산합니다.</p>
             </div>
 
             <div class="formula-box">
-              <div class="formula-tag">3. 판수 누적과 변화량 안정화</div>
-              <div class="formula-latex" v-html="renderKatex('N \\ge 40 \\;\\Longrightarrow\\; \\Delta R \\text{ 안정화}')"></div>
-              <p class="formula-explanation">초기에는 판당 변화량이 크며, 판수가 쌓일수록 변화량이 점차 작아져 약 40판 이후에는 변동폭이 동일하게 유지됩니다.</p>
+              <div class="formula-tag">3. 약 40판 이후 안정화 공식</div>
+              <div class="formula-latex" v-html="renderKatex('\\Delta R_{N \\ge 40} \\approx \\frac{1}{3} \\times \\left( \\text{Uma} + \\frac{\\bar{R}_{\\text{table}} - R}{20} \\right)')"></div>
+              <p class="formula-explanation">약 40판 이후 불확실도(σ)가 최소치(40)에 도달하면, 스케일이 1/3로 고정되어 모든 대국에서 일정한 변동폭 기준을 유지합니다.</p>
             </div>
           </div>
 
@@ -2406,7 +2406,7 @@ const getRankClass = (rank: number) => {
                 <p>
                   시스템 내부의 실제 기준 실력치는 <strong>1500</strong>입니다.
                   신규 플레이어의 시작 레이팅은 <strong>1320</strong>으로 표기되지만, 이는 판수가 적은 상태의 초기값(허상)일 뿐입니다.
-                  본전 성적(우마 0pt)만 유지하더라도 대국을 거듭할수록 불확실성이 줄어들며 본래 실력 기준치인 1500을 향해 자연스럽게 근접합니다.
+                  본전 성적(우마 0pt)만 유지하더라도 대국을 거듭할수록 불확실성(σ)이 줄어들며 본래 실력 기준치인 1500을 향해 자연스럽게 근접합니다.
                 </p>
               </div>
               <div class="rbc-step">
@@ -2416,7 +2416,7 @@ const getRankClass = (rank: number) => {
                 </div>
                 <p>
                   나보다 레이팅이 높은 상대들과 대국해서 이기면 보너스를 받아 더 많은 레이팅을 얻고, 나보다 레이팅이 낮은 상대들에게 패배하면 페널티로 더 많은 레이팅을 잃습니다.
-                  대국 테이블 4인의 평균 레이팅과 내 레이팅의 격차가 대국 결과(우마)에 직접 보정치로 반영됩니다.
+                  대국 테이블 4인의 평균 레이팅과 내 레이팅의 격차가 <code>(평균 레이팅 - 내 레이팅) / 20</code> 보정치로 대국 결과(우마)에 직접 더해집니다.
                 </p>
               </div>
               <div class="rbc-step">
@@ -2426,7 +2426,7 @@ const getRankClass = (rank: number) => {
                 </div>
                 <p>
                   대국 초반(1~40판가량)에는 빠른 실력 측정을 위해 판당 레이팅 변화량(등락폭)이 큽니다.
-                  판수를 거듭할수록 판당 변화량이 점차 작아져 안정화되며, <strong>약 40판 이후</strong>부터는 최소 변동폭 기준에 도달하여 이후 대국부터는 변화량 스케일이 일정하게 동일하게 유지됩니다.
+                  판수를 거듭할수록 불확실성(σ)이 줄어들어 변화량이 점차 작아지며, <strong>약 40판 이후</strong>부터는 최소치(σ=40)에 도달해 <strong>스케일이 1/3로 고정</strong>되어 이후 대국부터는 변화량 기준이 동일하게 유지됩니다.
                 </p>
               </div>
             </div>
@@ -2443,19 +2443,24 @@ const getRankClass = (rank: number) => {
               </thead>
               <tbody>
                 <tr>
-                  <td><strong>기준 실력치</strong></td>
+                  <td><strong>기준 실력치 (μ)</strong></td>
                   <td><strong>1500</strong></td>
                   <td>모든 참가자의 시스템 실제 기준 실력 (판수 누적 시 수렴하는 목표점)</td>
                 </tr>
                 <tr>
-                  <td><strong>시작 레이팅</strong></td>
+                  <td><strong>시작 레이팅 (R₀)</strong></td>
                   <td><strong>1320</strong></td>
-                  <td>신규 참가자의 초기 표기값 (대국 수가 적을 때의 임시 표기값)</td>
+                  <td>신규 참가자의 초기 표기값 (대국 수가 적을 때의 임시 표기값: 1500 - 1.5×120)</td>
                 </tr>
                 <tr>
-                  <td><strong>변화량 안정화</strong></td>
-                  <td><strong>약 40판</strong></td>
-                  <td>초반의 큰 변화량이 점차 줄어들어 판당 등락폭 기준이 동일해지는 판수</td>
+                  <td><strong>불확실도 (σ)</strong></td>
+                  <td><strong>120 → 최소 40</strong></td>
+                  <td>대국을 치를수록 감소하며, 약 40판 이후에는 최소치인 40으로 고정</td>
+                </tr>
+                <tr>
+                  <td><strong>판수 스케일</strong></td>
+                  <td><strong>σ / 120</strong></td>
+                  <td>초반 1.0에서 시작해 약 40판 후 최소치인 1/3 (약 0.33)로 안정화</td>
                 </tr>
                 <tr>
                   <td><strong>대국 결과 (우마)</strong></td>
@@ -2464,7 +2469,7 @@ const getRankClass = (rank: number) => {
                 </tr>
                 <tr>
                   <td><strong>상대 실력차 보정</strong></td>
-                  <td><strong>테이블 평균 대비</strong></td>
+                  <td><strong>(R̄_table - R) / 20</strong></td>
                   <td>나보다 높은 테이블에서 승리 시 가산점, 낮은 테이블에서 패배 시 추가 감점</td>
                 </tr>
               </tbody>
