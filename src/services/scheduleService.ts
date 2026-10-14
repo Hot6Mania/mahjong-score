@@ -232,6 +232,27 @@ export async function fetchScheduleHistory(month: string, adminToken?: string): 
   return localList;
 }
 
+// 인플라이트(In-Flight) 조회 요청이 직후 발생한 변경(Mutation) 결과를 덮어쓰지 않도록 보호하는 시퀀스 및 버전 가드
+let scheduleMutationSeq = 0;
+let activeMutationsCount = 0;
+const lastServerSyncedUpdatedAt = new Map<string, number>();
+
+export function isScheduleMutating(): boolean {
+  return activeMutationsCount > 0;
+}
+
+function recordServerScheduleSync(data: ScheduleMonthData): void {
+  if (!data || !data.month) return;
+  const ts = Number(data.updatedAt || 0);
+  if (ts > 0) {
+    const prev = lastServerSyncedUpdatedAt.get(data.month) || 0;
+    if (ts >= prev) {
+      lastServerSyncedUpdatedAt.set(data.month, ts);
+    }
+  }
+  saveLocalMonthSchedule(data);
+}
+
 /**
  * 세션 스토리지에 저장된 관리자 인증 코드 조회
  */
@@ -244,23 +265,39 @@ export function getAdminPasscode(): string {
  */
 export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthData> {
   const local = getLocalMonthSchedule(month);
+  const seqAtStart = scheduleMutationSeq;
 
   try {
     const res = await fetch(`${getWorkerUrl()}/api/schedule?month=${encodeURIComponent(month)}&_t=${Date.now()}`, {
       method: 'GET',
       cache: 'no-store',
       headers: {
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
       }
     });
 
     if (res.ok) {
       const json = await res.json();
       if (json && json.success && json.data) {
+        // 조회가 진행되는 도중 사용자가 일정 생성/수정/참석 등 변경(Mutation)을 수행했다면,
+        // 뒤늦게 도착한 과거 조회 응답이 최신 로컬 상태를 덮어쓰지 않도록 즉시 폐기!
+        if (scheduleMutationSeq !== seqAtStart || activeMutationsCount > 0) {
+          return getLocalMonthSchedule(month);
+        }
+
+        const incomingUpdatedAt = Number(json.data.updatedAt || 0);
+        const knownServerUpdatedAt = lastServerSyncedUpdatedAt.get(month) || 0;
+
+        // 이미 이번 세션에서 서버로부터 확인한 최신 버전보다 구버전 응답이 온 경우 역전 방지
+        if (knownServerUpdatedAt > 0 && incomingUpdatedAt > 0 && incomingUpdatedAt < knownServerUpdatedAt) {
+          return getLocalMonthSchedule(month);
+        }
+
         // 만약 서버에서 반환된 dates가 비어있고, 로컬에 저장된 일정이 이미 있다면 (KV 미연결 등) 로컬 일정을 우선 보존 및 서버 KV 자동 복구
-        if ((!json.data.dates || json.data.dates.length === 0) && local.dates && local.dates.length > 0) {
+        if ((!json.data.dates || json.data.dates.length === 0) && local.dates && local.dates.length > 0 && knownServerUpdatedAt === 0) {
           console.info('서버 일정이 비어 있어 로컬에 저장된 일정을 우선 유지하며, 서버 KV로 자동 복원 동기화를 시도합니다.');
-          // 백그라운드 서버 KV 자동 복원 시도
           setTimeout(async () => {
             try {
               const cipher = localStorage.getItem('google_refresh_cipher');
@@ -284,7 +321,7 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
           return local;
         }
 
-        saveLocalMonthSchedule(json.data); // 로컬 캐시 갱신
+        recordServerScheduleSync(json.data); // 로컬 캐시 및 최신 서버 타임스탬프 갱신
         return json.data;
       }
     }
@@ -292,7 +329,7 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
     console.warn('Worker 스케줄 API 호출 실패, 로컬 캐시 사용:', err);
   }
 
-  return local;
+  return getLocalMonthSchedule(month);
 }
 
 /**
@@ -520,14 +557,23 @@ export async function deleteAdminPasscode() {
 }
 
 /**
- * 관리자 후보 날짜 일괄 등록/수정 (Worker API -> 로컬 폴백)
+ * 관리자 후보 날짜 일괄 등록/수정 및 단일 날짜 원자적 업데이트 (Worker API 우선)
  */
 export async function saveAdminScheduleDates(
   month: string,
   dates: ScheduleDayItem[],
   adminToken?: string,
   creatorPin?: string,
-  options?: { baseSessionNumber?: number; isClearAttendees?: boolean; isToggleConfirm?: boolean; isCreateSession?: boolean; targetDate?: string }
+  options?: {
+    baseSessionNumber?: number;
+    isClearAttendees?: boolean;
+    isToggleConfirm?: boolean;
+    isCreateSession?: boolean;
+    isUpdateSessionType?: boolean;
+    isDeleteDate?: boolean;
+    targetDate?: string;
+    creatorName?: string;
+  }
 ): Promise<{ success: boolean; data: ScheduleMonthData; error?: string }> {
   const payload: ScheduleMonthData = {
     month,
@@ -535,17 +581,19 @@ export async function saveAdminScheduleDates(
     dates
   };
 
-  // 1. 항상 로컬 스토리지에 먼저 확실하게 저장하여 유실 방지
-  saveLocalMonthSchedule(payload);
-
   const cipher = localStorage.getItem('google_refresh_cipher');
   const accessToken = localStorage.getItem('google_access_token');
   const passcode = getAdminPasscode();
   const lastName = getLastAttendeeName();
+  const effectiveCreatorName = options?.creatorName?.trim() || lastName;
+
+  scheduleMutationSeq++;
+  activeMutationsCount++;
 
   try {
     const res = await fetch(`${getWorkerUrl()}/api/schedule/admin/dates`, {
       method: 'POST',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         month,
@@ -554,11 +602,13 @@ export async function saveAdminScheduleDates(
         is_clear_attendees: options?.isClearAttendees,
         is_toggle_confirm: options?.isToggleConfirm,
         is_create_session: options?.isCreateSession,
+        is_update_session_type: options?.isUpdateSessionType,
+        is_delete_date: options?.isDeleteDate,
         target_date: options?.targetDate,
-        creator_name: lastName,
+        creator_name: effectiveCreatorName,
         creator_pin: creatorPin,
         pin: creatorPin,
-        my_name: lastName,
+        my_name: effectiveCreatorName,
         refresh_cipher: cipher,
         access_token: accessToken,
         admin_token: adminToken,
@@ -566,24 +616,26 @@ export async function saveAdminScheduleDates(
       })
     });
 
-    if (res.ok) {
-      const json = await res.json();
-      if (json && json.success && json.data) {
-        saveLocalMonthSchedule(json.data);
-        return { success: true, data: json.data };
-      }
+    const json = await res.json().catch(() => null);
+    if (res.ok && json && json.success && json.data) {
+      recordServerScheduleSync(json.data);
+      return { success: true, data: json.data };
     } else {
-      const errJson = await res.json().catch(() => null);
-      if (errJson && errJson.error) {
-        console.warn('Worker 날짜 저장 거부:', errJson.error);
-      }
+      const errMsg = json?.error || `일정 저장에 실패했습니다. (HTTP ${res.status})`;
+      console.warn('Worker 날짜 저장 거부:', errMsg);
+      return {
+        success: false,
+        data: getLocalMonthSchedule(month),
+        error: errMsg
+      };
     }
   } catch (err) {
-    console.warn('Worker 날짜 저장 실패, 로컬에 저장 완료:', err);
+    console.warn('Worker 날짜 저장 네트워크 실패, 오프라인 로컬 폴백 저장:', err);
+    saveLocalMonthSchedule(payload);
+    return { success: true, data: payload };
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
-
-  // 폴백: 로컬 스토리지에 저장된 데이터 반환
-  return { success: true, data: payload };
 }
 
 /**
@@ -656,9 +708,13 @@ export async function submitAttendance(
   const cipher = localStorage.getItem('google_refresh_cipher');
   const lastName = getLastAttendeeName();
 
+  scheduleMutationSeq++;
+  activeMutationsCount++;
+
   try {
     const res = await fetch(`${getWorkerUrl()}/api/schedule/attend`, {
       method: 'POST',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         month,
@@ -677,23 +733,27 @@ export async function submitAttendance(
       })
     });
 
-    if (res.ok) {
-      const json = await res.json();
-      if (json && json.success && json.data) {
-        if (trimmedPin && trimmedPin.length >= 4 && trimmedPin !== 'admin_bypass') {
-          saveUserPin(trimmedName, trimmedPin, !isProxy);
-        }
-        saveLocalMonthSchedule(json.data);
-        return { success: true, data: json.data };
-      } else if (json && json.error) {
-        return { success: false, data: getLocalMonthSchedule(month), error: json.error };
+    const json = await res.json().catch(() => null);
+    if (res.ok && json && json.success && json.data) {
+      if (trimmedPin && trimmedPin.length >= 4 && trimmedPin !== 'admin_bypass') {
+        saveUserPin(trimmedName, trimmedPin, !isProxy);
       }
+      recordServerScheduleSync(json.data);
+      return { success: true, data: json.data };
+    } else {
+      return {
+        success: false,
+        data: getLocalMonthSchedule(month),
+        error: json?.error || `참석 등록에 실패했습니다. (HTTP ${res.status})`
+      };
     }
   } catch (err) {
-    console.warn('Worker 참석 등록 실패, 로컬 처리 진행:', err);
+    console.warn('Worker 참석 등록 네트워크 실패, 로컬 폴백 처리 진행:', err);
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
 
-  // 로컬 폴백 처리
+  // 오프라인/네트워크 장애 시에만 로컬 폴백 처리
   const currentData = getLocalMonthSchedule(month);
   const targetDay = currentData.dates.find(d => d.date === date);
 
@@ -710,12 +770,10 @@ export async function submitAttendance(
 
   const existingIdx = targetDay.attendees.findIndex(a => a.name === trimmedName);
   if (existingIdx !== -1) {
-    // 기존 참가자 수정 시 PIN 대조 (관리자/개설자는 무조건 통과)
     const existing = targetDay.attendees[existingIdx];
     if (!canManage && existing.pinHash && existing.pinHash !== 'admin_bypass' && existing.pinHash !== pinHash) {
       return { success: false, data: currentData, error: 'PIN 비밀번호가 일치하지 않습니다.' };
     }
-    // 기존 참가자의 본인 고유 유효 PIN (과거 버그로 인한 개설자 핀 복사값 배제)
     const existingValidPin = (existing.pinHash && existing.pinHash !== 'admin_bypass' && (existing.name === targetDay.creator || existing.pinHash !== targetDay.creatorPinHash)) ? existing.pinHash : '';
     const finalPin = pinHash || existingValidPin || '';
 
@@ -730,11 +788,9 @@ export async function submitAttendance(
       updatedAt: Date.now()
     };
   } else {
-    // 확정 모임 신규 참가자 추가 방어
     if (targetDay.isConfirmed && !isAdmin) {
       return { success: false, data: currentData, error: '이미 확정된 모임에는 새로 참석 신청할 수 없습니다.' };
     }
-    // 신규 참가자 추가: 본인이 직접 유효 PIN을 입력하지 않은 경우(대리 등록 등)에는 빈 문자열('')로 격리 (기본 PIN이나 개설자 PIN 절대 상속 금지)
     targetDay.attendees.push({
       id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       name: trimmedName,
@@ -748,7 +804,6 @@ export async function submitAttendance(
     });
   }
 
-  // 참가자 시간 기준 모임 시간 유동적 자동 동기화
   const updatedSession = computeSessionTimeFromAttendees(targetDay.attendees, targetDay.adminSessionType || targetDay.sessionType);
   targetDay.customStartTime = updatedSession.customStartTime;
   targetDay.customEndTime = updatedSession.customEndTime;
@@ -817,7 +872,6 @@ export async function submitBatchAttendance(
 
   const formattedAttendees = attendeesInput.map(a => {
     const trimmed = a.name.trim();
-    // 일괄 등록 시 작성자 본인에게만 입력된 PIN 해시를 적용하고, 타인은 PIN 미설정('') 상태로 등록
     const attPin = (trimmed === lastName && pinHash) ? pinHash : '';
     return {
       ...a,
@@ -826,9 +880,13 @@ export async function submitBatchAttendance(
     };
   });
 
+  scheduleMutationSeq++;
+  activeMutationsCount++;
+
   try {
     const res = await fetch(`${getWorkerUrl()}/api/schedule/attend`, {
       method: 'POST',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         month,
@@ -843,20 +901,24 @@ export async function submitBatchAttendance(
       })
     });
 
-    if (res.ok) {
-      const json = await res.json();
-      if (json && json.success && json.data) {
-        saveLocalMonthSchedule(json.data);
-        return { success: true, data: json.data };
-      } else if (json && json.error) {
-        return { success: false, data: getLocalMonthSchedule(month), error: json.error };
-      }
+    const json = await res.json().catch(() => null);
+    if (res.ok && json && json.success && json.data) {
+      recordServerScheduleSync(json.data);
+      return { success: true, data: json.data };
+    } else {
+      return {
+        success: false,
+        data: getLocalMonthSchedule(month),
+        error: json?.error || `일괄 참석 등록에 실패했습니다. (HTTP ${res.status})`
+      };
     }
   } catch (err) {
-    console.warn('Worker 다중 참석 등록 실패, 로컬 처리 진행:', err);
+    console.warn('Worker 다중 참석 등록 네트워크 실패, 로컬 폴백 처리 진행:', err);
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
 
-  // 로컬 폴백 처리
+  // 오프라인 로컬 폴백 처리
   const currentData = getLocalMonthSchedule(month);
   const targetDay = currentData.dates.find(d => d.date === date);
 
@@ -913,7 +975,6 @@ export async function submitBatchAttendance(
     }
   }
 
-  // 참가자 기준 모임 시간 유동적 동기화
   const updatedSession = computeSessionTimeFromAttendees(targetDay.attendees, targetDay.adminSessionType || targetDay.sessionType);
   targetDay.customStartTime = updatedSession.customStartTime;
   targetDay.customEndTime = updatedSession.customEndTime;
@@ -956,9 +1017,13 @@ export async function cancelAttendance(
   const cipher = localStorage.getItem('google_refresh_cipher');
   const lastName = getLastAttendeeName();
 
+  scheduleMutationSeq++;
+  activeMutationsCount++;
+
   try {
     const res = await fetch(`${getWorkerUrl()}/api/schedule/cancel`, {
       method: 'POST',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         month,
@@ -973,20 +1038,24 @@ export async function cancelAttendance(
       })
     });
 
-    if (res.ok) {
-      const json = await res.json();
-      if (json && json.success && json.data) {
-        saveLocalMonthSchedule(json.data);
-        return { success: true, data: json.data };
-      } else if (json && json.error) {
-        return { success: false, data: getLocalMonthSchedule(month), error: json.error };
-      }
+    const json = await res.json().catch(() => null);
+    if (res.ok && json && json.success && json.data) {
+      recordServerScheduleSync(json.data);
+      return { success: true, data: json.data };
+    } else {
+      return {
+        success: false,
+        data: getLocalMonthSchedule(month),
+        error: json?.error || `참석 취소에 실패했습니다. (HTTP ${res.status})`
+      };
     }
   } catch (err) {
-    console.warn('Worker 참석 취소 실패, 로컬 처리 진행:', err);
+    console.warn('Worker 참석 취소 네트워크 실패, 로컬 폴백 처리 진행:', err);
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
 
-  // 로컬 폴백 처리
+  // 오프라인 로컬 폴백 처리
   const currentData = getLocalMonthSchedule(month);
   const targetDay = currentData.dates.find(d => d.date === date);
 
@@ -999,7 +1068,6 @@ export async function cancelAttendance(
     return { success: false, data: currentData, error: '등록된 참석 정보를 찾을 수 없습니다.' };
   }
 
-  // 개설자 권한 검증: 개설자 이름뿐 아니라 개설자 PIN 해시가 일치해야 진정한 개설자 권한으로 인정
   const isCreatorAuthorized = isCreator && targetDay.creatorPinHash && (targetDay.creatorPinHash === pinHash || pin === 'admin_bypass');
   const canManage = !!(isAdmin || isCreatorAuthorized);
 
@@ -1017,7 +1085,6 @@ export async function cancelAttendance(
     targetDay.isConfirmed = false;
   }
 
-  // 참가자 취소 후 모임 시간 유동적 동기화
   const updatedSession = computeSessionTimeFromAttendees(targetDay.attendees, targetDay.adminSessionType || targetDay.sessionType);
   targetDay.customStartTime = updatedSession.customStartTime;
   targetDay.customEndTime = updatedSession.customEndTime;
@@ -1066,46 +1133,47 @@ export async function adminForceResetUserPin(
   // 로컬 스토리지 PIN 캐시도 갱신
   saveUserPin(trimmedName, trimmedPin, false);
 
-  // 1. Worker API 시도
   const workerUrl = getWorkerUrl();
   const passcode = getAdminPasscode();
-  if (workerUrl && (adminToken || passcode)) {
-    try {
-      // 최신 스케줄 조회
-      const currentRes = await fetchMonthSchedule(month);
-      const dates = currentRes.dates;
+  const cipher = localStorage.getItem('google_refresh_cipher');
+  const accessToken = localStorage.getItem('google_access_token');
 
-      let changed = false;
-      dates.forEach(d => {
-        if (targetDate && d.date !== targetDate) return;
-        if (d.attendees) {
-          d.attendees.forEach(a => {
-            if (a.name === trimmedName) {
-              a.pinHash = newPinHash;
-              changed = true;
-            }
-          });
-        }
-        if (d.creator === trimmedName) {
-          d.creatorPinHash = newPinHash;
-          changed = true;
-        }
-      });
+  scheduleMutationSeq++;
+  activeMutationsCount++;
 
-      if (changed) {
-        const saveRes = await saveAdminScheduleDates(month, dates, adminToken);
-        if (saveRes.success) {
-          return { success: true, data: saveRes.data };
-        }
-      } else {
-        return { success: true, data: currentRes };
-      }
-    } catch (e: any) {
-      console.warn('Worker PIN 재설정 실패, 로컬 처리 진행:', e);
+  try {
+    const res = await fetch(`${workerUrl}/api/schedule/admin/dates`, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        month,
+        dates: [],
+        is_reset_pin: true,
+        target_name: trimmedName,
+        new_pin_hash: newPinHash,
+        target_date: targetDate || undefined,
+        refresh_cipher: cipher,
+        access_token: accessToken,
+        admin_token: adminToken,
+        admin_passcode: passcode
+      })
+    });
+
+    const json = await res.json().catch(() => null);
+    if (res.ok && json && json.success && json.data) {
+      recordServerScheduleSync(json.data);
+      return { success: true, data: json.data };
+    } else if (json && json.error) {
+      return { success: false, data: getLocalMonthSchedule(month), error: json.error };
     }
+  } catch (e: any) {
+    console.warn('Worker PIN 재설정 네트워크 실패, 로컬 처리 진행:', e);
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
 
-  // 2. 로컬 스케줄 갱신
+  // 로컬 스케줄 갱신 폴백
   const localData = getLocalMonthSchedule(month);
   localData.dates.forEach(d => {
     if (targetDate && d.date !== targetDate) return;
@@ -1135,6 +1203,7 @@ export async function fetchScheduleCommits(month: string): Promise<ScheduleCommi
   try {
     const res = await fetch(`${workerUrl}/api/schedule/admin/commits?month=${encodeURIComponent(month)}&_t=${Date.now()}`, {
       method: 'GET',
+      cache: 'no-store',
       headers: {
         'Accept': 'application/json'
       }
@@ -1168,9 +1237,13 @@ export async function rollbackSchedule(
   const token = adminToken || localStorage.getItem('google_access_token') || '';
   const cipher = localStorage.getItem('google_refresh_cipher') || '';
 
+  scheduleMutationSeq++;
+  activeMutationsCount++;
+
   try {
     const res = await fetch(`${workerUrl}/api/schedule/admin/rollback`, {
       method: 'POST',
+      cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -1189,7 +1262,7 @@ export async function rollbackSchedule(
     const json = await res.json().catch(() => ({}));
     if (res.ok && json.success) {
       if (json.data) {
-        saveLocalMonthSchedule(json.data);
+        recordServerScheduleSync(json.data);
       }
       return {
         success: true,
@@ -1208,6 +1281,8 @@ export async function rollbackSchedule(
       success: false,
       error: e.message || '서버와의 통신에 실패했습니다.'
     };
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
 }
 

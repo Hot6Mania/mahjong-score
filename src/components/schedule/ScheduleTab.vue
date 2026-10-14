@@ -15,7 +15,8 @@ import {
   saveUserPin,
   hashPin,
   logScheduleHistory,
-  getWorkerUrl
+  getWorkerUrl,
+  isScheduleMutating
 } from '@/services/scheduleService';
 import { isScheduleDataEqual } from '@/utils/scheduleComparator';
 import { computeScheduleSessionNumbers, getMaxCompletedSessionNumber } from '@/utils/sessionNumbering';
@@ -448,10 +449,11 @@ const handleCreateScheduleSubmit = async () => {
     updatedDates = [...monthSchedule.value.dates, newDayItem].sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  const res = await saveAdminScheduleDates(currentMonth.value, updatedDates, adminToken.value, undefined, {
+  const res = await saveAdminScheduleDates(currentMonth.value, updatedDates, adminToken.value, creatorPin || undefined, {
     baseSessionNumber: currentBaseSessionNumber.value,
     isCreateSession: true,
-    targetDate: createDate.value
+    targetDate: createDate.value,
+    creatorName
   });
   if (res.success) {
     monthSchedule.value = res.data;
@@ -693,12 +695,14 @@ const verifyAdminPasscode = async () => {
 // 일정 데이터 로드 (silent: true일 경우 토스트 팝업 및 불필요한 스피너 없이 조용히 동기화)
 const loadSchedule = async (silent = true) => {
   if (silent) {
+    if (isScheduleMutating()) return;
     const hasData = monthSchedule.value.dates && monthSchedule.value.dates.length > 0;
     if (!hasData) {
       isLoading.value = true;
     }
     try {
       const data = await fetchMonthSchedule(currentMonth.value);
+      if (isScheduleMutating()) return;
       // 데이터 변동 여부 정밀 대조 (변동 없을 시 리렌더링 원천 차단)
       if (!isScheduleDataEqual(monthSchedule.value, data)) {
         monthSchedule.value = data;
@@ -742,6 +746,20 @@ const loadSchedule = async (silent = true) => {
     isRefreshing.value = false;
   }
 };
+
+// monthSchedule 갱신 시 열려있는 상세 모달(selectedDayItem) 데이터도 실시간 동기화
+watch(
+  () => monthSchedule.value,
+  (newData) => {
+    if (selectedDayItem.value && newData?.dates) {
+      const matched = newData.dates.find(d => d.date === selectedDayItem.value?.date);
+      if (matched) {
+        selectedDayItem.value = matched;
+      }
+    }
+  },
+  { deep: true }
+);
 
 // 월 이동
 const prevMonth = () => {
@@ -851,7 +869,9 @@ const onUpdateDateSessionType = async (payload: {
   };
 
   const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, undefined, {
-    baseSessionNumber: currentBaseSessionNumber.value
+    baseSessionNumber: currentBaseSessionNumber.value,
+    isUpdateSessionType: true,
+    targetDate: payload.dateStr
   });
   if (res.success) {
     monthSchedule.value = res.data;
@@ -1014,7 +1034,9 @@ const onClearAttendees = async (dateStr: string) => {
 const onDeleteCandidateDate = async (dateStr: string, pin?: string) => {
   const currentDates = monthSchedule.value.dates.filter(d => d.date !== dateStr);
   const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, pin, {
-    baseSessionNumber: currentBaseSessionNumber.value
+    baseSessionNumber: currentBaseSessionNumber.value,
+    isDeleteDate: true,
+    targetDate: dateStr
   });
   if (res.success) {
     monthSchedule.value = res.data;
@@ -1221,6 +1243,13 @@ const onAdminSaveDates = async (newDates: ScheduleDayItem[]) => {
   }
 };
 
+// 관리자 모달 내부에서 이미 서버 저장을 완료한 작업(PIN 강제 변경, 타임머신 롤백)의 상태 동기화
+const onAdminSyncData = (data: ScheduleMonthData) => {
+  if (data && Array.isArray(data.dates)) {
+    monthSchedule.value = data;
+  }
+};
+
 
 onMounted(async () => {
   // 로컬 뷰 모드 복원
@@ -1246,19 +1275,21 @@ onMounted(async () => {
 
   window.addEventListener('mahjong_admin_auth_changed', syncAdminAuth);
   window.addEventListener('storage', handleVisibilityOrStorage);
+  window.addEventListener('focus', handleVisibilityOrStorage);
   document.addEventListener('visibilitychange', handleVisibilityOrStorage);
 
-  // 다른 기기 변경 사항을 조용히 반영하기 위한 45초 백그라운드 폴링 (무깜빡임 Silent Refresh)
+  // 다른 기기 변경 사항을 조용히 즉시 반영하기 위한 10초 백그라운드 폴링 (무깜빡임 Silent Refresh)
   pollingTimer = setInterval(() => {
-    if (typeof document !== 'undefined' && !document.hidden && !isLoading.value && !isRefreshing.value) {
+    if (typeof document !== 'undefined' && !document.hidden && !isLoading.value && !isRefreshing.value && !isScheduleMutating()) {
       loadSchedule(true);
     }
-  }, 45000);
+  }, 10000);
 
   onUnmounted(() => {
     if (pollingTimer) clearInterval(pollingTimer);
     window.removeEventListener('mahjong_admin_auth_changed', syncAdminAuth);
     window.removeEventListener('storage', handleVisibilityOrStorage);
+    window.removeEventListener('focus', handleVisibilityOrStorage);
     document.removeEventListener('visibilitychange', handleVisibilityOrStorage);
   });
 
@@ -1493,6 +1524,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       :adminToken="adminToken"
       @close="isAdminModalOpen = false"
       @save="onAdminSaveDates"
+      @syncData="onAdminSyncData"
       @adminLogout="handleGoogleLogout"
     />
 

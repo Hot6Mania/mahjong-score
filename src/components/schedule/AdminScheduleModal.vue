@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue';
-import type { ScheduleDayItem, SessionType, ScheduleHistoryItem, ScheduleActionType, ScheduleCommitItem } from '@/types/schedule';
+import type { ScheduleDayItem, ScheduleMonthData, SessionType, ScheduleHistoryItem, ScheduleActionType, ScheduleCommitItem } from '@/types/schedule';
 import { parseScheduleNoticeText } from '@/utils/scheduleParser';
 import {
   fetchAdminPasscodes,
@@ -35,6 +35,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'save', dates: ScheduleDayItem[]): void;
+  (e: 'syncData', data: ScheduleMonthData): void;
   (e: 'adminLogout'): void;
 }>();
 
@@ -506,7 +507,7 @@ const handleForceResetPin = async () => {
       targetNewPin.value = '';
       targetNewPinConfirm.value = '';
       if (res.data?.dates) {
-        emit('save', res.data.dates);
+        emit('syncData', res.data);
       }
     } else {
       pinErrorMessage.value = res.error || 'PIN 변경에 실패했습니다.';
@@ -730,7 +731,7 @@ const handleRollback = async (targetId: string, label: string) => {
     if (res.success && res.data) {
       rollbackSuccessMsg.value = res.message || '일정이 성공적으로 복원되었습니다.';
       if (res.data.dates) {
-        emit('save', res.data.dates);
+        emit('syncData', res.data);
         // 달력 칩 상태 동기화
         const map: Record<number, 'none' | SessionType> = {};
         for (let d = 1; d <= daysInCurrentMonth.value; d++) map[d] = 'none';
