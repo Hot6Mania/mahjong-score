@@ -812,10 +812,7 @@ const onOpenAttendModal = (dayItem?: ScheduleDayItem, targetName?: string) => {
     selectedDayItem.value = dayItem;
   }
   const item = dayItem || selectedDayItem.value;
-  let finalTargetName = targetName || '';
-  if (!finalTargetName && item && myAttendeeName.value && item.attendees?.some(a => a.name === myAttendeeName.value)) {
-    finalTargetName = myAttendeeName.value;
-  }
+  const finalTargetName = targetName || '';
 
   // 확정된 일정 방어: 관리자가 아니며, 기존 참석자 수정이 아닌 신규 신청인 경우 차단
   if (item?.isConfirmed && !isAdmin.value) {
@@ -1494,6 +1491,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       :dayItem="selectedDayItem"
       :sessionNumber="selectedDayItem ? (sessionMap.get(selectedDayItem.date) || null) : null"
       :members="props.members"
+      :myAttendeeName="myAttendeeName"
       :targetAttendeeName="attendTargetName"
       :isAdmin="isAdmin"
       :isManager="isAdmin || (!!myAttendeeName && selectedDayItem?.creator === myAttendeeName)"

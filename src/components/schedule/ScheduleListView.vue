@@ -12,7 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'selectDay', dayItem: ScheduleDayItem): void;
-  (e: 'openAttend', dayItem: ScheduleDayItem): void;
+  (e: 'openAttend', dayItem: ScheduleDayItem, targetName?: string): void;
   (e: 'openAdmin'): void;
 }>();
 
@@ -77,7 +77,7 @@ const handleActionClick = (item: ScheduleDayItem) => {
   if (!isUserAttending(item) && isEmptyDate(item)) {
     emit('selectDay', item);
   } else {
-    emit('openAttend', item);
+    emit('openAttend', item, isUserAttending(item) ? props.myAttendeeName : undefined);
   }
 };
 
