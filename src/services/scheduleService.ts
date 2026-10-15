@@ -708,6 +708,8 @@ export async function submitAttendance(
   const cipher = localStorage.getItem('google_refresh_cipher');
   const lastName = getLastAttendeeName();
 
+  const normalizedMemo = (attendeeInput.memo ?? '').trim();
+
   scheduleMutationSeq++;
   activeMutationsCount++;
 
@@ -722,6 +724,7 @@ export async function submitAttendance(
         attendee: {
           ...attendeeInput,
           name: trimmedName,
+          memo: normalizedMemo,
           pinHash
         },
         pin: trimmedPin,
@@ -783,7 +786,7 @@ export async function submitAttendance(
       startTime: attendeeInput.startTime,
       endTime: attendeeInput.endTime,
       isCustomTime: attendeeInput.isCustomTime,
-      memo: attendeeInput.memo,
+      memo: normalizedMemo,
       pinHash: finalPin,
       updatedAt: Date.now()
     };
@@ -798,7 +801,7 @@ export async function submitAttendance(
       startTime: attendeeInput.startTime,
       endTime: attendeeInput.endTime,
       isCustomTime: attendeeInput.isCustomTime,
-      memo: attendeeInput.memo,
+      memo: normalizedMemo,
       pinHash: pinHash || '',
       updatedAt: Date.now()
     });
@@ -876,6 +879,7 @@ export async function submitBatchAttendance(
     return {
       ...a,
       name: trimmed,
+      memo: (a.memo ?? '').trim(),
       pinHash: attPin
     };
   });
@@ -936,6 +940,7 @@ export async function submitBatchAttendance(
   for (const attendeeInput of attendeesInput) {
     const trimmedName = attendeeInput.name.trim();
     if (!trimmedName) continue;
+    const normalizedMemo = (attendeeInput.memo ?? '').trim();
 
     const existingIdx = targetDay.attendees.findIndex(a => a.name === trimmedName);
     if (existingIdx !== -1) {
@@ -952,7 +957,7 @@ export async function submitBatchAttendance(
         startTime: attendeeInput.startTime,
         endTime: attendeeInput.endTime,
         isCustomTime: attendeeInput.isCustomTime,
-        memo: attendeeInput.memo,
+        memo: normalizedMemo,
         pinHash: finalPin,
         updatedAt: Date.now()
       };
@@ -968,7 +973,7 @@ export async function submitBatchAttendance(
         startTime: attendeeInput.startTime,
         endTime: attendeeInput.endTime,
         isCustomTime: attendeeInput.isCustomTime,
-        memo: attendeeInput.memo,
+        memo: normalizedMemo,
         pinHash: finalPin,
         updatedAt: Date.now()
       });

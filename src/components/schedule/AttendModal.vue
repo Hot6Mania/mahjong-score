@@ -207,7 +207,7 @@ const applyLongestExistingTime = () => {
 };
 
 // 날짜나 모달 열릴 때 초기화
-watch(() => [props.isOpen, props.dayItem, props.targetAttendeeName], () => {
+watch(() => [props.isOpen, props.dayItem?.date, props.targetAttendeeName], () => {
   if (!props.isOpen || !props.dayItem) return;
 
   errorMessage.value = '';
@@ -491,7 +491,7 @@ const handleSubmit = () => {
           startTime,
           endTime,
           isCustomTime,
-          memo: memo.value.trim() || undefined
+          memo: memo.value.trim()
         })),
         pin: finalPin || 'admin_bypass'
       });
@@ -503,7 +503,7 @@ const handleSubmit = () => {
         startTime,
         endTime,
         isCustomTime,
-        memo: memo.value.trim() || undefined,
+        memo: memo.value.trim(),
         pin: finalPin || (canBypassPin ? 'admin_bypass' : '')
       });
       return;
@@ -531,7 +531,7 @@ const handleSubmit = () => {
     startTime,
     endTime,
     isCustomTime,
-    memo: memo.value.trim() || undefined,
+    memo: memo.value.trim(),
     pin: finalPin || (canBypassPin ? 'admin_bypass' : '')
   });
 };
@@ -891,13 +891,25 @@ const handleCancel = () => {
           <!-- 4. 메모 (선택사항) -->
           <div class="form-group">
             <label class="form-label">메모 (선택)</label>
-            <input
-              type="text"
-              class="apple-input memo-input"
-              v-model="memo"
-              placeholder="예시: 도착 1시간쯤 늦을수도 있음 / 퇴근 후 참가 등"
-              maxlength="60"
-            />
+            <div class="memo-input-wrapper">
+              <input
+                type="text"
+                class="apple-input memo-input"
+                v-model="memo"
+                placeholder="예시: 도착 1시간쯤 늦을수도 있음 / 퇴근 후 참가 등"
+                maxlength="60"
+              />
+              <button
+                v-if="memo"
+                type="button"
+                class="btn-clear-memo"
+                @click="memo = ''"
+                title="메모 지우기"
+                aria-label="메모 지우기"
+              >
+                ✕
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1307,6 +1319,37 @@ html.dark .admin-field-hint {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.memo-input-wrapper {
+  position: relative;
+}
+.memo-input-wrapper .memo-input {
+  padding-right: 36px;
+}
+
+.btn-clear-memo {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(100, 116, 139, 0.16);
+  border: none;
+  color: var(--text-dimmed, #64748b);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.btn-clear-memo:hover {
+  background: rgba(100, 116, 139, 0.28);
+  color: var(--text-color, #0f172a);
 }
 
 .time-label-row {
