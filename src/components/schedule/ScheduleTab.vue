@@ -1840,6 +1840,9 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   flex-direction: column;
   gap: 16px;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   position: relative;
   font-family: inherit;
 }
@@ -1859,13 +1862,20 @@ const setViewMode = (mode: 'calendar' | 'list') => {
   flex-wrap: wrap;
   gap: 12px;
   padding: 10px 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .month-selector {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  height: 36px;
+  min-height: 36px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .current-month-display {
@@ -2015,8 +2025,12 @@ html.dark .btn-today:hover {
 .stat-chips-group {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  height: 32px;
+  min-height: 32px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .stat-chip {
@@ -2185,8 +2199,11 @@ html.dark .stat-chip.chip-me {
 .header-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  height: 32px;
+  min-height: 32px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* 캡슐형 세그먼트 컨트롤 */
@@ -2985,15 +3002,18 @@ html.dark .user-auth-badge {
 @media (max-width: 640px) {
   .schedule-header-bar {
     flex-direction: column;
+    flex-wrap: nowrap;
     align-items: stretch;
   }
   .stat-chips-group {
     order: 3;
-    overflow-x: auto;
-    padding-bottom: 4px;
+    flex-wrap: wrap;
+    width: 100%;
+    padding-bottom: 2px;
   }
   .header-actions {
     justify-content: space-between;
+    width: 100%;
   }
 }
 </style>

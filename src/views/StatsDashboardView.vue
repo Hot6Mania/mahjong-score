@@ -4314,8 +4314,17 @@ const getRankClass = (rank: number) => {
   color: var(--text-color, #1a1a1a);
   font-family: 'Noto Serif KR', 'Noto Serif JP', serif, sans-serif;
   padding: 16px 20px 40px;
+  width: 100%;
   max-width: 1200px;
   margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.dashboard-content,
+.tab-schedule {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   box-sizing: border-box;
 }
 
