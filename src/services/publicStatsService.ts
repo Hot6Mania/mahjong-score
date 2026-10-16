@@ -947,7 +947,8 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
     try {
       const ratingsMap = await fetchPublicRatings(sId);
       items.forEach(item => {
-        const r = ratingsMap[item.name];
+        const cleanName = item.name.replace(/★/g, '').trim();
+        const r = ratingsMap[item.name] || ratingsMap[cleanName];
         if (r) {
           item.rating = r.ordinal;
           item.ratingMu = r.mu;
@@ -979,21 +980,11 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
 let cachedRatings: Record<string, PlayerRating> | null = null;
 
 /**
- * '레이팅' 시트에서 현재 전체 선수 레이팅을 조회하거나 폴백 리플레이를 수행합니다.
+ * '레이팅' 시트에서 현재 전체 선수 레이팅을 조회하고 타임라인 이력과 병합합니다.
  */
 export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record<string, PlayerRating>> {
-  if (cachedRatings && Object.keys(cachedRatings).length > 0) {
+  if (cachedRatings && Object.keys(cachedRatings).length >= 15) {
     return cachedRatings;
-  }
-
-  // '레이팅 이력' 시트 기반 실시간 재계산(/30 공식)을 우선 수행하여 타임라인 차트와 대시보드 레이팅 수치를 100% 일치시킴
-  try {
-    await fetchPublicRatingTimeline(spreadsheetId);
-    if (cachedRatings && Object.keys(cachedRatings).length > 0) {
-      return cachedRatings;
-    }
-  } catch (e) {
-    console.warn("Timeline replay in fetchPublicRatings failed, falling back to ratings sheet:", e);
   }
 
   const workerUrl = getWorkerUrl();
@@ -1030,6 +1021,8 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
     }
   }
 
+  const sheetMap: Record<string, PlayerRating> = {};
+
   // C. 조회된 '레이팅' 테이블 파싱
   if (table && table.rows && table.rows.length > 0) {
     const isRatingSheet = table.cols && table.cols.some((c: any) => c && (c.label === '순위' || c.label === '레이팅'));
@@ -1042,7 +1035,6 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
       const hasLowestCol = table.cols?.some((c: any) => c && c.label === '최저 레이팅') ||
                            (table.rows[0]?.c && table.rows[0].c.some((c: any) => getCellStr(c).trim() === '최저 레이팅'));
 
-      const map: Record<string, PlayerRating> = {};
       table.rows.forEach((r: any) => {
         if (!r.c) return;
         const name = getCellStr(r.c[1]).trim();
@@ -1066,7 +1058,7 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
           lastUpdated = getCellStr(r.c[8]).trim();
         }
 
-        map[name] = {
+        sheetMap[name] = {
           name,
           ordinal,
           mu,
@@ -1078,12 +1070,32 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
           lastUpdated
         };
       });
-
-      if (Object.keys(map).length > 0) {
-        cachedRatings = map;
-        return map;
-      }
     }
+  }
+
+  // '레이팅 이력' 시트 타임라인 조회 및 이력(history) 병합
+  try {
+    await fetchPublicRatingTimeline(spreadsheetId);
+  } catch (e) {
+    console.warn("Timeline replay in fetchPublicRatings failed:", e);
+  }
+
+  if (Object.keys(sheetMap).length > 0) {
+    const merged: Record<string, PlayerRating> = { ...(cachedRatings || {}) };
+    Object.entries(sheetMap).forEach(([name, sheetRating]) => {
+      const timelineRating = merged[name];
+      merged[name] = {
+        ...sheetRating,
+        lowestOrdinal: timelineRating?.lowestOrdinal ?? sheetRating.lowestOrdinal,
+        history: timelineRating?.history || sheetRating.history || []
+      };
+    });
+    cachedRatings = merged;
+    return merged;
+  }
+
+  if (cachedRatings && Object.keys(cachedRatings).length > 0) {
+    return cachedRatings;
   }
 
   // D. 만약 '레이팅' 시트가 아직 생성되지 않았거나 비어있는 경우:
@@ -2043,7 +2055,7 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise
                 sessionLabel: sessLabel,
                 date: dateStr
               });
-              runningRatings = updatedRatings;
+              Object.assign(runningRatings, updatedRatings);
 
               const pList = matchPlayers.map(mp => {
                 const d = matchDeltas[mp.name];
@@ -2069,9 +2081,9 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise
             }
           });
 
-          if (historyRecords.length > 0) {
+          if (historyRecords.length >= 107) {
             cachedRatingHistoryRecords = historyRecords;
-            cachedRatings = runningRatings;
+            cachedRatings = { ...(cachedRatings || {}), ...runningRatings };
             const traj = calculateAllPlayersRatingTrajectory(historyRecords);
             cachedRatingTrajectory = traj;
             return traj;
@@ -2079,9 +2091,9 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise
         }
       }
 
-      // D. 폴백: 내장 레거시 데이터 리플레이
+      // D. 폴백: 내장 레거시 데이터 리플레이 (기존 '레이팅' 시트 데이터가 있으면 덮어쓰지 않고 보존)
       const { finalRatings, matchHistory } = replayAllHistoricalGames(LEGACY_CONSOLIDATED_RAW, []);
-      cachedRatings = finalRatings;
+      cachedRatings = { ...finalRatings, ...(cachedRatings || {}) };
       cachedRatingHistoryRecords = matchHistory;
       const traj = calculateAllPlayersRatingTrajectory(matchHistory);
       cachedRatingTrajectory = traj;

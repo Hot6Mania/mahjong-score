@@ -2776,11 +2776,7 @@ export const batchSaveRatingHistoryToSheet = async (
       rows.push(row);
     });
 
-    await window.gapi.client.sheets.spreadsheets.values.clear({
-      spreadsheetId,
-      range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:W1000`
-    });
-
+    // 1. 데이터 영역 먼저 덮어쓰기 (조회 중 빈 시트가 노출되는 경쟁 상태 방지)
     await window.gapi.client.sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `'${RATING_HISTORY_SHEET_TITLE}'!A1:W${rows.length}`,
@@ -2789,6 +2785,16 @@ export const batchSaveRatingHistoryToSheet = async (
         values: rows
       }
     });
+
+    // 2. 잔여 이전 행 초기화
+    if (rows.length < 1000) {
+      try {
+        await window.gapi.client.sheets.spreadsheets.values.clear({
+          spreadsheetId,
+          range: `'${RATING_HISTORY_SHEET_TITLE}'!A${rows.length + 1}:W1000`
+        });
+      } catch (_) {}
+    }
 
     return true;
   } catch (err) {

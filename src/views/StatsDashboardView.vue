@@ -1420,7 +1420,8 @@ const modalPlayerRatingHistory = computed(() => {
   }
   const pName = selectedPlayer.value.name;
   if (pName && ratingTimeline.value) {
-    const ds = ratingTimeline.value.datasets.find(d => d.name === pName);
+    const cleanPName = pName.replace(/★/g, '').trim();
+    const ds = ratingTimeline.value.datasets.find(d => d.name === pName || d.name === cleanPName);
     if (ds && ds.data) {
       const records: any[] = [];
       const labels = ratingTimeline.value.labels;
