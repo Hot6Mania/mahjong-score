@@ -998,8 +998,34 @@ const onHoverMetric = (
   unit = ''
 ) => {
   if (!allStats.value || allStats.value.length === 0) return;
-  const detailedList = allStats.value.map(m => m.detailedStats || m);
-  const dist = calculateMetricDistribution(detailedList, key, name, val, unit, higherIsBetter, displayPlayerStats.value?.name);
+  const overallKeys: (keyof MemberStatItem)[] = ['totalGames', 'totalUma', 'avgUma', 'avgRank', 'top2Rate'];
+  const hasDetailed = (displayPlayerStats.value?.totalRounds || 0) > 0 && (displayPlayerStats.value?.totalGames || 0) > 0;
+  const isOverallKey = overallKeys.includes(key);
+
+  let targetList: MemberStatItem[];
+  let targetVal = val;
+  let isUnrecorded = false;
+
+  if (!hasDetailed && isOverallKey && selectedPlayer.value) {
+    targetList = allStats.value;
+    targetVal = Number(selectedPlayer.value[key]) || 0;
+  } else {
+    targetList = allStats.value.map(m => m.detailedStats || m);
+    if (!hasDetailed) {
+      isUnrecorded = true;
+    }
+  }
+
+  const dist = calculateMetricDistribution(
+    targetList,
+    key,
+    name,
+    targetVal,
+    unit,
+    higherIsBetter,
+    displayPlayerStats.value?.name || selectedPlayer.value?.name,
+    isUnrecorded
+  );
   activeDist.value = dist;
   activeDistName.value = name;
   activeDistUnit.value = unit;
@@ -1826,16 +1852,25 @@ const getRankClass = (rank: number) => {
     >
       <div class="dist-tooltip-header">
         <span class="dist-title">{{ activeDistName }} 전체 분포</span>
-        <span class="dist-rank-chip" :class="activeDist.isUpperHalf ? 'pos' : 'neg'">
-          {{ activeDist.isUpperHalf ? '상위' : '하위' }} {{ activeDist.topPct.toFixed(2) }}%
+        <span v-if="activeDist.isUnrecorded" class="dist-rank-chip unrecorded">
+          집계 기록 없음
+        </span>
+        <span v-else class="dist-rank-chip" :class="activeDist.isUpperHalf ? 'pos' : 'neg'">
+          상위 {{ activeDist.topPct.toFixed(2) }}%
         </span>
       </div>
       <div class="dist-sub-rank">
-        {{ activeDist.percentileText }} ({{ activeDist.rank }}위 / {{ activeDist.totalCount }}명)
+        <template v-if="activeDist.isUnrecorded">
+          {{ activeDist.percentileText }}
+        </template>
+        <template v-else>
+          {{ activeDist.percentileText }} ({{ activeDist.rank }}위 / {{ activeDist.totalCount }}명)
+        </template>
       </div>
       <div class="dist-my-val">
         내 수치: <strong>
-          <template v-if="activeDistName === '평균 순위'">{{ activeDist.currentValue.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-if="activeDist.isUnrecorded">- (집계 외)</template>
+          <template v-else-if="activeDistName === '평균 순위'">{{ activeDist.currentValue.toFixed(3) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.currentValue.toFixed(4) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.currentValue.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.currentValue.toLocaleString() }}{{ activeDistUnit }}</template>
@@ -4484,6 +4519,14 @@ html.dark .dist-rank-chip.pos {
 html.dark .dist-rank-chip.neg {
   color: #f87171;
   background: rgba(248, 113, 113, 0.15);
+}
+.dist-rank-chip.unrecorded {
+  color: #64748b;
+  background: rgba(100, 116, 139, 0.14);
+}
+html.dark .dist-rank-chip.unrecorded {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.18);
 }
 .dist-sub-rank {
   font-size: 10px;

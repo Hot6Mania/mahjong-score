@@ -2140,6 +2140,7 @@ export interface DistributionData {
   line30X: number; // 하위 30% X좌표
   line70X: number; // 상위 30% X좌표
   higherIsBetter?: boolean;
+  isUnrecorded?: boolean;
 }
 
 export function calculateMetricDistribution(
@@ -2149,7 +2150,8 @@ export function calculateMetricDistribution(
   currentValue: number,
   unit: string = '%',
   higherIsBetter: boolean = true,
-  currentPlayerName?: string
+  currentPlayerName?: string,
+  isUnrecorded: boolean = false
 ): DistributionData {
   const totalCount = allStats.length;
   if (totalCount === 0) {
@@ -2169,6 +2171,7 @@ export function calculateMetricDistribution(
       bars: [],
       line30X: 48,
       line70X: 112,
+      isUnrecorded,
     };
   }
 
@@ -2195,6 +2198,7 @@ export function calculateMetricDistribution(
       bars: [],
       line30X: 48,
       line70X: 112,
+      isUnrecorded,
     };
   }
 
@@ -2210,20 +2214,23 @@ export function calculateMetricDistribution(
         ? parseFloat((sum / values.length).toFixed(2))
         : parseFloat((sum / values.length).toFixed(1));
 
-  // 순위 및 백분위 계산
-  let rank = 1;
+  // 순위 및 백분위 계산 (모수 인원수를 초과하지 않도록 클램핑)
+  let rawRank = 1;
   values.forEach(v => {
     if (higherIsBetter) {
-      if (v > currentValue) rank++;
+      if (v > currentValue) rawRank++;
     } else {
-      if (v < currentValue) rank++;
+      if (v < currentValue) rawRank++;
     }
   });
+  const rank = Math.min(rawRank, values.length);
 
-  const topPct = parseFloat(((rank / values.length) * 100).toFixed(2));
-  const bottomPct = parseFloat((100 - topPct).toFixed(2));
+  const topPct = Math.min(100, parseFloat(((rank / values.length) * 100).toFixed(2)));
+  const bottomPct = Math.max(0, parseFloat((100 - topPct).toFixed(2)));
   const isUpperHalf = rank <= Math.ceil(values.length / 2);
-  const percentileText = `상위 ${topPct.toFixed(2)}% (하위 ${bottomPct.toFixed(2)}%) · ${isUpperHalf ? '상위 50% 이내' : '하위 50%'}`;
+  const percentileText = isUnrecorded
+    ? `세부 스탯 집계 기록 없음 · 전체 ${values.length}명 분포`
+    : `상위 ${topPct.toFixed(2)}% (하위 ${bottomPct.toFixed(2)}%) · ${isUpperHalf ? '상위 50% 이내' : '하위 50%'}`;
 
   // 사람 1명당 1개 막대의 계단형 히스토그램 (오름차순 정렬)
   const sorted = [...validMembers].sort((a, b) => a.val - b.val);
@@ -2235,13 +2242,15 @@ export function calculateMetricDistribution(
   const stepW = svgWidth / Math.max(n, 1);
   const barWidth = Math.max(1.8, stepW - 0.8);
 
-  // 대상 플레이어 매칭 (이름 또는 값)
+  // 대상 플레이어 매칭 (미집계 대상이 아닌 경우에만 이름 또는 값으로 하이라이트)
   let matchedIndex = -1;
-  if (currentPlayerName) {
-    matchedIndex = sorted.findIndex(m => m.name === currentPlayerName);
-  }
-  if (matchedIndex === -1) {
-    matchedIndex = sorted.findIndex(m => Math.abs(m.val - currentValue) < 0.0001);
+  if (!isUnrecorded) {
+    if (currentPlayerName) {
+      matchedIndex = sorted.findIndex(m => m.name === currentPlayerName);
+    }
+    if (matchedIndex === -1) {
+      matchedIndex = sorted.findIndex(m => Math.abs(m.val - currentValue) < 0.0001);
+    }
   }
 
   const bars: HistogramBar[] = sorted.map((m, i) => {
@@ -2276,6 +2285,7 @@ export function calculateMetricDistribution(
     bottomPct,
     isUpperHalf,
     higherIsBetter,
+    isUnrecorded,
     bars,
     line30X: parseFloat((svgWidth * 0.3).toFixed(1)), // 하위 30% (48)
     line70X: parseFloat((svgWidth * 0.7).toFixed(1)), // 상위 30% (112)
