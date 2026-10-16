@@ -316,8 +316,8 @@ const formatPct = (val: number | undefined): string => {
 };
 
 const formatPct5 = (val: number | undefined): string => {
-  if (val === undefined || val === null || isNaN(val)) return '0.00000%';
-  return Number(val).toFixed(5) + '%';
+  if (val === undefined || val === null || isNaN(val)) return '0.0000%';
+  return Number(val).toFixed(4) + '%';
 };
 
 const getDistPct = (count: number, total: number): string => {
@@ -1836,7 +1836,7 @@ const getRankClass = (rank: number) => {
       <div class="dist-my-val">
         내 수치: <strong>
           <template v-if="activeDistName === '평균 순위'">{{ activeDist.currentValue.toFixed(3) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.currentValue.toFixed(5) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.currentValue.toFixed(4) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.currentValue.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.currentValue.toLocaleString() }}{{ activeDistUnit }}</template>
         </strong>
@@ -1912,19 +1912,19 @@ const getRankClass = (rank: number) => {
       <div class="dist-labels-row">
         <span>최소 
           <template v-if="activeDistName === '평균 순위'">{{ activeDist.min.toFixed(3) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.min.toFixed(5) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.min.toFixed(4) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.min.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.min.toLocaleString() }}{{ activeDistUnit }}</template>
         </span>
         <span class="dist-avg-val">평균 
           <template v-if="activeDistName === '평균 순위'">{{ activeDist.avg.toFixed(3) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.avg.toFixed(5) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.avg.toFixed(4) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.avg.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.avg.toLocaleString() }}{{ activeDistUnit }}</template>
         </span>
         <span>최대 
           <template v-if="activeDistName === '평균 순위'">{{ activeDist.max.toFixed(3) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.max.toFixed(5) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.max.toFixed(4) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.max.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.max.toLocaleString() }}{{ activeDistUnit }}</template>
         </span>

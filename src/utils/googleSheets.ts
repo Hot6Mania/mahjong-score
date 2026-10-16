@@ -1666,7 +1666,7 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
     }
 
     // 3) 촌보/벌부 스키마(U:V열 및 AL:AM열)가 이미 반영 완료된 시트라면 반복 점검 생략
-    const schemaCacheKey = `mahjong_penalty_schema_v1_${spreadsheetId}`;
+    const schemaCacheKey = `mahjong_penalty_schema_v2_${spreadsheetId}`;
     if (localStorage.getItem(schemaCacheKey) === 'true') {
       return true;
     }
@@ -1738,7 +1738,7 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
         console.warn("'전체 국별기록 (데이터)' U1:V1 헤더 업데이트 중 오류:", eGlobalHeader);
       }
 
-      // 4-4. '전체 멤버별 통계' AL:AM열('촌보율', '벌부율') 수식 및 소수점 5자리(0.00000%) 서식 자동 기입
+      // 4-4. '전체 멤버별 통계' AL:AM열('촌보율', '벌부율') 수식 및 소수점 4자리(0.0000%) 서식 자동 기입
       if (memberStatsSheet) {
         const alHeaderRes = await window.gapi.client.sheets.spreadsheets.values.get({
           spreadsheetId,
@@ -1763,39 +1763,39 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
               values: formulaRows,
             },
           });
+        }
 
-          try {
-            await window.gapi.client.sheets.spreadsheets.batchUpdate({
-              spreadsheetId,
-              resource: {
-                requests: [
-                  {
-                    repeatCell: {
-                      range: {
-                        sheetId: memberStatsSheet.properties.sheetId,
-                        startRowIndex: 1,
-                        endRowIndex: 50,
-                        startColumnIndex: 37, // AL열
-                        endColumnIndex: 39,   // AM열 다음
-                      },
-                      cell: {
-                        userEnteredFormat: {
-                          numberFormat: {
-                            type: 'PERCENT',
-                            pattern: '0.00000%',
-                          },
+        try {
+          await window.gapi.client.sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            resource: {
+              requests: [
+                {
+                  repeatCell: {
+                    range: {
+                      sheetId: memberStatsSheet.properties.sheetId,
+                      startRowIndex: 1,
+                      endRowIndex: 50,
+                      startColumnIndex: 37, // AL열
+                      endColumnIndex: 39,   // AM열 다음
+                    },
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'PERCENT',
+                          pattern: '0.0000%',
                         },
                       },
-                      fields: 'userEnteredFormat.numberFormat',
                     },
+                    fields: 'userEnteredFormat.numberFormat',
                   },
-                ],
-              },
-            });
-          } catch (_) {}
+                },
+              ],
+            },
+          });
+        } catch (_) {}
 
-          console.log("'전체 멤버별 통계' AL:AM열(촌보율/벌부율) 수식 및 0.00000% 서식 자동 구성 완료");
-        }
+        console.log("'전체 멤버별 통계' AL:AM열(촌보율/벌부율) 수식 및 0.0000% 서식 자동 구성 완료");
         localStorage.setItem(schemaCacheKey, 'true');
       }
     } catch (ePenaltyCols) {

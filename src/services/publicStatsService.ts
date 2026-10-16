@@ -693,8 +693,8 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
           : 0;
 
         const totalRounds = getCellNum(row[4]);
-        const sheetCheatRate = row[37] !== undefined ? parseFloat((getCellNum(row[37]) * 100).toFixed(5)) : 0;
-        const sheetBeolbuRate = row[38] !== undefined ? parseFloat((getCellNum(row[38]) * 100).toFixed(5)) : 0;
+        const sheetCheatRate = row[37] !== undefined ? parseFloat((getCellNum(row[37]) * 100).toFixed(4)) : 0;
+        const sheetBeolbuRate = row[38] !== undefined ? parseFloat((getCellNum(row[38]) * 100).toFixed(4)) : 0;
 
         detailedStatsMap[name] = {
           name,
@@ -794,8 +794,8 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
             item.cheatCount = counts.cheat;
             item.beolbuCount = counts.beolbu;
             if (denom > 0) {
-              item.cheatRate = parseFloat(((counts.cheat / denom) * 100).toFixed(5));
-              item.beolbuRate = parseFloat(((counts.beolbu / denom) * 100).toFixed(5));
+              item.cheatRate = parseFloat(((counts.cheat / denom) * 100).toFixed(4));
+              item.beolbuRate = parseFloat(((counts.beolbu / denom) * 100).toFixed(4));
             }
           }
         });
@@ -1491,8 +1491,8 @@ export async function fetchSessionDetailedStats(
       const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(2)) : 0;
       const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
       const dealInRiichiRate = p.loseCount > 0 ? parseFloat(((p.loseWithRiichiCount / p.loseCount) * 100).toFixed(2)) : 0;
-      const cheatRate = parseFloat(((p.cheatCount / totalRounds) * 100).toFixed(5));
-      const beolbuRate = parseFloat(((p.beolbuCount / totalRounds) * 100).toFixed(5));
+      const cheatRate = parseFloat(((p.cheatCount / totalRounds) * 100).toFixed(4));
+      const beolbuRate = parseFloat(((p.beolbuCount / totalRounds) * 100).toFixed(4));
 
       const r1 = p.ranks[1] || 0;
       const r2 = p.ranks[2] || 0;
@@ -2205,7 +2205,7 @@ export function calculateMetricDistribution(
   const avg = metricKey === 'avgRank'
     ? parseFloat((sum / values.length).toFixed(3))
     : (metricKey === 'cheatRate' || metricKey === 'beolbuRate')
-      ? parseFloat((sum / values.length).toFixed(5))
+      ? parseFloat((sum / values.length).toFixed(4))
       : unit === '%'
         ? parseFloat((sum / values.length).toFixed(2))
         : parseFloat((sum / values.length).toFixed(1));
