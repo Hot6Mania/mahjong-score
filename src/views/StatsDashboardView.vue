@@ -3141,15 +3141,6 @@ const getRankClass = (rank: number) => {
                       <div v-else-if="sessionModalActiveTab === 'other'" class="stats_group">
                         <div 
                           class="stat_row hoverable" 
-                          @mouseenter="onHoverSessionMetric($event, 'tenpaiRate', '텐파이율', currentSessionPlayerStats.tenpaiRate, true, '%')" 
-                          @mouseleave="onLeaveMetric"
-                          @click.stop="onHoverSessionMetric($event, 'tenpaiRate', '텐파이율', currentSessionPlayerStats.tenpaiRate, true, '%')"
-                        >
-                          <span class="stat_label">텐파이율</span>
-                          <span class="stat_value">{{ formatPct(currentSessionPlayerStats.tenpaiRate) }}</span>
-                        </div>
-                        <div 
-                          class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', currentSessionPlayerStats.oyaKaburiRate, false, '%')" 
                           @mouseleave="onLeaveMetric"
                           @click.stop="onHoverSessionMetric($event, 'oyaKaburiRate', '아픈 오야카부리율', currentSessionPlayerStats.oyaKaburiRate, false, '%')"
