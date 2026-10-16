@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import ScheduleTab from '@/components/schedule/ScheduleTab.vue';
+import RulesTab from '@/components/rules/RulesTab.vue';
 import {
   Chart as ChartJS,
   Title,
@@ -51,8 +52,8 @@ const router = useRouter();
 const route = useRoute();
 
 // 탭 상태 타입 및 유효 탭 목록
-type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule';
-const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'schedule'];
+type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules';
+const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'schedule', 'rules'];
 
 // URL 해시 및 쿼리 파라미터에서 현재 탭 추출 (기본값: 순수 /dashboard는 'ranking')
 const parseTabFromLocation = (): DashboardTab => {
@@ -69,7 +70,7 @@ const parseTabFromLocation = (): DashboardTab => {
   return 'ranking';
 };
 
-// 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule')
+// 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules')
 const activeTab = ref<DashboardTab>(parseTabFromLocation());
 const tabsNavRef = ref<HTMLElement | null>(null);
 
@@ -1996,16 +1997,23 @@ const getRankClass = (rank: number) => {
       >
         일정
       </button>
+      <button 
+        class="tab-btn" 
+        :class="{ active: activeTab === 'rules' }" 
+        @click="switchTab('rules')"
+      >
+        룰
+      </button>
     </nav>
 
     <!-- 로딩 상태 -->
-    <div v-if="isLoading" class="loading-state">
+    <div v-if="isLoading && activeTab !== 'rules'" class="loading-state">
       <div class="spinner"></div>
       <p>데이터를 불러오는 중입니다...</p>
     </div>
 
     <!-- 에러 상태 -->
-    <div v-else-if="errorMessage" class="error-state">
+    <div v-else-if="errorMessage && activeTab !== 'rules'" class="error-state">
       <p class="error-title">데이터를 불러오지 못했습니다</p>
       <p class="error-detail">{{ errorMessage }}</p>
       <button class="btn-retry" @click="loadAllData">다시 시도</button>
@@ -2822,6 +2830,11 @@ const getRankClass = (rank: number) => {
           :members="allStats"
           :availableSessions="availableSessions"
         />
+      </section>
+
+      <!-- 룰 탭 -->
+      <section v-else-if="activeTab === 'rules'" class="tab-rules">
+        <RulesTab />
       </section>
     </main>
 
@@ -4312,7 +4325,8 @@ const getRankClass = (rank: number) => {
 }
 
 .dashboard-content,
-.tab-schedule {
+.tab-schedule,
+.tab-rules {
   width: 100%;
   max-width: 100%;
   min-width: 0;
