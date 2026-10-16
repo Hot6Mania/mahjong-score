@@ -21,7 +21,7 @@ import {
 import { isScheduleDataEqual } from '@/utils/scheduleComparator';
 import { computeScheduleSessionNumbers, getMaxCompletedSessionNumber } from '@/utils/sessionNumbering';
 import { timeStringToMinutes } from '@/utils/timelineEngine';
-import { getKSTCurrentMonth } from '@/utils/kstTime';
+import { getKSTCurrentMonth, isKSTPastDate } from '@/utils/kstTime';
 import ScheduleCalendarView from './ScheduleCalendarView.vue';
 import ScheduleListView from './ScheduleListView.vue';
 import DateDetailModal from './DateDetailModal.vue';
@@ -262,8 +262,17 @@ const myAttendingDaysCount = computed(() => {
 });
 
 
+// 비관리자의 이전(과거) 날짜 수정 차단 여부 판별
+const isPastLocked = (dateStr?: string): boolean => {
+  return !isAdmin.value && !!dateStr && isKSTPastDate(dateStr);
+};
+
 // 일정 만들기 모달 오픈 (관리자가 등록한 가능한 날짜 대상)
 const openCreateScheduleModal = (dateStr: string, existingItem?: ScheduleDayItem) => {
+  if (isPastLocked(dateStr)) {
+    showToast('이전 날짜에는 일정을 개설하거나 수정할 수 없습니다. (관리자 전용)', 'error');
+    return;
+  }
   createDate.value = dateStr;
   createCreatorName.value = myAttendeeName.value || '';
   createCreatorPin.value = '';
@@ -300,9 +309,11 @@ const handleSelectCreateSessionType = (type: SessionType) => {
 };
 
 // 미등록(빈) 날짜 클릭 핸들러 (관리자만 관리 모달 연계, 일반 유저는 안내)
-const onEmptyDayClick = (_dateStr: string) => {
+const onEmptyDayClick = (dateStr: string) => {
   if (isAdmin.value) {
     isAdminModalOpen.value = true;
+  } else if (isKSTPastDate(dateStr)) {
+    return;
   } else {
     showToast('관리자가 지정한 가능한 날짜에만 일정을 개설할 수 있습니다.', 'info');
   }
@@ -311,6 +322,10 @@ const onEmptyDayClick = (_dateStr: string) => {
 // 일정 개설 제출 핸들러 (개설자 + 김케이 자동 등록 및 '나' 고정)
 const handleCreateScheduleSubmit = async () => {
   createErrorMessage.value = '';
+  if (isPastLocked(createDate.value)) {
+    createErrorMessage.value = '이전 날짜에는 일정을 개설하거나 수정할 수 없습니다. (관리자 전용)';
+    return;
+  }
   const creatorName = createCreatorName.value.trim();
   const creatorPin = createCreatorPin.value.trim();
 
@@ -797,6 +812,10 @@ const onSelectDay = (dayItem: ScheduleDayItem) => {
   // 관리자가 등록한 가능한 날짜이지만 아직 일정이 생성되지 않은 경우 -> 일정 만들기 모달 오픈!
   const hasCreatedSession = !!(dayItem.creator && (dayItem.attendees?.length || 0) > 0);
   if (!hasCreatedSession) {
+    if (isPastLocked(dayItem.date)) {
+      showToast('이전 날짜에는 일정을 개설할 수 없습니다. (관리자 전용)', 'info');
+      return;
+    }
     openCreateScheduleModal(dayItem.date, dayItem);
     return;
   }
@@ -812,6 +831,10 @@ const onOpenAttendModal = (dayItem?: ScheduleDayItem, targetName?: string) => {
     selectedDayItem.value = dayItem;
   }
   const item = dayItem || selectedDayItem.value;
+  if (isPastLocked(item?.date)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
   const finalTargetName = targetName || '';
 
   // 확정된 일정 방어: 관리자가 아니며, 기존 참석자 수정이 아닌 신규 신청인 경우 차단
@@ -839,6 +862,10 @@ const onUpdateDateSessionType = async (payload: {
   sessionNumber?: number;
   sheetTitle?: string;
 }) => {
+  if (isPastLocked(payload.dateStr)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
   const currentDates = [...monthSchedule.value.dates];
   const targetIdx = currentDates.findIndex(d => d.date === payload.dateStr);
   if (targetIdx === -1) return;
@@ -893,6 +920,10 @@ const onUpdateDateSessionType = async (payload: {
 
 // 관리자: 날짜 세션 타입(당일 ↔ 밤샘) 즉시 전환
 const onToggleDateSessionType = async (dateStr: string) => {
+  if (isPastLocked(dateStr)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
   const currentDates = [...monthSchedule.value.dates];
   const targetIdx = currentDates.findIndex(d => d.date === dateStr);
   if (targetIdx === -1) return;
@@ -908,6 +939,10 @@ const onToggleDateSessionType = async (dateStr: string) => {
 
 // 개설자 / 관리자: 모임 확정 토글
 const onToggleConfirmSession = async (dateStr: string) => {
+  if (isPastLocked(dateStr)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
   const currentDates = [...monthSchedule.value.dates];
   const targetIdx = currentDates.findIndex(d => d.date === dateStr);
   if (targetIdx === -1) return;
@@ -982,6 +1017,10 @@ const toggleAmPm = (timeStr: string): string => {
 
 // 해당 회차 참가 인원 전체 비우기 (날짜는 가능한 일정으로 유지 및 원래 관리자 속성으로 복원)
 const onClearAttendees = async (dateStr: string) => {
+  if (isPastLocked(dateStr)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
   const currentDates = [...monthSchedule.value.dates];
   const targetIdx = currentDates.findIndex(d => d.date === dateStr);
   if (targetIdx === -1) return;
@@ -1029,6 +1068,10 @@ const onClearAttendees = async (dateStr: string) => {
 
 // 관리자 또는 개설자 PIN: 후보 일정 삭제 핸들러 (가능한 날짜에서 완전 삭제)
 const onDeleteCandidateDate = async (dateStr: string, pin?: string) => {
+  if (isPastLocked(dateStr)) {
+    showToast('이전 날짜의 일정은 관리자만 삭제할 수 있습니다.', 'error');
+    return;
+  }
   const currentDates = monthSchedule.value.dates.filter(d => d.date !== dateStr);
   const res = await saveAdminScheduleDates(currentMonth.value, currentDates, adminToken.value, pin, {
     baseSessionNumber: currentBaseSessionNumber.value,
@@ -1055,6 +1098,10 @@ const onDeleteCandidateDate = async (dateStr: string, pin?: string) => {
 
 // 관리자 / 개설자 / 본인: 특정 참석자 제외 핸들러
 const onRemoveAttendee = async (dateStr: string, attendeeName: string, pin?: string) => {
+  if (isPastLocked(dateStr)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
   const isCreator = !!(selectedDayItem.value?.creator && (selectedDayItem.value.creator === myAttendeeName.value));
   const res = await cancelAttendance(
     currentMonth.value,
@@ -1088,6 +1135,10 @@ const onAttendSubmit = async (payload: {
   pin: string;
 }) => {
   if (!selectedDayItem.value) return;
+  if (isPastLocked(selectedDayItem.value.date)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
 
   // 확정된 일정 방어: 관리자가 아니며, 기존 참석자 목록에 없는 신규 신청인 경우 차단
   if (selectedDayItem.value.isConfirmed && !isAdmin.value) {
@@ -1157,6 +1208,10 @@ const onAttendBatchSubmit = async (payload: {
   pin: string;
 }) => {
   if (!selectedDayItem.value) return;
+  if (isPastLocked(selectedDayItem.value.date)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
 
   // 확정된 일정 방어: 관리자가 아닌 경우 신규 신청 포함 시 차단
   if (selectedDayItem.value.isConfirmed && !isAdmin.value) {
@@ -1194,6 +1249,10 @@ const onAttendBatchSubmit = async (payload: {
 // 참석 취소 핸들러
 const onAttendCancel = async (payload: { name: string; pin: string }) => {
   if (!selectedDayItem.value) return;
+  if (isPastLocked(selectedDayItem.value.date)) {
+    showToast('이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
 
   const res = await cancelAttendance(
     currentMonth.value,
@@ -1462,6 +1521,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
         :dates="monthSchedule.dates"
         :sessionMap="sessionMap"
         :myAttendeeName="myAttendeeName"
+        :isAdmin="isAdmin"
         @selectDay="onSelectDay"
         @openAttend="onOpenAttendModal"
         @openAdmin="onOpenAdminOrAuth"

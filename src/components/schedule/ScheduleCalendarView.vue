@@ -99,8 +99,17 @@ const isUserAttending = (item?: ScheduleDayItem) => {
   return item.attendees.some(a => a.name === props.myAttendeeName);
 };
 
+const isCellClickable = (cell: CalendarCell) => {
+  if (!cell.isCurrentMonth) return false;
+  if (props.isAdmin) return true;
+  if (!cell.scheduleItem) return false;
+  const hasCreatedSession = Boolean(cell.scheduleItem.creator && cell.scheduleItem.attendees?.length);
+  if (hasCreatedSession) return true;
+  return cell.dateStr >= todayStr;
+};
+
 const handleCellClick = (cell: CalendarCell) => {
-  if (!cell.isCurrentMonth) return;
+  if (!isCellClickable(cell)) return;
   if (cell.scheduleItem) {
     emit('selectDay', cell.scheduleItem);
   } else {
@@ -176,7 +185,7 @@ const todayStr = getKSTTodayString();
           'empty-schedule': cell.isCurrentMonth && !cell.scheduleItem,
           'day-sun': cell.dayOfWeek === 0,
           'day-sat': cell.dayOfWeek === 6,
-          'clickable': cell.isCurrentMonth && (!!cell.scheduleItem || !!props.isAdmin),
+          'clickable': isCellClickable(cell),
           'is-today': cell.dateStr === todayStr
         }"
         @click="handleCellClick(cell)"
@@ -221,7 +230,7 @@ const todayStr = getKSTTodayString();
         <div v-if="cell.scheduleItem" class="cell-content">
           <!-- 1. 아직 일정이 생성되지 않은 가능한 날짜 -->
           <div v-if="!cell.scheduleItem.creator || !cell.scheduleItem.attendees?.length" class="cell-uncreated-box">
-            <span class="pill-create-action">+ 일정 만들기</span>
+            <span v-if="cell.dateStr >= todayStr || isAdmin" class="pill-create-action">+ 일정 만들기</span>
           </div>
 
           <!-- 2. 이미 일정이 생성된 날짜 -->

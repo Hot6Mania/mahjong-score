@@ -15,7 +15,7 @@ import {
   applyDelayIfRepeated
 } from '@/utils/pinRateLimiter';
 import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName } from '@/utils/googleSheets';
-import { getKSTDayOfWeekName } from '@/utils/kstTime';
+import { getKSTDayOfWeekName, isKSTPastDate } from '@/utils/kstTime';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -46,8 +46,15 @@ const emit = defineEmits<{
   (e: 'toast', message: string, type?: 'success' | 'error'): void;
 }>();
 
+const isPastLocked = computed(() => {
+  if (props.isAdmin) return false;
+  if (!props.dayItem?.date) return false;
+  return isKSTPastDate(props.dayItem.date);
+});
+
 const isManager = computed(() => {
   if (props.isAdmin) return true;
+  if (isPastLocked.value) return false;
   if (props.myAttendeeName && props.dayItem?.creator === props.myAttendeeName) return true;
   return false;
 });
@@ -949,6 +956,10 @@ const handleUnconfirmKeepSheet = () => {
 };
 
 const onFooterAttendClick = () => {
+  if (isPastLocked.value) {
+    emit('toast', '이전 날짜의 일정은 관리자만 수정할 수 있습니다.', 'error');
+    return;
+  }
   if (props.dayItem?.isConfirmed && !isUserAttending.value && !props.isAdmin) {
     emit('toast', '이미 확정된 모임에는 새로 참석 신청할 수 없습니다.', 'error');
     return;
@@ -1030,7 +1041,7 @@ const onFooterAttendClick = () => {
               </button>
               <!-- 일정 정보 초기화 휴지통 아이콘 버튼 (날짜는 가능한 일정으로 유지) -->
               <button
-                v-if="isAdmin || !!dayItem.creator"
+                v-if="(isAdmin || !!dayItem.creator) && !isPastLocked"
                 type="button"
                 class="btn-icon-delete-date"
                 @click="onDeleteDateClick"
@@ -1180,7 +1191,7 @@ const onFooterAttendClick = () => {
                     전체 비우기
                   </button>
                   <button
-                    v-if="!dayItem.isConfirmed || isAdmin"
+                    v-if="(!dayItem.isConfirmed || isAdmin) && !isPastLocked"
                     type="button"
                     class="btn-add-attendee"
                     @click="emit('openAttend')"
@@ -1191,17 +1202,17 @@ const onFooterAttendClick = () => {
               </div>
 
               <div v-if="attendeeCount === 0" class="empty-attendees">
-                아직 신청한 참가자가 없습니다. 첫 번째로 신청해보세요!
+                {{ isPastLocked ? '신청한 참가자가 없는 지난 일정입니다.' : '아직 신청한 참가자가 없습니다. 첫 번째로 신청해보세요!' }}
               </div>
 
               <div v-else class="attendees-list">
                 <div 
                   v-for="att in dayItem.attendees" 
                   :key="att.id"
-                  class="attendee-card clickable-attendee"
-                  :class="{ 'is-me': att.name === myAttendeeName }"
-                  @click="emit('openAttend', att.name)"
-                  title="클릭하여 참석 시간/정보 수정"
+                  class="attendee-card"
+                  :class="{ 'is-me': att.name === myAttendeeName, 'clickable-attendee': !isPastLocked }"
+                  @click="!isPastLocked && emit('openAttend', att.name)"
+                  :title="isPastLocked ? undefined : '클릭하여 참석 시간/정보 수정'"
                 >
                   <div class="attendee-main">
                     <span class="attendee-name">
@@ -1220,7 +1231,7 @@ const onFooterAttendClick = () => {
                           10:00 ~ 22:00
                         </template>
                       </span>
-                      <div class="card-action-btns">
+                      <div v-if="!isPastLocked" class="card-action-btns">
                         <button
                           type="button"
                           class="btn-card-action edit-btn"
@@ -1472,7 +1483,7 @@ const onFooterAttendClick = () => {
             <div v-else class="empty-timetable-card">
               <p class="empty-timetable-text">아직 참가 신청한 인원이 없어 타임테이블이 생성되지 않았습니다.</p>
               <button
-                v-if="!dayItem.isConfirmed"
+                v-if="!dayItem.isConfirmed && !isPastLocked"
                 type="button"
                 class="btn-empty-attend"
                 @click="emit('openAttend')"
@@ -1488,11 +1499,11 @@ const onFooterAttendClick = () => {
           <button
             type="button"
             class="btn-primary"
-            :class="{ 'btn-closed': dayItem.isConfirmed && !isUserAttending }"
-            :disabled="dayItem.isConfirmed && !isUserAttending"
+            :class="{ 'btn-closed': (dayItem.isConfirmed && !isUserAttending) || isPastLocked }"
+            :disabled="(dayItem.isConfirmed && !isUserAttending) || isPastLocked"
             @click="onFooterAttendClick"
           >
-            {{ isUserAttending ? '내 참석 정보 수정' : (dayItem.isConfirmed ? '신청 마감 (출발 확정)' : '참석 신청하기') }}
+            {{ isPastLocked ? '종료된 일정 (수정 불가)' : (isUserAttending ? '내 참석 정보 수정' : (dayItem.isConfirmed ? '신청 마감 (출발 확정)' : '참석 신청하기')) }}
           </button>
         </div>
       </div>

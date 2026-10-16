@@ -95,6 +95,14 @@ export function isKSTToday(dateStr: string): boolean {
 }
 
 /**
+ * 특정 날짜 문자열("YYYY-MM-DD")이 KST 기준 오늘 이전(과거) 날짜인지 여부
+ */
+export function isKSTPastDate(dateStr: string): boolean {
+  if (!dateStr) return false;
+  return dateStr < getKSTTodayString();
+}
+
+/**
  * 특정 날짜("YYYY-MM-DD")의 요일 인덱스 반환 (0: 일요일, 1: 월요일, ..., 6: 토요일)
  * 브라우저 로컬 타임존의 영향을 받지 않고 UTC 정오 기준으로 결정론적 계산
  */

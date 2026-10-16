@@ -2,12 +2,13 @@
 import { computed } from 'vue';
 import type { ScheduleDayItem } from '@/types/schedule';
 import { computeEffectiveOverlapRange } from '@/utils/timelineEngine';
-import { getKSTDayOfWeekName } from '@/utils/kstTime';
+import { getKSTDayOfWeekName, isKSTPastDate } from '@/utils/kstTime';
 
 const props = defineProps<{
   dates: ScheduleDayItem[];
   sessionMap: Map<string, number>;
   myAttendeeName?: string;
+  isAdmin?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -70,7 +71,14 @@ const isEmptyDate = (day: ScheduleDayItem) => {
   return !day.attendees || day.attendees.length === 0;
 };
 
+const isPastLocked = (day: ScheduleDayItem) => {
+  return !props.isAdmin && isKSTPastDate(day.date);
+};
+
 const handleActionClick = (item: ScheduleDayItem) => {
+  if (isPastLocked(item)) {
+    return;
+  }
   if (item.isConfirmed && !isUserAttending(item)) {
     return;
   }
@@ -191,14 +199,14 @@ const getOverlapRange = (day: ScheduleDayItem) => {
             type="button" 
             class="btn-attend"
             :class="{ 
-              'btn-attend-edit': isUserAttending(item),
-              'btn-attend-create': !isUserAttending(item) && isEmptyDate(item),
-              'btn-attend-closed': item.isConfirmed && !isUserAttending(item)
+              'btn-attend-edit': !isPastLocked(item) && isUserAttending(item),
+              'btn-attend-create': !isPastLocked(item) && !isUserAttending(item) && isEmptyDate(item),
+              'btn-attend-closed': isPastLocked(item) || (item.isConfirmed && !isUserAttending(item))
             }"
-            :disabled="item.isConfirmed && !isUserAttending(item)"
+            :disabled="isPastLocked(item) || (item.isConfirmed && !isUserAttending(item))"
             @click="handleActionClick(item)"
           >
-            {{ isUserAttending(item) ? '내 참석 수정' : (item.isConfirmed ? '신청 마감' : (isEmptyDate(item) ? '개설' : '참석 신청')) }}
+            {{ isPastLocked(item) ? '기간 지남' : (isUserAttending(item) ? '내 참석 수정' : (item.isConfirmed ? '신청 마감' : (isEmptyDate(item) ? '개설' : '참석 신청'))) }}
           </button>
         </div>
       </div>
