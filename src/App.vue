@@ -337,7 +337,6 @@ const restoreGoogleSessionIfValid = async () => {
         googleInfo.syncMode = "google";
       }
       if (googleInfo.spreadsheetId) {
-        repairStatsSheetSpillError(googleInfo.spreadsheetId).catch(() => {});
         await loadMemberList();
         try {
           const stats = await fetchMemberStats(googleInfo.spreadsheetId);
@@ -365,7 +364,6 @@ const restoreGoogleSessionIfValid = async () => {
         googleInfo.syncMode = "google";
       }
       if (googleInfo.spreadsheetId) {
-        repairStatsSheetSpillError(googleInfo.spreadsheetId).catch(() => {});
         await loadMemberList();
         try {
           const stats = await fetchMemberStats(googleInfo.spreadsheetId);
@@ -396,7 +394,6 @@ const restoreGoogleSessionIfValid = async () => {
       }
 
       if (googleInfo.spreadsheetId) {
-        repairStatsSheetSpillError(googleInfo.spreadsheetId).catch(() => {});
         await loadMemberList();
         try {
           const stats = await fetchMemberStats(googleInfo.spreadsheetId);

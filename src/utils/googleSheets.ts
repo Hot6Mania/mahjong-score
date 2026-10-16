@@ -1597,75 +1597,81 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
 export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise<boolean> => {
   if (!spreadsheetId) return false;
   try {
-    // 1) '전체 멤버목록 (데이터)' 시트의 A3:A500 클리어 (Spill 충돌 원천 해소)
+    // 1) '전체 멤버목록 (데이터)' A2 셀 확인 -> #REF! 등 에러이거나 수식이 깨진 경우에만 조건부 복구 (불필요한 재계산 원천 차단)
     try {
-      await window.gapi.client.sheets.spreadsheets.values.clear({
-        spreadsheetId,
-        range: "'전체 멤버목록 (데이터)'!A3:A500",
-      });
-      console.log("'전체 멤버목록 (데이터)' 시트 A3:A500 클리어 완료 (Spill 에러 복구)");
-    } catch (e1) {
-      console.warn("'전체 멤버목록 (데이터)' A3:A500 클리어 중 오류:", e1);
-    }
-
-    // 2) 혹시 '전체 멤버목록 (데이터)' A2의 수식이 지워졌거나 텍스트로 오염된 경우 원래 수식으로 자동 복원
-    try {
-      const a2Res = await window.gapi.client.sheets.spreadsheets.values.get({
+      const a2CheckRes = await window.gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId,
         range: "'전체 멤버목록 (데이터)'!A2",
-        valueRenderOption: 'FORMULA',
       });
-      const a2Val = (a2Res.result.values?.[0]?.[0] || '').toString().trim();
-      if (!a2Val.startsWith('=')) {
-        await window.gapi.client.sheets.spreadsheets.values.update({
+      const a2Display = (a2CheckRes.result.values?.[0]?.[0] || '').toString().trim();
+      if (!a2Display || a2Display.startsWith('#')) {
+        await window.gapi.client.sheets.spreadsheets.values.clear({
+          spreadsheetId,
+          range: "'전체 멤버목록 (데이터)'!A3:A500",
+        });
+        const a2FormulaRes = await window.gapi.client.sheets.spreadsheets.values.get({
           spreadsheetId,
           range: "'전체 멤버목록 (데이터)'!A2",
-          valueInputOption: 'USER_ENTERED',
-          resource: {
-            values: [["=FILTER('통계'!A2:A1006, '통계'!A2:A1006<>\"\")"]],
-          },
+          valueRenderOption: 'FORMULA',
         });
-        console.log("'전체 멤버목록 (데이터)' A2 수식(=FILTER('통계'!A2:A1006...)) 자동 복원 완료");
+        const a2Formula = (a2FormulaRes.result.values?.[0]?.[0] || '').toString().trim();
+        if (!a2Formula.startsWith('=')) {
+          await window.gapi.client.sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: "'전체 멤버목록 (데이터)'!A2",
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+              values: [["=FILTER('통계'!A2:A1006, '통계'!A2:A1006<>\"\")"]],
+            },
+          });
+        }
+        console.log("'전체 멤버목록 (데이터)' 시트 Spill 에러 조건부 복구 완료");
       }
-    } catch (eFormula) {
-      console.warn("'전체 멤버목록 (데이터)' A2 수식 검증/복구 중 오류:", eFormula);
+    } catch (e1) {
+      console.warn("'전체 멤버목록 (데이터)' A2 점검 중 오류:", e1);
     }
 
-    // 3) '전체 멤버별 통계' 시트의 A3:A500 클리어
+    // 2) '전체 멤버별 통계' A2 셀 확인 -> #REF! 등 에러이거나 수식이 깨진 경우에만 조건부 복구
     try {
-      await window.gapi.client.sheets.spreadsheets.values.clear({
-        spreadsheetId,
-        range: "'전체 멤버별 통계'!A3:A500",
-      });
-      console.log("'전체 멤버별 통계' 시트 A3:A500 클리어 완료 (Spill 에러 복구)");
-    } catch (e2) {
-      console.warn("'전체 멤버별 통계' A3:A500 클리어 중 오류:", e2);
-    }
-
-    // 4) 혹시 '전체 멤버별 통계' A2 수식이 깨진 경우에도 자동 복원
-    try {
-      const statsA2Res = await window.gapi.client.sheets.spreadsheets.values.get({
+      const statsA2CheckRes = await window.gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId,
         range: "'전체 멤버별 통계'!A2",
-        valueRenderOption: 'FORMULA',
       });
-      const statsA2Val = (statsA2Res.result.values?.[0]?.[0] || '').toString().trim();
-      if (!statsA2Val.startsWith('=')) {
-        await window.gapi.client.sheets.spreadsheets.values.update({
+      const statsA2Display = (statsA2CheckRes.result.values?.[0]?.[0] || '').toString().trim();
+      if (!statsA2Display || statsA2Display.startsWith('#')) {
+        await window.gapi.client.sheets.spreadsheets.values.clear({
+          spreadsheetId,
+          range: "'전체 멤버별 통계'!A3:A500",
+        });
+        const statsA2FormulaRes = await window.gapi.client.sheets.spreadsheets.values.get({
           spreadsheetId,
           range: "'전체 멤버별 통계'!A2",
-          valueInputOption: 'USER_ENTERED',
-          resource: {
-            values: [["=UNIQUE(FILTER('전체 멤버목록 (데이터)'!A:A, '전체 멤버목록 (데이터)'!A:A <> \"\", '전체 멤버목록 (데이터)'!A:A <> \"이름\"))"]],
-          },
+          valueRenderOption: 'FORMULA',
         });
-        console.log("'전체 멤버별 통계' A2 수식(=UNIQUE(FILTER(...))) 자동 복원 완료");
+        const statsA2Formula = (statsA2FormulaRes.result.values?.[0]?.[0] || '').toString().trim();
+        if (!statsA2Formula.startsWith('=')) {
+          await window.gapi.client.sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: "'전체 멤버별 통계'!A2",
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+              values: [["=UNIQUE(FILTER('전체 멤버목록 (데이터)'!A:A, '전체 멤버목록 (데이터)'!A:A <> \"\", '전체 멤버목록 (데이터)'!A:A <> \"이름\"))"]],
+            },
+          });
+        }
+        console.log("'전체 멤버별 통계' 시트 Spill 에러 조건부 복구 완료");
       }
-    } catch (eStatsFormula) {
-      console.warn("'전체 멤버별 통계' A2 수식 검증 중 오류:", eStatsFormula);
+    } catch (e2) {
+      console.warn("'전체 멤버별 통계' A2 점검 중 오류:", e2);
     }
 
-    // 5) '전체 국별기록 (데이터)', 회차별 '(데이터)', '전체 멤버별 통계' 열 개수 자동 확장 및 헤더/수식 보장
+    // 3) 촌보/벌부 스키마(U:V열 및 AL:AM열)가 이미 반영 완료된 시트라면 반복 점검 생략
+    const schemaCacheKey = `mahjong_penalty_schema_v1_${spreadsheetId}`;
+    if (localStorage.getItem(schemaCacheKey) === 'true') {
+      return true;
+    }
+
+    // 4) 최초 1회: '전체 국별기록 (데이터)', 회차별 '(데이터)', '전체 멤버별 통계' 열 개수 자동 확장 및 헤더/수식 보장
     try {
       const metaRes = await window.gapi.client.sheets.spreadsheets.get({
         spreadsheetId,
@@ -1674,7 +1680,7 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
       const allSheets = metaRes.result.sheets || [];
       const dimensionRequests: any[] = [];
 
-      // 5-1. '전체 국별기록 (데이터)' 및 기존 회차 '(데이터)' 시트가 22열(V열) 미만이면 22열까지 확장
+      // 4-1. '전체 국별기록 (데이터)' 및 기존 회차 '(데이터)' 시트가 22열(V열) 미만이면 22열까지 확장
       allSheets.forEach((s: any) => {
         const title: string = s.properties?.title || '';
         if (title === '전체 국별기록 (데이터)' || (title.includes('(데이터)') && title !== '전체 멤버목록 (데이터)' && title !== '전체 누적우마 변동추이 (데이터)')) {
@@ -1691,7 +1697,7 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
         }
       });
 
-      // 5-2. '전체 멤버별 통계' 시트가 39열(AM열) 미만이면 39열까지 확장
+      // 4-2. '전체 멤버별 통계' 시트가 39열(AM열) 미만이면 39열까지 확장
       const memberStatsSheet = allSheets.find(
         (s: any) => s.properties?.title === '전체 멤버별 통계'
       );
@@ -1718,7 +1724,7 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
         console.log(`시트 열 자동 확장 완료 (${dimensionRequests.length}개 시트)`);
       }
 
-      // 5-3. '전체 국별기록 (데이터)' U1:V1 헤더 기입
+      // 4-3. '전체 국별기록 (데이터)' U1:V1 헤더 기입
       try {
         await window.gapi.client.sheets.spreadsheets.values.update({
           spreadsheetId,
@@ -1732,7 +1738,7 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
         console.warn("'전체 국별기록 (데이터)' U1:V1 헤더 업데이트 중 오류:", eGlobalHeader);
       }
 
-      // 5-4. '전체 멤버별 통계' AL:AM열('촌보율', '벌부율') 수식 및 소수점 5자리(0.00000%) 서식 자동 기입
+      // 4-4. '전체 멤버별 통계' AL:AM열('촌보율', '벌부율') 수식 및 소수점 5자리(0.00000%) 서식 자동 기입
       if (memberStatsSheet) {
         const alHeaderRes = await window.gapi.client.sheets.spreadsheets.values.get({
           spreadsheetId,
@@ -1790,6 +1796,7 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
 
           console.log("'전체 멤버별 통계' AL:AM열(촌보율/벌부율) 수식 및 0.00000% 서식 자동 구성 완료");
         }
+        localStorage.setItem(schemaCacheKey, 'true');
       }
     } catch (ePenaltyCols) {
       console.warn("'전체 멤버별 통계' 촌보율/벌부율 열 구성 중 오류 (무시 가능):", ePenaltyCols);
