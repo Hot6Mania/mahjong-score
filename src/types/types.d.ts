@@ -13,6 +13,8 @@ export interface Player { // 플레이어
   isLose: boolean, // 방총
   isTenpai: boolean, // 텐파이 유무
   isNagashi: boolean, // 유국만관 유무
+  isCheat: boolean, // 촌보 유무
+  beolbuCount: number, // 현재 국 벌부 횟수 카운트
   shortName: string, // 이름 축약어
   rating?: number, // 레이팅 (OpenSkill Ordinal)
 }
@@ -52,6 +54,8 @@ export interface Records { // 기록
   win: boolean[][], // 화료 횟수
   lose: boolean[][], // 방총 횟수
   tenpai?: boolean[][], // 텐파이 여부
+  cheat?: boolean[][], // 국별 촌보 유무
+  beolbu?: number[][], // 국별 벌부 횟수 카운트
   status?: string[], // 국의 종료 상태 (tsumo, ron, normal_draw, special_draw, cheat)
   riichiOrder?: number[][], // 각 국의 리치 선언자 순서 배열
   dealer?: number[], // 각 국의 친(East) 플레이어 인덱스

@@ -38,16 +38,16 @@ const savedPlayers = localStorage.getItem("mahjong_players");
 let initialPlayers: PlayerInterface[] = [
   {seat: "Down",  name: "▼", wind: "東", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, isCheat: false, beolbuCount: 0, shortName: ""},
   {seat: "Right", name: "▶", wind: "南", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, isCheat: false, beolbuCount: 0, shortName: ""},
   {seat: "Up",    name: "▲", wind: "西", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""},
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, isCheat: false, beolbuCount: 0, shortName: ""},
   {seat: "Left",  name: "◀", wind: "北", rank: 0, realRank: 1,
     displayScore: 25000, effectScore: NaN, gapScore: NaN, deltaScore: 0,
-    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, shortName: ""}
+    isRiichi: false, isWin: false, isLose: false, isTenpai: false, isNagashi: false, isCheat: false, beolbuCount: 0, shortName: ""}
 ];
 if (savedPlayers) {
   try {
@@ -55,6 +55,8 @@ if (savedPlayers) {
     if (Array.isArray(parsed) && parsed.length === 4) {
       initialPlayers = parsed.map(p => ({
         ...p,
+        isCheat: Boolean(p.isCheat),
+        beolbuCount: Number(p.beolbuCount || 0),
         effectScore: (p.effectScore === null || p.effectScore === undefined) ? NaN : Number(p.effectScore),
         gapScore: (p.gapScore === null || p.gapScore === undefined) ? NaN : Number(p.gapScore)
       }));
@@ -151,6 +153,8 @@ const records = reactive<RecordsType>({
   win: loadedRecords.win || [[false, false, false, false]], // 화료 횟수
   lose: loadedRecords.lose || [[false, false, false, false]], // 방총 횟수
   tenpai: loadedRecords.tenpai || [[false, false, false, false]], // 텐파이 여부
+  cheat: loadedRecords.cheat || [[false, false, false, false]], // 국별 촌보 여부
+  beolbu: loadedRecords.beolbu || [[0, 0, 0, 0]], // 국별 벌부 횟수
   status: loadedRecords.status || ["initial"], // 국 상태
   riichiOrder: loadedRecords.riichiOrder || [[]], // 리치 순서
   dealer: loadedRecords.dealer || [0], // 오야/동가 플레이어 인덱스
@@ -333,6 +337,7 @@ const restoreGoogleSessionIfValid = async () => {
         googleInfo.syncMode = "google";
       }
       if (googleInfo.spreadsheetId) {
+        repairStatsSheetSpillError(googleInfo.spreadsheetId).catch(() => {});
         await loadMemberList();
         try {
           const stats = await fetchMemberStats(googleInfo.spreadsheetId);
@@ -360,6 +365,7 @@ const restoreGoogleSessionIfValid = async () => {
         googleInfo.syncMode = "google";
       }
       if (googleInfo.spreadsheetId) {
+        repairStatsSheetSpillError(googleInfo.spreadsheetId).catch(() => {});
         await loadMemberList();
         try {
           const stats = await fetchMemberStats(googleInfo.spreadsheetId);
@@ -390,6 +396,7 @@ const restoreGoogleSessionIfValid = async () => {
       }
 
       if (googleInfo.spreadsheetId) {
+        repairStatsSheetSpillError(googleInfo.spreadsheetId).catch(() => {});
         await loadMemberList();
         try {
           const stats = await fetchMemberStats(googleInfo.spreadsheetId);
@@ -1089,13 +1096,19 @@ const resetAll = () => {
     records.win.pop();
     records.lose.pop();
     if (records.tenpai) records.tenpai.pop();
+    if (records.cheat) records.cheat.pop();
+    if (records.beolbu) records.beolbu.pop();
     if (records.status) records.status.pop();
     if (records.riichiOrder) records.riichiOrder.pop();
     if (records.dealer) records.dealer.pop();
   }
   for (let i=0;i<records.score.length;i++)
     records.score[i][0]=option.startingScore;
-  players.forEach((x) => {x.isRiichi=false;}); // 리치봉 제거
+  players.forEach((x) => {
+    x.isRiichi=false;
+    x.isCheat=false;
+    x.beolbuCount=0;
+  }); // 리치봉 및 벌칙 상태 초기화
   players.forEach((x) => {x.displayScore=option.startingScore;}); // 점수 설정
   panelInfo.wind="東"; // 장풍 설정
   panelInfo.round=1; // 국 설정
@@ -1166,12 +1179,13 @@ const hideModal = () => {
     inputBu: 2,
     inputFao: -1,
   });
-  players.forEach((x) => { // 승자/패자 및 변동점수 초기화
+  players.forEach((x) => { // 승자/패자 및 변동점수 초기화 (현재 국의 beolbuCount는 국 종료 전까지 유지)
     x.deltaScore=0;
     x.isWin=false;
     x.isLose=false;
     x.isTenpai=false;
     x.isNagashi=false;
+    x.isCheat=false;
   });
 }
 
@@ -1320,13 +1334,22 @@ const checkInvalidStatus = (status: string) => {
   else if (status==='cheat'){ // 촌보일때
     if (scoringState.whoCheat===-1) // 촌보한 사람이 없음 (불가능한 경우)
       return;
+    players[scoringState.whoCheat].isCheat = true;
     calculateCheat();
   }
   else if (status==='beolbu'){ // 벌부일때
     if (scoringState.whoBeolbu===-1) // 벌부 지급할 사람이 없음
       return;
+
+    // 김케이 하우스 룰: 동일 국에서 벌부 2회 누적 시 촌보(cheat)로 자동 전환 (벌부 1회 + 촌보 1회 동시 카운트)
+    if ((players[scoringState.whoBeolbu].beolbuCount || 0) >= 1) {
+      scoringState.whoCheat = scoringState.whoBeolbu;
+      players[scoringState.whoCheat].isCheat = true;
+      calculateCheat();
+      return;
+    }
     
-    // 벌부 점수 차이(deltaScore)를 임시 세팅하여 결과창으로 보냄
+    // 1회차 벌부 점수 차이(deltaScore)를 임시 세팅하여 결과창으로 보냄
     for (let i = 0; i < players.length; i++) {
       if (scoringState.whoBeolbu === i) {
         players[i].deltaScore = -1000;
@@ -1508,7 +1531,10 @@ const calculateCheat = () => {
 const saveRound = () => {
   let status = modalInfo.status;
   if (status === 'beolbu') {
-    // 벌부 최종 적용: 벌부 낸 플레이어 점수 차감 및 공탁 리치봉 개수 1 증가
+    // 벌부 최종 적용: 벌부 낸 플레이어 카운트 1 증가, 점수 차감 및 공탁 리치봉 개수 1 증가
+    if (scoringState.whoBeolbu >= 0 && scoringState.whoBeolbu < players.length) {
+      players[scoringState.whoBeolbu].beolbuCount = (players[scoringState.whoBeolbu].beolbuCount || 0) + 1;
+    }
     panelInfo.riichi++;
     // 모달 오버레이를 즉시 닫아 점수 감소 연출 중 화면이 어둡게 유지되지 않도록 조치
     modalInfo.isOpen = false;
@@ -1551,14 +1577,22 @@ const saveRound = () => {
     targetRiichi = 0;
   }
 
-  if (status==='cheat'){ // 촌보의 경우 리치봉 반환
+  if (status==='cheat'){ // 촌보의 경우 현 국의 리치봉 및 벌부 공탁금 반환
+    if (scoringState.whoCheat >= 0 && scoringState.whoCheat < players.length) {
+      players[scoringState.whoCheat].isCheat = true;
+    }
     for (let i=0;i<players.length;i++){
       if (players[i].isRiichi===true){
         players[i].displayScore+=1000;
         players[i].isRiichi=false;
-        panelInfo.riichi--;
+        panelInfo.riichi = Math.max(0, panelInfo.riichi - 1);
+      }
+      if ((players[i].beolbuCount || 0) > 0){
+        players[i].displayScore += players[i].beolbuCount * 1000;
+        panelInfo.riichi = Math.max(0, panelInfo.riichi - players[i].beolbuCount);
       }
     }
+    targetRiichi = panelInfo.riichi;
   }
 
   // 점수 기록창에 기록 남기기 (동기적 기록)
@@ -1578,11 +1612,15 @@ const saveRound = () => {
 
   // 통계 전용 데이터 기록
   if (!records.tenpai) records.tenpai = [[false, false, false, false]];
+  if (!records.cheat) records.cheat = [[false, false, false, false]];
+  if (!records.beolbu) records.beolbu = [[0, 0, 0, 0]];
   if (!records.status) records.status = ["initial"];
   if (!records.riichiOrder) records.riichiOrder = [[]];
   if (!records.dealer) records.dealer = [0];
 
   records.tenpai.push(players.map(x => x.isTenpai));
+  records.cheat.push(players.map(x => Boolean(x.isCheat)));
+  records.beolbu.push(players.map(x => Number(x.beolbuCount || 0)));
   records.status.push(status);
   records.riichiOrder.push([...riichiOrder.value]);
   records.dealer.push(chinIdx);
@@ -1712,7 +1750,11 @@ const saveRound = () => {
     }
   });
 
-  players.forEach((x) => {x.isRiichi=false;}); // 리치봉 수거
+  players.forEach((x) => {
+    x.isRiichi=false;
+    x.isCheat=false;
+    x.beolbuCount=0;
+  }); // 리치봉 수거 및 현 국 벌칙 상태 초기화
   hideModal(); // 모달 창 끄기
 }
 
@@ -1767,11 +1809,17 @@ const rollbackRecord = (idx: number) => {
     records.win.pop();
     records.lose.pop();
     if (records.tenpai) records.tenpai.pop();
+    if (records.cheat) records.cheat.pop();
+    if (records.beolbu) records.beolbu.pop();
     if (records.status) records.status.pop();
     if (records.riichiOrder) records.riichiOrder.pop();
     if (records.dealer) records.dealer.pop();
   }
-  players.forEach((x) => {x.isRiichi=false;}); // 리치봉 제거
+  players.forEach((x) => {
+    x.isRiichi=false;
+    x.isCheat=false;
+    x.beolbuCount=0;
+  }); // 리치봉 및 벌칙 상태 초기화
   for (let i=0;i<records.score.length;i++){
     players[i].displayScore=Number(records.score[i][records.score[i].length-1]); // 점수 설정
     sumScore+=players[i].displayScore;
@@ -1909,8 +1957,11 @@ const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) =
   await loadMemberList();
   await loadTodayMembers();
 
-  // 자동 로그인 완료 직후에도 전체 기간 통계 동기화
+  // 자동 로그인 완료 직후에도 시트 스키마 자동 보정 및 전체 기간 통계 동기화
   if (googleInfo.spreadsheetId) {
+    try {
+      await repairStatsSheetSpillError(googleInfo.spreadsheetId);
+    } catch (_) {}
     try {
       const stats = await fetchMemberStats(googleInfo.spreadsheetId);
       googleMemberStats.value = stats;
@@ -2568,7 +2619,10 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
     if (!isValid) return false;
 
     if (todayGamesHistory.length === 0) {
-      if (!skipConfirm) alert("오늘 기록된 로컬 대국 이력이 없습니다.");
+      try {
+        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
+      } catch (_) {}
+      if (!skipConfirm) alert("오늘 기록된 로컬 대국 이력이 없습니다. (시트 구조 및 통계 수식은 최신 상태로 점검되었습니다.)");
       return false;
     }
 
@@ -2712,9 +2766,10 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
               const wPrev = (r === 1) ? option.startingScore : (records.score[wIdx][2 * (r - 1)] || 0);
               const wCurr = records.score[wIdx][2 * r] || 0;
               const wDelta = wCurr - wPrev;
-              // 방총자/지불자가 이번 국에 리치를 걸었다면 리치봉(1000점) 공탁분은 방총 타점에서 제외
+              // 방총자/지불자가 이번 국에 리치나 벌부를 냈다면 공탁분(1000점 단위)은 방총/화료 타점에서 제외
               const riichiCost = (records.riichi && records.riichi[r] && records.riichi[r][wIdx]) ? 1000 : 0;
-              const pureLoss = Math.max(0, Math.abs(wDelta) - riichiCost);
+              const beolbuCost = (records.beolbu && records.beolbu[r] && records.beolbu[r][wIdx]) ? Number(records.beolbu[r][wIdx]) * 1000 : 0;
+              const pureLoss = Math.max(0, Math.abs(wDelta) - riichiCost - beolbuCost);
               pureWinScore += pureLoss;
             }
           }
@@ -2734,6 +2789,12 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
           const isWin = records.win[r][pIdx] ? 'TRUE' : 'FALSE';
           const isLose = records.lose[r][pIdx] ? 'TRUE' : 'FALSE';
           const isTenpai = records.tenpai && records.tenpai[r] && records.tenpai[r][pIdx] ? 'TRUE' : 'FALSE';
+          const isCheat = (records.cheat && records.cheat[r] && records.cheat[r][pIdx] !== undefined)
+            ? (records.cheat[r][pIdx] ? 'TRUE' : 'FALSE')
+            : ((roundStatus === 'cheat' && deltaScore < 0) ? 'TRUE' : 'FALSE');
+          const beolbuCount = (records.beolbu && records.beolbu[r] && records.beolbu[r][pIdx] !== undefined)
+            ? Number(records.beolbu[r][pIdx] || 0)
+            : 0;
           
           const historyItem = results.find((h: any) => h.name === playerName);
           const finalRank = historyItem ? historyItem.rank : 4;
@@ -2774,7 +2835,9 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
             isFirstRiichi,
             isChaseRiichi,
             isChasedRiichi,
-            pureWinScore
+            pureWinScore,
+            isCheat,
+            beolbuCount
           ];
           
           allRoundRows.push(rowData);
@@ -2901,9 +2964,12 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       triggerToast("동기화 성공!");
       return true;
     } else {
+      try {
+        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
+      } catch (_) {}
       if (skipCount > 0) {
         if (!skipConfirm) {
-          alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재합니다.)`);
+          alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재하며, 시트 통계 수식이 최신 상태로 점검되었습니다.)`);
         } else {
           triggerToast("이미 구글 시트에 최신 반영되어 있습니다.");
         }
@@ -3113,11 +3179,11 @@ const loadExistingSession = async (cleanTitle: string) => {
       localStorage.setItem("today_members_points", JSON.stringify(restoredPoints));
     }
 
-    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:T 긁어오기)
+    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 2행~ 긁어오기)
     syncProgress.value = 70;
     const dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: googleInfo.spreadsheetId,
-      range: `'${cleanTitle} (데이터)'!A2:T`
+      range: `'${cleanTitle} (데이터)'!2:10000`
     });
 
     const dataRows = dataRes.result.values || [];
@@ -3150,7 +3216,9 @@ const loadExistingSession = async (cleanTitle: string) => {
           isLose: boolean,
           isTenpai: boolean,
           isDealer: boolean,
-          pureWinScore: number
+          pureWinScore: number,
+          isCheat: boolean,
+          beolbuCount: number
         }>
       }>
     }> = {};
@@ -3172,6 +3240,10 @@ const loadExistingSession = async (cleanTitle: string) => {
       const rank = parseInt(row[13]) || 1;  // N열: 최종 순위
       const uma = parseFloat(row[14]) || 0;  // O열: 최종 우마
       const pureWinScore = parseInt(row[19]) || 0; // T열: 순수 화료 점수
+      const isCheat = (row[20] !== undefined && row[20] !== '')
+        ? (row[20] === 'TRUE')
+        : (roundStatus === 'cheat' && deltaScore < 0); // U열: 촌보 여부 (하위호환 지원)
+      const beolbuCount = parseInt(row[21]) || 0; // V열: 벌부 횟수
 
       const cleanGameId = gameId ? gameId.toString().trim() : '';
       const cleanPlayerName = name ? name.toString().trim() : '';
@@ -3227,7 +3299,9 @@ const loadExistingSession = async (cleanTitle: string) => {
           isLose,
           isTenpai,
           isDealer,
-          pureWinScore
+          pureWinScore,
+          isCheat,
+          beolbuCount
         };
       }
     });
@@ -3322,6 +3396,8 @@ const loadExistingSession = async (cleanTitle: string) => {
         win: [[false, false, false, false]],
         lose: [[false, false, false, false]],
         tenpai: [[false, false, false, false]],
+        cheat: [[false, false, false, false]],
+        beolbu: [[0, 0, 0, 0]],
         status: ["initial"],
         riichiOrder: [[]],
         dealer: [0],
@@ -3351,6 +3427,8 @@ const loadExistingSession = async (cleanTitle: string) => {
         const roundWin = [false, false, false, false];
         const roundLose = [false, false, false, false];
         const roundTenpai = [false, false, false, false];
+        const roundCheat = [false, false, false, false];
+        const roundBeolbu = [0, 0, 0, 0];
         let roundPureWinScore = 0;
 
         for (let pIdx = 0; pIdx < 4; pIdx++) {
@@ -3371,6 +3449,8 @@ const loadExistingSession = async (cleanTitle: string) => {
             roundWin[pIdx] = pData.isWin;
             roundLose[pIdx] = pData.isLose;
             roundTenpai[pIdx] = pData.isTenpai;
+            roundCheat[pIdx] = Boolean(pData.isCheat);
+            roundBeolbu[pIdx] = Number(pData.beolbuCount || 0);
             if (pData.pureWinScore !== undefined) {
               roundPureWinScore = pData.pureWinScore;
             }
@@ -3385,6 +3465,8 @@ const loadExistingSession = async (cleanTitle: string) => {
         restoredRecords.win.push(roundWin);
         restoredRecords.lose.push(roundLose);
         restoredRecords.tenpai.push(roundTenpai);
+        restoredRecords.cheat.push(roundCheat);
+        restoredRecords.beolbu.push(roundBeolbu);
         restoredRecords.riichiOrder.push([]);
         restoredRecords.pureWinScore.push(roundPureWinScore);
       });

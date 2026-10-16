@@ -315,6 +315,11 @@ const formatPct = (val: number | undefined): string => {
   return Number(val).toFixed(2) + '%';
 };
 
+const formatPct5 = (val: number | undefined): string => {
+  if (val === undefined || val === null || isNaN(val)) return '0.00000%';
+  return Number(val).toFixed(5) + '%';
+};
+
 const getDistPct = (count: number, total: number): string => {
   if (total <= 0) return '0.00';
   return ((count / total) * 100).toFixed(2);
@@ -663,6 +668,10 @@ const currentSessionPlayerStats = computed<MemberStatItem | null>(() => {
     oyaKaburiRate: 0,
     oyaKaburiAvg: 0,
     dealInRiichiRate: 0,
+    cheatRate: 0,
+    beolbuRate: 0,
+    cheatCount: 0,
+    beolbuCount: 0,
     totalScore: 0,
   };
 });
@@ -1827,6 +1836,7 @@ const getRankClass = (rank: number) => {
       <div class="dist-my-val">
         내 수치: <strong>
           <template v-if="activeDistName === '평균 순위'">{{ activeDist.currentValue.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.currentValue.toFixed(5) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.currentValue.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.currentValue.toLocaleString() }}{{ activeDistUnit }}</template>
         </strong>
@@ -1902,16 +1912,19 @@ const getRankClass = (rank: number) => {
       <div class="dist-labels-row">
         <span>최소 
           <template v-if="activeDistName === '평균 순위'">{{ activeDist.min.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.min.toFixed(5) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.min.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.min.toLocaleString() }}{{ activeDistUnit }}</template>
         </span>
         <span class="dist-avg-val">평균 
           <template v-if="activeDistName === '평균 순위'">{{ activeDist.avg.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.avg.toFixed(5) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.avg.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.avg.toLocaleString() }}{{ activeDistUnit }}</template>
         </span>
         <span>최대 
           <template v-if="activeDistName === '평균 순위'">{{ activeDist.max.toFixed(3) }}{{ activeDistUnit }}</template>
+          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.max.toFixed(5) }}{{ activeDistUnit }}</template>
           <template v-else-if="activeDistUnit === '%'">{{ activeDist.max.toFixed(2) }}{{ activeDistUnit }}</template>
           <template v-else>{{ activeDist.max.toLocaleString() }}{{ activeDistUnit }}</template>
         </span>
@@ -3181,6 +3194,24 @@ const getRankClass = (rank: number) => {
                         </div>
                         <div 
                           class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'cheatRate', '촌보율', currentSessionPlayerStats.cheatRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'cheatRate', '촌보율', currentSessionPlayerStats.cheatRate, false, '%')"
+                        >
+                          <span class="stat_label">촌보율</span>
+                          <span class="stat_value text_negative">{{ formatPct5(currentSessionPlayerStats.cheatRate) }}</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'beolbuRate', '벌부율', currentSessionPlayerStats.beolbuRate, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'beolbuRate', '벌부율', currentSessionPlayerStats.beolbuRate, false, '%')"
+                        >
+                          <span class="stat_label">벌부율</span>
+                          <span class="stat_value text_negative">{{ formatPct5(currentSessionPlayerStats.beolbuRate) }}</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'winEfficiency', '화료 효율', currentSessionPlayerStats.winEfficiency, true, '')" 
                           @mouseleave="onLeaveMetric"
                           @click.stop="onHoverSessionMetric($event, 'winEfficiency', '화료 효율', currentSessionPlayerStats.winEfficiency, true, '')"
@@ -3770,6 +3801,24 @@ const getRankClass = (rank: number) => {
               >
                 <span class="stat_label">방총 시 리치율</span>
                 <span class="stat_value">{{ formatPct(displayPlayerStats.dealInRiichiRate) }}</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'cheatRate', '촌보율', displayPlayerStats.cheatRate, false, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'cheatRate', '촌보율', displayPlayerStats.cheatRate, false, '%')"
+              >
+                <span class="stat_label">촌보율</span>
+                <span class="stat_value text_negative">{{ formatPct5(displayPlayerStats.cheatRate) }}</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'beolbuRate', '벌부율', displayPlayerStats.beolbuRate, false, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'beolbuRate', '벌부율', displayPlayerStats.beolbuRate, false, '%')"
+              >
+                <span class="stat_label">벌부율</span>
+                <span class="stat_value text_negative">{{ formatPct5(displayPlayerStats.beolbuRate) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 

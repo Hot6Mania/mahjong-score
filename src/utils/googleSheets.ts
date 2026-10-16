@@ -503,11 +503,12 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
         '대국 일시', '대국 ID', '국 구분', '국 인덱스', '종료 상태',
         '플레이어 이름', '친 여부(딜러)', '점수 변동', '최종 점수',
         '리치 여부', '화료 여부', '방총 여부', '텐파이 여부', '최종 순위', '최종 우마(포인트)', '소속 회차',
-        '선제 여부', '추격 여부', '피추격 여부', '순수 화료 점수'
+        '선제 여부', '추격 여부', '피추격 여부', '순수 화료 점수',
+        '촌보 여부', '벌부 횟수'
       ];
       await window.gapi.client.sheets.spreadsheets.values.update({
         spreadsheetId: spreadsheetId,
-        range: `'${detailTitle}'!A1:T1`,
+        range: `'${detailTitle}'!A1:V1`,
         valueInputOption: 'USER_ENTERED',
         resource: {
           values: [headers],
@@ -1272,7 +1273,7 @@ export const appendRoundRecords = async (
   if (!spreadsheetId || roundDataRows.length === 0) return;
 
   const isGlobalLog = sheetTitle === '전체 국별기록 (데이터)';
-  const range = `'${sheetTitle}'!A:T`;
+  const range = `'${sheetTitle}'!A:V`;
 
   if (!isGlobalLog && !skipEnsureSheet) {
     const baseTitle = sheetTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
@@ -1287,6 +1288,53 @@ export const appendRoundRecords = async (
   }
 
   try {
+    // 기존 시트에 U1:V1 헤더('촌보 여부', '벌부 횟수')가 비어 있거나 열이 20열 이하인 경우 자동 확장 및 보충
+    try {
+      await window.gapi.client.sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'${sheetTitle}'!U1:V1`,
+        valueInputOption: 'USER_ENTERED',
+        resource: {
+          values: [['촌보 여부', '벌부 횟수']]
+        }
+      });
+    } catch (headerErr) {
+      try {
+        const meta = await window.gapi.client.sheets.spreadsheets.get({
+          spreadsheetId,
+          includeGridData: false
+        });
+        const targetSheet = meta.result.sheets?.find((s: any) => s.properties?.title === sheetTitle);
+        if (targetSheet) {
+          const curCols = targetSheet.properties?.gridProperties?.columnCount || 20;
+          if (curCols < 22) {
+            await window.gapi.client.sheets.spreadsheets.batchUpdate({
+              spreadsheetId,
+              resource: {
+                requests: [
+                  {
+                    appendDimension: {
+                      sheetId: targetSheet.properties.sheetId,
+                      dimension: 'COLUMNS',
+                      length: 22 - curCols
+                    }
+                  }
+                ]
+              }
+            });
+          }
+          await window.gapi.client.sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `'${sheetTitle}'!U1:V1`,
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+              values: [['촌보 여부', '벌부 횟수']]
+            }
+          });
+        }
+      } catch (_) {}
+    }
+
     await window.gapi.client.sheets.spreadsheets.values.append({
       spreadsheetId,
       range,
@@ -1499,13 +1547,14 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
 
     const rule = rules[0];
     const ruleId = rule.alternatingColorRuleId;
+    const maxCols = sheet.properties?.gridProperties?.columnCount || 39;
     
     const newRange = {
       sheetId: sheetId,
       startRowIndex: 1,
       endRowIndex: totalMembers + 1,
       startColumnIndex: 0,
-      endColumnIndex: 37 // A~AK열
+      endColumnIndex: Math.min(39, maxCols) // A~AM열
     };
 
     await window.gapi.client.sheets.spreadsheets.batchUpdate({
@@ -1524,7 +1573,7 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
         ]
       }
     });
-    console.log(`교차 색상 규칙 범위 갱신 완료: A2:AK${totalMembers + 1}`);
+    console.log(`교차 색상 규칙 범위 갱신 완료: A2:AM${totalMembers + 1}`);
   } catch (err) {
     console.warn("교차 색상 범위 업데이트 중 오류 발생 (무시 가능):", err);
   }
@@ -1609,6 +1658,136 @@ export const repairStatsSheetSpillError = async (spreadsheetId: string): Promise
       }
     } catch (eStatsFormula) {
       console.warn("'전체 멤버별 통계' A2 수식 검증 중 오류:", eStatsFormula);
+    }
+
+    // 5) '전체 국별기록 (데이터)', 회차별 '(데이터)', '전체 멤버별 통계' 열 개수 자동 확장 및 헤더/수식 보장
+    try {
+      const metaRes = await window.gapi.client.sheets.spreadsheets.get({
+        spreadsheetId,
+        includeGridData: false,
+      });
+      const allSheets = metaRes.result.sheets || [];
+      const dimensionRequests: any[] = [];
+
+      // 5-1. '전체 국별기록 (데이터)' 및 기존 회차 '(데이터)' 시트가 22열(V열) 미만이면 22열까지 확장
+      allSheets.forEach((s: any) => {
+        const title: string = s.properties?.title || '';
+        if (title === '전체 국별기록 (데이터)' || (title.includes('(데이터)') && title !== '전체 멤버목록 (데이터)' && title !== '전체 누적우마 변동추이 (데이터)')) {
+          const cols = s.properties?.gridProperties?.columnCount || 20;
+          if (cols < 22) {
+            dimensionRequests.push({
+              appendDimension: {
+                sheetId: s.properties.sheetId,
+                dimension: 'COLUMNS',
+                length: 22 - cols,
+              },
+            });
+          }
+        }
+      });
+
+      // 5-2. '전체 멤버별 통계' 시트가 39열(AM열) 미만이면 39열까지 확장
+      const memberStatsSheet = allSheets.find(
+        (s: any) => s.properties?.title === '전체 멤버별 통계'
+      );
+      if (memberStatsSheet) {
+        const currentCols = memberStatsSheet.properties?.gridProperties?.columnCount || 37;
+        if (currentCols < 39) {
+          dimensionRequests.push({
+            appendDimension: {
+              sheetId: memberStatsSheet.properties.sheetId,
+              dimension: 'COLUMNS',
+              length: 39 - currentCols,
+            },
+          });
+        }
+      }
+
+      if (dimensionRequests.length > 0) {
+        await window.gapi.client.sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          resource: {
+            requests: dimensionRequests,
+          },
+        });
+        console.log(`시트 열 자동 확장 완료 (${dimensionRequests.length}개 시트)`);
+      }
+
+      // 5-3. '전체 국별기록 (데이터)' U1:V1 헤더 기입
+      try {
+        await window.gapi.client.sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: "'전체 국별기록 (데이터)'!U1:V1",
+          valueInputOption: 'USER_ENTERED',
+          resource: {
+            values: [['촌보 여부', '벌부 횟수']],
+          },
+        });
+      } catch (eGlobalHeader) {
+        console.warn("'전체 국별기록 (데이터)' U1:V1 헤더 업데이트 중 오류:", eGlobalHeader);
+      }
+
+      // 5-4. '전체 멤버별 통계' AL:AM열('촌보율', '벌부율') 수식 및 소수점 5자리(0.00000%) 서식 자동 기입
+      if (memberStatsSheet) {
+        const alHeaderRes = await window.gapi.client.sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: "'전체 멤버별 통계'!AL1:AM1",
+        });
+        const alHeader = (alHeaderRes.result.values?.[0]?.[0] || '').toString().trim();
+        const amHeader = (alHeaderRes.result.values?.[0]?.[1] || '').toString().trim();
+
+        if (alHeader !== '촌보율' || amHeader !== '벌부율') {
+          const formulaRows: string[][] = [['촌보율', '벌부율']];
+          for (let r = 2; r <= 50; r++) {
+            formulaRows.push([
+              `=IF(ISBLANK(A${r}), "", IFERROR((COUNTIFS('전체 국별기록 (데이터)'!$F:$F, A${r}, '전체 국별기록 (데이터)'!$U:$U, TRUE) + COUNTIFS('전체 국별기록 (데이터)'!$F:$F, A${r}, '전체 국별기록 (데이터)'!$U:$U, "", '전체 국별기록 (데이터)'!$E:$E, "cheat", '전체 국별기록 (데이터)'!$H:$H, "<0")) / E${r}, 0))`,
+              `=IF(ISBLANK(A${r}), "", IFERROR(SUMIFS('전체 국별기록 (데이터)'!$V:$V, '전체 국별기록 (데이터)'!$F:$F, A${r}) / E${r}, 0))`,
+            ]);
+          }
+          await window.gapi.client.sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: "'전체 멤버별 통계'!AL1:AM50",
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+              values: formulaRows,
+            },
+          });
+
+          try {
+            await window.gapi.client.sheets.spreadsheets.batchUpdate({
+              spreadsheetId,
+              resource: {
+                requests: [
+                  {
+                    repeatCell: {
+                      range: {
+                        sheetId: memberStatsSheet.properties.sheetId,
+                        startRowIndex: 1,
+                        endRowIndex: 50,
+                        startColumnIndex: 37, // AL열
+                        endColumnIndex: 39,   // AM열 다음
+                      },
+                      cell: {
+                        userEnteredFormat: {
+                          numberFormat: {
+                            type: 'PERCENT',
+                            pattern: '0.00000%',
+                          },
+                        },
+                      },
+                      fields: 'userEnteredFormat.numberFormat',
+                    },
+                  },
+                ],
+              },
+            });
+          } catch (_) {}
+
+          console.log("'전체 멤버별 통계' AL:AM열(촌보율/벌부율) 수식 및 0.00000% 서식 자동 구성 완료");
+        }
+      }
+    } catch (ePenaltyCols) {
+      console.warn("'전체 멤버별 통계' 촌보율/벌부율 열 구성 중 오류 (무시 가능):", ePenaltyCols);
     }
 
     return true;
@@ -1809,11 +1988,47 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
 export const fetchMemberStats = async (spreadsheetId: string, silent = false): Promise<any[]> => {
   if (!spreadsheetId) return [];
   try {
-    const range = "'전체 멤버별 통계'!A2:AK100";
-    const response = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range
+    const range = "'전체 멤버별 통계'!2:100";
+    const [response, roundsRes] = await Promise.all([
+      window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range
+      }),
+      window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "'전체 국별기록 (데이터)'!2:50000"
+      }).catch(() => null)
+    ]);
+
+    // '전체 국별기록 (데이터)'에서 플레이어별 촌보/벌부 횟수 직접 집계 (시트 수식 미적용 환경 폴백 겸용)
+    const penaltyAgg: Record<string, { rounds: number; cheatCount: number; beolbuCount: number }> = {};
+    const roundRows = roundsRes?.result?.values || [];
+    roundRows.forEach((r: any) => {
+      const status = (r[4] || '').toString().trim().toLowerCase(); // E열 (idx 4)
+      const pName = (r[5] || '').toString().trim(); // F열 (idx 5)
+      if (!pName) return;
+      const delta = parseFloat((r[7] || '0').toString().replace(/,/g, '')) || 0; // H열 (idx 7)
+      const uVal = r[20]; // U열 (idx 20)
+      const vVal = r[21]; // V열 (idx 21)
+
+      if (!penaltyAgg[pName]) {
+        penaltyAgg[pName] = { rounds: 0, cheatCount: 0, beolbuCount: 0 };
+      }
+      penaltyAgg[pName].rounds++;
+
+      const isCheat = (uVal !== undefined && uVal !== null && String(uVal).trim() !== '')
+        ? (String(uVal).trim().toUpperCase() === 'TRUE' || String(uVal).trim() === '1')
+        : (status === 'cheat' && delta < 0);
+      if (isCheat) {
+        penaltyAgg[pName].cheatCount++;
+      }
+
+      const bCnt = parseInt(String(vVal || '0'), 10) || 0;
+      if (bCnt > 0) {
+        penaltyAgg[pName].beolbuCount += bCnt;
+      }
     });
+
     const values = response.result.values;
     if (values) {
       return values
@@ -1821,17 +2036,31 @@ export const fetchMemberStats = async (spreadsheetId: string, silent = false): P
         .map((row: any) => {
         const cleanVal = (idx: number, isInt = false) => {
           if (row[idx] === undefined || row[idx] === null) return 0;
-          const cleanStr = row[idx].toString().replace(/,/g, '');
+          const rawStr = row[idx].toString();
+          const hasPct = rawStr.includes('%');
+          const cleanStr = rawStr.replace(/,/g, '').replace(/%/g, '');
           const parsed = isInt ? parseInt(cleanStr) : parseFloat(cleanStr);
-          return isNaN(parsed) ? 0 : parsed;
+          if (isNaN(parsed)) return 0;
+          return hasPct && !isInt ? parsed / 100 : parsed;
         };
 
+        const name = (row[0] || '').toString().trim();
+        const rounds = cleanVal(4, true);
+        const pAgg = penaltyAgg[name];
+        const totalR = rounds > 0 ? rounds : (pAgg?.rounds || 0);
+
+        const sheetCheatRate = row[37] !== undefined && row[37] !== '' ? cleanVal(37) : null;
+        const sheetBeolbuRate = row[38] !== undefined && row[38] !== '' ? cleanVal(38) : null;
+
+        const computedCheatRate = totalR > 0 && pAgg ? (pAgg.cheatCount / totalR) : 0;
+        const computedBeolbuRate = totalR > 0 && pAgg ? (pAgg.beolbuCount / totalR) : 0;
+
         return {
-          name: row[0] || '',
+          name,
           uma: cleanVal(1),
           rank: cleanVal(2),
           games: cleanVal(3, true),
-          rounds: cleanVal(4, true),
+          rounds,
           winRate: cleanVal(5),
           loseRate: cleanVal(6),
           riichiRate: cleanVal(7),
@@ -1863,7 +2092,11 @@ export const fetchMemberStats = async (spreadsheetId: string, silent = false): P
           chasedRiichiRate: cleanVal(28),
           oyaKaburiRate: cleanVal(29),
           oyaKaburiAvg: cleanVal(30),
-          loseRiichiRate: cleanVal(31)
+          loseRiichiRate: cleanVal(31),
+          cheatRate: sheetCheatRate !== null && sheetCheatRate > 0 ? sheetCheatRate : computedCheatRate,
+          beolbuRate: sheetBeolbuRate !== null && sheetBeolbuRate > 0 ? sheetBeolbuRate : computedBeolbuRate,
+          cheatCount: pAgg?.cheatCount || 0,
+          beolbuCount: pAgg?.beolbuCount || 0
         };
       });
     }

@@ -109,6 +109,10 @@ export interface MemberStatItem {
   oyaKaburiRate: number;
   oyaKaburiAvg: number;
   dealInRiichiRate: number;
+  cheatRate: number; // 촌보율 (0 ~ 100 %, 소수점 5자리)
+  beolbuRate: number; // 벌부율 (0 ~ 100 %, 소수점 5자리)
+  cheatCount?: number;
+  beolbuCount?: number;
   totalScore: number;
   rank1Count: number;
   rank2Count: number;
@@ -688,6 +692,10 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
           ? parseFloat((((rank1Count + rank2Count) / totalGames) * 100).toFixed(2))
           : 0;
 
+        const totalRounds = getCellNum(row[4]);
+        const sheetCheatRate = row[37] !== undefined ? parseFloat((getCellNum(row[37]) * 100).toFixed(5)) : 0;
+        const sheetBeolbuRate = row[38] !== undefined ? parseFloat((getCellNum(row[38]) * 100).toFixed(5)) : 0;
+
         detailedStatsMap[name] = {
           name,
           totalUma: sheetUma,
@@ -699,7 +707,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
           rank3Count,
           rank4Count,
           top2Rate,
-          totalRounds: getCellNum(row[4]),
+          totalRounds,
           winRate: parseFloat((getCellNum(row[5]) * 100).toFixed(2)),
           dealInRate: parseFloat((getCellNum(row[6]) * 100).toFixed(2)),
           riichiRate: parseFloat((getCellNum(row[7]) * 100).toFixed(2)),
@@ -726,9 +734,74 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
           oyaKaburiRate: parseFloat((getCellNum(row[29]) * 100).toFixed(2)),
           oyaKaburiAvg: Math.round(getCellNum(row[30])),
           dealInRiichiRate: parseFloat((getCellNum(row[31]) * 100).toFixed(2)),
+          cheatRate: sheetCheatRate,
+          beolbuRate: sheetBeolbuRate,
+          cheatCount: Math.round((sheetCheatRate / 100) * totalRounds),
+          beolbuCount: Math.round((sheetBeolbuRate / 100) * totalRounds),
           totalScore: getCellNum(row[32]),
         };
       });
+    }
+
+    // 2-1) '전체 국별기록 (데이터)'에서 촌보/벌부 횟수 및 촌보율/벌부율 정밀 보정
+    try {
+      if (!cachedAllRoundsTable) {
+        if (workerUrl) {
+          try {
+            const res = await fetch(`${workerUrl}/api/public/rounds`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.table) cachedAllRoundsTable = data.table;
+            }
+          } catch (e) {}
+        }
+        if (!cachedAllRoundsTable && sId) {
+          try {
+            const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
+            const res = await fetch(gvizUrl);
+            if (res.ok) {
+              const text = await res.text();
+              const json = parseGVizResponse(text);
+              if (json && json.table) cachedAllRoundsTable = json.table;
+            }
+          } catch (e) {}
+        }
+      }
+
+      if (cachedAllRoundsTable && cachedAllRoundsTable.rows) {
+        const penaltyMap: Record<string, { rounds: number; cheat: number; beolbu: number }> = {};
+        cachedAllRoundsTable.rows.forEach((r: any) => {
+          if (!r.c) return;
+          const pName = getCellStr(r.c[5]).trim();
+          if (!pName) return;
+          if (!penaltyMap[pName]) penaltyMap[pName] = { rounds: 0, cheat: 0, beolbu: 0 };
+          penaltyMap[pName].rounds++;
+
+          const endStatus = getCellStr(r.c[4]).toLowerCase();
+          const delta = getCellNum(r.c[7]);
+          const uVal = r.c[20]?.v;
+          const isCheat = uVal === true || uVal === "TRUE" || uVal === 1 || (uVal === undefined && endStatus === "cheat" && delta < 0);
+          const beolbuCnt = getCellNum(r.c[21], 0);
+
+          if (isCheat) penaltyMap[pName].cheat++;
+          if (beolbuCnt > 0) penaltyMap[pName].beolbu += beolbuCnt;
+        });
+
+        Object.entries(penaltyMap).forEach(([pName, counts]) => {
+          const item = detailedStatsMap[pName];
+          if (item) {
+            const denom = item.totalRounds > 0 ? item.totalRounds : counts.rounds;
+            item.cheatCount = counts.cheat;
+            item.beolbuCount = counts.beolbu;
+            if (denom > 0) {
+              item.cheatRate = parseFloat(((counts.cheat / denom) * 100).toFixed(5));
+              item.beolbuRate = parseFloat(((counts.beolbu / denom) * 100).toFixed(5));
+            }
+          }
+        });
+      }
+    } catch (e) {
+      console.warn("촌보/벌부 카운트 보정 실패:", e);
     }
 
     // 3) '통계' 시트의 모든 멤버가 누락 없이 포함되도록 통합 (에러 셀 및 비정상 명칭 제외)
@@ -843,6 +916,10 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
         oyaKaburiRate: 0,
         oyaKaburiAvg: 0,
         dealInRiichiRate: 0,
+        cheatRate: 0,
+        beolbuRate: 0,
+        cheatCount: 0,
+        beolbuCount: 0,
         totalScore: 0,
       };
       // 9회차 이후 기록이 없는 레거시 전용 선수의 경우 9회차 상세 통계는 0전으로 연결
@@ -1239,6 +1316,8 @@ export async function fetchSessionDetailedStats(
       oyaManganSufferedCount: number;
       oyaManganLossSum: number;
       tobiCount: number;
+      cheatCount: number;
+      beolbuCount: number;
     }> = {};
 
     cachedAllRoundsTable.rows.forEach((r: any) => {
@@ -1281,6 +1360,8 @@ export async function fetchSessionDetailedStats(
           oyaManganSufferedCount: 0,
           oyaManganLossSum: 0,
           tobiCount: 0,
+          cheatCount: 0,
+          beolbuCount: 0,
         };
       }
 
@@ -1315,6 +1396,12 @@ export async function fetchSessionDetailedStats(
       const isChase = r.c[17]?.v === true || r.c[17]?.v === "TRUE" || r.c[17]?.v === 1;
       const isChased = r.c[18]?.v === true || r.c[18]?.v === "TRUE" || r.c[18]?.v === 1;
       const pureScore = getCellNum(r.c[19]);
+      const uVal = r.c[20]?.v;
+      const isCheat = uVal === true || uVal === "TRUE" || uVal === 1 || (uVal === undefined && endStatus === "cheat" && delta < 0);
+      const beolbuCnt = getCellNum(r.c[21], 0);
+
+      if (isCheat) p.cheatCount++;
+      if (beolbuCnt > 0) p.beolbuCount += beolbuCnt;
 
       p.roundSujiSum += delta;
 
@@ -1404,6 +1491,8 @@ export async function fetchSessionDetailedStats(
       const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(2)) : 0;
       const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
       const dealInRiichiRate = p.loseCount > 0 ? parseFloat(((p.loseWithRiichiCount / p.loseCount) * 100).toFixed(2)) : 0;
+      const cheatRate = parseFloat(((p.cheatCount / totalRounds) * 100).toFixed(5));
+      const beolbuRate = parseFloat(((p.beolbuCount / totalRounds) * 100).toFixed(5));
 
       const r1 = p.ranks[1] || 0;
       const r2 = p.ranks[2] || 0;
@@ -1452,6 +1541,10 @@ export async function fetchSessionDetailedStats(
         oyaKaburiRate,
         oyaKaburiAvg,
         dealInRiichiRate,
+        cheatRate,
+        beolbuRate,
+        cheatCount: p.cheatCount,
+        beolbuCount: p.beolbuCount,
         totalScore: p.roundSujiSum,
       };
     }
@@ -2111,9 +2204,11 @@ export function calculateMetricDistribution(
   const sum = values.reduce((acc, v) => acc + v, 0);
   const avg = metricKey === 'avgRank'
     ? parseFloat((sum / values.length).toFixed(3))
-    : unit === '%'
-      ? parseFloat((sum / values.length).toFixed(2))
-      : parseFloat((sum / values.length).toFixed(1));
+    : (metricKey === 'cheatRate' || metricKey === 'beolbuRate')
+      ? parseFloat((sum / values.length).toFixed(5))
+      : unit === '%'
+        ? parseFloat((sum / values.length).toFixed(2))
+        : parseFloat((sum / values.length).toFixed(1));
 
   // 순위 및 백분위 계산
   let rank = 1;

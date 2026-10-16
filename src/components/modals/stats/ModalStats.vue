@@ -422,6 +422,8 @@ const emptyStats = {
   oyaKaburiRate: '-',
   oyaKaburiAvg: '-',
   loseRiichiRate: '-',
+  cheatRate: '-',
+  beolbuRate: '-',
   winEfficiency: 0,
   loseLoss: 0,
   netWinEfficiency: 0,
@@ -489,6 +491,9 @@ const stats = computed(() => {
     const cleanLoseRiichiRate = parseCleanScore(item.loseRiichiRate);
     const loseRiichiRate = cleanLoseRiichiRate > 0 ? (cleanLoseRiichiRate * 100).toFixed(2) + '%' : '-';
 
+    const cheatRate = item.rounds > 0 ? (parseCleanScore(item.cheatRate) * 100).toFixed(5) + '%' : '-';
+    const beolbuRate = item.rounds > 0 ? (parseCleanScore(item.beolbuRate) * 100).toFixed(5) + '%' : '-';
+
     return {
       totalGames: item.games,
       totalRounds: item.rounds,
@@ -515,6 +520,8 @@ const stats = computed(() => {
       oyaKaburiRate,
       oyaKaburiAvg,
       loseRiichiRate,
+      cheatRate,
+      beolbuRate,
       winEfficiency: Math.round(parseCleanScore(item.winEfficiency)),
       loseLoss: Math.round(parseCleanScore(item.loseLoss)),
       netWinEfficiency: Math.round(parseCleanScore(item.netEfficiency)),
@@ -554,6 +561,8 @@ const stats = computed(() => {
   let manganOyaKaburiCount = 0
   let manganOyaKaburiScoreSum = 0
   let loseWithRiichiCount = 0
+  let cheatCount = 0
+  let beolbuCount = 0
 
   if (activeHistory.value) {
     activeHistory.value.forEach((game: any) => {
@@ -599,6 +608,15 @@ const stats = computed(() => {
           const isDraw = (roundStatusVal.includes('draw') || roundStatusVal === 'noten' || roundStatusVal === 'tenpai' || roundStatusVal.includes('유국'));
           
           const delta = (rec.score && rec.score[pIdx]) ? (rec.score[pIdx][2 * r - 1] || 0) : 0;
+
+          const isCheat = (rec.cheat && rec.cheat[r] && rec.cheat[r][pIdx] !== undefined)
+            ? !!rec.cheat[r][pIdx]
+            : (roundStatusVal === 'cheat' && delta < 0);
+          const beolbuCnt = (rec.beolbu && rec.beolbu[r] && rec.beolbu[r][pIdx] !== undefined)
+            ? Number(rec.beolbu[r][pIdx]) || 0
+            : 0;
+          if (isCheat) cheatCount++
+          if (beolbuCnt > 0) beolbuCount += beolbuCnt
 
           // 선제 리치 여부 분석을 위한 국 내부 리치 리스트 수집
           const riichiList: number[] = [];
@@ -716,6 +734,11 @@ const stats = computed(() => {
           const isDraw = !!(status && status.includes('draw'))
           const delta = myResult.delta || 0
           const hasRiichi = !!myResult.riichi
+
+          const isCheat = myResult.cheat !== undefined ? !!myResult.cheat : (status === 'cheat' && delta < 0)
+          const beolbuCnt = Number(myResult.beolbu || 0)
+          if (isCheat) cheatCount++
+          if (beolbuCnt > 0) beolbuCount += beolbuCnt
 
           const currScore = myResult.finalScore !== undefined ? myResult.finalScore : null
           let actualRoundDelta = delta
@@ -867,6 +890,8 @@ const stats = computed(() => {
   const oyaKaburiRate = oyaKaburiSufferedCount > 0 ? formatRate(manganOyaKaburiCount, tsumoSufferedCount) : '-'
   const oyaKaburiAvg = formatVal(manganOyaKaburiScoreSum, manganOyaKaburiCount)
   const loseRiichiRate = loseWithRiichiCount > 0 ? formatRate(loseWithRiichiCount, loseCount) : '-'
+  const cheatRate = totalRounds > 0 ? ((cheatCount / totalRounds) * 100).toFixed(5) + '%' : '-'
+  const beolbuRate = totalRounds > 0 ? ((beolbuCount / totalRounds) * 100).toFixed(5) + '%' : '-'
 
   // 화료 효율, 방총 손실, 알짜 화료 효율
   const winRateNum = totalRounds > 0 ? winCount / totalRounds : 0
@@ -907,6 +932,8 @@ const stats = computed(() => {
     oyaKaburiRate,
     oyaKaburiAvg,
     loseRiichiRate,
+    cheatRate,
+    beolbuRate,
     winEfficiency,
     loseLoss,
     netWinEfficiency,
@@ -1140,6 +1167,14 @@ const emptyScopeMessage = computed(() => {
         <div class="stat_row">
           <span class="stat_label">방총 시 리치율</span>
           <span class="stat_value">{{ stats.loseRiichiRate }}</span>
+        </div>
+        <div class="stat_row">
+          <span class="stat_label">촌보율</span>
+          <span class="stat_value text_negative">{{ stats.cheatRate }}</span>
+        </div>
+        <div class="stat_row">
+          <span class="stat_label">벌부율</span>
+          <span class="stat_value text_negative">{{ stats.beolbuRate }}</span>
         </div>
         <div class="stat_row">
           <span class="stat_label">화료 효율</span>

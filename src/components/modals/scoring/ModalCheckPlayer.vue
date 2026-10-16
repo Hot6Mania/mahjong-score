@@ -79,6 +79,12 @@ const okButtonStyle = (status: string) => {
 <div class="container_check">
   <div class="guide_message">
     {{ t(guideMessages[actionType]) }}
+    <div
+      v-if="actionType === 'beolbu' && scoringState.whoBeolbu !== -1 && (players[scoringState.whoBeolbu]?.beolbuCount || 0) >= 1"
+      class="beolbu_warning"
+    >
+      {{ players[scoringState.whoBeolbu].name }}: 현재 국 벌부 {{ players[scoringState.whoBeolbu].beolbuCount }}회 누적 (확인 시 촌보 처리)
+    </div>
   </div>
   <div v-for="(_, i) in class_check"
     :key="i"
@@ -87,6 +93,9 @@ const okButtonStyle = (status: string) => {
     @click.stop="emit('set-arrow-button', actionType, i)"
   >
     {{ arr_arrow[i] }}
+    <span v-if="actionType === 'beolbu' && (players[i]?.beolbuCount || 0) >= 1" class="beolbu_badge">
+      벌부 {{ players[i].beolbuCount }}회
+    </span>
   </div>
   <div class="ok" :style="okButtonStyle(actionType)" @click.stop="emit('check-invalid-status', actionType)">
     OK
@@ -118,6 +127,26 @@ const okButtonStyle = (status: string) => {
 .guide_message{
   grid-area: guide_message;
   font-size: 20px;
+}
+.beolbu_warning{
+  font-size: 13px;
+  color: var(--color-negative);
+  margin-top: 4px;
+  font-weight: bold;
+}
+.down_check, .right_check, .up_check, .left_check{
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.beolbu_badge{
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--color-negative);
+  font-weight: bold;
+  margin-top: -8px;
 }
 .down_check{
   grid-area: down_check;
