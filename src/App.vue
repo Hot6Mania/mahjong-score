@@ -3179,14 +3179,22 @@ const loadExistingSession = async (cleanTitle: string) => {
       localStorage.setItem("today_members_points", JSON.stringify(restoredPoints));
     }
 
-    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 2행~ 긁어오기)
+    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:V 긁어오기, 구버전 20열 시트일 경우 A2:T 폴백)
     syncProgress.value = 70;
-    const dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId: googleInfo.spreadsheetId,
-      range: `'${cleanTitle} (데이터)'!2:10000`
-    });
+    let dataRes: any = null;
+    try {
+      dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: googleInfo.spreadsheetId,
+        range: `'${cleanTitle} (데이터)'!A2:V`
+      });
+    } catch {
+      dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: googleInfo.spreadsheetId,
+        range: `'${cleanTitle} (데이터)'!A2:T`
+      });
+    }
 
-    const dataRows = dataRes.result.values || [];
+    const dataRows = dataRes?.result?.values || [];
 
     // 3.1. 대국 요약 이력(raw) 복원 (수동 입력 대국 복원용)
     let rawDataRows: any[][] = [];

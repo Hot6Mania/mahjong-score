@@ -167,7 +167,12 @@ export const refreshAccessTokenViaWorker = async (
     });
     const data = await res.json();
     if (!res.ok || data.error) {
-      if (data.code === 'MISSING_CLIENT_SECRET' || data.code === 'INVALID_CIPHER') {
+      if (
+        data.code === 'MISSING_CLIENT_SECRET' ||
+        data.code === 'INVALID_CIPHER' ||
+        res.status === 401 ||
+        String(data.error || '').toLowerCase().includes('expired or revoked')
+      ) {
         localStorage.removeItem("google_refresh_cipher");
       }
       console.warn("Worker 토큰 갱신 안내:", data.error || 'Worker refresh failed');
@@ -1994,10 +1999,23 @@ export const fetchMemberStats = async (spreadsheetId: string, silent = false): P
         spreadsheetId,
         range
       }),
-      window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: "'전체 국별기록 (데이터)'!2:50000"
-      }).catch(() => null)
+      (async () => {
+        try {
+          return await window.gapi.client.sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: "'전체 국별기록 (데이터)'!A2:V"
+          });
+        } catch {
+          try {
+            return await window.gapi.client.sheets.spreadsheets.values.get({
+              spreadsheetId,
+              range: "'전체 국별기록 (데이터)'!A2:T"
+            });
+          } catch {
+            return null;
+          }
+        }
+      })()
     ]);
 
     // '전체 국별기록 (데이터)'에서 플레이어별 촌보/벌부 횟수 직접 집계 (시트 수식 미적용 환경 폴백 겸용)
