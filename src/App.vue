@@ -9,6 +9,7 @@ import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
 import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, isGoogleAuthError, type SessionMigrationBackup } from "@/utils/googleSheets"
 import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
+import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
@@ -95,15 +96,45 @@ const loadRatings = async () => {
     }
   } catch (e) {}
 
+  try {
+    const publicRatings = await fetchPublicRatings(googleInfo.spreadsheetId || undefined);
+    if (publicRatings && Object.keys(publicRatings).length > 0) {
+      ratingsMap.value = publicRatings;
+      localStorage.setItem("mahjong_ratings", JSON.stringify(publicRatings));
+    }
+  } catch (e) {
+    console.warn("공개 레이팅 리플레이 로드 실패:", e);
+  }
+
   if (googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
-    try {
-      const sheetRatings = await fetchRatingsFromSheet(googleInfo.spreadsheetId);
-      if (sheetRatings && Object.keys(sheetRatings).length > 0) {
-        ratingsMap.value = sheetRatings;
-        localStorage.setItem("mahjong_ratings", JSON.stringify(sheetRatings));
+    const migKey = `mahjong_rating_formula_v30_${googleInfo.spreadsheetId}`;
+    if (!localStorage.getItem(migKey)) {
+      recalculateAndSyncAllRatings(googleInfo.spreadsheetId)
+        .then((res) => {
+          if (res && res.ratings && Object.keys(res.ratings).length > 0) {
+            ratingsMap.value = res.ratings;
+            localStorage.setItem("mahjong_ratings", JSON.stringify(res.ratings));
+            localStorage.setItem(migKey, "true");
+            players.forEach(p => {
+              if (res.ratings[p.name]) {
+                p.rating = res.ratings[p.name].ordinal;
+              }
+            });
+          }
+        })
+        .catch((err) => {
+          console.warn("백그라운드 /30 레이팅 시트 자동 마이그레이션 실패:", err);
+        });
+    } else {
+      try {
+        const sheetRatings = await fetchRatingsFromSheet(googleInfo.spreadsheetId);
+        if (sheetRatings && Object.keys(sheetRatings).length > 0) {
+          ratingsMap.value = sheetRatings;
+          localStorage.setItem("mahjong_ratings", JSON.stringify(sheetRatings));
+        }
+      } catch (e) {
+        console.warn("구글 시트 레이팅 데이터 로드 실패:", e);
       }
-    } catch (e) {
-      console.warn("구글 시트 레이팅 데이터 로드 실패:", e);
     }
   }
 

@@ -182,12 +182,12 @@ export function calculateMatchRatings(
       }
     }
 
-    // 상대방과의 실력차 보정 (자신보다 높은 레이팅의 테이블에서 플레이할 경우 가산점)
-    const oppDiff = (avgTableRating - prev.ordinal) / 40;
+    // 상대방과의 실력차 보정 (자신보다 높은 레이팅의 테이블에서 플레이할 경우 가산점, 분모 30 기준)
+    const oppDiff = (avgTableRating - prev.ordinal) / 30;
 
     // 불확실도(sigma) 기반 학습률 스케일 (초기 플레이어는 빠른 궤도 진입, 베테랑은 안정화)
     const scale = prev.sigma / DEFAULT_SIGMA;
-    const dMu = scale * (rawUma + oppDiff * 2.0);
+    const dMu = scale * (rawUma + oppDiff);
 
     // 베이지안 불확실도 점진적 감쇄 (대국 수가 쌓일수록 신뢰도 증가)
     const deltaDecay = Math.min(0.06, (prev.sigma / c) ** 2 * 0.4);

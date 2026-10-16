@@ -2469,13 +2469,13 @@ const getRankClass = (rank: number) => {
 
             <div class="formula-box">
               <div class="formula-tag">2. 경기 실력 갱신 공식 (Δμ)</div>
-              <div class="formula-latex" v-html="renderKatex('\\Delta \\mu = \\left(\\frac{\\sigma}{120}\\right) \\times \\left( \\text{Uma} + \\frac{\\bar{R}_{\\text{table}} - R}{20} \\right)')"></div>
+              <div class="formula-latex" v-html="renderKatex('\\Delta \\mu = \\left(\\frac{\\sigma}{120}\\right) \\times \\left( \\text{Uma} + \\frac{\\bar{R}_{\\text{table}} - R}{30} \\right)')"></div>
               <p class="formula-explanation">우마(Uma)와 상대 테이블 평균 격차 보정값을 합산한 뒤, 판수 스케일(σ/120)을 곱하여 최종 변동치를 계산합니다.</p>
             </div>
 
             <div class="formula-box">
               <div class="formula-tag">3. 약 40판 이후 안정화 공식</div>
-              <div class="formula-latex" v-html="renderKatex('\\Delta R_{N \\ge 40} \\approx \\frac{1}{3} \\times \\left( \\text{Uma} + \\frac{\\bar{R}_{\\text{table}} - R}{20} \\right)')"></div>
+              <div class="formula-latex" v-html="renderKatex('\\Delta R_{N \\ge 40} \\approx \\frac{1}{3} \\times \\left( \\text{Uma} + \\frac{\\bar{R}_{\\text{table}} - R}{30} \\right)')"></div>
               <p class="formula-explanation">약 40판 이후 불확실도(σ)가 최소치(40)에 도달하면, 스케일이 1/3로 고정되어 모든 대국에서 일정한 변동폭 기준을 유지합니다.</p>
             </div>
           </div>
@@ -2505,7 +2505,7 @@ const getRankClass = (rank: number) => {
                 </div>
                 <p>
                   나보다 레이팅이 높은 상대들과 대국해서 이기면 보너스를 받아 더 많은 레이팅을 얻고, 나보다 레이팅이 낮은 상대들에게 패배하면 페널티로 더 많은 레이팅을 잃습니다.
-                  대국 테이블 4인의 평균 레이팅과 내 레이팅의 격차가 <code>(평균 레이팅 - 내 레이팅) / 20</code> 보정치로 대국 결과(우마)에 직접 더해집니다.
+                  대국 테이블 4인의 평균 레이팅과 내 레이팅의 격차가 <code>(평균 레이팅 - 내 레이팅) / 30</code> 보정치로 대국 결과(우마)에 직접 더해집니다.
                 </p>
               </div>
               <div class="rbc-step">
@@ -2558,7 +2558,7 @@ const getRankClass = (rank: number) => {
                 </tr>
                 <tr>
                   <td><strong>상대 실력차 보정</strong></td>
-                  <td><strong>(R̄_table - R) / 20</strong></td>
+                  <td><strong>(R̄_table - R) / 30</strong></td>
                   <td>나보다 높은 테이블에서 승리 시 가산점, 낮은 테이블에서 패배 시 추가 감점</td>
                 </tr>
               </tbody>
