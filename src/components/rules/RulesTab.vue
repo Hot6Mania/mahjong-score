@@ -173,9 +173,12 @@
           <h3 class="rule-card-title">유국 관련</h3>
         </div>
         <div class="rule-list">
-          <div class="rule-row">
-            <span class="rule-label">도중 유국</span>
-            <span class="rule-badge on">적용</span>
+          <div class="rule-row rule-row-multiline">
+            <div class="rule-row-top">
+              <span class="rule-label">도중 유국</span>
+              <span class="rule-badge on">적용</span>
+            </div>
+            <div class="rule-subnote">구종구패, 사풍연타, 사깡유국, 사가리치 있음</div>
           </div>
           <div class="rule-row">
             <span class="rule-label">도중 유국 시 연장</span>
@@ -297,6 +300,7 @@
             <li>노텐 리치 후 유국</li>
             <li>리치 후 부정한 안깡 (발각 시)</li>
             <li>쿠이카에 발각 시</li>
+            <li>벌부 2회 누적</li>
             <li>기타 경기 속행 불가능 수준 반칙</li>
           </ul>
         </div>
@@ -320,7 +324,7 @@
             <span class="penalty-tag tag-info">1000점</span>
           </div>
           <ul class="penalty-items">
-            <li>오발성 1회 벌부, 2회부터 촌보 (치, 퐁, 깡, 리치)</li>
+            <li>오발성 1회 벌부 (치, 퐁, 깡, 리치)</li>
           </ul>
         </div>
       </div>
