@@ -770,13 +770,24 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
       }
 
       if (cachedAllRoundsTable && cachedAllRoundsTable.rows) {
-        const penaltyMap: Record<string, { rounds: number; cheat: number; beolbu: number }> = {};
+        const penaltyMap: Record<string, { rounds: number; cheat: number; beolbu: number; games: Set<string>; tobiGames: Set<string> }> = {};
         cachedAllRoundsTable.rows.forEach((r: any) => {
           if (!r.c) return;
           const pName = getCellStr(r.c[5]).trim();
           if (!pName) return;
-          if (!penaltyMap[pName]) penaltyMap[pName] = { rounds: 0, cheat: 0, beolbu: 0 };
+          if (!penaltyMap[pName]) {
+            penaltyMap[pName] = { rounds: 0, cheat: 0, beolbu: 0, games: new Set<string>(), tobiGames: new Set<string>() };
+          }
           penaltyMap[pName].rounds++;
+
+          const gameId = getCellStr(r.c[1]).trim();
+          const finalScore = getCellNum(r.c[8]);
+          if (gameId) {
+            penaltyMap[pName].games.add(gameId);
+            if (finalScore < 0) {
+              penaltyMap[pName].tobiGames.add(gameId);
+            }
+          }
 
           const endStatus = getCellStr(r.c[4]).toLowerCase();
           const delta = getCellNum(r.c[7]);
@@ -798,11 +809,15 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
               item.cheatRate = parseFloat(((counts.cheat / denom) * 100).toFixed(4));
               item.beolbuRate = parseFloat(((counts.beolbu / denom) * 100).toFixed(4));
             }
+            const gameDenom = item.totalGames > 0 ? item.totalGames : counts.games.size;
+            if (gameDenom > 0) {
+              item.tobiRate = parseFloat(((counts.tobiGames.size / gameDenom) * 100).toFixed(2));
+            }
           }
         });
       }
     } catch (e) {
-      console.warn("촌보/벌부 카운트 보정 실패:", e);
+      console.warn("촌보/벌부/토비 카운트 보정 실패:", e);
     }
 
     // 3) '통계' 시트의 모든 멤버가 누락 없이 포함되도록 통합 (에러 셀 및 비정상 명칭 제외)
@@ -1338,6 +1353,7 @@ export async function fetchSessionDetailedStats(
       oyaTsumoSufferedCount: number;
       oyaManganSufferedCount: number;
       oyaManganLossSum: number;
+      tobiGameIds: Set<string>;
       tobiCount: number;
       cheatCount: number;
       beolbuCount: number;
@@ -1382,6 +1398,7 @@ export async function fetchSessionDetailedStats(
           oyaTsumoSufferedCount: 0,
           oyaManganSufferedCount: 0,
           oyaManganLossSum: 0,
+          tobiGameIds: new Set<string>(),
           tobiCount: 0,
           cheatCount: 0,
           beolbuCount: 0,
@@ -1391,7 +1408,7 @@ export async function fetchSessionDetailedStats(
       const p = rawAgg[player];
       p.totalRounds++;
 
-      const gameId = getCellStr(r.c[1]);
+      const gameId = getCellStr(r.c[1]).trim();
       const rank = getCellNum(r.c[13]);
       const uma = getCellNum(r.c[14]);
       const finalScore = getCellNum(r.c[8]);
@@ -1403,9 +1420,11 @@ export async function fetchSessionDetailedStats(
           p.rankSum += rank;
         }
         p.totalUmaSum += uma;
-        if (finalScore < 0) {
-          p.tobiCount++;
-        }
+      }
+
+      if (gameId && finalScore < 0 && !p.tobiGameIds.has(gameId)) {
+        p.tobiGameIds.add(gameId);
+        p.tobiCount++;
       }
 
       const endStatus = getCellStr(r.c[4]).toLowerCase();
