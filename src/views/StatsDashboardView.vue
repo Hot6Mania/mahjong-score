@@ -750,7 +750,7 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
       if (selectedGameDetail.value && !selectedGameDetail.value.hasRoundDetails && !isLoadingGameDetail.value) {
         const matchedGame = detail.games.find(g => g.gameIndex === selectedGameDetail.value?.gameIndex);
         if (matchedGame) {
-          openGameDetailModal(matchedGame);
+          openGameDetailModal(matchedGame, true);
         }
       }
     }
@@ -1088,12 +1088,14 @@ const gameModalSelectedRound = ref<string>('__all__');
 const isLoadingGameDetail = ref(false);
 let gameDetailRequestId = 0;
 
-const openGameDetailModal = async (game: SessionGame) => {
+const openGameDetailModal = async (game: SessionGame, preserveViewState = false) => {
   if (!game) return;
   const reqId = ++gameDetailRequestId;
   isLoadingGameDetail.value = true;
-  gameModalMode.value = 'sheet';
-  gameModalSelectedRound.value = '__all__';
+  if (!preserveViewState) {
+    gameModalMode.value = 'sheet';
+    gameModalSelectedRound.value = '__all__';
+  }
 
   const seatOrder = ["東", "南", "西", "北"];
   const sortedPlayers = [...game.players].sort((a, b) => {
@@ -2456,6 +2458,7 @@ const galleryStorageStats = computed(() => {
   void highlightStorageTick.value;
   const info = getHighlightStorageInfo(highlightsList.value);
   const maxMB = (info.maxBytes / (1024 * 1024)).toFixed(0);
+  const maxGB = (info.maxBytes / (1024 * 1024 * 1024)).toFixed(1);
   const remainingMB = (info.remainingBytes / (1024 * 1024)).toFixed(1);
   const remainingPercent = Number(Math.max(0, 100 - info.usedPercent).toFixed(2));
   const barWidthPct = info.usedBytes > 0 ? Math.min(100, Math.max(0.8, info.usedPercent)) : 0;
@@ -2464,7 +2467,7 @@ const galleryStorageStats = computed(() => {
     usedText: formatStorageBytes(info.usedBytes),
     imageBytesText: formatStorageBytes(info.imageBytes ?? 0),
     otherKvBytesText: formatStorageBytes(info.otherKvBytes ?? 0),
-    maxText: `${Number(maxMB).toLocaleString()} MB (1.0 GB)`,
+    maxText: `${Number(maxMB).toLocaleString()} MB (${maxGB} GB)`,
     remainingText: `${Number(remainingMB).toLocaleString()} MB`,
     remainingPercent,
     barWidthPct,
@@ -3099,6 +3102,10 @@ const findTargetGameAndRoundForSession = async (
 };
 
 let isInitializingUploadModal = false;
+let hasUserInteractedWithUploadForm = false;
+const markUploadFormUserInteracted = () => {
+  hasUserInteractedWithUploadForm = true;
+};
 
 const uploadForm = ref<{
   category: HighlightCategory;
@@ -3307,9 +3314,21 @@ const syncUploadModalGameRounds = async (
   }
 
   uploadForm.value.gameId = matchedGame.gameId || '';
-  uploadModalGameViewMode.value = 'sheet';
 
-  // 이미 열려 있는 대국 상세 모달과 동일 경기이고 상세 데이터가 있으면 즉시 재사용
+  // 1) 이미 업로드 모달에 동일 경기의 세부 국별 데이터가 로드되어 있으면 옵션 리스트 리셋 없이 즉시 재사용
+  if (
+    uploadModalGameDetail.value &&
+    uploadModalGameDetail.value.hasRoundDetails &&
+    Number(uploadModalGameDetail.value.gameIndex) === Number(gameIdx)
+  ) {
+    isLoadingUploadGameDetail.value = false;
+    if (!hasUserInteractedWithUploadForm || !preserveRound) {
+      resolveAndApplyUploadRoundSelection(preserveRound, allowSwitchToFunWhenNoYakuman);
+    }
+    return;
+  }
+
+  // 2) 이미 열려 있는 대국 상세 모달과 동일 경기이고 상세 데이터가 있으면 즉시 재사용
   if (
     selectedGameDetail.value &&
     selectedGameDetail.value.hasRoundDetails &&
@@ -3322,31 +3341,35 @@ const syncUploadModalGameRounds = async (
     return;
   }
 
-  // 초기 기본 결과표 즉시 렌더링
-  const seatOrder = ['東', '南', '西', '北'];
-  const sortedPlayers = [...matchedGame.players].sort((a, b) => seatOrder.indexOf(a.seat) - seatOrder.indexOf(b.seat));
-  uploadModalGameDetail.value = {
-    gameId: matchedGame.gameId,
-    gameIndex: matchedGame.gameIndex,
-    time: matchedGame.time,
-    hasRoundDetails: false,
-    playerStats: sortedPlayers.map((p, idx) => ({
-      seat: p.seat || seatOrder[idx],
-      name: p.name,
-      rank: p.rank,
-      score: p.score,
-      uma: p.uma,
-      ratingBefore: p.ratingBefore,
-      ratingAfter: p.ratingAfter,
-      ratingDelta: p.ratingDelta,
-      cntRiichi: 0,
-      cntRon: 0,
-      cntTsumo: 0,
-      cntLose: 0,
-    })),
-    chartData: { labels: [], datasets: [] },
-    roundDetailsList: [],
-  };
+  uploadModalGameViewMode.value = 'sheet';
+
+  // 초기 기본 결과표 즉시 렌더링 (단, 기존 동일 경기 객체가 없을 때만 스켈레톤 세팅)
+  if (!uploadModalGameDetail.value || Number(uploadModalGameDetail.value.gameIndex) !== Number(gameIdx)) {
+    const seatOrder = ['東', '南', '西', '北'];
+    const sortedPlayers = [...matchedGame.players].sort((a, b) => seatOrder.indexOf(a.seat) - seatOrder.indexOf(b.seat));
+    uploadModalGameDetail.value = {
+      gameId: matchedGame.gameId,
+      gameIndex: matchedGame.gameIndex,
+      time: matchedGame.time,
+      hasRoundDetails: false,
+      playerStats: sortedPlayers.map((p, idx) => ({
+        seat: p.seat || seatOrder[idx],
+        name: p.name,
+        rank: p.rank,
+        score: p.score,
+        uma: p.uma,
+        ratingBefore: p.ratingBefore,
+        ratingAfter: p.ratingAfter,
+        ratingDelta: p.ratingDelta,
+        cntRiichi: 0,
+        cntRon: 0,
+        cntTsumo: 0,
+        cntLose: 0,
+      })),
+      chartData: { labels: [], datasets: [] },
+      roundDetailsList: [],
+    };
+  }
 
   isLoadingUploadGameDetail.value = true;
   try {
@@ -3363,7 +3386,9 @@ const syncUploadModalGameRounds = async (
       }
     });
     uploadModalGameDetail.value = detail;
-    resolveAndApplyUploadRoundSelection(preserveRound, allowSwitchToFunWhenNoYakuman);
+    if (!hasUserInteractedWithUploadForm || !preserveRound) {
+      resolveAndApplyUploadRoundSelection(preserveRound, allowSwitchToFunWhenNoYakuman);
+    }
   } catch (err) {
     console.warn('업로드 모달 경기 국별 정보 조회 실패:', err);
   } finally {
@@ -3383,7 +3408,13 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
   }
 
   // 1) 현재 로드된 회차 상세 또는 레이팅 히스토리 캐시에서 즉시 반영
-  if (currentSessionDetail.value && matchHighlightSession(currentSessionDetail.value.sessionName, sessName)) {
+  const hasFullCurrentSession = Boolean(
+    currentSessionDetail.value &&
+    matchHighlightSession(currentSessionDetail.value.sessionName, sessName) &&
+    currentSessionDetail.value.games.length > 0
+  );
+
+  if (hasFullCurrentSession && currentSessionDetail.value) {
     uploadModalSessionDetail.value = currentSessionDetail.value;
   } else {
     const optimistic = buildSessionDetailFromRatingHistory(sessName);
@@ -3396,7 +3427,7 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
 
   syncDefaultUploadPlayerForCandidates();
   if (uploadForm.value.gameIndex !== undefined) {
-    syncUploadModalGameRounds(uploadForm.value.gameIndex, isInitialOpen, isInitialOpen && !uploadForm.value.roundName);
+    await syncUploadModalGameRounds(uploadForm.value.gameIndex, isInitialOpen, isInitialOpen && !uploadForm.value.roundName);
   } else if (
     uploadForm.value.category !== 'session' &&
     uploadModalSessionDetail.value &&
@@ -3408,7 +3439,7 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
       isInitialOpen
     );
     if (reqId !== uploadModalSessionReqId) return;
-    if (target && uploadForm.value.gameIndex === undefined) {
+    if (target && uploadForm.value.gameIndex === undefined && !hasUserInteractedWithUploadForm) {
       isInitializingUploadModal = true;
       uploadForm.value.category = target.category;
       uploadForm.value.gameIndex = target.gameIndex;
@@ -3416,10 +3447,15 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
         uploadForm.value.roundName = target.roundName;
       }
       await syncUploadModalGameRounds(target.gameIndex, true, false);
-      nextTick(() => {
-        isInitializingUploadModal = false;
-      });
+      await nextTick();
+      isInitializingUploadModal = false;
     }
+  }
+
+  // 이미 현재 회차의 전체 대국 데이터가 메모리에 로드되어 있다면,
+  // 불필요한 백그라운드 재할당으로 인해 열려 있는 <select> 드롭다운이 닫히는 현상을 방지
+  if (hasFullCurrentSession) {
+    return;
   }
 
   // 2) 서버/시트에서 실제 회차 상세 및 레이팅 기록 비동기 조회하여 최신 반영
@@ -3433,23 +3469,36 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
       attachRatingToSessionGames(sessName, detail.games, historyRecords);
     }
     if (detail && (detail.games.length > 0 || detail.members.length > 0)) {
+      const hadNoGamesBefore = !uploadModalSessionDetail.value || uploadModalSessionDetail.value.games.length === 0;
       uploadModalSessionDetail.value = detail;
-      syncDefaultUploadPlayerForCandidates();
+      if (!hasUserInteractedWithUploadForm) {
+        syncDefaultUploadPlayerForCandidates();
+      }
       if (uploadForm.value.gameIndex !== undefined) {
         const exists = detail.games.some(g => Number(g.gameIndex) === Number(uploadForm.value.gameIndex));
-        if (!exists) {
+        if (!exists && !hasUserInteractedWithUploadForm) {
           uploadForm.value.gameIndex = undefined;
           uploadForm.value.gameId = '';
           uploadForm.value.roundName = '';
           uploadModalGameDetail.value = null;
-        } else {
-          syncUploadModalGameRounds(uploadForm.value.gameIndex, true, false);
+        } else if (
+          exists &&
+          (!uploadModalGameDetail.value ||
+            !uploadModalGameDetail.value.hasRoundDetails ||
+            Number(uploadModalGameDetail.value.gameIndex) !== Number(uploadForm.value.gameIndex)) &&
+          !isLoadingUploadGameDetail.value
+        ) {
+          await syncUploadModalGameRounds(uploadForm.value.gameIndex, true, false);
         }
-      }
-      if (uploadForm.value.gameIndex === undefined && uploadForm.value.category !== 'session' && detail.games.length > 0) {
+      } else if (
+        hadNoGamesBefore &&
+        !hasUserInteractedWithUploadForm &&
+        uploadForm.value.category !== 'session' &&
+        detail.games.length > 0
+      ) {
         const target = await findTargetGameAndRoundForSession(sessName, detail.games, isInitialOpen);
         if (reqId !== uploadModalSessionReqId) return;
-        if (target && uploadForm.value.gameIndex === undefined) {
+        if (target && uploadForm.value.gameIndex === undefined && !hasUserInteractedWithUploadForm) {
           isInitializingUploadModal = true;
           uploadForm.value.category = target.category;
           uploadForm.value.gameIndex = target.gameIndex;
@@ -3457,9 +3506,8 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
             uploadForm.value.roundName = target.roundName;
           }
           await syncUploadModalGameRounds(target.gameIndex, true, false);
-          nextTick(() => {
-            isInitializingUploadModal = false;
-          });
+          await nextTick();
+          isInitializingUploadModal = false;
         }
       }
     }
@@ -3471,6 +3519,7 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
 watch(() => uploadForm.value.sessionName, (newSess, oldSess) => {
   if (!isHighlightUploadModalOpen.value || isInitializingUploadModal) return;
   if (newSess && newSess !== oldSess) {
+    hasUserInteractedWithUploadForm = false;
     uploadForm.value.gameIndex = undefined;
     uploadForm.value.gameId = '';
     uploadForm.value.roundName = '';
@@ -3511,9 +3560,8 @@ watch(() => uploadForm.value.category, async (newCat) => {
         uploadForm.value.gameIndex = target.gameIndex;
         if (target.roundName) uploadForm.value.roundName = target.roundName;
         await syncUploadModalGameRounds(target.gameIndex, !!target.roundName, false);
-        nextTick(() => {
-          isInitializingUploadModal = false;
-        });
+        await nextTick();
+        isInitializingUploadModal = false;
       }
     } else {
       tryAutoFocusYakumanRound();
@@ -3523,9 +3571,8 @@ watch(() => uploadForm.value.category, async (newCat) => {
       isInitializingUploadModal = true;
       uploadForm.value.gameIndex = Number(uploadModalGames.value[0].gameIndex);
       await syncUploadModalGameRounds(uploadForm.value.gameIndex, false, false);
-      nextTick(() => {
-        isInitializingUploadModal = false;
-      });
+      await nextTick();
+      isInitializingUploadModal = false;
     } else if (
       !uploadForm.value.roundName ||
       (selectedUploadRoundMovements.value.length > 0 && isEstimatedYakumanRound(selectedUploadRoundMovements.value[0]))
@@ -3628,6 +3675,7 @@ const openHighlightUploadModal = (preset?: {
   const defaultSession = matchedOption || rawSession;
   const initialWinner = preset?.winnerName || getSavedDefaultUploadPlayer() || '';
 
+  hasUserInteractedWithUploadForm = false;
   isInitializingUploadModal = true;
   uploadModalGameViewMode.value = 'sheet';
   uploadForm.value = {
@@ -3653,10 +3701,10 @@ const openHighlightUploadModal = (preset?: {
   highlightUploadError.value = '';
   isHighlightUploadModalOpen.value = true;
 
-  syncUploadModalSessionData(defaultSession, true);
   nextTick(() => {
     isInitializingUploadModal = false;
   });
+  syncUploadModalSessionData(defaultSession, true);
 };
 
 const closeHighlightUploadModal = () => {
@@ -7028,7 +7076,7 @@ const formatHighlightDate = (ts: number) => {
       <div 
         v-if="isHighlightUploadModalOpen" 
         class="modal-overlay" 
-        @click.self="closeHighlightUploadModal"
+        v-backdrop-dismiss="closeHighlightUploadModal"
       >
         <div class="highlight-upload-modal-card large-upload-modal">
           <div class="highlight-modal-header">
@@ -7038,7 +7086,12 @@ const formatHighlightDate = (ts: number) => {
             </div>
             <button class="btn-close" @click="closeHighlightUploadModal" title="닫기">✕</button>
           </div>
-          <div class="highlight-modal-body">
+          <div
+            class="highlight-modal-body"
+            @mousedown="markUploadFormUserInteracted"
+            @touchstart.passive="markUploadFormUserInteracted"
+            @keydown="markUploadFormUserInteracted"
+          >
             <!-- 현재 아카이브 요약 현황 -->
             <div class="gh-stats-row upload-modal-stats-row">
               <div class="gh-stat-pill">

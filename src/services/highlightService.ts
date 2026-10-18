@@ -65,8 +65,8 @@ export interface HighlightStorageInfo {
   maxSingleImageBytes: number;
 }
 
-const DEFAULT_KV_MAX_BYTES = 1024 * 1024 * 1024; // 1 GB (1,024 MB)
-const DEFAULT_MAX_SINGLE_IMAGE_BYTES = 24 * 1024 * 1024; // 24 MB
+const DEFAULT_KV_MAX_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB (Cloudflare R2 Free Tier)
+const DEFAULT_MAX_SINGLE_IMAGE_BYTES = 50 * 1024 * 1024; // 50 MB
 const IMAGE_SIZE_CACHE_KEY = 'mahjong_highlight_img_sizes_v1';
 
 const SESSION_PIN_STORAGE_KEY = 'mahjong_highlight_upload_pin';
@@ -525,9 +525,8 @@ export async function createHighlight(params: {
 
     let uploadedSize = 0;
     if (params.imageFile) {
-      const webpFile = await convertToOriginalQualityWebP(params.imageFile);
-      uploadedSize = webpFile.size;
-      formData.append('image', webpFile, webpFile.name);
+      uploadedSize = params.imageFile.size;
+      formData.append('image', params.imageFile, params.imageFile.name);
     }
 
     const res = await fetch(`${getWorkerUrl()}/api/public/highlights`, {
