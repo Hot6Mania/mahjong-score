@@ -479,18 +479,6 @@ watch(displayedAvailableSessions, (newSessions) => {
   }
 }, { immediate: true });
 
-const loadSessionsList = async (forceRefresh: boolean = false) => {
-  try {
-    const sessions = await fetchPublicSessions(undefined, forceRefresh);
-    availableSessions.value = sessions;
-    if (sessions.length > 0 && !selectedSession.value) {
-      selectedSession.value = sessions[0];
-    }
-  } catch (err: any) {
-    console.error("회차 목록 로드 실패:", err);
-  }
-};
-
 const currentSessionDetailedStatsMap = ref<Record<string, MemberStatItem>>({});
 const sessionModalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
 
@@ -532,6 +520,13 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
     }
     if (detail && (detail.games.length > 0 || detail.members.length > 0 || !currentSessionDetail.value)) {
       currentSessionDetail.value = detail;
+      // 만약 사용자가 이미 대국 상세 모달을 열어둔 상태에서 세부 국별 데이터가 아직 로드되지 않았다면 실제 대국 객체로 재조회
+      if (selectedGameDetail.value && !selectedGameDetail.value.hasRoundDetails && !isLoadingGameDetail.value) {
+        const matchedGame = detail.games.find(g => g.gameIndex === selectedGameDetail.value?.gameIndex);
+        if (matchedGame) {
+          openGameDetailModal(matchedGame);
+        }
+      }
     }
   } catch (err: any) {
     console.error("회차 상세 로드 실패:", err);
@@ -864,9 +859,11 @@ const sessionChartOptions = computed<ChartOptions<'line'>>(() => ({
 const selectedGameDetail = ref<GameDetailRecord | null>(null);
 const gameModalMode = ref<'sheet' | 'chart'>('sheet');
 const isLoadingGameDetail = ref(false);
+let gameDetailRequestId = 0;
 
 const openGameDetailModal = async (game: SessionGame) => {
   if (!game) return;
+  const reqId = ++gameDetailRequestId;
   isLoadingGameDetail.value = true;
   gameModalMode.value = 'sheet';
 
@@ -900,9 +897,9 @@ const openGameDetailModal = async (game: SessionGame) => {
 
   try {
     const detail = await fetchSessionGameDetail(selectedSession.value, game);
-    if (selectedGameDetail.value && 
-        selectedGameDetail.value.gameIndex === game.gameIndex && 
-        (selectedGameDetail.value.gameId === game.gameId || !game.gameId)) {
+    if (reqId === gameDetailRequestId &&
+        selectedGameDetail.value &&
+        selectedGameDetail.value.gameIndex === game.gameIndex) {
       detail.playerStats.forEach(dp => {
         if (dp.ratingBefore === undefined) {
           const orig = game.players.find(gp => gp.name === dp.name);
@@ -918,7 +915,9 @@ const openGameDetailModal = async (game: SessionGame) => {
   } catch (e) {
     console.warn("fetchSessionGameDetail failed:", e);
   } finally {
-    isLoadingGameDetail.value = false;
+    if (reqId === gameDetailRequestId) {
+      isLoadingGameDetail.value = false;
+    }
   }
 };
 
@@ -1094,7 +1093,7 @@ const loadAllData = async (forceRefresh: boolean = false) => {
   isLoading.value = true;
   errorMessage.value = '';
   try {
-    const [stats, matrix, timeline] = await Promise.all([
+    const [stats, matrix, timeline, sessions] = await Promise.all([
       fetchPublicAllStats(undefined, forceRefresh),
       fetchPublicStatsMatrix(undefined, forceRefresh).catch(e => {
         console.warn("통계 매트릭스 로드 실패:", e);
@@ -1104,13 +1103,23 @@ const loadAllData = async (forceRefresh: boolean = false) => {
         console.warn("레이팅 타임라인 로드 실패:", e);
         return null;
       }),
-      loadSessionsList(forceRefresh)
+      fetchPublicSessions(undefined, forceRefresh).catch(e => {
+        console.error("회차 목록 로드 실패:", e);
+        return [] as string[];
+      })
     ]);
     allStats.value = stats;
     statsMatrix.value = matrix;
     if (timeline) {
       ratingTimeline.value = timeline;
       filterRatingTopN(5);
+    }
+    if (sessions.length > 0) {
+      availableSessions.value = sessions;
+      const valid = displayedAvailableSessions.value;
+      if (valid.length > 0 && (!selectedSession.value || !valid.includes(selectedSession.value))) {
+        selectedSession.value = valid[0];
+      }
     }
     if (selectedSession.value && (forceRefresh || (!isLoadingSession.value && currentSessionDetail.value?.sessionName !== selectedSession.value))) {
       await loadSessionDetail(selectedSession.value, forceRefresh);
