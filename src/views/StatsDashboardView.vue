@@ -97,23 +97,63 @@ const route = useRoute();
 type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'gallery' | 'schedule' | 'rules';
 const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'gallery', 'schedule', 'rules'];
 
-// URL 해시 및 쿼리 파라미터에서 현재 탭 추출 (기본값: 순수 /dashboard는 'ranking')
+// URL 쿼리(?photo=), 경로(/dashboard/gallery/:photoId) 및 해시에서 사진 ID 추출
+const parsePhotoIdFromLocation = (): string => {
+  if (typeof window !== 'undefined') {
+    const searchParams = new URLSearchParams(window.location.search);
+    const qPhoto = (searchParams.get('photo') || '').trim();
+    if (qPhoto) return qPhoto;
+
+    const pathMatch = window.location.pathname.match(/\/dashboard\/(?:gallery|photo)\/([^/?#]+)/);
+    if (pathMatch && pathMatch[1]) {
+      return decodeURIComponent(pathMatch[1]).trim();
+    }
+
+    const rawHash = window.location.hash.replace(/^#/, '').trim();
+    if (rawHash.startsWith('photo=')) {
+      return decodeURIComponent(rawHash.slice(6)).trim();
+    }
+  }
+  const routePhoto = (route.query.photo as string) || (route.params.photoId as string) || '';
+  return String(routePhoto).trim();
+};
+
+// URL 쿼리(?tab=), 경로(/dashboard/:tab) 및 해시(#tab)에서 현재 탭 추출 (사진 ID가 있으면 기본 'gallery')
 const parseTabFromLocation = (): DashboardTab => {
   if (typeof window !== 'undefined') {
+    const searchParams = new URLSearchParams(window.location.search);
+    const qTab = (searchParams.get('tab') || '').trim();
+    if (qTab && VALID_TABS.includes(qTab as DashboardTab)) {
+      return qTab as DashboardTab;
+    }
+
+    const pathMatch = window.location.pathname.match(/\/dashboard\/([^/?#]+)/);
+    if (pathMatch && pathMatch[1]) {
+      const seg = decodeURIComponent(pathMatch[1]).trim();
+      if (seg === 'photo') return 'gallery';
+      if (VALID_TABS.includes(seg as DashboardTab)) {
+        return seg as DashboardTab;
+      }
+    }
+
     const rawHash = window.location.hash.replace(/^#/, '').trim();
     if (rawHash && VALID_TABS.includes(rawHash as DashboardTab)) {
       return rawHash as DashboardTab;
     }
   }
-  const queryTab = route.query.tab as string;
+  const queryTab = (route.query.tab as string) || (route.params.tab as string);
   if (queryTab && VALID_TABS.includes(queryTab as DashboardTab)) {
     return queryTab as DashboardTab;
+  }
+  if (parsePhotoIdFromLocation()) {
+    return 'gallery';
   }
   return 'ranking';
 };
 
 // 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules' | 'gallery')
 const activeTab = ref<DashboardTab>(parseTabFromLocation());
+const pendingUrlPhotoId = ref<string>(parsePhotoIdFromLocation());
 const tabsNavRef = ref<HTMLElement | null>(null);
 const isDraggingTabsNav = ref(false);
 const hasDraggedTabsNav = ref(false);
@@ -329,27 +369,46 @@ watch(activeTab, () => {
   scrollActiveTabIntoView(true);
 });
 
+// 대시보드 상대 URL 생성 헬퍼 (?tab= 및 ?photo= 쿼리 방식 사용하여 커뮤니티 # 잘림 방지)
+const buildDashboardRelativeUrl = (tab: DashboardTab, photoId?: string | null): string => {
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+  const cleanPhotoId = (photoId || '').trim();
+  if (cleanPhotoId) {
+    return `${base}/dashboard?photo=${encodeURIComponent(cleanPhotoId)}`;
+  }
+  if (tab === 'ranking') {
+    return `${base}/dashboard`;
+  }
+  return `${base}/dashboard?tab=${encodeURIComponent(tab)}`;
+};
+
 // 탭 전환 및 URL 동기화
 const switchTab = (tab: DashboardTab, updateUrl = true) => {
   activeTab.value = tab;
   scrollActiveTabIntoView(true);
   if (updateUrl && typeof window !== 'undefined') {
-    const pathname = window.location.pathname;
-    const search = window.location.search;
-    if (tab === 'ranking') {
-      // 종합 랭킹은 해시 없이 깔끔한 /dashboard 유지
-      window.history.replaceState(null, '', `${pathname}${search}`);
-    } else {
-      window.history.replaceState(null, '', `${pathname}${search}#${tab}`);
-    }
+    const activePhotoId = lightboxHighlight.value?.id || pendingUrlPhotoId.value || '';
+    const nextUrl = buildDashboardRelativeUrl(tab, activePhotoId || null);
+    window.history.replaceState(null, '', nextUrl);
   }
 };
 
-const handleHashChange = () => {
+const handleLocationChange = () => {
   const current = parseTabFromLocation();
   if (activeTab.value !== current) {
     activeTab.value = current;
     scrollActiveTabIntoView(true);
+  }
+  const urlPhotoId = parsePhotoIdFromLocation();
+  if (!urlPhotoId && lightboxHighlight.value) {
+    lightboxHighlight.value = null;
+  } else if (urlPhotoId && lightboxHighlight.value?.id !== urlPhotoId) {
+    const matched = highlightsList.value.find(h => h.id === urlPhotoId);
+    if (matched) {
+      openHighlightLightbox(matched, false);
+    } else {
+      pendingUrlPhotoId.value = urlPhotoId;
+    }
   }
 };
 
@@ -366,8 +425,9 @@ onMounted(() => {
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
   }
 
-  // 브라우저 뒤로가기 / 앞으로가기 및 URL 해시 변경 동기화
-  window.addEventListener('hashchange', handleHashChange);
+  // 브라우저 뒤로가기 / 앞으로가기 및 URL 변경 동기화
+  window.addEventListener('hashchange', handleLocationChange);
+  window.addEventListener('popstate', handleLocationChange);
   window.addEventListener('resize', updateTabsNavScrollIndicator);
 
   if (typeof ResizeObserver !== 'undefined') {
@@ -381,7 +441,11 @@ onMounted(() => {
 
   // 초기 URL 동기화
   const initial = parseTabFromLocation();
-  switchTab(initial, initial !== 'ranking');
+  const initialPhoto = parsePhotoIdFromLocation();
+  if (initialPhoto) {
+    pendingUrlPhotoId.value = initialPhoto;
+  }
+  switchTab(initial, initial !== 'ranking' || Boolean(initialPhoto));
   // 마운트 후 초기 활성 탭 스크롤 및 인디케이터 계산
   setTimeout(() => {
     scrollActiveTabIntoView(false);
@@ -399,18 +463,16 @@ onUnmounted(() => {
     themeObserver.disconnect();
     themeObserver = null;
   }
-  window.removeEventListener('hashchange', handleHashChange);
+  window.removeEventListener('hashchange', handleLocationChange);
+  window.removeEventListener('popstate', handleLocationChange);
   window.removeEventListener('resize', updateTabsNavScrollIndicator);
   window.removeEventListener('mousemove', onTabsNavWindowMouseMove);
   window.removeEventListener('mouseup', onTabsNavWindowMouseUp);
 });
 
 // Vue 라우트 변화 감시
-watch(() => [route.hash, route.query.tab], () => {
-  const target = parseTabFromLocation();
-  if (activeTab.value !== target) {
-    activeTab.value = target;
-  }
+watch(() => [route.hash, route.query.tab, route.query.photo, route.params.tab, route.params.photoId], () => {
+  handleLocationChange();
 });
 
 const toggleTheme = () => {
@@ -1395,6 +1457,24 @@ const loadAllData = async (forceRefresh: boolean = false) => {
   isLoading.value = true;
   errorMessage.value = '';
   try {
+    const highlightsPromise = fetchHighlights(forceRefresh)
+      .then(hlList => {
+        highlightsList.value = hlList;
+        const targetPhotoId = pendingUrlPhotoId.value || parsePhotoIdFromLocation();
+        if (targetPhotoId && !lightboxHighlight.value) {
+          const found = hlList.find(h => h.id === targetPhotoId);
+          if (found) {
+            pendingUrlPhotoId.value = '';
+            openHighlightLightbox(found, false);
+          }
+        }
+        return hlList;
+      })
+      .catch(e => {
+        console.warn("역만/화료 갤러리 로드 실패:", e);
+        return [] as HighlightRecord[];
+      });
+
     const [stats, matrix, timeline, sessions, highlights] = await Promise.all([
       fetchPublicAllStats(undefined, forceRefresh),
       fetchPublicStatsMatrix(undefined, forceRefresh).catch(e => {
@@ -1409,10 +1489,7 @@ const loadAllData = async (forceRefresh: boolean = false) => {
         console.error("회차 목록 로드 실패:", e);
         return [] as string[];
       }),
-      fetchHighlights(forceRefresh).catch(e => {
-        console.warn("역만/화료 갤러리 로드 실패:", e);
-        return [] as HighlightRecord[];
-      })
+      highlightsPromise
     ]);
     allStats.value = stats;
     statsMatrix.value = matrix;
@@ -2378,23 +2455,40 @@ onMounted(() => {
   refreshGalleryAuthState();
 });
 
-// 링크 복사
+const copyTextToClipboard = async (text: string) => {
+  if (navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const input = document.createElement('textarea');
+    input.value = text;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    document.body.removeChild(input);
+  }
+};
+
+// 대시보드 링크 복사 (# 대신 ?tab= / ?photo= 쿼리 사용으로 커뮤니티 링크 잘림 방지)
 const copyDashboardLink = async () => {
   try {
-    const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-    const hash = activeTab.value === 'ranking' ? '' : `#${activeTab.value}`;
-    const url = `${window.location.origin}${base}/dashboard${hash}`;
-    if (navigator.clipboard) {
-      await navigator.clipboard.writeText(url);
-    } else {
-      const input = document.createElement('textarea');
-      input.value = url;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand('copy');
-      document.body.removeChild(input);
-    }
-    showToast('대시보드 링크가 복사되었습니다!');
+    const relUrl = buildDashboardRelativeUrl(activeTab.value, lightboxHighlight.value?.id || null);
+    const url = `${window.location.origin}${relUrl}`;
+    await copyTextToClipboard(url);
+    showToast(lightboxHighlight.value ? '현재 사진 공유 링크가 복사되었습니다!' : '대시보드 링크가 복사되었습니다!');
+  } catch (e) {
+    showToast('링크 복사에 실패했습니다.');
+  }
+};
+
+// 개별 갤러리 사진/기록 고유 링크 공유(복사)
+const copyHighlightShareLink = async (rec?: HighlightRecord | null) => {
+  const target = rec || lightboxHighlight.value;
+  if (!target?.id) return;
+  try {
+    const relUrl = buildDashboardRelativeUrl('gallery', target.id);
+    const url = `${window.location.origin}${relUrl}`;
+    await copyTextToClipboard(url);
+    showToast('사진 공유 링크가 복사되었습니다!');
   } catch (e) {
     showToast('링크 복사에 실패했습니다.');
   }
@@ -4388,31 +4482,49 @@ const submitNewHighlightComment = async () => {
 };
 
 const updateLightboxFloatingBtnState = () => {
-  const scrollEl = lightboxScrollAreaRef.value;
-  const commentsEl = lightboxCommentsSectionRef.value;
-  if (!scrollEl || !commentsEl) {
+  const scrollEl =
+    lightboxScrollAreaRef.value ||
+    (typeof document !== 'undefined'
+      ? (document.querySelector('.lightbox-scroll-area') as HTMLElement | null)
+      : null);
+  if (!scrollEl) {
     showLightboxCommentFab.value = false;
     return;
   }
   const remainingScroll = scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop;
-  if (scrollEl.scrollHeight <= scrollEl.clientHeight + 24 || remainingScroll <= 36) {
+  if (remainingScroll <= 36) {
     showLightboxCommentFab.value = false;
     return;
   }
-  const scrollRect = scrollEl.getBoundingClientRect();
-  const commentsRect = commentsEl.getBoundingClientRect();
-  const visibleHeightInModal = scrollRect.bottom - commentsRect.top;
-  showLightboxCommentFab.value = visibleHeightInModal < 90;
+  const formEl = scrollEl.querySelector('.lb-comment-form-card') as HTMLElement | null;
+  if (formEl) {
+    const scrollRect = scrollEl.getBoundingClientRect();
+    const formRect = formEl.getBoundingClientRect();
+    const formVisibleHeight = scrollRect.bottom - formRect.top;
+    showLightboxCommentFab.value = formVisibleHeight < 120;
+  } else {
+    showLightboxCommentFab.value = true;
+  }
 };
 
 const scrollToLightboxComments = () => {
-  const scrollEl = lightboxScrollAreaRef.value;
+  const scrollEl =
+    lightboxScrollAreaRef.value ||
+    (typeof document !== 'undefined'
+      ? (document.querySelector('.lightbox-scroll-area') as HTMLElement | null)
+      : null);
   const commentsEl = lightboxCommentsSectionRef.value;
-  if (!scrollEl || !commentsEl) return;
-  const scrollRect = scrollEl.getBoundingClientRect();
-  const commentsRect = commentsEl.getBoundingClientRect();
-  const targetDelta = commentsRect.top - scrollRect.top - 12;
-  scrollEl.scrollBy({ top: targetDelta, behavior: 'smooth' });
+  if (!scrollEl) return;
+  if (commentsEl) {
+    const scrollRect = scrollEl.getBoundingClientRect();
+    const commentsRect = commentsEl.getBoundingClientRect();
+    const targetDelta = commentsRect.top - scrollRect.top - 12;
+    if (targetDelta > 40) {
+      scrollEl.scrollBy({ top: targetDelta, behavior: 'smooth' });
+      return;
+    }
+  }
+  scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
 };
 
 const handleLightboxImageLoad = () => {
@@ -4422,6 +4534,9 @@ const handleLightboxImageLoad = () => {
   requestAnimationFrame(() => {
     updateLightboxFloatingBtnState();
   });
+  setTimeout(() => {
+    updateLightboxFloatingBtnState();
+  }, 80);
 };
 
 const openFullImageZoom = () => {
@@ -4435,11 +4550,16 @@ const closeFullImageZoom = () => {
   isFullImageZoomScaled.value = false;
 };
 
-watch(lightboxHighlight, (val) => {
+watch(lightboxHighlight, (val, oldVal) => {
   if (!val) {
     isFullImageZoomOpen.value = false;
     isFullImageZoomScaled.value = false;
     showLightboxCommentFab.value = false;
+    pendingUrlPhotoId.value = '';
+    if (oldVal && typeof window !== 'undefined') {
+      const nextUrl = buildDashboardRelativeUrl(activeTab.value, null);
+      window.history.replaceState(null, '', nextUrl);
+    }
   }
 });
 
@@ -4709,7 +4829,7 @@ const confirmDeleteComment = async (cmt: HighlightComment, explicitPin?: string)
   }
 };
 
-const openHighlightLightbox = (rec: HighlightRecord) => {
+const openHighlightLightbox = (rec: HighlightRecord, updateUrl = true) => {
   preloadMahjongTileImages();
   refreshGalleryAuthState();
   useGuestCommentMode.value = false;
@@ -4718,7 +4838,12 @@ const openHighlightLightbox = (rec: HighlightRecord) => {
   lightboxSessionPopupDetail.value = null;
   isFullImageZoomOpen.value = false;
   isFullImageZoomScaled.value = false;
+  showLightboxCommentFab.value = true;
   lightboxHighlight.value = rec;
+  if (updateUrl && typeof window !== 'undefined' && rec.id) {
+    const nextUrl = buildDashboardRelativeUrl(activeTab.value, rec.id);
+    window.history.replaceState(null, '', nextUrl);
+  }
   showDeletePinInput.value = false;
   deletePinPromptInput.value = getSavedHighlightPin();
   deleteHighlightError.value = '';
@@ -4739,6 +4864,12 @@ const openHighlightLightbox = (rec: HighlightRecord) => {
     requestAnimationFrame(() => {
       updateLightboxFloatingBtnState();
     });
+    setTimeout(() => {
+      updateLightboxFloatingBtnState();
+    }, 80);
+    setTimeout(() => {
+      updateLightboxFloatingBtnState();
+    }, 240);
   });
 };
 
@@ -9305,7 +9436,17 @@ const openGamePopupFromLightbox = async (
               </template>
               <span v-else class="badge-session-photo">기타 사진</span>
             </div>
-            <button class="btn-close" @click="lightboxHighlight = null" title="닫기">✕</button>
+            <div class="lightbox-header-right">
+              <button
+                type="button"
+                class="btn-share-highlight-header"
+                title="이 사진의 공유 링크 복사"
+                @click.stop="copyHighlightShareLink(lightboxHighlight)"
+              >
+                공유
+              </button>
+              <button class="btn-close" @click="lightboxHighlight = null" title="닫기">✕</button>
+            </div>
           </div>
 
           <div
@@ -9325,7 +9466,6 @@ const openGamePopupFromLightbox = async (
                 alt="사진"
                 @load="handleLightboxImageLoad"
               />
-              <span class="lightbox-zoom-hint-badge">클릭하여 크게 보기</span>
             </div>
 
             <div class="lightbox-info-footer">
@@ -9352,6 +9492,14 @@ const openGamePopupFromLightbox = async (
                   <div v-else class="lightbox-players-spacer"></div>
 
                   <div class="lightbox-delete-zone">
+                    <button
+                      type="button"
+                      class="btn-share-highlight"
+                      title="이 사진의 공유 링크 복사"
+                      @click="copyHighlightShareLink(lightboxHighlight)"
+                    >
+                      링크 공유
+                    </button>
                     <button
                       type="button"
                       class="btn-edit-highlight"
@@ -14097,6 +14245,38 @@ html.dark .lightbox-header {
   gap: 0.35rem;
   align-items: center;
 }
+.lightbox-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.btn-share-highlight-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.38);
+  background: rgba(37, 99, 235, 0.09);
+  color: #2563eb;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-share-highlight-header:hover {
+  background: rgba(37, 99, 235, 0.18);
+  border-color: #2563eb;
+}
+html.dark .btn-share-highlight-header {
+  color: #60a5fa;
+  border-color: rgba(96, 165, 250, 0.4);
+  background: rgba(59, 130, 246, 0.14);
+}
+html.dark .btn-share-highlight-header:hover {
+  background: rgba(59, 130, 246, 0.24);
+}
 .lightbox-scroll-area {
   flex: 1 1 auto;
   min-height: 0;
@@ -14111,6 +14291,7 @@ html.dark .lightbox-header {
   flex-shrink: 0;
   position: relative;
   width: 100%;
+  min-height: min(64vh, 540px);
   background: #09090b;
   display: flex;
   justify-content: center;
@@ -14127,28 +14308,12 @@ html.dark .lightbox-header {
   display: block;
 }
 @media (max-width: 640px) {
+  .lightbox-img-container {
+    min-height: 50vh;
+  }
   .lightbox-full-img {
     max-height: 68vh;
   }
-}
-.lightbox-zoom-hint-badge {
-  position: absolute;
-  left: 12px;
-  bottom: 10px;
-  padding: 4px 9px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  background: rgba(15, 23, 42, 0.72);
-  color: #f8fafc;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  backdrop-filter: blur(4px);
-  pointer-events: none;
-  opacity: 0.86;
-  transition: opacity 0.18s ease;
-}
-.lightbox-img-container:hover .lightbox-zoom-hint-badge {
-  opacity: 1;
 }
 .lightbox-info-footer {
   flex-shrink: 0;
@@ -14343,6 +14508,32 @@ html.dark .lightbox-header {
   flex-wrap: wrap;
   gap: 0.45rem;
   margin-left: auto;
+}
+.btn-share-highlight {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0.42rem 0.78rem;
+  border-radius: 6px;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-share-highlight:hover {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: #059669;
+}
+html.dark .btn-share-highlight {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(16, 185, 129, 0.14);
+}
+html.dark .btn-share-highlight:hover {
+  background: rgba(16, 185, 129, 0.24);
 }
 .btn-edit-highlight {
   padding: 0.42rem 0.78rem;

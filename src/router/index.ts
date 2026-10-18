@@ -8,7 +8,7 @@ const routes = [
     component: App,
   },
   {
-    path: '/dashboard',
+    path: '/dashboard/:tab?/:photoId?',
     name: 'dashboard',
     component: App,
   },
