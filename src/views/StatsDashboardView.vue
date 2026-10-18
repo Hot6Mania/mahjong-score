@@ -45,6 +45,14 @@ import {
 } from '@/services/publicStatsService';
 import {
   YAKUMAN_DEFINITIONS,
+  MAHJONG_TILE_EMOTES,
+  MAHJONG_ACTION_EMOTES,
+  getMahjongTileImageUrl,
+  parseRichMahjongText,
+  getEffectiveHighlightComments,
+  addHighlightComment,
+  updateHighlightComment,
+  deleteHighlightComment,
   fetchHighlights,
   createHighlight,
   deleteHighlight,
@@ -60,9 +68,14 @@ import {
   matchHighlightSession,
   computePlayerYakumanStats,
   type HighlightRecord,
-  type HighlightCategory
+  type HighlightCategory,
+  type HighlightComment
 } from '@/services/highlightService';
-import { checkAdminStatus } from '@/services/scheduleService';
+import {
+  checkAdminStatus,
+  getLastAttendeeName,
+  getSavedPins
+} from '@/services/scheduleService';
 import zoomPlugin from 'chartjs-plugin-zoom';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
@@ -1102,14 +1115,21 @@ const sessionChartOptions = computed<ChartOptions<'line'>>(() => ({
 // 3-1. 회차 대국별 상세 모달 (결과 표 & 점수 변동 차트 & 국별 점수 이동)
 // ==========================================
 const selectedGameDetail = ref<GameDetailRecord | null>(null);
+const gameModalSessionName = ref<string>('');
 const gameModalMode = ref<'sheet' | 'chart' | 'rounds'>('sheet');
 const gameModalSelectedRound = ref<string>('__all__');
 const isLoadingGameDetail = ref(false);
 let gameDetailRequestId = 0;
 
-const openGameDetailModal = async (game: SessionGame, preserveViewState = false) => {
+const openGameDetailModal = async (
+  game: SessionGame,
+  preserveViewState = false,
+  overrideSessionName?: string
+) => {
   if (!game) return;
   const reqId = ++gameDetailRequestId;
+  const targetSession = overrideSessionName || currentSessionDetail.value?.sessionName || selectedSession.value;
+  gameModalSessionName.value = targetSession;
   isLoadingGameDetail.value = true;
   if (!preserveViewState) {
     gameModalMode.value = 'sheet';
@@ -1146,7 +1166,7 @@ const openGameDetailModal = async (game: SessionGame, preserveViewState = false)
   };
 
   try {
-    const detail = await fetchSessionGameDetail(selectedSession.value, game);
+    const detail = await fetchSessionGameDetail(targetSession, game);
     if (reqId === gameDetailRequestId &&
         selectedGameDetail.value &&
         selectedGameDetail.value.gameIndex === game.gameIndex) {
@@ -2400,10 +2420,12 @@ const currentSessionHighlights = computed(() => {
 
 // 현재 열려 있는 대국 상세 모달에 해당하는 역만/화료 사진 목록
 const currentGameHighlights = computed(() => {
-  if (!selectedGameDetail.value || !selectedSession.value) return [];
+  const activeSess = gameModalSessionName.value || selectedSession.value;
+  if (!selectedGameDetail.value || !activeSess) return [];
   const gIdx = selectedGameDetail.value.gameIndex;
   const gId = selectedGameDetail.value.gameId;
-  return currentSessionHighlights.value.filter(r => {
+  return highlightsList.value.filter(r => {
+    if (!matchHighlightSession(r.sessionName, activeSess)) return false;
     if (r.category === 'session') return false;
     if (gId && r.gameId && r.gameId === gId) return true;
     if (gIdx && r.gameIndex && Number(r.gameIndex) === Number(gIdx)) return true;
@@ -2540,11 +2562,13 @@ const filteredGalleryHighlights = computed(() => {
 const gallerySummaryStats = computed(() => {
   const yakumanRecs = highlightsList.value.filter(r => r.category === 'yakuman');
   const funRecs = highlightsList.value.filter(r => r.category === 'fun');
+  const nanikiruRecs = highlightsList.value.filter(r => r.category === 'nanikiru');
   const sessionRecs = highlightsList.value.filter(r => r.category === 'session');
   return {
     totalCount: highlightsList.value.length,
     yakumanCount: yakumanRecs.length,
     funPhotoCount: funRecs.length,
+    nanikiruCount: nanikiruRecs.length,
     sessionPhotoCount: sessionRecs.length,
   };
 });
@@ -3714,6 +3738,7 @@ watch(() => uploadForm.value.winnerName, (newWinner) => {
 const handleOpenUploadFromGameModal = () => {
   const gDetail = selectedGameDetail.value;
   if (!gDetail) return;
+  const targetSession = gameModalSessionName.value || selectedSession.value;
 
   let activeRoundName = '';
   if (gameModalMode.value === 'rounds') {
@@ -3732,7 +3757,7 @@ const handleOpenUploadFromGameModal = () => {
     const isYakuman = matchedRm ? isEstimatedYakumanRound(matchedRm) : false;
     openHighlightUploadModal({
       category: isYakuman ? 'yakuman' : 'fun',
-      sessionName: selectedSession.value,
+      sessionName: targetSession,
       gameId: gDetail.gameId,
       gameIndex: gDetail.gameIndex,
       roundName: activeRoundName,
@@ -3746,7 +3771,7 @@ const handleOpenUploadFromGameModal = () => {
     const yakumanRounds = gameModalAllRoundMovements.value.filter(rm => isEstimatedYakumanRound(rm));
     if (yakumanRounds.length > 0) {
       const unregisteredYm = yakumanRounds.filter(
-        rm => !isYakumanRoundAlreadyRegistered(selectedSession.value, gDetail.gameIndex, gDetail.gameId, rm.roundName)
+        rm => !isYakumanRoundAlreadyRegistered(targetSession, gDetail.gameIndex, gDetail.gameId, rm.roundName)
       );
       const ymPool = unregisteredYm.length > 0 ? unregisteredYm : yakumanRounds;
       const bestYm = [...ymPool].sort((a, b) => {
@@ -3756,7 +3781,7 @@ const handleOpenUploadFromGameModal = () => {
       })[0];
       openHighlightUploadModal({
         category: 'yakuman',
-        sessionName: selectedSession.value,
+        sessionName: targetSession,
         gameId: gDetail.gameId,
         gameIndex: gDetail.gameIndex,
         roundName: bestYm?.roundName || '',
@@ -3765,7 +3790,7 @@ const handleOpenUploadFromGameModal = () => {
       const bestFunRound = findBestFunRoundInGame(gameModalAllRoundMovements.value);
       openHighlightUploadModal({
         category: 'fun',
-        sessionName: selectedSession.value,
+        sessionName: targetSession,
         gameId: gDetail.gameId,
         gameIndex: gDetail.gameIndex,
         roundName: bestFunRound?.roundName || gameModalAllRoundMovements.value[0].roundName,
@@ -3776,7 +3801,7 @@ const handleOpenUploadFromGameModal = () => {
 
   openHighlightUploadModal({
     category: 'yakuman',
-    sessionName: selectedSession.value,
+    sessionName: targetSession,
     gameId: gDetail.gameId,
     gameIndex: gDetail.gameIndex,
   });
@@ -3876,6 +3901,11 @@ const submitHighlightUpload = async () => {
       highlightUploadError.value = '달성한 역만 종류를 선택하거나 사진을 첨부해 주세요.';
       return;
     }
+  } else if (f.category === 'nanikiru') {
+    if (!selectedUploadFile.value) {
+      highlightUploadError.value = '나니키루(무엇을 버릴까) 등록 시 손패 사진 파일을 첨부해 주세요.';
+      return;
+    }
   } else if (f.category === 'session') {
     if (!selectedUploadFile.value) {
       highlightUploadError.value = '회차별 사진 등록 시 업로드할 사진 파일을 선택해 주세요.';
@@ -3896,8 +3926,8 @@ const submitHighlightUpload = async () => {
       gameIndex: f.gameIndex || undefined,
       roundName: f.roundName || undefined,
       winnerName: f.winnerName.trim() || undefined,
-      loserName: f.category !== 'session' && f.winType === 'ron' && f.loserName.trim() ? f.loserName.trim() : undefined,
-      winType: f.category === 'session' || !f.winnerName.trim() ? undefined : f.winType,
+      loserName: (f.category === 'yakuman' || f.category === 'fun') && f.winType === 'ron' && f.loserName.trim() ? f.loserName.trim() : undefined,
+      winType: (f.category === 'session' || f.category === 'nanikiru' || !f.winnerName.trim()) ? undefined : f.winType,
       yakumanTypes: f.category === 'yakuman' ? f.yakumanTypes : [],
       caption: f.caption,
       uploaderName: f.uploaderName,
@@ -3942,8 +3972,301 @@ const editingMemoPin = ref('');
 const isSavingLightboxMemo = ref(false);
 const memoEditError = ref('');
 
+// ==========================================
+// 6-2. 사진 댓글 시스템 (일정 로그인 연동 + 디시인사이드 유동 스타일 + 마작패/액션 디시콘)
+// ==========================================
+const scheduleLoggedInName = ref<string>('');
+const scheduleLoggedInPin = ref<string>('');
+const useGuestCommentMode = ref<boolean>(false);
+
+const commentNicknameInput = ref<string>('');
+const commentPinInput = ref<string>('');
+const commentContentInput = ref<string>('');
+const commentTextareaRef = ref<HTMLTextAreaElement | null>(null);
+const isSubmittingComment = ref<boolean>(false);
+const commentFormError = ref<string>('');
+
+// 마작패 / 액션 버튼 디시콘 팔레트 상태
+const isCommentEmotePickerOpen = ref<boolean>(false);
+const activeEmoteTab = ref<'action' | 'man' | 'pin' | 'sou' | 'honor'>('action');
+
+// 개별 댓글 수정 / 삭제 상태
+const editingCommentId = ref<string | null>(null);
+const editingCommentContent = ref<string>('');
+const editingCommentPin = ref<string>('');
+const isEditingCommentPickerOpen = ref<boolean>(false);
+const deletingCommentId = ref<string | null>(null);
+const deletingCommentPin = ref<string>('');
+const commentActionError = ref<string>('');
+const isProcessingCommentAction = ref<boolean>(false);
+
+const syncScheduleLoginForComment = () => {
+  const lastAttendee = (getLastAttendeeName() || '').trim();
+  const savedPins = getSavedPins();
+  scheduleLoggedInName.value = lastAttendee;
+  scheduleLoggedInPin.value = lastAttendee ? (savedPins[lastAttendee] || 'schedule_user') : '';
+  if (lastAttendee && !useGuestCommentMode.value) {
+    commentNicknameInput.value = lastAttendee;
+    commentPinInput.value = scheduleLoggedInPin.value;
+  } else if (!commentNicknameInput.value) {
+    try {
+      commentNicknameInput.value = localStorage.getItem('mahjong_guest_comment_nick') || '';
+    } catch {}
+  }
+};
+
+const isUsingScheduleIdentity = computed(() => {
+  return Boolean(scheduleLoggedInName.value && !useGuestCommentMode.value);
+});
+
+const toggleGuestCommentMode = () => {
+  useGuestCommentMode.value = !useGuestCommentMode.value;
+  commentFormError.value = '';
+  if (isUsingScheduleIdentity.value) {
+    commentNicknameInput.value = scheduleLoggedInName.value;
+    commentPinInput.value = scheduleLoggedInPin.value;
+  } else {
+    try {
+      commentNicknameInput.value = localStorage.getItem('mahjong_guest_comment_nick') || '';
+    } catch {
+      commentNicknameInput.value = '';
+    }
+    commentPinInput.value = '';
+  }
+};
+
+const lightboxComments = computed<HighlightComment[]>(() => {
+  void highlightStorageTick.value;
+  return getEffectiveHighlightComments(lightboxHighlight.value);
+});
+
+const getRecordCommentCount = (rec: HighlightRecord): number => {
+  void highlightStorageTick.value;
+  return getEffectiveHighlightComments(rec).length;
+};
+
+const filteredTileEmotesByTab = computed(() => {
+  if (activeEmoteTab.value === 'action') return [];
+  return MAHJONG_TILE_EMOTES.filter(t => t.group === activeEmoteTab.value);
+});
+
+const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' = 'new') => {
+  const token = `[${tokenLabel}]`;
+  if (target === 'edit') {
+    editingCommentContent.value = `${editingCommentContent.value}${token}`;
+    return;
+  }
+  const el = commentTextareaRef.value;
+  if (!el) {
+    commentContentInput.value = `${commentContentInput.value}${token}`;
+    return;
+  }
+  const start = el.selectionStart ?? commentContentInput.value.length;
+  const end = el.selectionEnd ?? commentContentInput.value.length;
+  const before = commentContentInput.value.slice(0, start);
+  const after = commentContentInput.value.slice(end);
+  commentContentInput.value = `${before}${token}${after}`;
+  nextTick(() => {
+    el.focus();
+    const nextPos = start + token.length;
+    el.setSelectionRange(nextPos, nextPos);
+  });
+};
+
+const formatCommentTime = (ts?: number): string => {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${mm}.${dd} ${hh}:${min}`;
+};
+
+const canAutoAuthComment = (cmt: HighlightComment): boolean => {
+  if (isGalleryAdmin.value) return true;
+  if (scheduleLoggedInName.value && cmt.authorName === scheduleLoggedInName.value && scheduleLoggedInPin.value) {
+    return true;
+  }
+  return false;
+};
+
+const submitNewHighlightComment = async () => {
+  if (!lightboxHighlight.value || isSubmittingComment.value) return;
+  commentFormError.value = '';
+
+  const author = isUsingScheduleIdentity.value
+    ? scheduleLoggedInName.value.trim()
+    : commentNicknameInput.value.trim();
+  const pin = isUsingScheduleIdentity.value
+    ? (scheduleLoggedInPin.value || 'schedule_user')
+    : commentPinInput.value.trim();
+  const content = commentContentInput.value.trim();
+
+  if (!author) {
+    commentFormError.value = '닉네임을 입력해 주세요.';
+    return;
+  }
+  if (!isUsingScheduleIdentity.value && (!pin || pin.length < 2)) {
+    commentFormError.value = '댓글 수정/삭제에 사용할 비밀번호(PIN 2자리 이상)를 입력해 주세요.';
+    return;
+  }
+  if (!content) {
+    commentFormError.value = '댓글 내용을 입력해 주세요.';
+    return;
+  }
+
+  if (!isUsingScheduleIdentity.value) {
+    try {
+      localStorage.setItem('mahjong_guest_comment_nick', author);
+    } catch {}
+  }
+
+  isSubmittingComment.value = true;
+  try {
+    const res = await addHighlightComment({
+      highlightId: lightboxHighlight.value.id,
+      authorName: author,
+      content,
+      pin,
+      isLoggedInUser: isUsingScheduleIdentity.value,
+    });
+    if (res.success) {
+      if (res.records) {
+        highlightsList.value = res.records;
+      }
+      if (res.record) {
+        lightboxHighlight.value = res.record;
+      }
+      highlightStorageTick.value++;
+      commentContentInput.value = '';
+      isCommentEmotePickerOpen.value = false;
+      showToast('댓글이 등록되었습니다.');
+    } else {
+      commentFormError.value = res.error || '댓글 등록에 실패했습니다.';
+    }
+  } finally {
+    isSubmittingComment.value = false;
+  }
+};
+
+const startEditComment = (cmt: HighlightComment) => {
+  deletingCommentId.value = null;
+  commentActionError.value = '';
+  editingCommentId.value = cmt.id;
+  editingCommentContent.value = cmt.content;
+  isEditingCommentPickerOpen.value = false;
+  if (scheduleLoggedInName.value && cmt.authorName === scheduleLoggedInName.value && scheduleLoggedInPin.value) {
+    editingCommentPin.value = scheduleLoggedInPin.value;
+  } else {
+    editingCommentPin.value = '';
+  }
+};
+
+const cancelEditComment = () => {
+  editingCommentId.value = null;
+  editingCommentContent.value = '';
+  editingCommentPin.value = '';
+  isEditingCommentPickerOpen.value = false;
+  commentActionError.value = '';
+};
+
+const confirmUpdateComment = async (cmt: HighlightComment) => {
+  if (!lightboxHighlight.value || isProcessingCommentAction.value) return;
+  commentActionError.value = '';
+  const autoAuth = canAutoAuthComment(cmt);
+  const pinToUse = autoAuth
+    ? (scheduleLoggedInPin.value || '')
+    : editingCommentPin.value.trim();
+
+  if (!autoAuth && !pinToUse) {
+    commentActionError.value = '댓글 작성 시 설정한 비밀번호(PIN)를 입력해 주세요.';
+    return;
+  }
+
+  isProcessingCommentAction.value = true;
+  try {
+    const res = await updateHighlightComment({
+      highlightId: lightboxHighlight.value.id,
+      commentId: cmt.id,
+      content: editingCommentContent.value,
+      pin: pinToUse,
+    });
+    if (res.success) {
+      if (res.records) {
+        highlightsList.value = res.records;
+      }
+      if (res.record) {
+        lightboxHighlight.value = res.record;
+      }
+      highlightStorageTick.value++;
+      cancelEditComment();
+      showToast('댓글이 수정되었습니다.');
+    } else {
+      commentActionError.value = res.error || '비밀번호(PIN)가 일치하지 않습니다.';
+    }
+  } finally {
+    isProcessingCommentAction.value = false;
+  }
+};
+
+const startDeleteComment = async (cmt: HighlightComment) => {
+  editingCommentId.value = null;
+  commentActionError.value = '';
+  if (canAutoAuthComment(cmt)) {
+    if (!window.confirm('이 댓글을 삭제하시겠습니까?')) return;
+    await confirmDeleteComment(cmt, scheduleLoggedInPin.value || '');
+    return;
+  }
+  deletingCommentId.value = cmt.id;
+  deletingCommentPin.value = '';
+};
+
+const confirmDeleteComment = async (cmt: HighlightComment, explicitPin?: string) => {
+  if (!lightboxHighlight.value || isProcessingCommentAction.value) return;
+  commentActionError.value = '';
+  const autoAuth = canAutoAuthComment(cmt);
+  const pinToUse = explicitPin !== undefined
+    ? explicitPin
+    : (autoAuth ? (scheduleLoggedInPin.value || '') : deletingCommentPin.value.trim());
+
+  if (!autoAuth && !pinToUse) {
+    commentActionError.value = '댓글 작성 시 입력한 비밀번호(PIN)를 입력해 주세요.';
+    return;
+  }
+
+  isProcessingCommentAction.value = true;
+  try {
+    const res = await deleteHighlightComment({
+      highlightId: lightboxHighlight.value.id,
+      commentId: cmt.id,
+      pin: pinToUse,
+    });
+    if (res.success) {
+      if (res.records) {
+        highlightsList.value = res.records;
+      }
+      if (res.record) {
+        lightboxHighlight.value = res.record;
+      }
+      highlightStorageTick.value++;
+      deletingCommentId.value = null;
+      deletingCommentPin.value = '';
+      showToast('댓글이 삭제되었습니다.');
+    } else {
+      commentActionError.value = res.error || '비밀번호(PIN)가 일치하지 않습니다.';
+    }
+  } finally {
+    isProcessingCommentAction.value = false;
+  }
+};
+
 const openHighlightLightbox = (rec: HighlightRecord) => {
   refreshGalleryAuthState();
+  useGuestCommentMode.value = false;
+  syncScheduleLoginForComment();
+  selectedGameDetail.value = null;
+  lightboxSessionPopupDetail.value = null;
   lightboxHighlight.value = rec;
   showDeletePinInput.value = false;
   deletePinPromptInput.value = getSavedHighlightPin();
@@ -3952,6 +4275,11 @@ const openHighlightLightbox = (rec: HighlightRecord) => {
   editingMemoText.value = rec.caption || '';
   editingMemoPin.value = getSavedHighlightPin();
   memoEditError.value = '';
+  commentContentInput.value = '';
+  commentFormError.value = '';
+  isCommentEmotePickerOpen.value = false;
+  cancelEditComment();
+  deletingCommentId.value = null;
 };
 
 const startEditLightboxMemo = () => {
@@ -4120,16 +4448,374 @@ const saveNewServerUploadPin = async () => {
   }
 };
 
-const formatHighlightDate = (ts: number) => {
-  if (!ts) return '';
-  try {
-    return new Date(ts).toLocaleDateString('ko-KR', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
+
+// 갤러리 핀 카드(.hl-card-body) 내부 전용 국 이름 한글 표기 변환 헬퍼
+const formatCardRoundKorean = (roundName?: string): string => {
+  if (!roundName) return '';
+  return roundName
+    .replace(/東/g, '동')
+    .replace(/南/g, '남')
+    .replace(/西/g, '서')
+    .replace(/北/g, '북')
+    .replace(/局/g, '국')
+    .replace(/本場/g, '본장');
+};
+
+const formatHighlightCategoryLabel = (cat?: HighlightCategory, isCard = false): string => {
+  if (cat === 'yakuman') return '역만';
+  if (cat === 'fun') return '그 외 화료';
+  if (cat === 'nanikiru') return '나니키루';
+  return isCard ? '회차 사진' : '회차 사진';
+};
+
+// ==========================================
+// 7. 개인 통계 모달 내부 탭(.tab_menu) 가로 스크롤 & 인디케이터
+// ==========================================
+const modalTabMenuRef = ref<HTMLElement | null>(null);
+const isDraggingModalTab = ref(false);
+const hasDraggedModalTab = ref(false);
+let modalTabDragStartX = 0;
+let modalTabStartScrollLeft = 0;
+let modalTabResizeObserver: ResizeObserver | null = null;
+
+const modalTabScrollIndicator = ref({
+  visible: false,
+  widthPct: 100,
+  leftPct: 0,
+});
+
+const getActiveModalTabMenuEl = (): HTMLElement | null => {
+  if (modalTabMenuRef.value && modalTabMenuRef.value.isConnected) {
+    return modalTabMenuRef.value;
+  }
+  if (typeof document !== 'undefined') {
+    const queried = document.querySelector('.player-modal-card .tab_menu') as HTMLElement | null;
+    if (queried) {
+      modalTabMenuRef.value = queried;
+      return queried;
+    }
+  }
+  return modalTabMenuRef.value;
+};
+
+const updateModalTabScrollIndicator = () => {
+  const el = getActiveModalTabMenuEl();
+  if (!el) {
+    modalTabScrollIndicator.value = { visible: false, widthPct: 100, leftPct: 0 };
+    return;
+  }
+  const sw = el.scrollWidth;
+  const cw = el.clientWidth;
+  if (cw <= 0 || sw <= cw + 2) {
+    modalTabScrollIndicator.value = { visible: false, widthPct: 100, leftPct: 0 };
+    return;
+  }
+  const widthPct = Math.max(16, Math.min(100, (cw / sw) * 100));
+  const maxScroll = Math.max(1, sw - cw);
+  const ratio = Math.max(0, Math.min(1, el.scrollLeft / maxScroll));
+  const leftPct = ratio * (100 - widthPct);
+  modalTabScrollIndicator.value = {
+    visible: true,
+    widthPct,
+    leftPct,
+  };
+};
+
+const setModalTabMenuRef = (el: unknown) => {
+  const htmlEl = el as HTMLElement | null;
+  if (!htmlEl) {
+    // v-if 분기 전환 시 이전 엘리먼트의 null 콜백이 새로 마운트된 엘리먼트 참조를 덮어쓰지 않도록 보호
+    if (modalTabMenuRef.value && modalTabMenuRef.value.isConnected) {
+      updateModalTabScrollIndicator();
+      return;
+    }
+    if (modalTabResizeObserver && modalTabMenuRef.value) {
+      modalTabResizeObserver.unobserve(modalTabMenuRef.value);
+    }
+    modalTabMenuRef.value = null;
+    modalTabScrollIndicator.value = { visible: false, widthPct: 100, leftPct: 0 };
+    return;
+  }
+
+  if (modalTabMenuRef.value === htmlEl) {
+    updateModalTabScrollIndicator();
+    return;
+  }
+  if (modalTabResizeObserver && modalTabMenuRef.value) {
+    modalTabResizeObserver.unobserve(modalTabMenuRef.value);
+  }
+  modalTabMenuRef.value = htmlEl;
+  if (typeof ResizeObserver !== 'undefined') {
+    if (!modalTabResizeObserver) {
+      modalTabResizeObserver = new ResizeObserver(() => {
+        updateModalTabScrollIndicator();
+      });
+    }
+    modalTabResizeObserver.observe(htmlEl);
+  }
+  nextTick(() => {
+    updateModalTabScrollIndicator();
+    if (typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(() => updateModalTabScrollIndicator());
+    }
+    setTimeout(() => updateModalTabScrollIndicator(), 80);
+  });
+};
+
+const onModalTabTrackClick = (e: MouseEvent) => {
+  const el = getActiveModalTabMenuEl();
+  const track = e.currentTarget as HTMLElement | null;
+  if (!el || !track) return;
+  const rect = track.getBoundingClientRect();
+  if (rect.width <= 0) return;
+  const clickRatio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+  el.scrollTo({
+    left: clickRatio * maxScroll,
+    behavior: 'smooth',
+  });
+};
+
+const onModalTabWindowMouseMove = (e: MouseEvent) => {
+  const el = getActiveModalTabMenuEl();
+  if (!isDraggingModalTab.value || !el) return;
+  const dx = e.clientX - modalTabDragStartX;
+  if (Math.abs(dx) > 4) {
+    hasDraggedModalTab.value = true;
+  }
+  if (hasDraggedModalTab.value) {
+    el.scrollLeft = modalTabStartScrollLeft - dx;
+    updateModalTabScrollIndicator();
+  }
+};
+
+const onModalTabWindowMouseUp = () => {
+  if (!isDraggingModalTab.value) return;
+  isDraggingModalTab.value = false;
+  window.removeEventListener('mousemove', onModalTabWindowMouseMove);
+  window.removeEventListener('mouseup', onModalTabWindowMouseUp);
+  setTimeout(() => {
+    hasDraggedModalTab.value = false;
+  }, 60);
+};
+
+const onModalTabMouseDown = (e: MouseEvent) => {
+  if (e.button !== 0 && e.button !== 1) return;
+  const el = getActiveModalTabMenuEl();
+  if (!el) return;
+  if (e.button === 1) e.preventDefault();
+  isDraggingModalTab.value = true;
+  hasDraggedModalTab.value = false;
+  modalTabDragStartX = e.clientX;
+  modalTabStartScrollLeft = el.scrollLeft;
+  window.addEventListener('mousemove', onModalTabWindowMouseMove);
+  window.addEventListener('mouseup', onModalTabWindowMouseUp);
+};
+
+const onModalTabClickCapture = (e: MouseEvent) => {
+  if (hasDraggedModalTab.value) {
+    e.stopPropagation();
+    e.preventDefault();
+    hasDraggedModalTab.value = false;
+  }
+};
+
+const onModalTabWheel = (e: WheelEvent) => {
+  const el = getActiveModalTabMenuEl();
+  if (!el) return;
+  if (el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+    e.preventDefault();
+    el.scrollLeft += e.deltaY;
+    updateModalTabScrollIndicator();
+  }
+};
+
+const scrollActiveModalTabIntoView = (smooth = true) => {
+  nextTick(() => {
+    const el = getActiveModalTabMenuEl();
+    if (!el) return;
+    const activeBtn = el.querySelector('.tab_btn.active') as HTMLElement | null;
+    if (activeBtn) {
+      activeBtn.scrollIntoView({
+        behavior: smooth ? 'smooth' : 'auto',
+        inline: 'center',
+        block: 'nearest',
+      });
+    }
+    updateModalTabScrollIndicator();
+    setTimeout(() => {
+      updateModalTabScrollIndicator();
+    }, smooth ? 240 : 60);
+  });
+};
+
+watch([selectedPlayer, modalScopeTab, modalActiveTab, sessionModalActiveTab], () => {
+  scrollActiveModalTabIntoView(true);
+});
+
+onMounted(() => {
+  window.addEventListener('resize', updateModalTabScrollIndicator);
+});
+onUnmounted(() => {
+  if (modalTabResizeObserver) {
+    modalTabResizeObserver.disconnect();
+    modalTabResizeObserver = null;
+  }
+  window.removeEventListener('resize', updateModalTabScrollIndicator);
+  window.removeEventListener('mousemove', onModalTabWindowMouseMove);
+  window.removeEventListener('mouseup', onModalTabWindowMouseUp);
+});
+
+// ==========================================
+// 8. 라이트박스 헤더 배지(회차 / 경기 / 국) 클릭 시 상세 팝업 모달 연동
+// ==========================================
+const lightboxSessionPopupDetail = ref<SessionDetail | null>(null);
+const isLoadingLightboxSessionPopup = ref(false);
+
+const resolveMatchedSessionName = (rawSessionName?: string): string => {
+  const raw = (rawSessionName || '').trim();
+  if (!raw) return '';
+  const found = availableSessions.value.find(s => matchHighlightSession(s, raw));
+  return found || raw;
+};
+
+const lightboxSessionPopupMembersWithRanks = computed(() => {
+  const detail = lightboxSessionPopupDetail.value;
+  if (!detail) return [];
+  return detail.members.map(m => {
+    let r1 = 0, r2 = 0, r3 = 0, r4 = 0;
+    detail.games.forEach(g => {
+      const p = g.players.find(pl => pl.name === m.name);
+      if (p) {
+        if (p.rank === 1) r1++;
+        else if (p.rank === 2) r2++;
+        else if (p.rank === 3) r3++;
+        else if (p.rank === 4) r4++;
+      }
     });
-  } catch {
-    return '';
+    const top2Rate = m.totalGames > 0 ? parseFloat((((r1 + r2) / m.totalGames) * 100).toFixed(2)) : 0;
+    const avgUma = m.totalGames > 0 ? parseFloat((m.totalUma / m.totalGames).toFixed(1)) : 0;
+    return {
+      ...m,
+      r1,
+      r2,
+      r3,
+      r4,
+      top2Rate,
+      avgUma,
+    };
+  });
+});
+
+const openSessionPopupFromLightbox = async (rec: HighlightRecord) => {
+  const sessName = resolveMatchedSessionName(rec.sessionName);
+  if (!sessName) return;
+
+  if (currentSessionDetail.value && matchHighlightSession(currentSessionDetail.value.sessionName, sessName)) {
+    lightboxSessionPopupDetail.value = currentSessionDetail.value;
+    return;
+  }
+
+  isLoadingLightboxSessionPopup.value = true;
+  lightboxSessionPopupDetail.value = {
+    sessionName: sessName,
+    members: [],
+    games: [],
+  };
+  try {
+    const detail = await fetchPublicSessionDetail(sessName);
+    if (allRatingHistoryRecords.value.length > 0 && detail.games.length > 0) {
+      attachRatingToSessionGames(sessName, detail.games, allRatingHistoryRecords.value);
+    }
+    lightboxSessionPopupDetail.value = detail;
+  } catch (err) {
+    console.warn('라이트박스 회차 팝업 로드 실패:', err);
+    showToast('회차 정보를 불러오지 못했습니다.');
+  } finally {
+    isLoadingLightboxSessionPopup.value = false;
+  }
+};
+
+const openGameFromSessionPopup = (game: SessionGame) => {
+  const sessName = lightboxSessionPopupDetail.value?.sessionName || '';
+  openGameDetailModal(game, false, sessName);
+};
+
+const goToSessionTabFromPopup = () => {
+  const sessName = lightboxSessionPopupDetail.value?.sessionName;
+  if (!sessName) return;
+  selectedSession.value = sessName;
+  lightboxSessionPopupDetail.value = null;
+  lightboxHighlight.value = null;
+  switchTab('sessions');
+};
+
+const openGamePopupFromLightbox = async (
+  rec: HighlightRecord,
+  targetMode: 'sheet' | 'rounds'
+) => {
+  const sessName = resolveMatchedSessionName(rec.sessionName);
+  if (!sessName) return;
+
+  let sessDetail: SessionDetail | null = null;
+  if (currentSessionDetail.value && matchHighlightSession(currentSessionDetail.value.sessionName, sessName)) {
+    sessDetail = currentSessionDetail.value;
+  } else if (lightboxSessionPopupDetail.value && matchHighlightSession(lightboxSessionPopupDetail.value.sessionName, sessName) && lightboxSessionPopupDetail.value.games.length > 0) {
+    sessDetail = lightboxSessionPopupDetail.value;
+  } else {
+    try {
+      sessDetail = await fetchPublicSessionDetail(sessName);
+      if (allRatingHistoryRecords.value.length > 0 && sessDetail.games.length > 0) {
+        attachRatingToSessionGames(sessName, sessDetail.games, allRatingHistoryRecords.value);
+      }
+    } catch (err) {
+      console.warn('라이트박스 경기 팝업용 회차 조회 실패:', err);
+      showToast('해당 경기 정보를 불러오지 못했습니다.');
+      return;
+    }
+  }
+
+  if (!sessDetail || !Array.isArray(sessDetail.games) || sessDetail.games.length === 0) {
+    showToast('해당 회차의 경기 기록이 없습니다.');
+    return;
+  }
+
+  let matchedGame = sessDetail.games.find(
+    g =>
+      (rec.gameId && g.gameId && g.gameId === rec.gameId) ||
+      (rec.gameIndex !== undefined && Number(g.gameIndex) === Number(rec.gameIndex))
+  );
+
+  if (!matchedGame && rec.winnerName) {
+    matchedGame = sessDetail.games.find(g => g.players.some(p => p.name.trim() === rec.winnerName.trim()));
+  }
+  if (!matchedGame) {
+    matchedGame = sessDetail.games[0];
+  }
+
+  await openGameDetailModal(matchedGame, false, sessName);
+
+  if (targetMode === 'rounds') {
+    gameModalMode.value = 'rounds';
+    const allMovements = buildRoundMovementsFromGameDetail(selectedGameDetail.value);
+    if (rec.roundName && allMovements.length > 0) {
+      const normTarget = formatCardRoundKorean(rec.roundName).replace(/\s+/g, ' ').trim();
+      const baseTarget = normTarget.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim();
+      const matchedRm = allMovements.find(rm => {
+        const normRm = formatCardRoundKorean(rm.roundName).replace(/\s+/g, ' ').trim();
+        const baseRm = normRm.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim();
+        return (
+          rm.roundName.trim() === rec.roundName!.trim() ||
+          normRm === normTarget ||
+          baseRm === baseTarget
+        );
+      });
+      gameModalSelectedRound.value = matchedRm ? matchedRm.roundName : '__all__';
+    } else {
+      gameModalSelectedRound.value = '__all__';
+    }
+  } else {
+    gameModalMode.value = 'sheet';
   }
 };
 </script>
@@ -5179,10 +5865,13 @@ const formatHighlightDate = (ts: number) => {
                         v-for="hl in getGameHighlights(game)"
                         :key="hl.id"
                         class="game-hl-chip"
-                        :class="hl.category === 'yakuman' ? 'chip-yakuman' : 'chip-fun'"
+                        :class="hl.category === 'yakuman' ? 'chip-yakuman' : hl.category === 'nanikiru' ? 'chip-nanikiru' : 'chip-fun'"
                       >
                         <template v-if="hl.category === 'yakuman'">
                           {{ hl.winnerName }} {{ hl.yakumanTypes.join('·') }}
+                        </template>
+                        <template v-else-if="hl.category === 'nanikiru'">
+                          나니키루
                         </template>
                         <template v-else>
                           그 외 화료
@@ -5229,7 +5918,7 @@ const formatHighlightDate = (ts: number) => {
               <div class="sg-header-row">
                 <div>
                   <h3 class="card-title">{{ currentSessionDetail.sessionName }} 사진 &amp; 역만 갤러리 ({{ currentSessionHighlights.length }})</h3>
-                  <p class="sg-sub-desc">이 회차에서 달성된 역만, 그 외 화료, 회차 현장 사진을 보관합니다.</p>
+                  <p class="sg-sub-desc">이 회차에서 달성된 역만, 그 외 화료, 나니키루, 회차 현장 사진을 보관합니다.</p>
                 </div>
                 <div class="sg-btn-group">
                   <button
@@ -5237,6 +5926,12 @@ const formatHighlightDate = (ts: number) => {
                     @click="openHighlightUploadModal({ category: 'yakuman', sessionName: currentSessionDetail.sessionName })"
                   >
                     역만 / 화료 등록
+                  </button>
+                  <button
+                    class="btn-hl-upload nanikiru"
+                    @click="openHighlightUploadModal({ category: 'nanikiru', sessionName: currentSessionDetail.sessionName })"
+                  >
+                    나니키루 등록
                   </button>
                   <button
                     class="btn-hl-upload secondary"
@@ -5261,19 +5956,22 @@ const formatHighlightDate = (ts: number) => {
                   <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
                     <img :src="getHighlightImageUrl(rec.imageId)" :alt="rec.caption || rec.winnerName" loading="lazy" class="pinterest-img" />
                   </div>
-                  <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun' }">
-                    <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : '和了' }}</span>
+                  <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun', 'is-nanikiru-banner': rec.category === 'nanikiru' }">
+                    <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : rec.category === 'nanikiru' ? '何切る' : '和了' }}</span>
                     <span class="hl-yakuman-main-txt">
-                      {{ rec.category === 'yakuman' ? rec.yakumanTypes.join(' · ') : (rec.winnerName || '그 외 화료') }}
+                      {{ rec.category === 'yakuman' ? rec.yakumanTypes.join(' · ') : rec.category === 'nanikiru' ? '무엇을 버릴까' : (rec.winnerName || '그 외 화료') }}
                     </span>
                   </div>
                   <div class="hl-card-body">
                     <div class="hl-meta-top">
                       <span class="hl-type-tag" :class="rec.category">
-                        {{ rec.category === 'yakuman' ? '역만' : rec.category === 'fun' ? '그 외 화료' : '회차 사진' }}
+                        {{ formatHighlightCategoryLabel(rec.category, true) }}
                       </span>
-                      <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ rec.roundName }}</span>
-                      <span v-else-if="rec.roundName" class="hl-round-tag">{{ rec.roundName }}</span>
+                      <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ formatCardRoundKorean(rec.roundName) }}</span>
+                      <span v-else-if="rec.roundName" class="hl-round-tag">{{ formatCardRoundKorean(rec.roundName) }}</span>
+                      <span v-if="getRecordCommentCount(rec) > 0" class="hl-comment-cnt-badge" title="댓글 수">
+                        💬 {{ getRecordCommentCount(rec) }}
+                      </span>
                     </div>
                     <div v-if="rec.yakumanTypes && rec.yakumanTypes.length > 0" class="hl-yakuman-badges">
                       <span v-for="yt in rec.yakumanTypes" :key="yt" class="hl-y-badge">{{ yt }}</span>
@@ -5282,7 +5980,21 @@ const formatHighlightDate = (ts: number) => {
                       <strong>{{ rec.winnerName }}</strong>
                       <span v-if="rec.winType" class="hl-wintype">({{ rec.winType === 'tsumo' ? '쯔모' : `론${rec.loserName ? ' ← ' + rec.loserName : ''}` }})</span>
                     </div>
-                    <div v-if="rec.caption" class="hl-caption">{{ rec.caption }}</div>
+                    <div v-if="rec.caption" class="hl-caption">
+                      <template v-for="(seg, sIdx) in parseRichMahjongText(rec.caption)" :key="`s-cap-${rec.id}-${sIdx}`">
+                        <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <img
+                          v-else-if="seg.type === 'tile'"
+                          :src="getMahjongTileImageUrl(seg.tile.fileName)"
+                          :alt="seg.tile.label"
+                          :title="seg.tile.label"
+                          class="inline-mahjong-tile"
+                        />
+                        <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                          {{ seg.action.label }}
+                        </span>
+                      </template>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -5374,6 +6086,9 @@ const formatHighlightDate = (ts: number) => {
                 <button class="gh-cat-btn" :class="{ active: galleryCategoryFilter === 'fun' }" @click="galleryCategoryFilter = 'fun'">
                   그 외 화료 ({{ gallerySummaryStats.funPhotoCount }})
                 </button>
+                <button class="gh-cat-btn nanikiru-tab" :class="{ active: galleryCategoryFilter === 'nanikiru' }" @click="galleryCategoryFilter = 'nanikiru'">
+                  나니키루 ({{ gallerySummaryStats.nanikiruCount }})
+                </button>
                 <button class="gh-cat-btn" :class="{ active: galleryCategoryFilter === 'session' }" @click="galleryCategoryFilter = 'session'">
                   회차 사진 ({{ gallerySummaryStats.sessionPhotoCount }})
                 </button>
@@ -5416,6 +6131,9 @@ const formatHighlightDate = (ts: number) => {
               <button class="btn-hl-upload primary" @click="openHighlightUploadModal({ category: 'yakuman' })">
                 역만 / 화료 등록
               </button>
+              <button class="btn-hl-upload nanikiru" @click="openHighlightUploadModal({ category: 'nanikiru' })">
+                나니키루 등록
+              </button>
               <button class="btn-hl-upload secondary" @click="openHighlightUploadModal({ category: 'session' })">
                 회차별 사진 등록
               </button>
@@ -5457,7 +6175,7 @@ const formatHighlightDate = (ts: number) => {
 
         <!-- Pinterest 스타일 Masonry 사진 그리드 -->
         <div v-if="filteredGalleryHighlights.length === 0" class="section-card sg-empty-box">
-          조건에 해당하는 역만 기록이나 사진이 없습니다. 우측 상단 <strong>[역만 / 화료 등록]</strong> 또는 <strong>[회차별 사진 등록]</strong> 버튼으로 첫 기록을 남겨보세요.
+          조건에 해당하는 기록이나 사진이 없습니다. 우측 상단 <strong>[역만 / 화료 등록]</strong>, <strong>[나니키루 등록]</strong> 또는 <strong>[회차별 사진 등록]</strong> 버튼으로 첫 기록을 남겨보세요.
         </div>
         <div v-else class="pinterest-masonry-grid">
           <div
@@ -5470,20 +6188,23 @@ const formatHighlightDate = (ts: number) => {
             <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
               <img :src="getHighlightImageUrl(rec.imageId)" :alt="rec.caption || rec.winnerName" loading="lazy" class="pinterest-img" />
             </div>
-            <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun' }">
-              <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : '和了' }}</span>
+            <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun', 'is-nanikiru-banner': rec.category === 'nanikiru' }">
+              <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : rec.category === 'nanikiru' ? '何切る' : '和了' }}</span>
               <span class="hl-yakuman-main-txt">
-                {{ rec.category === 'yakuman' ? rec.yakumanTypes.join(' · ') : (rec.winnerName || '그 외 화료') }}
+                {{ rec.category === 'yakuman' ? rec.yakumanTypes.join(' · ') : rec.category === 'nanikiru' ? '무엇을 버릴까' : (rec.winnerName || '그 외 화료') }}
               </span>
             </div>
             <div class="hl-card-body">
               <div class="hl-meta-top">
                 <span class="hl-type-tag" :class="rec.category">
-                  {{ rec.category === 'yakuman' ? '역만' : rec.category === 'fun' ? '그 외 화료' : '회차 사진' }}
+                  {{ formatHighlightCategoryLabel(rec.category, true) }}
                 </span>
                 <span class="hl-session-tag">{{ rec.sessionName }}</span>
-                <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ rec.roundName }}</span>
-                <span v-else-if="rec.roundName" class="hl-round-tag">{{ rec.roundName }}</span>
+                <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ formatCardRoundKorean(rec.roundName) }}</span>
+                <span v-else-if="rec.roundName" class="hl-round-tag">{{ formatCardRoundKorean(rec.roundName) }}</span>
+                <span v-if="getRecordCommentCount(rec) > 0" class="hl-comment-cnt-badge" title="댓글 수">
+                  💬 {{ getRecordCommentCount(rec) }}
+                </span>
               </div>
               <div v-if="rec.yakumanTypes && rec.yakumanTypes.length > 0" class="hl-yakuman-badges">
                 <span v-for="yt in rec.yakumanTypes" :key="yt" class="hl-y-badge">{{ yt }}</span>
@@ -5494,8 +6215,21 @@ const formatHighlightDate = (ts: number) => {
                   ({{ rec.winType === 'tsumo' ? '쯔모 화료' : `론 화료${rec.loserName ? ' ← ' + rec.loserName : ''}` }})
                 </span>
               </div>
-              <div v-if="rec.caption" class="hl-caption">{{ rec.caption }}</div>
-              <div class="hl-footer-date">{{ formatHighlightDate(rec.createdAt) }}</div>
+              <div v-if="rec.caption" class="hl-caption">
+                <template v-for="(seg, sIdx) in parseRichMahjongText(rec.caption)" :key="`g-cap-${rec.id}-${sIdx}`">
+                  <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                  <img
+                    v-else-if="seg.type === 'tile'"
+                    :src="getMahjongTileImageUrl(seg.tile.fileName)"
+                    :alt="seg.tile.label"
+                    :title="seg.tile.label"
+                    class="inline-mahjong-tile"
+                  />
+                  <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                    {{ seg.action.label }}
+                  </span>
+                </template>
+              </div>
             </div>
           </div>
         </div>
@@ -5574,57 +6308,82 @@ const formatHighlightDate = (ts: number) => {
               </div>
               <div v-else class="session_modal_body">
                 <template v-if="currentSessionPlayerStats.totalRounds > 0">
-                  <!-- 4개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 -->
-                  <div class="tab_menu">
-                    <button 
-                      class="tab_btn" 
-                      :class="{ active: sessionModalActiveTab === 'basic' }" 
-                      @click="sessionModalActiveTab = 'basic'"
+                  <!-- 7개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 / 레이팅 추이 / 역만 / 자주 만나는 상대 -->
+                  <div class="tab-menu-wrap" :class="{ 'has-scroll-indicator': modalTabScrollIndicator.visible }">
+                    <div
+                      :ref="setModalTabMenuRef"
+                      class="tab_menu"
+                      :class="{ 'is-dragging': isDraggingModalTab }"
+                      @mousedown="onModalTabMouseDown"
+                      @click.capture="onModalTabClickCapture"
+                      @auxclick.prevent
+                      @wheel="onModalTabWheel"
+                      @scroll.passive="updateModalTabScrollIndicator"
                     >
-                      기본
-                    </button>
-                    <button 
-                      class="tab_btn" 
-                      :class="{ active: sessionModalActiveTab === 'riichi' }" 
-                      @click="sessionModalActiveTab = 'riichi'"
+                      <button 
+                        class="tab_btn" 
+                        :class="{ active: sessionModalActiveTab === 'basic' }" 
+                        @click="sessionModalActiveTab = 'basic'"
+                      >
+                        기본
+                      </button>
+                      <button 
+                        class="tab_btn" 
+                        :class="{ active: sessionModalActiveTab === 'riichi' }" 
+                        @click="sessionModalActiveTab = 'riichi'"
+                      >
+                        리치 스탯
+                      </button>
+                      <button 
+                        class="tab_btn" 
+                        :class="{ active: sessionModalActiveTab === 'other' }" 
+                        @click="sessionModalActiveTab = 'other'"
+                      >
+                        그 외
+                      </button>
+                      <button 
+                        class="tab_btn" 
+                        :class="{ active: sessionModalActiveTab === 'rank' }" 
+                        @click="sessionModalActiveTab = 'rank'"
+                      >
+                        순위 비율
+                      </button>
+                      <button 
+                        class="tab_btn" 
+                        :class="{ active: sessionModalActiveTab === 'rating' }" 
+                        @click="sessionModalActiveTab = 'rating'"
+                      >
+                        레이팅 추이
+                      </button>
+                      <button 
+                        class="tab_btn" 
+                        :class="{ active: sessionModalActiveTab === 'yakuman' }" 
+                        @click="sessionModalActiveTab = 'yakuman'"
+                      >
+                        역만
+                      </button>
+                      <button 
+                        class="tab_btn" 
+                        :class="{ active: sessionModalActiveTab === 'opponents' }" 
+                        @click="sessionModalActiveTab = 'opponents'"
+                      >
+                        자주 만나는 상대
+                      </button>
+                    </div>
+                    <div
+                      v-show="modalTabScrollIndicator.visible"
+                      class="tabs-nav-scroll-track"
+                      @click="onModalTabTrackClick"
+                      title="좌우 스크롤 위치 표시"
                     >
-                      리치 스탯
-                    </button>
-                    <button 
-                      class="tab_btn" 
-                      :class="{ active: sessionModalActiveTab === 'other' }" 
-                      @click="sessionModalActiveTab = 'other'"
-                    >
-                      그 외
-                    </button>
-                    <button 
-                      class="tab_btn" 
-                      :class="{ active: sessionModalActiveTab === 'rank' }" 
-                      @click="sessionModalActiveTab = 'rank'"
-                    >
-                      순위 비율
-                    </button>
-                    <button 
-                      class="tab_btn" 
-                      :class="{ active: sessionModalActiveTab === 'rating' }" 
-                      @click="sessionModalActiveTab = 'rating'"
-                    >
-                      레이팅 추이
-                    </button>
-                    <button 
-                      class="tab_btn" 
-                      :class="{ active: sessionModalActiveTab === 'yakuman' }" 
-                      @click="sessionModalActiveTab = 'yakuman'"
-                    >
-                      역만
-                    </button>
-                    <button 
-                      class="tab_btn" 
-                      :class="{ active: sessionModalActiveTab === 'opponents' }" 
-                      @click="sessionModalActiveTab = 'opponents'"
-                    >
-                      자주 만나는 상대
-                    </button>
+                      <div
+                        class="tabs-nav-scroll-thumb"
+                        :style="{
+                          width: modalTabScrollIndicator.widthPct + '%',
+                          left: modalTabScrollIndicator.leftPct + '%'
+                        }"
+                      ></div>
+                    </div>
                   </div>
 
                   <!-- 스탯 데이터 테이블 -->
@@ -6275,28 +7034,53 @@ const formatHighlightDate = (ts: number) => {
 
                 <!-- 레거시 회차 (국별 세부 데이터 없음) -->
                 <div v-else class="session_legacy_view">
-                  <div class="tab_menu" style="margin-bottom: 12px;">
-                    <button
-                      class="tab_btn"
-                      :class="{ active: sessionModalActiveTab !== 'rating' && sessionModalActiveTab !== 'opponents' }"
-                      @click="sessionModalActiveTab = 'basic'"
+                  <div class="tab-menu-wrap" :class="{ 'has-scroll-indicator': modalTabScrollIndicator.visible }" style="margin-bottom: 12px;">
+                    <div
+                      :ref="setModalTabMenuRef"
+                      class="tab_menu"
+                      :class="{ 'is-dragging': isDraggingModalTab }"
+                      @mousedown="onModalTabMouseDown"
+                      @click.capture="onModalTabClickCapture"
+                      @auxclick.prevent
+                      @wheel="onModalTabWheel"
+                      @scroll.passive="updateModalTabScrollIndicator"
                     >
-                      기본 및 순위
-                    </button>
-                    <button
-                      class="tab_btn"
-                      :class="{ active: sessionModalActiveTab === 'rating' }"
-                      @click="sessionModalActiveTab = 'rating'"
+                      <button
+                        class="tab_btn"
+                        :class="{ active: sessionModalActiveTab !== 'rating' && sessionModalActiveTab !== 'opponents' }"
+                        @click="sessionModalActiveTab = 'basic'"
+                      >
+                        기본 및 순위
+                      </button>
+                      <button
+                        class="tab_btn"
+                        :class="{ active: sessionModalActiveTab === 'rating' }"
+                        @click="sessionModalActiveTab = 'rating'"
+                      >
+                        레이팅 추이
+                      </button>
+                      <button
+                        class="tab_btn"
+                        :class="{ active: sessionModalActiveTab === 'opponents' }"
+                        @click="sessionModalActiveTab = 'opponents'"
+                      >
+                        자주 만나는 상대
+                      </button>
+                    </div>
+                    <div
+                      v-show="modalTabScrollIndicator.visible"
+                      class="tabs-nav-scroll-track"
+                      @click="onModalTabTrackClick"
+                      title="좌우 스크롤 위치 표시"
                     >
-                      레이팅 추이
-                    </button>
-                    <button
-                      class="tab_btn"
-                      :class="{ active: sessionModalActiveTab === 'opponents' }"
-                      @click="sessionModalActiveTab = 'opponents'"
-                    >
-                      자주 만나는 상대
-                    </button>
+                      <div
+                        class="tabs-nav-scroll-thumb"
+                        :style="{
+                          width: modalTabScrollIndicator.widthPct + '%',
+                          left: modalTabScrollIndicator.leftPct + '%'
+                        }"
+                      ></div>
+                    </div>
                   </div>
                   <template v-if="sessionModalActiveTab === 'rating'">
                     <div class="rating_tab_wrapper">
@@ -6422,56 +7206,81 @@ const formatHighlightDate = (ts: number) => {
             <template v-else>
 
             <!-- 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 / 레이팅 추이 / 역만 / 자주 만나는 상대 -->
-            <div class="tab_menu">
-              <button 
-                class="tab_btn" 
-                :class="{ active: modalActiveTab === 'basic' }" 
-                @click="modalActiveTab = 'basic'"
+            <div class="tab-menu-wrap" :class="{ 'has-scroll-indicator': modalTabScrollIndicator.visible }">
+              <div
+                :ref="setModalTabMenuRef"
+                class="tab_menu"
+                :class="{ 'is-dragging': isDraggingModalTab }"
+                @mousedown="onModalTabMouseDown"
+                @click.capture="onModalTabClickCapture"
+                @auxclick.prevent
+                @wheel="onModalTabWheel"
+                @scroll.passive="updateModalTabScrollIndicator"
               >
-                기본
-              </button>
-              <button 
-                class="tab_btn" 
-                :class="{ active: modalActiveTab === 'riichi' }" 
-                @click="modalActiveTab = 'riichi'"
+                <button 
+                  class="tab_btn" 
+                  :class="{ active: modalActiveTab === 'basic' }" 
+                  @click="modalActiveTab = 'basic'"
+                >
+                  기본
+                </button>
+                <button 
+                  class="tab_btn" 
+                  :class="{ active: modalActiveTab === 'riichi' }" 
+                  @click="modalActiveTab = 'riichi'"
+                >
+                  리치 스탯
+                </button>
+                <button 
+                  class="tab_btn" 
+                  :class="{ active: modalActiveTab === 'other' }" 
+                  @click="modalActiveTab = 'other'"
+                >
+                  그 외
+                </button>
+                <button 
+                  class="tab_btn" 
+                  :class="{ active: modalActiveTab === 'rank' }" 
+                  @click="modalActiveTab = 'rank'"
+                >
+                  순위 비율
+                </button>
+                <button 
+                  class="tab_btn" 
+                  :class="{ active: modalActiveTab === 'rating' }" 
+                  @click="modalActiveTab = 'rating'"
+                >
+                  레이팅 추이
+                </button>
+                <button 
+                  class="tab_btn" 
+                  :class="{ active: modalActiveTab === 'yakuman' }" 
+                  @click="modalActiveTab = 'yakuman'"
+                >
+                  역만
+                </button>
+                <button 
+                  class="tab_btn" 
+                  :class="{ active: modalActiveTab === 'opponents' }" 
+                  @click="modalActiveTab = 'opponents'"
+                >
+                  자주 만나는 상대
+                </button>
+              </div>
+              <div
+                v-show="modalTabScrollIndicator.visible"
+                class="tabs-nav-scroll-track"
+                @click="onModalTabTrackClick"
+                title="좌우 스크롤 위치 표시"
               >
-                리치 스탯
-              </button>
-              <button 
-                class="tab_btn" 
-                :class="{ active: modalActiveTab === 'other' }" 
-                @click="modalActiveTab = 'other'"
-              >
-                그 외
-              </button>
-              <button 
-                class="tab_btn" 
-                :class="{ active: modalActiveTab === 'rank' }" 
-                @click="modalActiveTab = 'rank'"
-              >
-                순위 비율
-              </button>
-              <button 
-                class="tab_btn" 
-                :class="{ active: modalActiveTab === 'rating' }" 
-                @click="modalActiveTab = 'rating'"
-              >
-                레이팅 추이
-              </button>
-              <button 
-                class="tab_btn" 
-                :class="{ active: modalActiveTab === 'yakuman' }" 
-                @click="modalActiveTab = 'yakuman'"
-              >
-                역만
-              </button>
-              <button 
-                class="tab_btn" 
-                :class="{ active: modalActiveTab === 'opponents' }" 
-                @click="modalActiveTab = 'opponents'"
-              >
-                자주 만나는 상대
-              </button>
+                <div
+                  class="tabs-nav-scroll-thumb"
+                  :style="{
+                    width: modalTabScrollIndicator.widthPct + '%',
+                    left: modalTabScrollIndicator.leftPct + '%'
+                  }"
+                ></div>
+              </div>
             </div>
 
             <!-- 스탯 데이터 테이블 -->
@@ -7152,7 +7961,7 @@ const formatHighlightDate = (ts: number) => {
           <!-- 모달 헤더 -->
           <div class="gdm-header">
             <div class="gdm-title-box">
-              <span class="gdm-session-badge">{{ currentSessionDetail?.sessionName || selectedSession }}</span>
+              <span class="gdm-session-badge">{{ gameModalSessionName || currentSessionDetail?.sessionName || selectedSession }}</span>
               <h3 class="gdm-title">{{ selectedGameDetail.gameIndex }}경기 결과</h3>
               <span class="gdm-time" v-if="selectedGameDetail.time">({{ selectedGameDetail.time }})</span>
             </div>
@@ -7223,7 +8032,7 @@ const formatHighlightDate = (ts: number) => {
                 >
                   <span class="gdm-player-name-txt">{{ p.name }}</span>
                   <span
-                    v-if="isPlayerYakumanInGame(selectedGameDetail, p.name, currentSessionDetail?.sessionName || selectedSession)"
+                    v-if="isPlayerYakumanInGame(selectedGameDetail, p.name, gameModalSessionName || currentSessionDetail?.sessionName || selectedSession)"
                     class="gdm-inline-yakuman-badge"
                   >역만</span>
                 </div>
@@ -7313,7 +8122,7 @@ const formatHighlightDate = (ts: number) => {
                   :key="`gdm-r-opt-${rm.roundIndex}-${idx}`"
                   :value="rm.roundName"
                 >
-                  {{ rm.roundName }}{{ formatRoundOptionSummary(rm) }}{{ isRoundYakuman(rm, selectedGameDetail, currentSessionDetail?.sessionName || selectedSession) ? ' [역만]' : '' }}
+                  {{ rm.roundName }}{{ formatRoundOptionSummary(rm) }}{{ isRoundYakuman(rm, selectedGameDetail, gameModalSessionName || currentSessionDetail?.sessionName || selectedSession) ? ' [역만]' : '' }}
                 </option>
               </select>
             </div>
@@ -7327,7 +8136,7 @@ const formatHighlightDate = (ts: number) => {
                   <div class="urm-title-group">
                     <span class="urm-title">{{ rm.roundName }} 점수 이동 내역</span>
                     <span
-                      v-if="isRoundYakuman(rm, selectedGameDetail, currentSessionDetail?.sessionName || selectedSession)"
+                      v-if="isRoundYakuman(rm, selectedGameDetail, gameModalSessionName || currentSessionDetail?.sessionName || selectedSession)"
                       class="urm-yakuman-badge"
                     >역만</span>
                   </div>
@@ -7346,7 +8155,7 @@ const formatHighlightDate = (ts: number) => {
                       <span class="urm-seat" :class="{ 'is-east': pm.seat === '東' }">{{ pm.seat }}</span>
                       <span class="urm-name">{{ pm.name }}</span>
                       <span
-                        v-if="isRoundPlayerYakuman(rm, pm, selectedGameDetail, currentSessionDetail?.sessionName || selectedSession)"
+                        v-if="isRoundPlayerYakuman(rm, pm, selectedGameDetail, gameModalSessionName || currentSessionDetail?.sessionName || selectedSession)"
                         class="urm-tag yakuman"
                       >역만</span>
                       <span v-if="pm.isRiichi" class="urm-tag riichi">리치</span>
@@ -7401,11 +8210,12 @@ const formatHighlightDate = (ts: number) => {
                       <span v-for="yk in item.yakumanTypes" :key="yk" class="badge-yakuman-sm">{{ yk }}</span>
                     </template>
                     <span v-else-if="item.category === 'fun'" class="badge-fun-sm">그 외 화료</span>
+                    <span v-else-if="item.category === 'nanikiru'" class="badge-nanikiru-sm">나니키루</span>
                     <span v-else class="badge-session-sm">회차 사진</span>
                   </div>
                   <div v-if="item.winnerName" class="gdm-highlight-players">
-                    화료: <strong>{{ item.winnerName }}</strong>
-                    <span v-if="item.winType"> ({{ item.winType === 'tsumo' ? '쯔모' : `론${item.loserName ? ' ← ' + item.loserName : ''}` }})</span>
+                    {{ item.category === 'session' || item.category === 'nanikiru' ? '인원:' : '화료:' }} <strong>{{ item.winnerName }}</strong>
+                    <span v-if="item.winType && item.category !== 'nanikiru' && item.category !== 'session'"> ({{ item.winType === 'tsumo' ? '쯔모' : `론${item.loserName ? ' ← ' + item.loserName : ''}` }})</span>
                   </div>
                   <div v-if="item.caption" class="gdm-highlight-note">{{ item.caption }}</div>
                 </div>
@@ -7417,7 +8227,7 @@ const formatHighlightDate = (ts: number) => {
     </Transition>
 
     <!-- ============================================== -->
-    <!-- 역만 / 화료 / 회차별 사진 등록 대형 모달 -->
+    <!-- 역만 / 화료 / 나니키루 / 회차별 사진 등록 대형 모달 -->
     <!-- ============================================== -->
     <Transition name="modal-fade">
       <div 
@@ -7428,8 +8238,8 @@ const formatHighlightDate = (ts: number) => {
         <div class="highlight-upload-modal-card large-upload-modal">
           <div class="highlight-modal-header">
             <div>
-              <h3>역만 / 화료 / 회차별 사진 등록</h3>
-              <p class="upload-modal-subdesc">역만, 그 외 화료, 회차별 현장 사진을 등록합니다.</p>
+              <h3>역만 / 화료 / 나니키루 / 회차별 사진 등록</h3>
+              <p class="upload-modal-subdesc">역만, 그 외 화료, 나니키루(무엇을 버릴까), 회차별 현장 사진을 등록합니다.</p>
             </div>
             <button class="btn-close" @click="closeHighlightUploadModal" title="닫기">✕</button>
           </div>
@@ -7452,6 +8262,10 @@ const formatHighlightDate = (ts: number) => {
               <div class="gh-stat-pill fun">
                 <span class="gh-stat-label">그 외 화료</span>
                 <span class="gh-stat-val">{{ highlightsList.filter(h => h.category === 'fun').length }}건</span>
+              </div>
+              <div class="gh-stat-pill nanikiru">
+                <span class="gh-stat-label">나니키루</span>
+                <span class="gh-stat-val">{{ highlightsList.filter(h => h.category === 'nanikiru').length }}건</span>
               </div>
               <div class="gh-stat-pill session">
                 <span class="gh-stat-label">회차 현장 사진</span>
@@ -7510,6 +8324,14 @@ const formatHighlightDate = (ts: number) => {
                   @click="uploadForm.category = 'fun'"
                 >
                   그 외 화료
+                </button>
+                <button 
+                  type="button"
+                  class="cat-radio-btn nanikiru" 
+                  :class="{ active: uploadForm.category === 'nanikiru' }"
+                  @click="uploadForm.category = 'nanikiru'"
+                >
+                  나니키루 (무엇을 버릴까)
                 </button>
                 <button 
                   type="button"
@@ -7739,7 +8561,7 @@ const formatHighlightDate = (ts: number) => {
             </div>
 
             <!-- 해당 회차 참여 인원 중에서 선택 (인원 미선택 업로드도 가능) -->
-            <div v-if="uploadForm.category !== 'session'" class="form-row-2">
+            <div v-if="uploadForm.category === 'yakuman' || uploadForm.category === 'fun'" class="form-row-2">
               <div class="form-group">
                 <label class="form-label">화료자 / 인원 (선택)</label>
                 <select v-model="uploadForm.winnerName" class="form-select">
@@ -7758,7 +8580,7 @@ const formatHighlightDate = (ts: number) => {
               </div>
             </div>
             <div v-else class="form-group">
-              <label class="form-label">인원 선택 (선택)</label>
+              <label class="form-label">{{ uploadForm.category === 'nanikiru' ? '질문자 / 대국자 (선택)' : '인원 선택 (선택)' }}</label>
               <select v-model="uploadForm.winnerName" class="form-select">
                 <option value="">선택 안 함</option>
                 <option v-for="pName in uploadCandidatePlayers" :key="`up-ws-${pName}`" :value="pName">
@@ -7767,7 +8589,7 @@ const formatHighlightDate = (ts: number) => {
               </select>
             </div>
 
-            <div v-if="uploadForm.category !== 'session' && uploadForm.winType === 'ron'" class="form-group">
+            <div v-if="(uploadForm.category === 'yakuman' || uploadForm.category === 'fun') && uploadForm.winType === 'ron'" class="form-group">
               <label class="form-label">방총자 (선택)</label>
               <select v-model="uploadForm.loserName" class="form-select">
                 <option value="">선택 안 함</option>
@@ -7797,7 +8619,7 @@ const formatHighlightDate = (ts: number) => {
             <!-- 사진 업로드 -->
             <div class="form-group">
               <label class="form-label">
-                사진 첨부 {{ uploadForm.category === 'session' ? '*' : '(선택)' }}
+                사진 첨부 {{ uploadForm.category === 'session' || uploadForm.category === 'nanikiru' ? '*' : '(선택)' }}
               </label>
               <input 
                 ref="highlightFileInputRef"
@@ -7825,7 +8647,7 @@ const formatHighlightDate = (ts: number) => {
                 v-model="uploadForm.caption" 
                 rows="3"
                 class="form-textarea" 
-                placeholder="역만 달성 상황, 대기패/도라 설명, 대국 비하인드 메모를 자유롭게 남겨보세요"
+                :placeholder="uploadForm.category === 'nanikiru' ? '현재 순목, 도라, 점수 상황, 고민되는 타패 후보 등을 적어보세요 (예: [3만] [7통] [리치] 중 무엇을 버릴까요?)' : '역만 달성 상황, 대기패/도라 설명, 대국 비하인드 메모를 자유롭게 남겨보세요'"
                 maxlength="500"
               ></textarea>
             </div>
@@ -7867,7 +8689,7 @@ const formatHighlightDate = (ts: number) => {
     </Transition>
 
     <!-- ============================================== -->
-    <!-- 사진 원본 라이트박스, 메모 수정 및 삭제 모달 -->
+    <!-- 사진 원본 라이트박스, 메모 수정, 댓글 및 삭제 모달 -->
     <!-- ============================================== -->
     <Transition name="modal-fade">
       <div 
@@ -7878,15 +8700,30 @@ const formatHighlightDate = (ts: number) => {
         <div class="lightbox-modal-card">
           <div class="lightbox-header">
             <div class="lightbox-title-meta">
-              <span class="badge-session">{{ lightboxHighlight.sessionName }}</span>
-              <span v-if="lightboxHighlight.gameIndex" class="badge-game">{{ lightboxHighlight.gameIndex }}경기</span>
-              <span v-if="lightboxHighlight.roundName" class="badge-round">{{ lightboxHighlight.roundName }}</span>
+              <span
+                class="badge-session clickable-lb-badge"
+                title="클릭하여 해당 회차 정보 보기"
+                @click="openSessionPopupFromLightbox(lightboxHighlight)"
+              >{{ lightboxHighlight.sessionName }}</span>
+              <span
+                v-if="lightboxHighlight.gameIndex"
+                class="badge-game clickable-lb-badge"
+                title="클릭하여 해당 경기 결과 보기"
+                @click="openGamePopupFromLightbox(lightboxHighlight, 'sheet')"
+              >{{ lightboxHighlight.gameIndex }}경기</span>
+              <span
+                v-if="lightboxHighlight.roundName"
+                class="badge-round clickable-lb-badge"
+                title="클릭하여 해당 국 점수 이동 내역 보기"
+                @click="openGamePopupFromLightbox(lightboxHighlight, 'rounds')"
+              >{{ lightboxHighlight.roundName }}</span>
               <template v-if="lightboxHighlight.category === 'yakuman'">
                 <span v-for="yk in lightboxHighlight.yakumanTypes" :key="yk" class="badge-yakuman">
                   {{ yk }}
                 </span>
               </template>
               <span v-else-if="lightboxHighlight.category === 'fun'" class="badge-fun">그 외 화료</span>
+              <span v-else-if="lightboxHighlight.category === 'nanikiru'" class="badge-nanikiru">나니키루</span>
               <span v-else class="badge-session-photo">회차 사진</span>
             </div>
             <button class="btn-close" @click="lightboxHighlight = null" title="닫기">✕</button>
@@ -7899,8 +8736,8 @@ const formatHighlightDate = (ts: number) => {
           <div class="lightbox-info-footer">
             <div class="lightbox-details">
               <div v-if="lightboxHighlight.winnerName" class="lightbox-players">
-                {{ lightboxHighlight.category === 'session' ? '인원:' : '화료:' }} <strong>{{ lightboxHighlight.winnerName }}</strong>
-                <span v-if="lightboxHighlight.winType">
+                {{ lightboxHighlight.category === 'session' ? '인원:' : lightboxHighlight.category === 'nanikiru' ? '질문자:' : '화료:' }} <strong>{{ lightboxHighlight.winnerName }}</strong>
+                <span v-if="lightboxHighlight.winType && lightboxHighlight.category !== 'session' && lightboxHighlight.category !== 'nanikiru'">
                   ({{ lightboxHighlight.winType === 'tsumo' ? '쯔모' : `론${lightboxHighlight.loserName ? ' ← ' + lightboxHighlight.loserName : ''}` }})
                 </span>
               </div>
@@ -7914,7 +8751,17 @@ const formatHighlightDate = (ts: number) => {
                       {{ lightboxHighlight.caption ? '메모 수정' : '+ 메모 추가' }}
                     </button>
                   </div>
-                  <div v-if="lightboxHighlight.caption" class="lightbox-note">{{ lightboxHighlight.caption }}</div>
+                  <div v-if="lightboxHighlight.caption" class="lightbox-note rich-mahjong-content">
+                    <template v-for="(seg, sIdx) in parseRichMahjongText(lightboxHighlight.caption)" :key="`lb-memo-seg-${sIdx}`">
+                      <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                      <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                        <img :src="getMahjongTileImageUrl(seg.tile.code)" :alt="seg.tile.label" loading="lazy" />
+                      </span>
+                      <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="`act-${seg.action.key}`">
+                        {{ seg.action.label }}
+                      </span>
+                    </template>
+                  </div>
                   <div v-else class="lightbox-note-empty">등록된 메모가 없습니다. [+ 메모 추가] 버튼으로 상황 설명을 남길 수 있습니다.</div>
                 </template>
 
@@ -7924,7 +8771,7 @@ const formatHighlightDate = (ts: number) => {
                     rows="3"
                     maxlength="500"
                     class="form-textarea"
-                    placeholder="역만/사진에 대한 메모를 입력하세요 (최대 500자)"
+                    placeholder="역만/나니키루/사진에 대한 메모를 입력하세요 (최대 500자)"
                   ></textarea>
                   <div class="lightbox-memo-editor-actions">
                     <input
@@ -7954,8 +8801,340 @@ const formatHighlightDate = (ts: number) => {
                 </div>
               </div>
 
-              <div class="lightbox-date">
-                등록일: {{ formatHighlightDate(lightboxHighlight.createdAt) }}
+              <!-- ============================================== -->
+              <!-- 사진 댓글 영역 (일정 로그인 연동 + 디시 유동 + 마작패/액션 디시콘) -->
+              <!-- ============================================== -->
+              <div class="lightbox-comments-section">
+                <div class="lb-comments-header">
+                  <div class="lb-comments-title-wrap">
+                    <span class="lb-comments-title">댓글</span>
+                    <span class="lb-comments-count">{{ lightboxComments.length }}</span>
+                  </div>
+                  <span class="lb-comments-hint">마작패 · 리치/론/쯔모/치/퐁/깡 아이콘 첨부 가능</span>
+                </div>
+
+                <!-- 댓글 목록 -->
+                <div v-if="lightboxComments.length > 0" class="lb-comments-list">
+                  <div
+                    v-for="cmt in lightboxComments"
+                    :key="cmt.id"
+                    class="lb-comment-item"
+                  >
+                    <div class="lb-comment-top">
+                      <div class="lb-comment-author-box">
+                        <strong class="lb-comment-author">{{ cmt.authorName }}</strong>
+                        <span v-if="cmt.isLoggedInUser" class="lb-comment-user-badge" title="일정 로그인 사용자">고정</span>
+                        <span v-else class="lb-comment-guest-badge" title="유동 닉네임">유동</span>
+                        <span class="lb-comment-time">
+                          {{ formatCommentTime(cmt.createdAt) }}
+                          <template v-if="cmt.updatedAt"> (수정됨)</template>
+                        </span>
+                      </div>
+                      <div class="lb-comment-actions">
+                        <button
+                          type="button"
+                          class="btn-cmt-act"
+                          @click="startEditComment(cmt)"
+                        >수정</button>
+                        <button
+                          type="button"
+                          class="btn-cmt-act del"
+                          @click="startDeleteComment(cmt)"
+                        >삭제</button>
+                      </div>
+                    </div>
+
+                    <!-- 일반 댓글 본문 -->
+                    <div v-if="editingCommentId !== cmt.id" class="lb-comment-body rich-mahjong-content">
+                      <template v-for="(seg, sIdx) in parseRichMahjongText(cmt.content)" :key="`cmt-${cmt.id}-seg-${sIdx}`">
+                        <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                          <img :src="getMahjongTileImageUrl(seg.tile.code)" :alt="seg.tile.label" loading="lazy" />
+                        </span>
+                        <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="`act-${seg.action.key}`">
+                          {{ seg.action.label }}
+                        </span>
+                      </template>
+                    </div>
+
+                    <!-- 댓글 수정 인라인 폼 -->
+                    <div v-else class="lb-comment-edit-box">
+                      <textarea
+                        v-model="editingCommentContent"
+                        rows="2"
+                        maxlength="400"
+                        class="form-textarea lb-cmt-edit-textarea"
+                        placeholder="댓글 내용을 수정하세요"
+                      ></textarea>
+                      <div class="lb-cmt-edit-toolbar">
+                        <button
+                          type="button"
+                          class="btn-toggle-emote-picker sm"
+                          :class="{ active: isEditingCommentPickerOpen }"
+                          @click="isEditingCommentPickerOpen = !isEditingCommentPickerOpen"
+                        >
+                          🀄 마작패/액션 아이콘 {{ isEditingCommentPickerOpen ? '닫기' : '열기' }}
+                        </button>
+                        <div class="lb-cmt-edit-right">
+                          <input
+                            v-if="!canAutoAuthComment(cmt)"
+                            v-model="editingCommentPin"
+                            type="password"
+                            class="lb-cmt-pin-input"
+                            placeholder="비밀번호(PIN)"
+                            autocomplete="off"
+                          />
+                          <button type="button" class="btn-cancel-modal sm" @click="cancelEditComment">취소</button>
+                          <button
+                            type="button"
+                            class="btn-submit-modal sm"
+                            :disabled="isProcessingCommentAction"
+                            @click="confirmUpdateComment(cmt)"
+                          >저장</button>
+                        </div>
+                      </div>
+
+                      <!-- 댓글 수정용 미니 아이콘 팔레트 -->
+                      <div v-if="isEditingCommentPickerOpen" class="mahjong-emote-picker compact">
+                        <div class="mep-tabs">
+                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
+                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'man' }" @click="activeEmoteTab = 'man'">만수패 (1~9만)</button>
+                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'pin' }" @click="activeEmoteTab = 'pin'">통수패 (1~9통)</button>
+                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'sou' }" @click="activeEmoteTab = 'sou'">삭수패 (1~9삭)</button>
+                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'honor' }" @click="activeEmoteTab = 'honor'">자패 (동남서북백발중)</button>
+                        </div>
+                        <div v-if="activeEmoteTab === 'action'" class="mep-actions-grid">
+                          <button
+                            v-for="act in MAHJONG_ACTION_EMOTES"
+                            :key="`ed-act-${act.key}`"
+                            type="button"
+                            class="mep-action-btn"
+                            :class="`act-${act.key}`"
+                            @click="insertEmoteTokenToComment(act.label, 'edit')"
+                          >
+                            {{ act.label }}
+                          </button>
+                        </div>
+                        <div v-else class="mep-tiles-grid">
+                          <button
+                            v-for="tl in filteredTileEmotesByTab"
+                            :key="`ed-tl-${tl.code}`"
+                            type="button"
+                            class="mep-tile-btn"
+                            :title="tl.label"
+                            @click="insertEmoteTokenToComment(tl.label, 'edit')"
+                          >
+                            <img :src="getMahjongTileImageUrl(tl.code)" :alt="tl.label" />
+                            <span class="mep-tile-sub">{{ tl.label }}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div v-if="commentActionError && editingCommentId === cmt.id" class="upload-error-msg">{{ commentActionError }}</div>
+                    </div>
+
+                    <!-- 댓글 삭제 비밀번호 확인 인라인 폼 (유동 댓글 등) -->
+                    <div v-if="deletingCommentId === cmt.id" class="lb-comment-delete-box">
+                      <span class="lb-del-prompt">삭제 비밀번호(PIN):</span>
+                      <input
+                        v-model="deletingCommentPin"
+                        type="password"
+                        class="lb-cmt-pin-input"
+                        placeholder="작성 시 PIN 입력"
+                        autocomplete="off"
+                        @keyup.enter="confirmDeleteComment(cmt)"
+                      />
+                      <button
+                        type="button"
+                        class="btn-delete-highlight sm"
+                        :disabled="isProcessingCommentAction"
+                        @click="confirmDeleteComment(cmt)"
+                      >삭제 확인</button>
+                      <button
+                        type="button"
+                        class="btn-cancel-modal sm"
+                        @click="deletingCommentId = null; commentActionError = ''"
+                      >취소</button>
+                      <div v-if="commentActionError && deletingCommentId === cmt.id" class="upload-error-msg">{{ commentActionError }}</div>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="lb-comments-empty">
+                  첫 댓글을 남겨보세요! 마작패 아이콘과 [리치] [쯔모] [론] 버튼을 넣을 수 있습니다.
+                </div>
+
+                <!-- 새 댓글 작성 폼 -->
+                <div class="lb-comment-form-card">
+                  <!-- 작성자 정보 헤더 (일정 로그인 상태 vs 디시 유동 닉네임+PIN 직접 입력) -->
+                  <div class="lb-cf-author-row">
+                    <template v-if="isUsingScheduleIdentity">
+                      <div class="lb-cf-logged-in">
+                        <span class="lb-cf-logged-badge">일정 로그인 연동</span>
+                        <strong class="lb-cf-logged-name">{{ scheduleLoggedInName }}</strong>
+                        <span class="lb-cf-logged-sub">님으로 댓글 작성 (본인 댓글 즉시 수정·삭제 가능)</span>
+                      </div>
+                      <button type="button" class="btn-switch-guest-mode" @click="toggleGuestCommentMode">
+                        유동(직접 입력) 전환
+                      </button>
+                    </template>
+                    <template v-else>
+                      <div class="lb-cf-guest-inputs">
+                        <input
+                          v-model="commentNicknameInput"
+                          type="text"
+                          maxlength="24"
+                          class="lb-cf-input nick"
+                          placeholder="닉네임 (예: ㅇㅇ)"
+                        />
+                        <input
+                          v-model="commentPinInput"
+                          type="password"
+                          maxlength="20"
+                          class="lb-cf-input pin"
+                          placeholder="비밀번호 (수정·삭제용 PIN)"
+                          autocomplete="off"
+                        />
+                      </div>
+                      <button
+                        v-if="scheduleLoggedInName"
+                        type="button"
+                        class="btn-switch-guest-mode"
+                        @click="toggleGuestCommentMode"
+                      >
+                        '{{ scheduleLoggedInName }}' 로그인 정보 사용
+                      </button>
+                    </template>
+                  </div>
+
+                  <!-- 댓글 입력창 -->
+                  <div class="lb-cf-input-wrap">
+                    <textarea
+                      ref="commentTextareaRef"
+                      v-model="commentContentInput"
+                      rows="2"
+                      maxlength="400"
+                      class="form-textarea lb-cf-textarea"
+                      placeholder="댓글을 입력하세요... 아래 [마작패 · 액션 아이콘] 버튼으로 패와 선언 버튼을 넣을 수 있습니다."
+                      @keydown.ctrl.enter.prevent="submitNewHighlightComment"
+                    ></textarea>
+                  </div>
+
+                  <!-- 입력창에 포함된 마작패/액션 실시간 미리보기 -->
+                  <div
+                    v-if="commentContentInput.includes('[') && commentContentInput.includes(']')"
+                    class="lb-cf-live-preview"
+                  >
+                    <span class="lb-cf-preview-label">미리보기</span>
+                    <div class="lb-cf-preview-body rich-mahjong-content">
+                      <template v-for="(seg, sIdx) in parseRichMahjongText(commentContentInput)" :key="`prev-seg-${sIdx}`">
+                        <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                          <img :src="getMahjongTileImageUrl(seg.tile.code)" :alt="seg.tile.label" />
+                        </span>
+                        <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="`act-${seg.action.key}`">
+                          {{ seg.action.label }}
+                        </span>
+                      </template>
+                    </div>
+                  </div>
+
+                  <!-- 하단 툴바: 마작패/액션 디시콘 팔레트 토글 + 등록 버튼 -->
+                  <div class="lb-cf-bottom-bar">
+                    <button
+                      type="button"
+                      class="btn-toggle-emote-picker"
+                      :class="{ active: isCommentEmotePickerOpen }"
+                      @click="isCommentEmotePickerOpen = !isCommentEmotePickerOpen"
+                    >
+                      🀄 마작패 · 액션 아이콘 {{ isCommentEmotePickerOpen ? '닫기 ▲' : '열기 ▼' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-submit-comment"
+                      :disabled="isSubmittingComment"
+                      @click="submitNewHighlightComment"
+                    >
+                      {{ isSubmittingComment ? '등록 중...' : '댓글 등록' }}
+                    </button>
+                  </div>
+
+                  <!-- 마작패(34종) & 액션 버튼(8종) 디시콘 선택 팔레트 -->
+                  <div v-if="isCommentEmotePickerOpen" class="mahjong-emote-picker">
+                    <div class="mep-tabs">
+                      <button
+                        type="button"
+                        class="mep-tab"
+                        :class="{ active: activeEmoteTab === 'action' }"
+                        @click="activeEmoteTab = 'action'"
+                      >
+                        액션 버튼 (8)
+                      </button>
+                      <button
+                        type="button"
+                        class="mep-tab"
+                        :class="{ active: activeEmoteTab === 'man' }"
+                        @click="activeEmoteTab = 'man'"
+                      >
+                        만수패 (1~9만)
+                      </button>
+                      <button
+                        type="button"
+                        class="mep-tab"
+                        :class="{ active: activeEmoteTab === 'pin' }"
+                        @click="activeEmoteTab = 'pin'"
+                      >
+                        통수패 (1~9통)
+                      </button>
+                      <button
+                        type="button"
+                        class="mep-tab"
+                        :class="{ active: activeEmoteTab === 'sou' }"
+                        @click="activeEmoteTab = 'sou'"
+                      >
+                        삭수패 (1~9삭)
+                      </button>
+                      <button
+                        type="button"
+                        class="mep-tab"
+                        :class="{ active: activeEmoteTab === 'honor' }"
+                        @click="activeEmoteTab = 'honor'"
+                      >
+                        자패 (동남서북백발중)
+                      </button>
+                    </div>
+
+                    <!-- 액션 버튼 8종 (리치/다마/퐁/치/깡/론/쯔모/스킵) -->
+                    <div v-if="activeEmoteTab === 'action'" class="mep-actions-grid">
+                      <button
+                        v-for="act in MAHJONG_ACTION_EMOTES"
+                        :key="`new-act-${act.key}`"
+                        type="button"
+                        class="mep-action-btn"
+                        :class="`act-${act.key}`"
+                        @click="insertEmoteTokenToComment(act.label, 'new')"
+                      >
+                        {{ act.label }}
+                      </button>
+                    </div>
+
+                    <!-- 마작패 이미지 그리드 (1~9만 / 1~9통 / 1~9삭 / 동남서북백발중) -->
+                    <div v-else class="mep-tiles-grid">
+                      <button
+                        v-for="tl in filteredTileEmotesByTab"
+                        :key="`new-tl-${tl.code}`"
+                        type="button"
+                        class="mep-tile-btn"
+                        :title="`${tl.label} 넣기`"
+                        @click="insertEmoteTokenToComment(tl.label, 'new')"
+                      >
+                        <img :src="getMahjongTileImageUrl(tl.code)" :alt="tl.label" />
+                        <span class="mep-tile-sub">{{ tl.label }}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div v-if="commentFormError" class="upload-error-msg">{{ commentFormError }}</div>
+                </div>
               </div>
             </div>
 
@@ -7976,6 +9155,125 @@ const formatHighlightDate = (ts: number) => {
               </button>
             </div>
             <div v-if="deleteHighlightError" class="upload-error-msg">{{ deleteHighlightError }}</div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ============================================== -->
+    <!-- 라이트박스 연동: 회차 요약 정보 팝업 모달        -->
+    <!-- ============================================== -->
+    <Transition name="modal-fade">
+      <div
+        v-if="lightboxSessionPopupDetail"
+        class="modal-overlay session-popup-modal-overlay"
+        v-backdrop-dismiss="() => lightboxSessionPopupDetail = null"
+      >
+        <div class="session-popup-modal-card">
+          <div class="spm-header">
+            <div class="spm-title-box">
+              <span class="badge-session">{{ lightboxSessionPopupDetail.sessionName }}</span>
+              <h3 class="spm-title">회차 요약 정보</h3>
+              <span class="spm-sub">
+                (참가 {{ lightboxSessionPopupDetail.members.length }}명 · 총 {{ lightboxSessionPopupDetail.games.length }}경기)
+              </span>
+            </div>
+            <div class="spm-header-actions">
+              <button
+                type="button"
+                class="btn-goto-session-tab"
+                @click="goToSessionTabFromPopup()"
+              >
+                회차 상세 탭으로 이동 ↗
+              </button>
+              <button
+                type="button"
+                class="gdm-close-btn"
+                @click="lightboxSessionPopupDetail = null"
+                title="닫기"
+              >✕</button>
+            </div>
+          </div>
+
+          <div v-if="isLoadingLightboxSessionPopup" class="gdm-loading-badge">
+            <span class="gdm-spinner"></span> 회차 상세 데이터를 불러오는 중...
+          </div>
+
+          <div class="spm-body">
+            <!-- 1) 회차 참가 인원 순위 요약 표 -->
+            <div class="spm-section" v-if="lightboxSessionPopupMembersWithRanks.length > 0">
+              <h4 class="spm-section-title">회차 종합 순위 ({{ lightboxSessionPopupMembersWithRanks.length }}명)</h4>
+              <div class="spm-table-wrap">
+                <table class="spm-table">
+                  <thead>
+                    <tr>
+                      <th>순위</th>
+                      <th>이름</th>
+                      <th>대국 수</th>
+                      <th>합계 우마</th>
+                      <th>평균 우마</th>
+                      <th>1 / 2 / 3 / 4위</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(m, idx) in lightboxSessionPopupMembersWithRanks" :key="`spm-m-${m.name}`">
+                      <td>
+                        <span class="rank-badge" :class="`rank-${idx + 1}`">{{ idx + 1 }}</span>
+                      </td>
+                      <td class="font-bold">{{ m.name }}</td>
+                      <td>{{ m.totalGames }}전</td>
+                      <td class="font-bold" :class="m.totalUma >= 0 ? 'text_pos' : 'text_neg'">
+                        <span v-if="m.totalUma > 0">+</span>{{ m.totalUma.toFixed(1) }}
+                      </td>
+                      <td :class="m.avgUma >= 0 ? 'text_pos' : 'text_neg'">
+                        <span v-if="m.avgUma > 0">+</span>{{ m.avgUma.toFixed(1) }}
+                      </td>
+                      <td class="spm-ranks-cell">{{ m.r1 }} / {{ m.r2 }} / {{ m.r3 }} / {{ m.r4 }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- 2) 회차 경기 목록 (클릭 시 경기 상세 모달 오픈) -->
+            <div class="spm-section" v-if="lightboxSessionPopupDetail.games.length > 0">
+              <h4 class="spm-section-title">
+                진행 대국 목록 ({{ lightboxSessionPopupDetail.games.length }}경기)
+                <span class="spm-hint-txt">경기를 클릭하면 상세 결과 및 국별 점수 이동을 볼 수 있습니다</span>
+              </h4>
+              <div class="spm-games-grid">
+                <div
+                  v-for="g in lightboxSessionPopupDetail.games"
+                  :key="`spm-g-${g.gameIndex}`"
+                  class="spm-game-card"
+                  @click="openGameFromSessionPopup(g)"
+                >
+                  <div class="spm-game-head">
+                    <strong>{{ g.gameIndex }}경기</strong>
+                    <span v-if="g.time" class="spm-game-time">{{ g.time }}</span>
+                  </div>
+                  <div class="spm-game-players">
+                    <div
+                      v-for="p in g.players"
+                      :key="`spm-gp-${g.gameIndex}-${p.seat}-${p.name}`"
+                      class="spm-game-player-row"
+                      :class="{ 'is-winner': p.rank === 1 }"
+                    >
+                      <span class="spm-gp-left">
+                        <span class="spm-gp-rank">{{ p.rank }}위</span>
+                        <span class="spm-gp-name">{{ p.name }}</span>
+                      </span>
+                      <span class="spm-gp-right">
+                        <span class="spm-gp-score">{{ p.score.toLocaleString() }}</span>
+                        <span class="spm-gp-uma" :class="p.uma >= 0 ? 'text_pos' : 'text_neg'">
+                          ({{ p.uma > 0 ? '+' : '' }}{{ p.uma }})
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -9552,18 +10850,40 @@ html.dark .player_select option {
   color: #ef4444;
 }
 
-/* 탭 메뉴 */
+/* 탭 메뉴 (모바일/좁은 화면 1줄 유지 + 좌우 스크롤 인디케이터 + 버튼 간 은은한 구분선) */
+.tab-menu-wrap {
+  position: relative;
+  width: 100%;
+  margin-bottom: 8px;
+}
+.tab-menu-wrap.has-scroll-indicator .tab_menu {
+  margin-bottom: 3px;
+}
 .tab_menu {
   display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
   border-bottom: 1px solid var(--border-color, #e2e8f0);
-  margin-bottom: 8px;
+  margin-bottom: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  user-select: none;
+}
+.tab_menu::-webkit-scrollbar {
+  display: none;
+}
+.tab_menu.is-dragging {
+  cursor: grabbing;
 }
 html.dark .tab_menu {
   border-bottom-color: var(--border-color, #334155);
 }
 .tab_btn {
-  flex: 1;
-  padding: 8px 0;
+  position: relative;
+  flex: 1 0 auto;
+  padding: 8px 12px;
   background: none;
   border: none;
   font-size: 14px;
@@ -9574,6 +10894,23 @@ html.dark .tab_menu {
   transition: all 0.2s;
   text-align: center;
   font-family: inherit;
+  white-space: nowrap;
+  word-break: keep-all;
+  flex-shrink: 0;
+}
+.tab_btn:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 26%;
+  height: 48%;
+  width: 1px;
+  border-radius: 1px;
+  background-color: rgba(148, 163, 184, 0.3);
+  pointer-events: none;
+}
+html.dark .tab_btn:not(:last-child)::after {
+  background-color: rgba(148, 163, 184, 0.2);
 }
 .tab_btn:hover {
   color: var(--text-color, #0f172a);
@@ -9591,6 +10928,12 @@ html.dark .tab_btn:hover {
 html.dark .tab_btn.active {
   color: var(--color-toggle-on, #38bdf8);
   border-bottom-color: var(--color-toggle-on, #38bdf8);
+}
+@media (max-width: 640px) {
+  .tab_btn {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
 }
 
 /* 스탯 목록 4열 그리드 레이아웃 (ModalStats.vue 일치) */
@@ -13123,17 +14466,43 @@ html.dark .gh-storage-track {
   }
 }
 
-/* 탭 메뉴 다중 탭 대응 */
+/* 탭 메뉴 다중 탭 대응 (한 줄 유지 + 좌우 스크롤 인디케이터 연동) */
+.tab-menu-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
 .tab_menu {
+  display: flex;
+  flex-wrap: nowrap;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  -ms-overflow-style: none;
+  user-select: none;
+  -webkit-user-select: none;
+  margin-bottom: 0;
+  cursor: grab;
 }
 .tab_menu::-webkit-scrollbar {
   display: none;
+  width: 0;
+  height: 0;
+}
+.tab_menu.is-dragging {
+  cursor: grabbing;
+  scroll-behavior: auto;
+}
+.tab_menu.is-dragging .tab_btn {
+  cursor: grabbing;
 }
 .tab_btn {
+  flex: 1 0 auto;
+  flex-shrink: 0;
   white-space: nowrap;
-  padding: 8px 6px;
+  word-break: keep-all;
+  padding: 8px 11px;
   font-size: 13px;
 }
 
@@ -13387,5 +14756,995 @@ html.dark .opp_right {
   padding-left: 2px !important;
   padding-right: 10px !important;
 }
+
+/* 라이트박스 헤더 뱃지 클릭 인터랙션 & 모달 z-index 계층 */
+.modal-overlay {
+  z-index: 2900;
+}
+.modal-overlay.lightbox-overlay {
+  z-index: 2700;
+}
+.modal-overlay.session-popup-modal-overlay {
+  z-index: 2760;
+}
+.game-detail-modal-overlay {
+  z-index: 2800;
+}
+
+.clickable-lb-badge {
+  cursor: pointer;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
+  border: 1px solid rgba(59, 130, 246, 0.28);
+}
+.clickable-lb-badge:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.22);
+  text-decoration: underline;
+}
+.clickable-lb-badge:active {
+  transform: translateY(0);
+}
+html.dark .clickable-lb-badge {
+  border-color: rgba(96, 165, 250, 0.35);
+}
+
+/* 라이트박스 연동 회차 요약 정보 팝업 모달 */
+.session-popup-modal-card {
+  width: min(740px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-modal, #ffffff);
+  color: var(--text-color, #0f172a);
+  border-radius: 14px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.35);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+html.dark .session-popup-modal-card {
+  background: var(--bg-modal, #18181b);
+  color: var(--text-color, #f4f4f5);
+  border-color: #27272a;
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.65);
+}
+.spm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .spm-header {
+  border-bottom-color: #27272a;
+}
+.spm-title-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.spm-title {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 800;
+}
+.spm-sub {
+  font-size: 12px;
+  color: var(--text-dimmed, #64748b);
+}
+.spm-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn-goto-session-tab {
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.08);
+  color: #2563eb;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-goto-session-tab:hover {
+  background: #2563eb;
+  color: #ffffff;
+}
+html.dark .btn-goto-session-tab {
+  border-color: rgba(96, 165, 250, 0.4);
+  background: rgba(59, 130, 246, 0.16);
+  color: #60a5fa;
+}
+html.dark .btn-goto-session-tab:hover {
+  background: #3b82f6;
+  color: #ffffff;
+}
+.spm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.spm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.spm-section-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.spm-hint-txt {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-dimmed, #64748b);
+}
+.spm-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+}
+html.dark .spm-table-wrap {
+  border-color: #27272a;
+}
+.spm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  text-align: center;
+  white-space: nowrap;
+}
+.spm-table th {
+  background: rgba(0, 0, 0, 0.03);
+  padding: 7px 8px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .spm-table th {
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom-color: #27272a;
+}
+.spm-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color, #f1f5f9);
+}
+html.dark .spm-table td {
+  border-bottom-color: #27272a;
+}
+.spm-table tr:last-child td {
+  border-bottom: none;
+}
+.spm-ranks-cell {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dimmed, #64748b);
+}
+.spm-games-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+.spm-game-card {
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: var(--bg-card, #f8fafc);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+html.dark .spm-game-card {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.spm-game-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-toggle-on, #3b82f6);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.spm-game-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12.5px;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  color: var(--color-toggle-on, #2563eb);
+}
+html.dark .spm-game-head {
+  border-bottom-color: #3f3f46;
+  color: #60a5fa;
+}
+.spm-game-time {
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+  font-weight: 500;
+}
+.spm-game-players {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.spm-game-player-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  padding: 1.5px 2px;
+}
+.spm-game-player-row.is-winner .spm-gp-name {
+  font-weight: 800;
+  color: #d97706;
+}
+html.dark .spm-game-player-row.is-winner .spm-gp-name {
+  color: #fbbf24;
+}
+.spm-gp-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.spm-gp-rank {
+  font-size: 10.5px;
+  color: var(--text-dimmed, #64748b);
+  font-weight: 700;
+}
+.spm-gp-name {
+  font-weight: 600;
+}
+.spm-gp-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.spm-gp-score {
+  font-size: 11.5px;
+}
+.spm-gp-uma {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* =====================================================================
+   나니키루 (무엇을 버릴까) 카테고리 뱃지 / 칩 / 버튼 스타일
+   ===================================================================== */
+.gh-stat-pill.nanikiru {
+  border-color: rgba(13, 148, 136, 0.35);
+  background: rgba(13, 148, 136, 0.06);
+}
+.gh-stat-pill.nanikiru .gh-stat-val {
+  color: #0d9488;
+}
+html.dark .gh-stat-pill.nanikiru {
+  border-color: rgba(45, 212, 191, 0.35);
+  background: rgba(20, 184, 166, 0.12);
+}
+html.dark .gh-stat-pill.nanikiru .gh-stat-val {
+  color: #2dd4bf;
+}
+
+.gf-tab.nanikiru.active,
+.sg-filter-btn.nanikiru.active,
+.cat-radio-btn.nanikiru.active {
+  background: #0d9488 !important;
+  border-color: #0f766e !important;
+  color: #ffffff !important;
+}
+html.dark .gf-tab.nanikiru.active,
+html.dark .sg-filter-btn.nanikiru.active,
+html.dark .cat-radio-btn.nanikiru.active {
+  background: #0d9488 !important;
+  border-color: #2dd4bf !important;
+  color: #ffffff !important;
+}
+
+.hl-type-tag.nanikiru,
+.chip-nanikiru,
+.badge-nanikiru,
+.badge-nanikiru-sm {
+  background: rgba(13, 148, 136, 0.14);
+  color: #0f766e;
+  border: 1px solid rgba(13, 148, 136, 0.32);
+  font-weight: 700;
+}
+.badge-nanikiru {
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+.badge-nanikiru-sm {
+  font-size: 10.5px;
+  padding: 1.5px 6px;
+  border-radius: 4px;
+}
+html.dark .hl-type-tag.nanikiru,
+html.dark .chip-nanikiru,
+html.dark .badge-nanikiru,
+html.dark .badge-nanikiru-sm {
+  background: rgba(20, 184, 166, 0.22);
+  color: #5eead4;
+  border-color: rgba(45, 212, 191, 0.38);
+}
+
+/* 카드 내 댓글 개수 뱃지 */
+.hl-comment-count-badge,
+.sg-comment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1.5px 6px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  margin-left: auto;
+}
+.sg-comment-chip {
+  background: rgba(15, 23, 42, 0.72);
+  color: #93c5fd;
+  border: 1px solid rgba(147, 197, 253, 0.35);
+}
+html.dark .hl-comment-count-badge {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+/* =====================================================================
+   인라인 마작패 이미지 & 마작 액션 버튼 (디시콘 스타일)
+   ===================================================================== */
+.rich-mahjong-content {
+  line-height: 1.65;
+  word-break: break-word;
+}
+.inline-mahjong-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  width: 24px;
+  height: 33px;
+  margin: 1px 1.5px;
+  padding: 1px;
+  border-radius: 3.5px;
+  background: linear-gradient(180deg, #fffdf9 0%, #f1ece1 100%);
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 1.5px 0 #94a3b8, 0 2px 3px rgba(0, 0, 0, 0.14);
+  box-sizing: border-box;
+}
+.inline-mahjong-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+html.dark .inline-mahjong-tile {
+  background: linear-gradient(180deg, #faf8f5 0%, #e5e0d5 100%);
+  border-color: #94a3b8;
+  box-shadow: 0 1.5px 0 #475569, 0 2px 4px rgba(0, 0, 0, 0.45);
+}
+
+/* 마작 선언/액션 버튼 (리치/쯔모/론/깡/퐁/치/다마/스킵 - 세련된 톤다운 컬러) */
+.inline-mahjong-action,
+.mep-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  padding: 2px 9px;
+  margin: 1px 2px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 1.5px 3px rgba(0, 0, 0, 0.2);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28);
+  line-height: 1.35;
+  user-select: none;
+}
+
+/* 리치: 주황색 (Warm Amber-Orange) */
+.act-riichi {
+  background: linear-gradient(180deg, #ea8a2a 0%, #cf6711 100%);
+  border-color: #b45309;
+}
+/* 쯔모: 다홍색 (Refined Coral-Vermilion) */
+.act-tsumo {
+  background: linear-gradient(180deg, #eb5747 0%, #c93b2b 100%);
+  border-color: #b02e20;
+}
+/* 론: 붉은색 (Deep Ruby-Crimson) */
+.act-ron {
+  background: linear-gradient(180deg, #cf3448 0%, #a61c30 100%);
+  border-color: #881327;
+}
+/* 깡: 보라색 (Muted Royal Violet) */
+.act-kan {
+  background: linear-gradient(180deg, #845ef7 0%, #6741d9 100%);
+  border-color: #5530c2;
+}
+/* 퐁: 파란색 (Clean Cobalt-Ocean Blue) */
+.act-pon {
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  border-color: #1d4ed8;
+}
+/* 치: 초록색 (Calm Emerald-Jade Green) */
+.act-chii {
+  background: linear-gradient(180deg, #20a478 0%, #13825c 100%);
+  border-color: #0e6b4b;
+}
+/* 다마: 차분한 슬레이트 네이비 */
+.act-dama {
+  background: linear-gradient(180deg, #52637a 0%, #3b495c 100%);
+  border-color: #2d3848;
+}
+/* 스킵: 회색 (Neutral Cool Gray) */
+.act-skip {
+  background: linear-gradient(180deg, #7c8594 0%, #5e6673 100%);
+  border-color: #4b525e;
+}
+
+/* =====================================================================
+   라이트박스 사진 댓글 영역 스타일
+   ===================================================================== */
+.lightbox-comments-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+html.dark .lightbox-comments-section {
+  border-top-color: #27272a;
+}
+
+.lb-comments-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lb-comments-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lb-comments-title {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--text-color, #0f172a);
+}
+html.dark .lb-comments-title {
+  color: #f4f4f5;
+}
+.lb-comments-count {
+  font-size: 11.5px;
+  font-weight: 800;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+html.dark .lb-comments-count {
+  background: rgba(59, 130, 246, 0.22);
+  color: #60a5fa;
+}
+.lb-comments-hint {
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+}
+
+.lb-comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 290px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.lb-comment-item {
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+html.dark .lb-comment-item {
+  background: #222226;
+  border-color: #323238;
+}
+.lb-comment-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.lb-comment-author-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.lb-comment-author {
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--text-color, #0f172a);
+}
+html.dark .lb-comment-author {
+  color: #f4f4f5;
+}
+.lb-comment-user-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.14);
+  color: #2563eb;
+}
+html.dark .lb-comment-user-badge {
+  background: rgba(59, 130, 246, 0.22);
+  color: #60a5fa;
+}
+.lb-comment-guest-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-dimmed, #64748b);
+}
+.lb-comment-time {
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+}
+.lb-comment-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-cmt-act {
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dimmed, #64748b);
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.btn-cmt-act:hover {
+  color: var(--color-toggle-on, #2563eb);
+  background: rgba(59, 130, 246, 0.08);
+}
+.btn-cmt-act.del:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+.lb-comment-body {
+  font-size: 13px;
+  color: var(--text-color, #1e293b);
+  white-space: pre-wrap;
+}
+html.dark .lb-comment-body {
+  color: #e4e4e7;
+}
+
+.lb-comments-empty {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dimmed, #64748b);
+  padding: 12px 8px;
+  background: var(--bg-card, #f8fafc);
+  border: 1px dashed var(--border-color, #cbd5e1);
+  border-radius: 8px;
+}
+html.dark .lb-comments-empty {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: #3f3f46;
+}
+
+/* 댓글 수정 / 삭제 인라인 박스 */
+.lb-comment-edit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.lb-cmt-edit-textarea {
+  font-size: 12.5px;
+  padding: 6px 8px;
+}
+.lb-cmt-edit-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lb-cmt-edit-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.lb-cmt-pin-input {
+  width: 118px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-modal, #ffffff);
+  color: var(--text-color, #0f172a);
+}
+html.dark .lb-cmt-pin-input {
+  background: #18181b;
+  border-color: #3f3f46;
+  color: #f4f4f5;
+}
+.lb-comment-delete-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-color, #cbd5e1);
+}
+html.dark .lb-comment-delete-box {
+  border-top-color: #3f3f46;
+}
+.lb-del-prompt {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #ef4444;
+}
+
+/* 새 댓글 작성 카드 */
+.lb-comment-form-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #cbd5e1);
+}
+html.dark .lb-comment-form-card {
+  background: #1e1e22;
+  border-color: #323238;
+}
+.lb-cf-author-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.lb-cf-logged-in {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.lb-cf-logged-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(22, 163, 74, 0.14);
+  color: #15803d;
+}
+html.dark .lb-cf-logged-badge {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+}
+.lb-cf-logged-name {
+  font-weight: 800;
+  color: var(--text-color, #0f172a);
+}
+html.dark .lb-cf-logged-name {
+  color: #f4f4f5;
+}
+.lb-cf-logged-sub {
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+}
+.lb-cf-guest-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 210px;
+}
+.lb-cf-input {
+  padding: 5px 9px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-modal, #ffffff);
+  color: var(--text-color, #0f172a);
+  box-sizing: border-box;
+}
+.lb-cf-input.nick {
+  width: 120px;
+  flex-shrink: 0;
+}
+.lb-cf-input.pin {
+  width: 145px;
+  flex-shrink: 0;
+}
+html.dark .lb-cf-input {
+  background: #141417;
+  border-color: #3f3f46;
+  color: #f4f4f5;
+}
+.btn-switch-guest-mode {
+  background: transparent;
+  border: 1px solid var(--border-color, #cbd5e1);
+  color: var(--text-dimmed, #64748b);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-switch-guest-mode:hover {
+  border-color: var(--color-toggle-on, #3b82f6);
+  color: var(--color-toggle-on, #2563eb);
+}
+html.dark .btn-switch-guest-mode {
+  border-color: #3f3f46;
+  color: #a1a1aa;
+}
+
+.lb-cf-textarea {
+  font-size: 12.5px;
+  padding: 7px 9px;
+  min-height: 52px;
+  resize: vertical;
+}
+
+.lb-cf-live-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px dashed rgba(59, 130, 246, 0.28);
+  flex-wrap: wrap;
+}
+.lb-cf-preview-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #2563eb;
+  flex-shrink: 0;
+}
+html.dark .lb-cf-preview-label {
+  color: #60a5fa;
+}
+.lb-cf-preview-body {
+  font-size: 12.5px;
+}
+
+.lb-cf-bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.btn-toggle-emote-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-modal, #ffffff);
+  color: var(--text-color, #1e293b);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-toggle-emote-picker.sm {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.btn-toggle-emote-picker:hover,
+.btn-toggle-emote-picker.active {
+  border-color: var(--color-toggle-on, #3b82f6);
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--color-toggle-on, #2563eb);
+}
+html.dark .btn-toggle-emote-picker {
+  background: #141417;
+  border-color: #3f3f46;
+  color: #e4e4e7;
+}
+html.dark .btn-toggle-emote-picker:hover,
+html.dark .btn-toggle-emote-picker.active {
+  border-color: #60a5fa;
+  color: #60a5fa;
+}
+
+.btn-submit-comment {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 800;
+  border: none;
+  background: var(--color-toggle-on, #2563eb);
+  color: #ffffff;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.btn-submit-comment:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.btn-submit-comment:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-cancel-modal.sm,
+.btn-submit-modal.sm,
+.btn-delete-highlight.sm {
+  padding: 4px 9px;
+  font-size: 11.5px;
+  border-radius: 5px;
+}
+
+/* 마작패 / 액션 디시콘 팔레트 */
+.mahjong-emote-picker {
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg-modal, #ffffff);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+html.dark .mahjong-emote-picker {
+  background: #141417;
+  border-color: #323238;
+}
+.mep-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+.mep-tabs::-webkit-scrollbar {
+  display: none;
+}
+html.dark .mep-tabs {
+  border-bottom-color: #27272a;
+}
+.mep-tab {
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 700;
+  border: none;
+  background: transparent;
+  color: var(--text-dimmed, #64748b);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.mep-tab.active {
+  background: var(--color-toggle-on, #2563eb);
+  color: #ffffff;
+}
+.mep-actions-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0;
+}
+.mep-action-btn {
+  cursor: pointer;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.mep-action-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+.mep-action-btn:active {
+  transform: translateY(0);
+}
+.mep-tiles-grid {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 4px;
+}
+@media (max-width: 520px) {
+  .mep-tiles-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+  .lb-cf-guest-inputs {
+    width: 100%;
+  }
+  .lb-cf-input.nick,
+  .lb-cf-input.pin {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+}
+.mep-tile-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 2px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  background: var(--bg-card, #f8fafc);
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
+}
+.mep-tile-btn:hover {
+  transform: translateY(-1.5px);
+  border-color: var(--color-toggle-on, #3b82f6);
+  background: rgba(59, 130, 246, 0.08);
+}
+html.dark .mep-tile-btn {
+  background: #222226;
+  border-color: #323238;
+}
+.mep-tile-btn img {
+  width: 26px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #fffdf9 0%, #f1ece1 100%);
+  padding: 1px;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 1px 0 #94a3b8;
+}
+.mep-tile-sub {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dimmed, #64748b);
+  white-space: nowrap;
+}
+html.dark .mep-tile-sub {
+  color: #a1a1aa;
+}
 </style>
+
+
 

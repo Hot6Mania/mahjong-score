@@ -31,7 +31,17 @@ export const YAKUMAN_DEFINITIONS: YakumanDef[] = [
   { key: '오픈리치(리치 이외의 방총)', label: '오픈리치(리치 이외의 방총)', hanja: 'オープン立直' },
 ];
 
-export type HighlightCategory = 'yakuman' | 'fun' | 'session';
+export type HighlightCategory = 'yakuman' | 'fun' | 'nanikiru' | 'session';
+
+export interface HighlightComment {
+  id: string;
+  authorName: string;
+  isLoggedInUser?: boolean;
+  content: string;
+  hasPin?: boolean;
+  createdAt: number;
+  updatedAt?: number;
+}
 
 export interface HighlightRecord {
   id: string;
@@ -49,6 +59,7 @@ export interface HighlightRecord {
   hasImage: boolean;
   imageId?: string;
   imageSize?: number;
+  comments?: HighlightComment[];
   createdAt: number;
 }
 
@@ -751,3 +762,434 @@ export function computePlayerYakumanStats(
     achievedRecords,
   };
 }
+
+// ==========================================
+// 마작패 (34종) & 액션 버튼 (8종) 디시콘/아이콘 정의 및 파서
+// ==========================================
+export interface MahjongTileEmoteDef {
+  code: string; // e.g. '1m', '1z'
+  label: string; // e.g. '1만', '동'
+  group: 'man' | 'pin' | 'sou' | 'honor';
+  fileName: string; // e.g. '1m.png'
+}
+
+export interface MahjongActionEmoteDef {
+  key: string; // e.g. '리치', '다마', '퐁', '치', '깡', '론', '쯔모', '스킵'
+  label: string;
+  colorClass: string; // CSS class for refined button badge
+}
+
+export const MAHJONG_ACTION_EMOTES: MahjongActionEmoteDef[] = [
+  { key: '리치', label: '리치', colorClass: 'act-riichi' },
+  { key: '다마', label: '다마', colorClass: 'act-dama' },
+  { key: '퐁', label: '퐁', colorClass: 'act-pon' },
+  { key: '치', label: '치', colorClass: 'act-chii' },
+  { key: '깡', label: '깡', colorClass: 'act-kan' },
+  { key: '론', label: '론', colorClass: 'act-ron' },
+  { key: '쯔모', label: '쯔모', colorClass: 'act-tsumo' },
+  { key: '스킵', label: '스킵', colorClass: 'act-skip' },
+];
+
+export const MAHJONG_TILE_EMOTES: MahjongTileEmoteDef[] = [
+  // 1~9만
+  { code: '1m', label: '1만', group: 'man', fileName: '1m.png' },
+  { code: '2m', label: '2만', group: 'man', fileName: '2m.png' },
+  { code: '3m', label: '3만', group: 'man', fileName: '3m.png' },
+  { code: '4m', label: '4만', group: 'man', fileName: '4m.png' },
+  { code: '5m', label: '5만', group: 'man', fileName: '5m.png' },
+  { code: '6m', label: '6만', group: 'man', fileName: '6m.png' },
+  { code: '7m', label: '7만', group: 'man', fileName: '7m.png' },
+  { code: '8m', label: '8만', group: 'man', fileName: '8m.png' },
+  { code: '9m', label: '9만', group: 'man', fileName: '9m.png' },
+  // 1~9통
+  { code: '1p', label: '1통', group: 'pin', fileName: '1p.png' },
+  { code: '2p', label: '2통', group: 'pin', fileName: '2p.png' },
+  { code: '3p', label: '3통', group: 'pin', fileName: '3p.png' },
+  { code: '4p', label: '4통', group: 'pin', fileName: '4p.png' },
+  { code: '5p', label: '5통', group: 'pin', fileName: '5p.png' },
+  { code: '6p', label: '6통', group: 'pin', fileName: '6p.png' },
+  { code: '7p', label: '7통', group: 'pin', fileName: '7p.png' },
+  { code: '8p', label: '8통', group: 'pin', fileName: '8p.png' },
+  { code: '9p', label: '9통', group: 'pin', fileName: '9p.png' },
+  // 1~9삭
+  { code: '1s', label: '1삭', group: 'sou', fileName: '1s.png' },
+  { code: '2s', label: '2삭', group: 'sou', fileName: '2s.png' },
+  { code: '3s', label: '3삭', group: 'sou', fileName: '3s.png' },
+  { code: '4s', label: '4삭', group: 'sou', fileName: '4s.png' },
+  { code: '5s', label: '5삭', group: 'sou', fileName: '5s.png' },
+  { code: '6s', label: '6삭', group: 'sou', fileName: '6s.png' },
+  { code: '7s', label: '7삭', group: 'sou', fileName: '7s.png' },
+  { code: '8s', label: '8삭', group: 'sou', fileName: '8s.png' },
+  { code: '9s', label: '9삭', group: 'sou', fileName: '9s.png' },
+  // 동남서북백발중 (1z~7z)
+  { code: '1z', label: '동', group: 'honor', fileName: '1z.png' },
+  { code: '2z', label: '남', group: 'honor', fileName: '2z.png' },
+  { code: '3z', label: '서', group: 'honor', fileName: '3z.png' },
+  { code: '4z', label: '북', group: 'honor', fileName: '4z.png' },
+  { code: '5z', label: '백', group: 'honor', fileName: '5z.png' },
+  { code: '6z', label: '발', group: 'honor', fileName: '6z.png' },
+  { code: '7z', label: '중', group: 'honor', fileName: '7z.png' },
+];
+
+const TILE_BY_TOKEN_MAP: Record<string, MahjongTileEmoteDef> = {};
+MAHJONG_TILE_EMOTES.forEach((t) => {
+  TILE_BY_TOKEN_MAP[t.code] = t;
+  TILE_BY_TOKEN_MAP[t.label] = t;
+});
+
+const ACTION_BY_TOKEN_MAP: Record<string, MahjongActionEmoteDef> = {};
+MAHJONG_ACTION_EMOTES.forEach((a) => {
+  ACTION_BY_TOKEN_MAP[a.key] = a;
+});
+
+export function getMahjongTileImageUrl(fileName: string): string {
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+  return `${base}/assets/tiles/${fileName}`;
+}
+
+export type CommentSegment =
+  | { type: 'text'; text: string }
+  | { type: 'tile'; tile: MahjongTileEmoteDef }
+  | { type: 'action'; action: MahjongActionEmoteDef };
+
+/**
+ * 댓글/메모 내 `[1만]`, `[1m]`, `[동]`, `[리치]` 등의 토큰을 파싱하여
+ * 텍스트/마작패/액션버튼 세그먼트로 분리합니다.
+ */
+export function parseRichMahjongText(raw?: string): CommentSegment[] {
+  if (!raw) return [];
+  const segments: CommentSegment[] = [];
+  const regex = /\[([1-9][mps]|[1-7]z|[1-9][만통삭]|동|남|서|북|백|발|중|리치|다마|퐁|치|깡|론|쯔모|스킵)\]/g;
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(raw)) !== null) {
+    if (match.index > lastIdx) {
+      segments.push({ type: 'text', text: raw.slice(lastIdx, match.index) });
+    }
+    const tokenKey = match[1];
+    if (TILE_BY_TOKEN_MAP[tokenKey]) {
+      segments.push({ type: 'tile', tile: TILE_BY_TOKEN_MAP[tokenKey] });
+    } else if (ACTION_BY_TOKEN_MAP[tokenKey]) {
+      segments.push({ type: 'action', action: ACTION_BY_TOKEN_MAP[tokenKey] });
+    } else {
+      segments.push({ type: 'text', text: match[0] });
+    }
+    lastIdx = regex.lastIndex;
+  }
+
+  if (lastIdx < raw.length) {
+    segments.push({ type: 'text', text: raw.slice(lastIdx) });
+  }
+  return segments;
+}
+
+// ==========================================
+// 사진 댓글 CRUD API + 로컬 폴백 동기화
+// ==========================================
+const LOCAL_COMMENTS_FALLBACK_KEY = 'mahjong_highlight_comments_fallback_v1';
+
+interface LocalCommentStored extends HighlightComment {
+  pin?: string;
+}
+
+function loadLocalCommentsFallbackMap(): Record<string, LocalCommentStored[]> {
+  try {
+    const raw = localStorage.getItem(LOCAL_COMMENTS_FALLBACK_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch {}
+  return {};
+}
+
+function saveLocalCommentsFallbackMap(map: Record<string, LocalCommentStored[]>): void {
+  try {
+    localStorage.setItem(LOCAL_COMMENTS_FALLBACK_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+export function getEffectiveHighlightComments(rec?: HighlightRecord | null): HighlightComment[] {
+  if (!rec) return [];
+  const serverComments = Array.isArray(rec.comments) ? rec.comments : [];
+  const localMap = loadLocalCommentsFallbackMap();
+  const localList = Array.isArray(localMap[rec.id]) ? localMap[rec.id] : [];
+  if (localList.length === 0) return serverComments;
+
+  const merged = [...serverComments];
+  const existingIds = new Set(serverComments.map((c) => c.id));
+  for (const lc of localList) {
+    if (!existingIds.has(lc.id)) {
+      const { pin: _p, ...safe } = lc;
+      merged.push(safe);
+    }
+  }
+  return merged.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function addHighlightComment(params: {
+  highlightId: string;
+  authorName: string;
+  content: string;
+  pin: string;
+  isLoggedInUser?: boolean;
+}): Promise<{
+  success: boolean;
+  record?: HighlightRecord;
+  records?: HighlightRecord[];
+  error?: string;
+}> {
+  const cleanAuthor = params.authorName.trim();
+  const cleanContent = params.content.trim();
+  const cleanPin = params.pin.trim();
+
+  if (!cleanAuthor) return { success: false, error: '닉네임을 입력해 주세요.' };
+  if (!cleanContent) return { success: false, error: '댓글 내용을 입력해 주세요.' };
+  if (!cleanPin || cleanPin.length < 2) {
+    return { success: false, error: '수정/삭제용 비밀번호(PIN)를 입력해 주세요.' };
+  }
+
+  try {
+    const auth = getClientAuthPayload();
+    const res = await fetch(`${getWorkerUrl()}/api/public/highlights/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create',
+        highlightId: params.highlightId,
+        authorName: cleanAuthor,
+        content: cleanContent,
+        pin: cleanPin,
+        isLoggedInUser: !!params.isLoggedInUser,
+        ...auth,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.success) {
+        if (Array.isArray(data.records)) {
+          cachedHighlights = data.records;
+        }
+        return {
+          success: true,
+          record: data.record,
+          records: data.records,
+        };
+      }
+    }
+
+    if (res.status === 400 || res.status === 403) {
+      const errData = await res.json().catch(() => null);
+      return { success: false, error: errData?.error || '댓글 등록에 실패했습니다.' };
+    }
+  } catch (e) {
+    console.warn('Server comment create failed, using local fallback:', e);
+  }
+
+  // 워커 미배포(404) 또는 오프라인 환경 폴백
+  const localMap = loadLocalCommentsFallbackMap();
+  const list = Array.isArray(localMap[params.highlightId]) ? localMap[params.highlightId] : [];
+  const newComment: LocalCommentStored = {
+    id: `cmt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    authorName: cleanAuthor,
+    isLoggedInUser: !!params.isLoggedInUser,
+    content: cleanContent,
+    hasPin: true,
+    pin: cleanPin,
+    createdAt: Date.now(),
+  };
+  list.push(newComment);
+  localMap[params.highlightId] = list;
+  saveLocalCommentsFallbackMap(localMap);
+
+  if (cachedHighlights) {
+    cachedHighlights = cachedHighlights.map((r) => {
+      if (r.id !== params.highlightId) return r;
+      return {
+        ...r,
+        comments: getEffectiveHighlightComments(r),
+      };
+    });
+  }
+
+  const updatedRec = cachedHighlights?.find((r) => r.id === params.highlightId);
+  return {
+    success: true,
+    record: updatedRec,
+    records: cachedHighlights || undefined,
+  };
+}
+
+export async function updateHighlightComment(params: {
+  highlightId: string;
+  commentId: string;
+  content: string;
+  pin?: string;
+}): Promise<{
+  success: boolean;
+  record?: HighlightRecord;
+  records?: HighlightRecord[];
+  error?: string;
+}> {
+  const cleanContent = params.content.trim();
+  const cleanPin = (params.pin || '').trim();
+  if (!cleanContent) return { success: false, error: '수정할 댓글 내용을 입력해 주세요.' };
+
+  try {
+    const auth = getClientAuthPayload();
+    const res = await fetch(`${getWorkerUrl()}/api/public/highlights/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update',
+        highlightId: params.highlightId,
+        commentId: params.commentId,
+        content: cleanContent,
+        pin: cleanPin,
+        ...auth,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.success) {
+        if (Array.isArray(data.records)) {
+          cachedHighlights = data.records;
+        }
+        return {
+          success: true,
+          record: data.record,
+          records: data.records,
+        };
+      }
+    }
+
+    if (res.status === 403 || res.status === 400) {
+      const errData = await res.json().catch(() => null);
+      return { success: false, error: errData?.error || '비밀번호(PIN)가 일치하지 않습니다.' };
+    }
+  } catch (e) {
+    console.warn('Server comment update failed, checking local fallback:', e);
+  }
+
+  // 로컬 폴백 수정 처리
+  const localMap = loadLocalCommentsFallbackMap();
+  const list = Array.isArray(localMap[params.highlightId]) ? localMap[params.highlightId] : [];
+  const cIdx = list.findIndex((c) => c.id === params.commentId);
+  if (cIdx === -1) {
+    return { success: false, error: '해당 댓글을 찾을 수 없거나 권한이 없습니다.' };
+  }
+  if (list[cIdx].pin && list[cIdx].pin !== cleanPin) {
+    return { success: false, error: '비밀번호(PIN)가 일치하지 않습니다.' };
+  }
+  list[cIdx] = {
+    ...list[cIdx],
+    content: cleanContent,
+    updatedAt: Date.now(),
+  };
+  localMap[params.highlightId] = list;
+  saveLocalCommentsFallbackMap(localMap);
+
+  if (cachedHighlights) {
+    cachedHighlights = cachedHighlights.map((r) => {
+      if (r.id !== params.highlightId) return r;
+      return {
+        ...r,
+        comments: getEffectiveHighlightComments(r),
+      };
+    });
+  }
+  const updatedRec = cachedHighlights?.find((r) => r.id === params.highlightId);
+  return {
+    success: true,
+    record: updatedRec,
+    records: cachedHighlights || undefined,
+  };
+}
+
+export async function deleteHighlightComment(params: {
+  highlightId: string;
+  commentId: string;
+  pin?: string;
+}): Promise<{
+  success: boolean;
+  record?: HighlightRecord;
+  records?: HighlightRecord[];
+  error?: string;
+}> {
+  const cleanPin = (params.pin || '').trim();
+
+  try {
+    const auth = getClientAuthPayload();
+    const res = await fetch(`${getWorkerUrl()}/api/public/highlights/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'delete',
+        highlightId: params.highlightId,
+        commentId: params.commentId,
+        pin: cleanPin,
+        ...auth,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.success) {
+        // 로컬에도 혹시 있으면 정리
+        const localMap = loadLocalCommentsFallbackMap();
+        if (Array.isArray(localMap[params.highlightId])) {
+          localMap[params.highlightId] = localMap[params.highlightId].filter((c) => c.id !== params.commentId);
+          saveLocalCommentsFallbackMap(localMap);
+        }
+        if (Array.isArray(data.records)) {
+          cachedHighlights = data.records;
+        }
+        return {
+          success: true,
+          record: data.record,
+          records: data.records,
+        };
+      }
+    }
+
+    if (res.status === 403 || res.status === 400) {
+      const errData = await res.json().catch(() => null);
+      return { success: false, error: errData?.error || '비밀번호(PIN)가 일치하지 않습니다.' };
+    }
+  } catch (e) {
+    console.warn('Server comment delete failed, checking local fallback:', e);
+  }
+
+  // 로컬 폴백 삭제 처리
+  const localMap = loadLocalCommentsFallbackMap();
+  const list = Array.isArray(localMap[params.highlightId]) ? localMap[params.highlightId] : [];
+  const cIdx = list.findIndex((c) => c.id === params.commentId);
+  if (cIdx === -1) {
+    return { success: false, error: '해당 댓글을 찾을 수 없거나 비밀번호가 일치하지 않습니다.' };
+  }
+  if (list[cIdx].pin && list[cIdx].pin !== cleanPin) {
+    return { success: false, error: '비밀번호(PIN)가 일치하지 않습니다.' };
+  }
+  localMap[params.highlightId] = list.filter((c) => c.id !== params.commentId);
+  saveLocalCommentsFallbackMap(localMap);
+
+  if (cachedHighlights) {
+    cachedHighlights = cachedHighlights.map((r) => {
+      if (r.id !== params.highlightId) return r;
+      return {
+        ...r,
+        comments: getEffectiveHighlightComments(r),
+      };
+    });
+  }
+  const updatedRec = cachedHighlights?.find((r) => r.id === params.highlightId);
+  return {
+    success: true,
+    record: updatedRec,
+    records: cachedHighlights || undefined,
+  };
+}
+

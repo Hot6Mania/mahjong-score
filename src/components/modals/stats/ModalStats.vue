@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from "vue"
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue"
 import { useRouter } from "vue-router"
 import type { Player, Option } from "@/types/types.d"
 import { getRatingColor } from "@/utils/ratingEngine"
@@ -67,6 +67,125 @@ const activeHistory = computed(() => {
 type TabType = 'basic' | 'riichi' | 'other' | 'rank' | 'rating' | 'opponents'
 const activeTab = ref<TabType>('basic')
 
+// 모달 탭 메뉴 가로 스크롤 & 스크롤 인디케이터 제어
+const tabMenuRef = ref<HTMLElement | null>(null)
+const isTabDragging = ref(false)
+const tabScrollIndicator = ref({
+  canScroll: false,
+  thumbWidthPct: 100,
+  thumbLeftPct: 0,
+})
+let tabDragPointerDown = false
+let tabDragMoved = false
+let tabDragStartX = 0
+let tabDragStartScrollLeft = 0
+let tabResizeObserver: ResizeObserver | null = null
+
+const updateTabScrollIndicator = () => {
+  const nav = tabMenuRef.value
+  if (!nav) {
+    tabScrollIndicator.value = { canScroll: false, thumbWidthPct: 100, thumbLeftPct: 0 }
+    return
+  }
+  const { scrollLeft, scrollWidth, clientWidth } = nav
+  const maxScroll = scrollWidth - clientWidth
+  if (maxScroll <= 2) {
+    tabScrollIndicator.value = { canScroll: false, thumbWidthPct: 100, thumbLeftPct: 0 }
+    return
+  }
+  const rawThumbWidth = (clientWidth / scrollWidth) * 100
+  const thumbWidthPct = Math.max(18, Math.min(92, rawThumbWidth))
+  const progress = Math.max(0, Math.min(1, scrollLeft / maxScroll))
+  const thumbLeftPct = progress * (100 - thumbWidthPct)
+  tabScrollIndicator.value = {
+    canScroll: true,
+    thumbWidthPct,
+    thumbLeftPct,
+  }
+}
+
+const onTabWheel = (e: WheelEvent) => {
+  const nav = tabMenuRef.value
+  if (!nav) return
+  if (nav.scrollWidth <= nav.clientWidth + 1) return
+  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  if (delta === 0) return
+  e.preventDefault()
+  nav.scrollLeft += delta
+  updateTabScrollIndicator()
+}
+
+const onTabTrackClick = (e: MouseEvent) => {
+  const nav = tabMenuRef.value
+  const track = e.currentTarget as HTMLElement | null
+  if (!nav || !track) return
+  const rect = track.getBoundingClientRect()
+  if (rect.width <= 0) return
+  const clickRatio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+  const maxScroll = Math.max(0, nav.scrollWidth - nav.clientWidth)
+  const targetLeft = clickRatio * maxScroll
+  nav.scrollTo({ left: targetLeft, behavior: 'smooth' })
+}
+
+const onTabPointerDown = (e: MouseEvent) => {
+  if (e.button !== 0) return
+  const nav = tabMenuRef.value
+  if (!nav) return
+  if (nav.scrollWidth <= nav.clientWidth + 2) return
+  tabDragPointerDown = true
+  tabDragMoved = false
+  tabDragStartX = e.pageX
+  tabDragStartScrollLeft = nav.scrollLeft
+}
+
+const onTabPointerMove = (e: MouseEvent) => {
+  if (!tabDragPointerDown) return
+  const nav = tabMenuRef.value
+  if (!nav) return
+  const dx = e.pageX - tabDragStartX
+  if (!tabDragMoved && Math.abs(dx) > 5) {
+    tabDragMoved = true
+    isTabDragging.value = true
+  }
+  if (tabDragMoved) {
+    e.preventDefault()
+    nav.scrollLeft = tabDragStartScrollLeft - dx
+    updateTabScrollIndicator()
+  }
+}
+
+const stopTabDrag = () => {
+  if (!tabDragPointerDown) return
+  tabDragPointerDown = false
+  isTabDragging.value = false
+  if (tabDragMoved) {
+    window.setTimeout(() => {
+      tabDragMoved = false
+    }, 60)
+  }
+}
+
+const onTabClickCapture = (e: MouseEvent) => {
+  if (tabDragMoved) {
+    e.stopPropagation()
+    e.preventDefault()
+    tabDragMoved = false
+  }
+}
+
+const selectModalTab = (tab: TabType, e?: MouseEvent) => {
+  activeTab.value = tab
+  const btn = e?.currentTarget as HTMLElement | null
+  const nav = tabMenuRef.value
+  if (btn && nav && nav.scrollWidth > nav.clientWidth + 2) {
+    const navRect = nav.getBoundingClientRect()
+    const btnRect = btn.getBoundingClientRect()
+    const offset = (btnRect.left - navRect.left) - (navRect.width / 2 - btnRect.width / 2)
+    nav.scrollBy({ left: offset, behavior: 'smooth' })
+  }
+  nextTick(() => updateTabScrollIndicator())
+}
+
 // 자주 만나는 상대 (전체 기간 대국 기록 & 필터/툴팁 상태)
 const allRatingHistoryRecords = ref<GameRatingHistoryRecord[]>([])
 const opponentsGameLimit = ref<number>(0)
@@ -75,6 +194,15 @@ const oppTooltipPos = ref<{ x: number; y: number }>({ x: 0, y: 0 })
 const isOppTooltipBelow = ref(false)
 
 onMounted(async () => {
+  nextTick(() => {
+    updateTabScrollIndicator()
+    if (typeof ResizeObserver !== 'undefined' && tabMenuRef.value) {
+      tabResizeObserver = new ResizeObserver(() => updateTabScrollIndicator())
+      tabResizeObserver.observe(tabMenuRef.value)
+    }
+  })
+  window.addEventListener('resize', updateTabScrollIndicator, { passive: true })
+
   try {
     const records = await fetchPublicRatingHistoryRecords()
     if (records && records.length > 0) {
@@ -83,6 +211,14 @@ onMounted(async () => {
   } catch (err) {
     console.warn("Failed to load rating history records for opponents tab:", err)
   }
+})
+
+onBeforeUnmount(() => {
+  if (tabResizeObserver) {
+    tabResizeObserver.disconnect()
+    tabResizeObserver = null
+  }
+  window.removeEventListener('resize', updateTabScrollIndicator)
 })
 
 function updateOppTooltipPosition(el: HTMLElement) {
@@ -1112,50 +1248,77 @@ const emptyScopeMessage = computed(() => {
     </select>
   </div>
 
-  <!-- 탭 메뉴 -->
-  <div class="tab_menu">
-    <button 
-      class="tab_btn" 
-      :class="{ active: activeTab === 'basic' }" 
-      @click="activeTab = 'basic'"
+  <!-- 탭 메뉴 (좁은 화면에서 한 줄 유지 + 좌우 스크롤 인디케이터) -->
+  <div class="tab-menu-wrap" :class="{ 'has-scroll-indicator': tabScrollIndicator.canScroll }">
+    <div
+      ref="tabMenuRef"
+      class="tab_menu"
+      :class="{ 'is-dragging': isTabDragging }"
+      @scroll.passive="updateTabScrollIndicator"
+      @wheel="onTabWheel"
+      @mousedown="onTabPointerDown"
+      @mousemove="onTabPointerMove"
+      @mouseup="stopTabDrag"
+      @mouseleave="stopTabDrag"
+      @click.capture="onTabClickCapture"
     >
-      기본
-    </button>
-    <button 
-      class="tab_btn" 
-      :class="{ active: activeTab === 'riichi' }" 
-      @click="activeTab = 'riichi'"
+      <button 
+        class="tab_btn" 
+        :class="{ active: activeTab === 'basic' }" 
+        @click="selectModalTab('basic', $event)"
+      >
+        기본
+      </button>
+      <button 
+        class="tab_btn" 
+        :class="{ active: activeTab === 'riichi' }" 
+        @click="selectModalTab('riichi', $event)"
+      >
+        리치 스탯
+      </button>
+      <button 
+        class="tab_btn" 
+        :class="{ active: activeTab === 'other' }" 
+        @click="selectModalTab('other', $event)"
+      >
+        그 외
+      </button>
+      <button 
+        class="tab_btn" 
+        :class="{ active: activeTab === 'rank' }" 
+        @click="selectModalTab('rank', $event)"
+      >
+        순위 비율
+      </button>
+      <button 
+        class="tab_btn" 
+        :class="{ active: activeTab === 'rating' }" 
+        @click="selectModalTab('rating', $event)"
+      >
+        레이팅 추이
+      </button>
+      <button 
+        class="tab_btn" 
+        :class="{ active: activeTab === 'opponents' }" 
+        @click="selectModalTab('opponents', $event)"
+      >
+        자주 만나는 상대
+      </button>
+    </div>
+    <div
+      v-show="tabScrollIndicator.canScroll"
+      class="tabs-nav-scroll-track"
+      title="좌우 스크롤 위치 표시"
+      @click="onTabTrackClick"
     >
-      리치 스탯
-    </button>
-    <button 
-      class="tab_btn" 
-      :class="{ active: activeTab === 'other' }" 
-      @click="activeTab = 'other'"
-    >
-      그 외
-    </button>
-    <button 
-      class="tab_btn" 
-      :class="{ active: activeTab === 'rank' }" 
-      @click="activeTab = 'rank'"
-    >
-      순위 비율
-    </button>
-    <button 
-      class="tab_btn" 
-      :class="{ active: activeTab === 'rating' }" 
-      @click="activeTab = 'rating'"
-    >
-      레이팅 추이
-    </button>
-    <button 
-      class="tab_btn" 
-      :class="{ active: activeTab === 'opponents' }" 
-      @click="activeTab = 'opponents'"
-    >
-      자주 만나는 상대
-    </button>
+      <div
+        class="tabs-nav-scroll-thumb"
+        :style="{
+          width: tabScrollIndicator.thumbWidthPct + '%',
+          left: tabScrollIndicator.thumbLeftPct + '%'
+        }"
+      ></div>
+    </div>
   </div>
 
   <!-- 스탯 데이터 테이블 -->
@@ -1755,27 +1918,78 @@ html.dark .container_stats_modal {
   color: var(--text-color, #ffffff) !important;
 }
 
-/* 탭 메뉴 */
-.tab_menu {
+/* 탭 메뉴 (한 줄 유지 + 좌우 스크롤 인디케이터 연동) */
+.tab-menu-wrap {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
   width: 100%;
-  border-bottom: 1px solid var(--border-color);
   margin-bottom: 10px;
 }
 
+.tab_menu {
+  display: flex;
+  flex-wrap: nowrap;
+  width: 100%;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+
+.tab_menu::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.tab_menu.is-dragging {
+  cursor: grabbing;
+  scroll-behavior: auto;
+}
+
+.tab_menu.is-dragging .tab_btn {
+  cursor: grabbing;
+}
+
 .tab_btn {
-  flex: 1;
+  position: relative;
+  flex: 1 0 auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+  word-break: keep-all;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  padding: 8px 0;
-  font-size: 14px;
+  padding: 8px 12px;
+  font-size: 13px;
   font-weight: bold;
   color: var(--text-color);
   opacity: 0.6;
   cursor: pointer;
   transition: border-color 0.2s, opacity 0.2s;
   text-align: center;
+}
+
+.tab_btn:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 26%;
+  height: 48%;
+  width: 1px;
+  border-radius: 1px;
+  background-color: rgba(148, 163, 184, 0.35);
+  pointer-events: none;
+}
+
+html.dark .tab_btn:not(:last-child)::after {
+  background-color: rgba(148, 163, 184, 0.25);
 }
 
 .tab_btn:hover {
@@ -1786,6 +2000,31 @@ html.dark .container_stats_modal {
   opacity: 1;
   border-bottom-color: var(--color-toggle-on);
   color: var(--color-toggle-on);
+}
+
+.tabs-nav-scroll-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+html.dark .tabs-nav-scroll-track {
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.tabs-nav-scroll-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: var(--color-toggle-on, #3b82f6);
+  opacity: 0.82;
+  transition: width 0.08s ease-out;
+  will-change: left, width;
 }
 
 /* 스탯 목록 - 스크롤 없이 넓게 렌더링 */
