@@ -423,7 +423,20 @@ const handleLocationChange = () => {
 const isDark = ref(typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : false);
 let themeObserver: MutationObserver | null = null;
 
+// 모바일 브라우저 주소창 표시/숨김 전환 시 실제 가시 뷰포트 높이(--vvh) 실시간 동기화
+const updateVisualViewportHeight = () => {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  const vv = window.visualViewport;
+  // 핀치 줌 상태(scale > 1.01)에서는 전체 레이아웃 뷰포트 높이를 왜곡하지 않도록 window.innerHeight 사용
+  const rawHeight = vv && (!vv.scale || vv.scale <= 1.01) ? vv.height : window.innerHeight;
+  if (rawHeight > 0) {
+    document.documentElement.style.setProperty('--vvh', `${Math.round(rawHeight)}px`);
+  }
+};
+updateVisualViewportHeight();
+
 onMounted(() => {
+  updateVisualViewportHeight();
   if (typeof document !== 'undefined') {
     isDark.value = document.documentElement.classList.contains('dark');
     themeObserver = new MutationObserver(() => {
@@ -436,6 +449,12 @@ onMounted(() => {
   window.addEventListener('hashchange', handleLocationChange);
   window.addEventListener('popstate', handleLocationChange);
   window.addEventListener('resize', updateTabsNavScrollIndicator);
+  window.addEventListener('resize', updateVisualViewportHeight);
+  window.addEventListener('orientationchange', updateVisualViewportHeight);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', updateVisualViewportHeight);
+    window.visualViewport.addEventListener('scroll', updateVisualViewportHeight);
+  }
 
   if (typeof ResizeObserver !== 'undefined') {
     tabsNavResizeObserver = new ResizeObserver(() => {
@@ -473,6 +492,12 @@ onUnmounted(() => {
   window.removeEventListener('hashchange', handleLocationChange);
   window.removeEventListener('popstate', handleLocationChange);
   window.removeEventListener('resize', updateTabsNavScrollIndicator);
+  window.removeEventListener('resize', updateVisualViewportHeight);
+  window.removeEventListener('orientationchange', updateVisualViewportHeight);
+  if (window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', updateVisualViewportHeight);
+    window.visualViewport.removeEventListener('scroll', updateVisualViewportHeight);
+  }
   window.removeEventListener('mousemove', onTabsNavWindowMouseMove);
   window.removeEventListener('mouseup', onTabsNavWindowMouseUp);
 });
@@ -4629,7 +4654,9 @@ const cycleFullImageFitMode = () => {
 };
 
 watch(lightboxHighlight, (val, oldVal) => {
-  if (!val) {
+  if (val) {
+    updateVisualViewportHeight();
+  } else {
     clearInitialLightboxImagePending();
     isFullImageZoomOpen.value = false;
     fullImageFitMode.value = 'contain';
@@ -14339,6 +14366,7 @@ html.dark .btn-cancel-modal {
   position: relative;
   width: min(960px, 96vw);
   max-height: 92vh;
+  max-height: min(92dvh, calc(var(--vvh, 100dvh) - 24px));
   overflow: hidden;
   background: var(--card-bg, #ffffff);
   color: var(--text-primary, #1e293b);
@@ -14412,6 +14440,7 @@ html.dark .btn-share-highlight-header:hover {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   scroll-behavior: smooth;
@@ -14422,6 +14451,8 @@ html.dark .btn-share-highlight-header:hover {
   position: relative;
   width: 100%;
   min-height: min(64vh, 540px);
+  min-height: min(64dvh, 540px);
+  min-height: min(calc(var(--vvh, 100dvh) * 0.64), 540px);
   background: #09090b;
   display: flex;
   justify-content: center;
@@ -14432,17 +14463,29 @@ html.dark .btn-share-highlight-header:hover {
 .lightbox-full-img {
   max-width: 100%;
   max-height: min(74vh, 720px);
+  max-height: min(74dvh, 720px);
+  max-height: min(calc(var(--vvh, 100dvh) * 0.74), 720px);
   width: auto;
   height: auto;
   object-fit: contain;
   display: block;
 }
 @media (max-width: 640px) {
+  .lightbox-modal-card {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
+    max-height: calc(var(--vvh, 100dvh) - 20px);
+  }
   .lightbox-img-container {
-    min-height: 50vh;
+    min-height: min(44vh, 380px);
+    min-height: min(44dvh, 380px);
+    min-height: min(calc(var(--vvh, 100dvh) * 0.44), 380px);
   }
   .lightbox-full-img {
-    max-height: 68vh;
+    max-height: 62vh;
+    max-height: 62dvh;
+    max-height: calc(var(--vvh, 100dvh) * 0.62);
   }
 }
 .lightbox-info-footer {
@@ -14576,10 +14619,13 @@ html.dark .btn-share-highlight-header:hover {
 .full-image-zoom-stage {
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
+  height: var(--vvh, 100dvh);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 56px 16px 16px;
   box-sizing: border-box;
   -webkit-overflow-scrolling: touch;
@@ -14606,6 +14652,8 @@ html.dark .btn-share-highlight-header:hover {
 .full-image-zoom-img.fit-contain {
   max-width: 96vw;
   max-height: 90vh;
+  max-height: 90dvh;
+  max-height: calc(var(--vvh, 100dvh) * 0.9);
   width: auto;
   height: auto;
   object-fit: contain;
@@ -14618,6 +14666,8 @@ html.dark .btn-share-highlight-header:hover {
 }
 .full-image-zoom-img.fit-height {
   height: 90vh;
+  height: 90dvh;
+  height: calc(var(--vvh, 100dvh) * 0.9);
   width: auto;
   max-width: none;
   max-height: none;
@@ -15657,6 +15707,11 @@ html.dark .urm-score-flow {
   left: 0;
   right: 0;
   bottom: 0;
+  height: 100vh;
+  height: 100dvh;
+  height: var(--vvh, 100dvh);
+  box-sizing: border-box;
+  overscroll-behavior: contain;
   background: rgba(0, 0, 0, 0.65);
   display: flex;
   align-items: center;
@@ -15667,6 +15722,11 @@ html.dark .urm-score-flow {
 }
 .modal-overlay.lightbox-overlay {
   z-index: 2700;
+}
+@media (max-width: 640px) {
+  .modal-overlay.lightbox-overlay {
+    padding: 10px;
+  }
 }
 
 /* 레이팅 차트 캔버스 외부 반응형 HTML 선수 범례 */
