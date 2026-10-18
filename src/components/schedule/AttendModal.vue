@@ -79,6 +79,24 @@ const selectedNames = ref<string[]>([]);
 const isCustomName = ref(false);
 const nameSearchQuery = ref('');
 const isDropdownOpen = ref(false);
+const searchInputRef = ref<HTMLInputElement | null>(null);
+let ignoreInputUntil = 0;
+
+const clearMultiSearchInput = () => {
+  ignoreInputUntil = Date.now() + 90;
+  nameSearchQuery.value = '';
+  selectedName.value = '';
+  if (searchInputRef.value) {
+    searchInputRef.value.value = '';
+  }
+  nextTick(() => {
+    nameSearchQuery.value = '';
+    selectedName.value = '';
+    if (searchInputRef.value) {
+      searchInputRef.value.value = '';
+    }
+  });
+};
 
 const toggleMemberSelection = (name: string) => {
   const trimmed = name.trim();
@@ -89,19 +107,24 @@ const toggleMemberSelection = (name: string) => {
   } else {
     selectedNames.value.push(trimmed);
   }
+  if (isMultiSelectMode.value) {
+    clearMultiSearchInput();
+    highlightedIndex.value = 0;
+  }
 };
 
 const removeSelectedName = (name: string) => {
   selectedNames.value = selectedNames.value.filter(n => n !== name);
 };
 
-const addCustomName = () => {
-  const val = nameSearchQuery.value.trim();
+const addCustomName = (explicitName?: string) => {
+  const val = (explicitName ?? nameSearchQuery.value).trim();
   if (!val) return;
   if (!selectedNames.value.includes(val)) {
     selectedNames.value.push(val);
   }
-  nameSearchQuery.value = '';
+  clearMultiSearchInput();
+  highlightedIndex.value = 0;
 };
 
 // 시간대 선택: 'day' (10~22시) | 'overnight' (10시~익일) | 'custom' (직접 입력)
@@ -342,15 +365,63 @@ const openDropdown = () => {
 };
 
 const onSearchInput = (e: Event) => {
-  const val = (e.target as HTMLInputElement).value;
+  const inputEl = e.target as HTMLInputElement;
+  if (isMultiSelectMode.value && Date.now() < ignoreInputUntil) {
+    inputEl.value = '';
+    nameSearchQuery.value = '';
+    selectedName.value = '';
+    return;
+  }
+  const val = inputEl.value;
   nameSearchQuery.value = val;
-  selectedName.value = val;
+  if (!isMultiSelectMode.value) {
+    selectedName.value = val;
+  }
   isDropdownOpen.value = true;
   highlightedIndex.value = 0;
 };
 
+const onCompositionEnd = (e: CompositionEvent) => {
+  const inputEl = e.target as HTMLInputElement;
+  if (isMultiSelectMode.value && Date.now() < ignoreInputUntil) {
+    inputEl.value = '';
+    nameSearchQuery.value = '';
+    selectedName.value = '';
+  }
+};
+
 const onKeyDown = (e: KeyboardEvent) => {
   const list = filteredMembers.value;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    isDropdownOpen.value = false;
+    return;
+  }
+
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (isMultiSelectMode.value) {
+      if (isDropdownOpen.value && highlightedIndex.value >= 0 && highlightedIndex.value < list.length) {
+        addCustomName(list[highlightedIndex.value].name);
+      } else {
+        const rawInput = (searchInputRef.value?.value ?? nameSearchQuery.value).trim();
+        if (rawInput) {
+          addCustomName(rawInput);
+        }
+      }
+      isDropdownOpen.value = false;
+      return;
+    }
+
+    if (isDropdownOpen.value && highlightedIndex.value >= 0 && highlightedIndex.value < list.length) {
+      selectMember(list[highlightedIndex.value].name);
+    } else if (nameSearchQuery.value.trim()) {
+      selectMember(nameSearchQuery.value.trim());
+    }
+    return;
+  }
+
   if (!list.length) return;
 
   if (!isDropdownOpen.value) {
@@ -377,16 +448,6 @@ const onKeyDown = (e: KeyboardEvent) => {
       highlightedIndex.value = Math.max(highlightedIndex.value - 1, 0);
     }
     scrollToHighlighted();
-  } else if (e.key === 'Enter') {
-    e.preventDefault();
-    if (highlightedIndex.value >= 0 && highlightedIndex.value < list.length) {
-      selectMember(list[highlightedIndex.value].name);
-    } else if (nameSearchQuery.value.trim()) {
-      selectMember(nameSearchQuery.value.trim());
-    }
-  } else if (e.key === 'Escape') {
-    e.preventDefault();
-    isDropdownOpen.value = false;
   }
 };
 
@@ -464,7 +525,7 @@ const handleSubmit = () => {
   // 다중 참가자 일괄 추가 모드
   if (isMultiSelectMode.value) {
     const namesToSubmit = [...selectedNames.value];
-    const singleName = selectedName.value.trim();
+    const singleName = (nameSearchQuery.value.trim() || selectedName.value.trim());
     if (singleName && !namesToSubmit.includes(singleName)) {
       namesToSubmit.push(singleName);
     }
@@ -628,14 +689,15 @@ const handleCancel = () => {
 
             <div class="autocomplete-wrapper">
               <input
+                ref="searchInputRef"
                 type="text"
                 class="apple-input"
                 :value="nameSearchQuery"
                 :readonly="isNameReadOnly"
                 @input="isNameReadOnly ? null : onSearchInput($event)"
+                @compositionend="isNameReadOnly ? null : onCompositionEnd($event)"
                 @focus="isNameReadOnly ? null : openDropdown()"
                 @keydown="isNameReadOnly ? null : onKeyDown($event)"
-                @keydown.enter.prevent="isMultiSelectMode ? addCustomName() : null"
                 :placeholder="isNameReadOnly ? '확정된 모임 (이름 변경 불가)' : (isMultiSelectMode ? '이름 검색 후 선택 또는 엔터로 추가' : '이름 검색 또는 직접 입력')"
               />
               <button 
@@ -660,6 +722,7 @@ const handleCancel = () => {
                     selected: isMultiSelectMode ? selectedNames.includes(member.name) : selectedName === member.name,
                     highlighted: highlightedIndex === idx 
                   }"
+                  @mousedown.prevent
                   @mousemove="onDropdownItemMouseMove($event, idx)"
                   @click="isMultiSelectMode ? toggleMemberSelection(member.name) : selectMember(member.name)"
                 >
