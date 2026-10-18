@@ -1449,6 +1449,20 @@ const onLeaveMetric = () => {
   activeDist.value = null;
 };
 
+// 딥링크(?photo=...) 진입 시 라이트박스 메인 사진이 로드될 때까지 배경 갤러리 썸네일 및 무거운 통계 요청을 지연
+const isInitialLightboxImagePending = ref<boolean>(false);
+let resolveInitialLightboxImageWait: (() => void) | null = null;
+const clearInitialLightboxImagePending = () => {
+  if (isInitialLightboxImagePending.value) {
+    isInitialLightboxImagePending.value = false;
+  }
+  if (resolveInitialLightboxImageWait) {
+    const fn = resolveInitialLightboxImageWait;
+    resolveInitialLightboxImageWait = null;
+    fn();
+  }
+};
+
 // 전체 초기 데이터 로드 (forceRefresh=true 시 메모리 캐시 초기화 및 서버 최신 강제 조회)
 const loadAllData = async (forceRefresh: boolean = false) => {
   if (forceRefresh) {
@@ -1457,23 +1471,67 @@ const loadAllData = async (forceRefresh: boolean = false) => {
   isLoading.value = true;
   errorMessage.value = '';
   try {
-    const highlightsPromise = fetchHighlights(forceRefresh)
-      .then(hlList => {
+    const initialTargetPhotoId = pendingUrlPhotoId.value || parsePhotoIdFromLocation();
+    const isGalleryPriority = Boolean(initialTargetPhotoId || activeTab.value === 'gallery');
+
+    let preloadedHighlights: HighlightRecord[] | null = null;
+
+    // 1) ?photo=... 공유 링크나 갤러리 탭으로 진입한 경우:
+    // 무거운 구글 시트 통계 API 4종보다 갤러리 목록(KV)만 단독으로 먼저 조회하여 게시글/사진을 0순위로 즉시 오픈
+    if (isGalleryPriority) {
+      try {
+        const hlList = await fetchHighlights(forceRefresh);
+        preloadedHighlights = hlList;
         highlightsList.value = hlList;
+
         const targetPhotoId = pendingUrlPhotoId.value || parsePhotoIdFromLocation();
         if (targetPhotoId && !lightboxHighlight.value) {
           const found = hlList.find(h => h.id === targetPhotoId);
           if (found) {
             pendingUrlPhotoId.value = '';
+            if (found.hasImage && found.imageId) {
+              isInitialLightboxImagePending.value = true;
+            }
             openHighlightLightbox(found, false);
+            isLoading.value = false;
+
+            if (found.hasImage && found.imageId) {
+              await new Promise<void>(resolve => {
+                resolveInitialLightboxImageWait = resolve;
+                setTimeout(() => {
+                  clearInitialLightboxImagePending();
+                }, 1500);
+              });
+            }
           }
+        } else {
+          isLoading.value = false;
         }
-        return hlList;
-      })
-      .catch(e => {
-        console.warn("역만/화료 갤러리 로드 실패:", e);
-        return [] as HighlightRecord[];
-      });
+      } catch (e) {
+        console.warn("역만/화료 갤러리 우선 로드 실패:", e);
+        clearInitialLightboxImagePending();
+      }
+    }
+
+    const highlightsPromise = preloadedHighlights !== null
+      ? Promise.resolve(preloadedHighlights)
+      : fetchHighlights(forceRefresh)
+          .then(hlList => {
+            highlightsList.value = hlList;
+            const targetPhotoId = pendingUrlPhotoId.value || parsePhotoIdFromLocation();
+            if (targetPhotoId && !lightboxHighlight.value) {
+              const found = hlList.find(h => h.id === targetPhotoId);
+              if (found) {
+                pendingUrlPhotoId.value = '';
+                openHighlightLightbox(found, false);
+              }
+            }
+            return hlList;
+          })
+          .catch(e => {
+            console.warn("역만/화료 갤러리 로드 실패:", e);
+            return [] as HighlightRecord[];
+          });
 
     const [stats, matrix, timeline, sessions, highlights] = await Promise.all([
       fetchPublicAllStats(undefined, forceRefresh),
@@ -1523,6 +1581,7 @@ const loadAllData = async (forceRefresh: boolean = false) => {
     errorMessage.value = err.message || "스프레드시트 데이터를 불러오는 데 실패했습니다.";
   } finally {
     isLoading.value = false;
+    clearInitialLightboxImagePending();
   }
 };
 
@@ -4236,7 +4295,8 @@ const lightboxScrollAreaRef = ref<HTMLElement | null>(null);
 const lightboxCommentsSectionRef = ref<HTMLElement | null>(null);
 const showLightboxCommentFab = ref<boolean>(false);
 const isFullImageZoomOpen = ref<boolean>(false);
-const isFullImageZoomScaled = ref<boolean>(false);
+type FullImageFitMode = 'contain' | 'width' | 'height' | 'original';
+const fullImageFitMode = ref<FullImageFitMode>('contain');
 const deletePinPromptInput = ref('');
 const isDeletingHighlight = ref(false);
 const showDeletePinInput = ref(false);
@@ -4528,6 +4588,7 @@ const scrollToLightboxComments = () => {
 };
 
 const handleLightboxImageLoad = () => {
+  clearInitialLightboxImagePending();
   if (lightboxScrollAreaRef.value && lightboxScrollAreaRef.value.scrollTop < 10) {
     lightboxScrollAreaRef.value.scrollTop = 0;
   }
@@ -4541,19 +4602,30 @@ const handleLightboxImageLoad = () => {
 
 const openFullImageZoom = () => {
   if (!lightboxHighlight.value?.hasImage || !lightboxHighlight.value?.imageId) return;
-  isFullImageZoomScaled.value = false;
+  fullImageFitMode.value = 'contain';
   isFullImageZoomOpen.value = true;
 };
 
 const closeFullImageZoom = () => {
   isFullImageZoomOpen.value = false;
-  isFullImageZoomScaled.value = false;
+  fullImageFitMode.value = 'contain';
+};
+
+const cycleFullImageFitMode = () => {
+  if (fullImageFitMode.value === 'contain') {
+    fullImageFitMode.value = 'width';
+  } else if (fullImageFitMode.value === 'width') {
+    fullImageFitMode.value = 'original';
+  } else {
+    fullImageFitMode.value = 'contain';
+  }
 };
 
 watch(lightboxHighlight, (val, oldVal) => {
   if (!val) {
+    clearInitialLightboxImagePending();
     isFullImageZoomOpen.value = false;
-    isFullImageZoomScaled.value = false;
+    fullImageFitMode.value = 'contain';
     showLightboxCommentFab.value = false;
     pendingUrlPhotoId.value = '';
     if (oldVal && typeof window !== 'undefined') {
@@ -4837,7 +4909,7 @@ const openHighlightLightbox = (rec: HighlightRecord, updateUrl = true) => {
   selectedGameDetail.value = null;
   lightboxSessionPopupDetail.value = null;
   isFullImageZoomOpen.value = false;
-  isFullImageZoomScaled.value = false;
+  fullImageFitMode.value = 'contain';
   showLightboxCommentFab.value = true;
   lightboxHighlight.value = rec;
   if (updateUrl && typeof window !== 'undefined' && rec.id) {
@@ -6807,7 +6879,14 @@ const openGamePopupFromLightbox = async (
             @click="openHighlightLightbox(rec)"
           >
             <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
-              <img :src="getHighlightImageUrl(rec.imageId)" :alt="rec.caption || rec.winnerName" loading="lazy" class="pinterest-img" />
+              <img
+                v-if="!isInitialLightboxImagePending"
+                :src="getHighlightImageUrl(rec.imageId)"
+                :alt="rec.caption || rec.winnerName"
+                loading="lazy"
+                decoding="async"
+                class="pinterest-img"
+              />
             </div>
             <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun', 'is-nanikiru-banner': rec.category === 'nanikiru' }">
               <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : rec.category === 'nanikiru' ? '何切る' : '和了' }}</span>
@@ -9443,7 +9522,11 @@ const openGamePopupFromLightbox = async (
                 title="이 사진의 공유 링크 복사"
                 @click.stop="copyHighlightShareLink(lightboxHighlight)"
               >
-                공유
+                <svg class="share-link-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+                <span>공유</span>
               </button>
               <button class="btn-close" @click="lightboxHighlight = null" title="닫기">✕</button>
             </div>
@@ -9464,7 +9547,10 @@ const openGamePopupFromLightbox = async (
                 :src="getHighlightImageUrl(lightboxHighlight.imageId)"
                 class="lightbox-full-img"
                 alt="사진"
+                fetchpriority="high"
+                decoding="async"
                 @load="handleLightboxImageLoad"
+                @error="handleLightboxImageLoad"
               />
             </div>
 
@@ -9498,7 +9584,11 @@ const openGamePopupFromLightbox = async (
                       title="이 사진의 공유 링크 복사"
                       @click="copyHighlightShareLink(lightboxHighlight)"
                     >
-                      링크 공유
+                      <svg class="share-link-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                      </svg>
+                      <span>링크 공유</span>
                     </button>
                     <button
                       type="button"
@@ -10128,9 +10218,34 @@ const openGamePopupFromLightbox = async (
           <button
             type="button"
             class="btn-zoom-scale-toggle"
-            @click="isFullImageZoomScaled = !isFullImageZoomScaled"
+            :class="{ active: fullImageFitMode === 'contain' }"
+            @click="fullImageFitMode = 'contain'"
           >
-            {{ isFullImageZoomScaled ? '화면 맞춤 (1x)' : '더 크게 확대 (1.8x)' }}
+            화면 맞춤
+          </button>
+          <button
+            type="button"
+            class="btn-zoom-scale-toggle"
+            :class="{ active: fullImageFitMode === 'width' }"
+            @click="fullImageFitMode = 'width'"
+          >
+            가로 맞춤
+          </button>
+          <button
+            type="button"
+            class="btn-zoom-scale-toggle"
+            :class="{ active: fullImageFitMode === 'height' }"
+            @click="fullImageFitMode = 'height'"
+          >
+            세로 맞춤
+          </button>
+          <button
+            type="button"
+            class="btn-zoom-scale-toggle"
+            :class="{ active: fullImageFitMode === 'original' }"
+            @click="fullImageFitMode = 'original'"
+          >
+            원본 크기
           </button>
           <button
             type="button"
@@ -10143,14 +10258,14 @@ const openGamePopupFromLightbox = async (
         </div>
         <div
           class="full-image-zoom-stage"
-          :class="{ 'is-scaled': isFullImageZoomScaled }"
+          :class="`fit-${fullImageFitMode}`"
         >
           <img
             :src="getHighlightImageUrl(lightboxHighlight.imageId)"
             alt="원본 크게 보기"
             class="full-image-zoom-img"
-            :class="{ 'is-scaled': isFullImageZoomScaled }"
-            @click.stop="isFullImageZoomScaled = !isFullImageZoomScaled"
+            :class="`fit-${fullImageFitMode}`"
+            @click.stop="cycleFullImageFitMode"
           />
         </div>
       </div>
@@ -14277,6 +14392,11 @@ html.dark .btn-share-highlight-header {
 html.dark .btn-share-highlight-header:hover {
   background: rgba(59, 130, 246, 0.24);
 }
+.share-link-svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
 .lightbox-scroll-area {
   flex: 1 1 auto;
   min-height: 0;
@@ -14410,14 +14530,19 @@ html.dark .btn-share-highlight-header:hover {
   position: fixed;
   top: 14px;
   right: 16px;
+  left: 16px;
   z-index: 2990;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  pointer-events: none;
 }
 .btn-zoom-scale-toggle,
 .btn-zoom-close {
-  padding: 7px 13px;
+  pointer-events: auto;
+  padding: 7px 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.25);
   background: rgba(24, 24, 27, 0.85);
@@ -14430,8 +14555,13 @@ html.dark .btn-share-highlight-header:hover {
 }
 .btn-zoom-scale-toggle:hover,
 .btn-zoom-close:hover {
-  background: rgba(59, 130, 246, 0.85);
+  background: rgba(59, 130, 246, 0.72);
   border-color: rgba(147, 197, 253, 0.6);
+}
+.btn-zoom-scale-toggle.active {
+  background: rgba(37, 99, 235, 0.95);
+  border-color: rgba(147, 197, 253, 0.9);
+  color: #ffffff;
 }
 .full-image-zoom-stage {
   width: 100vw;
@@ -14440,30 +14570,53 @@ html.dark .btn-share-highlight-header:hover {
   align-items: center;
   justify-content: center;
   overflow: auto;
-  padding: 16px;
+  padding: 56px 16px 16px;
   box-sizing: border-box;
   -webkit-overflow-scrolling: touch;
 }
-.full-image-zoom-stage.is-scaled {
+.full-image-zoom-stage.fit-width {
+  align-items: flex-start;
+  justify-content: center;
+}
+.full-image-zoom-stage.fit-height {
+  align-items: center;
+  justify-content: flex-start;
+}
+.full-image-zoom-stage.fit-original {
   align-items: flex-start;
   justify-content: flex-start;
 }
 .full-image-zoom-img {
-  max-width: 96vw;
-  max-height: 92vh;
-  width: auto;
-  height: auto;
-  object-fit: contain;
   display: block;
   margin: auto;
   cursor: zoom-in;
   user-select: none;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
 }
-.full-image-zoom-img.is-scaled {
+.full-image-zoom-img.fit-contain {
+  max-width: 96vw;
+  max-height: 90vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+.full-image-zoom-img.fit-width {
+  width: 96vw;
+  height: auto;
   max-width: none;
   max-height: none;
-  width: min(175vw, 1800px);
+}
+.full-image-zoom-img.fit-height {
+  height: 90vh;
+  width: auto;
+  max-width: none;
+  max-height: none;
+}
+.full-image-zoom-img.fit-original {
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
   cursor: zoom-out;
 }
 .lightbox-details {

@@ -142,33 +142,29 @@ export async function probeActualHighlightImageSizes(records: HighlightRecord[])
     if (r.imageId) probingImageIds.add(r.imageId);
   }
 
-  await Promise.all(
-    needFetch.map(async (r) => {
-      const imgId = r.imageId;
-      if (!imgId) return;
-      try {
-        const imgUrl = getHighlightImageUrl(imgId);
-        const res = await fetch(imgUrl, { method: 'GET', cache: 'force-cache' });
-        if (res.ok) {
-          const clHeader = Number(res.headers.get('content-length') || 0);
-          let byteSize = clHeader > 0 ? clHeader : 0;
-          if (!byteSize) {
-            const blob = await res.blob();
-            byteSize = blob.size;
-          }
-          if (byteSize > 0) {
-            r.imageSize = byteSize;
-            sizeCache[imgId] = byteSize;
-            updated = true;
-          }
+  // 초기 화면 및 라이트박스 이미지 로딩을 전혀 방해하지 않도록 지연 후 순차 HEAD 조회만 수행
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+
+  for (const r of needFetch) {
+    const imgId = r.imageId;
+    if (!imgId) continue;
+    try {
+      const imgUrl = getHighlightImageUrl(imgId);
+      const res = await fetch(imgUrl, { method: 'HEAD', cache: 'force-cache' });
+      if (res.ok) {
+        const clHeader = Number(res.headers.get('content-length') || 0);
+        if (clHeader > 0) {
+          r.imageSize = clHeader;
+          sizeCache[imgId] = clHeader;
+          updated = true;
         }
-      } catch {
-        // ignore network error
-      } finally {
-        probingImageIds.delete(imgId);
       }
-    })
-  );
+    } catch {
+      // ignore network error
+    } finally {
+      probingImageIds.delete(imgId);
+    }
+  }
 
   if (updated) {
     saveLocalImageSizeCache(sizeCache);
@@ -227,7 +223,16 @@ export function getHighlightStorageInfo(records?: HighlightRecord[]): HighlightS
     }
   }
 
-  if (unprobedCount > 0) {
+  if (cachedStorageInfo && cachedStorageInfo.maxBytes > 0) {
+    if (cachedStorageInfo.imageCount === imageCount && cachedStorageInfo.usedBytes >= localImageBytes) {
+      return {
+        ...cachedStorageInfo,
+        isProbing: false,
+      };
+    }
+  }
+
+  if (unprobedCount > 0 && (!cachedStorageInfo || !cachedStorageInfo.usedBytes)) {
     probeActualHighlightImageSizes(list).catch(() => {});
   }
 
@@ -236,15 +241,6 @@ export function getHighlightStorageInfo(records?: HighlightRecord[]): HighlightS
     indexBytes = new TextEncoder().encode(JSON.stringify(list)).byteLength;
   } catch {
     indexBytes = list.length * 320;
-  }
-
-  if (cachedStorageInfo && cachedStorageInfo.maxBytes > 0) {
-    if (cachedStorageInfo.imageCount === imageCount && cachedStorageInfo.usedBytes >= localImageBytes) {
-      return {
-        ...cachedStorageInfo,
-        isProbing: unprobedCount > 0 && !cachedStorageInfo.isExactServerKv,
-      };
-    }
   }
 
   const maxBytes = cachedStorageInfo?.maxBytes || DEFAULT_KV_MAX_BYTES;
