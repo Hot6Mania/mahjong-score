@@ -873,11 +873,19 @@ export interface MahjongActionEmoteDef {
   colorClass: string; // CSS class for refined button badge
 }
 
+export const NANIKIRU_TAG_DEFINITIONS: string[] = [
+  '리치 판단',
+  '공수 판단',
+  '안전패 선택',
+  '패효율',
+  '후로 판단',
+];
+
 export const MAHJONG_ACTION_EMOTES: MahjongActionEmoteDef[] = [
   { key: '리치', label: '리치', colorClass: 'act-riichi' },
   { key: '다마', label: '다마', colorClass: 'act-dama' },
-  { key: '퐁', label: '퐁', colorClass: 'act-pon' },
   { key: '치', label: '치', colorClass: 'act-chii' },
+  { key: '퐁', label: '퐁', colorClass: 'act-pon' },
   { key: '깡', label: '깡', colorClass: 'act-kan' },
   { key: '론', label: '론', colorClass: 'act-ron' },
   { key: '쯔모', label: '쯔모', colorClass: 'act-tsumo' },
@@ -941,6 +949,23 @@ export function getMahjongTileImageUrl(codeOrFileName: string): string {
   const cleanName = (codeOrFileName || '').trim();
   const file = cleanName.endsWith('.png') ? cleanName : `${cleanName}.png`;
   return `${base}/assets/tiles/${file}`;
+}
+
+let tileImagesPreloaded = false;
+const preloadedTileImageElements: HTMLImageElement[] = [];
+
+export function preloadMahjongTileImages(): void {
+  if (tileImagesPreloaded || typeof window === 'undefined' || typeof Image === 'undefined') return;
+  tileImagesPreloaded = true;
+  for (const tile of MAHJONG_TILE_EMOTES) {
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = getMahjongTileImageUrl(tile.fileName);
+    if (typeof img.decode === 'function') {
+      img.decode().catch(() => {});
+    }
+    preloadedTileImageElements.push(img);
+  }
 }
 
 export type CommentSegment =

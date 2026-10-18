@@ -45,9 +45,11 @@ import {
 } from '@/services/publicStatsService';
 import {
   YAKUMAN_DEFINITIONS,
+  NANIKIRU_TAG_DEFINITIONS,
   MAHJONG_TILE_EMOTES,
   MAHJONG_ACTION_EMOTES,
   getMahjongTileImageUrl,
+  preloadMahjongTileImages,
   parseRichMahjongText,
   getEffectiveHighlightComments,
   addHighlightComment,
@@ -697,13 +699,26 @@ const openPlayerModal = (
   }
 };
 
+const findMemberStatByName = (name?: string): MemberStatItem | undefined => {
+  const clean = (name || '').trim();
+  if (!clean) return undefined;
+  const exact = allStats.value.find(m => m.name.trim() === clean);
+  if (exact) return exact;
+  const norm = clean.replace(/★/g, '').trim();
+  return allStats.value.find(m => m.name.replace(/★/g, '').trim() === norm);
+};
+
+const isKnownPlayerName = (name?: string): boolean => {
+  return Boolean(findMemberStatByName(name));
+};
+
 const openPlayerByName = (
   name: string,
   fromSession: boolean = false,
   keepScopeTab: boolean = false,
   keepActiveTab: boolean = false
 ) => {
-  const match = allStats.value.find(m => m.name === name);
+  const match = findMemberStatByName(name);
   if (match) {
     openPlayerModal(match, fromSession, keepScopeTab, keepActiveTab);
   }
@@ -2358,6 +2373,7 @@ const formatDonutPct = (pct: number): string => {
 };
 
 onMounted(() => {
+  preloadMahjongTileImages();
   loadAllData();
   refreshGalleryAuthState();
 });
@@ -3047,7 +3063,7 @@ const selectedUploadRoundMovements = computed<GameRoundMovement[]>(() => {
 
 // 선택한 국의 화료자(복수 시 최고 득점자 우선), 화료 방식(쯔모/론), 방총자를 기본값으로 자동 반영
 const applyUploadRoundWinnerDefaults = (rm: GameRoundMovement | undefined) => {
-  if (!rm || uploadForm.value.category === 'session') return;
+  if (!rm || uploadForm.value.category === 'session' || uploadForm.value.category === 'nanikiru') return;
   const explicitWinners = rm.players.filter(pm => pm.isWin);
   const positiveDeltaPlayers = rm.players.filter(pm => pm.deltaScore > 0);
   const winners = explicitWinners.length > 0 ? explicitWinners : positiveDeltaPlayers;
@@ -3601,9 +3617,9 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
 
   syncDefaultUploadPlayerForCandidates();
   if (uploadForm.value.gameIndex !== undefined) {
-    await syncUploadModalGameRounds(uploadForm.value.gameIndex, isInitialOpen, isInitialOpen && !uploadForm.value.roundName);
+    await syncUploadModalGameRounds(uploadForm.value.gameIndex, isInitialOpen, isInitialOpen && !uploadForm.value.roundName && uploadForm.value.category === 'yakuman');
   } else if (
-    uploadForm.value.category !== 'session' &&
+    (uploadForm.value.category === 'yakuman' || uploadForm.value.category === 'fun') &&
     uploadModalSessionDetail.value &&
     uploadModalSessionDetail.value.games.length > 0
   ) {
@@ -3667,7 +3683,7 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
       } else if (
         hadNoGamesBefore &&
         !hasUserInteractedWithUploadForm &&
-        uploadForm.value.category !== 'session' &&
+        (uploadForm.value.category === 'yakuman' || uploadForm.value.category === 'fun') &&
         detail.games.length > 0
       ) {
         const target = await findTargetGameAndRoundForSession(sessName, detail.games, isInitialOpen);
@@ -3720,7 +3736,21 @@ watch(() => uploadForm.value.roundName, (newRound) => {
 });
 
 // 분류 전환 시 역만 추정 경기/국 또는 그 외 화료(유국만관/최고 득점 국)에 자동 포커싱
-watch(() => uploadForm.value.category, async (newCat) => {
+watch(() => uploadForm.value.category, async (newCat, oldCat) => {
+  if (newCat !== oldCat) {
+    if (newCat === 'yakuman') {
+      uploadForm.value.yakumanTypes = uploadForm.value.yakumanTypes.filter(t =>
+        YAKUMAN_DEFINITIONS.some(y => y.key === t)
+      );
+    } else if (newCat === 'nanikiru') {
+      uploadForm.value.yakumanTypes = uploadForm.value.yakumanTypes.filter(t =>
+        NANIKIRU_TAG_DEFINITIONS.includes(t)
+      );
+      uploadForm.value.loserName = '';
+    } else {
+      uploadForm.value.yakumanTypes = [];
+    }
+  }
   if (!isHighlightUploadModalOpen.value || isInitializingUploadModal) return;
   if (newCat === 'yakuman') {
     if (uploadForm.value.gameIndex === undefined && uploadModalGames.value.length > 0) {
@@ -4023,7 +4053,7 @@ const submitHighlightUpload = async () => {
         winnerName: f.winnerName.trim() || '',
         loserName: (f.category === 'yakuman' || f.category === 'fun') && f.winType === 'ron' && f.loserName.trim() ? f.loserName.trim() : '',
         winType: (f.category === 'session' || f.category === 'nanikiru' || !f.winnerName.trim()) ? null : f.winType,
-        yakumanTypes: f.category === 'yakuman' ? f.yakumanTypes : [],
+        yakumanTypes: (f.category === 'yakuman' || f.category === 'nanikiru') ? f.yakumanTypes : [],
         caption: f.caption,
         imageFile: selectedUploadFile.value,
         removeImage: removeExistingHighlightImage.value,
@@ -4064,7 +4094,7 @@ const submitHighlightUpload = async () => {
       winnerName: f.winnerName.trim() || undefined,
       loserName: (f.category === 'yakuman' || f.category === 'fun') && f.winType === 'ron' && f.loserName.trim() ? f.loserName.trim() : undefined,
       winType: (f.category === 'session' || f.category === 'nanikiru' || !f.winnerName.trim()) ? undefined : f.winType,
-      yakumanTypes: f.category === 'yakuman' ? f.yakumanTypes : [],
+      yakumanTypes: (f.category === 'yakuman' || f.category === 'nanikiru') ? f.yakumanTypes : [],
       caption: f.caption,
       uploaderName: f.uploaderName,
       imageFile: selectedUploadFile.value,
@@ -4124,7 +4154,14 @@ const commentFormError = ref<string>('');
 
 // 마작패 / 액션 버튼 디시콘 팔레트 상태
 const isCommentEmotePickerOpen = ref<boolean>(false);
-const activeEmoteTab = ref<'action' | 'man' | 'pin' | 'sou' | 'honor'>('action');
+const activeEmoteTab = ref<'man' | 'pin' | 'sou' | 'honor' | 'action'>('man');
+
+const TILE_EMOTE_GROUPS = [
+  { key: 'man' as const, label: '만수', tiles: MAHJONG_TILE_EMOTES.filter(t => t.group === 'man') },
+  { key: 'pin' as const, label: '통수', tiles: MAHJONG_TILE_EMOTES.filter(t => t.group === 'pin') },
+  { key: 'sou' as const, label: '삭수', tiles: MAHJONG_TILE_EMOTES.filter(t => t.group === 'sou') },
+  { key: 'honor' as const, label: '자패', tiles: MAHJONG_TILE_EMOTES.filter(t => t.group === 'honor') },
+];
 
 // 개별 댓글 수정 / 삭제 상태
 const editingCommentId = ref<string | null>(null);
@@ -4136,6 +4173,11 @@ const deletingCommentPin = ref<string>('');
 const commentActionError = ref<string>('');
 const isProcessingCommentAction = ref<boolean>(false);
 
+const closeEmotePickers = () => {
+  isCommentEmotePickerOpen.value = false;
+  isEditingCommentPickerOpen.value = false;
+};
+
 const syncScheduleLoginForComment = () => {
   const lastAttendee = (getLastAttendeeName() || '').trim();
   const savedPins = getSavedPins();
@@ -4144,10 +4186,9 @@ const syncScheduleLoginForComment = () => {
   if (lastAttendee && !useGuestCommentMode.value) {
     commentNicknameInput.value = lastAttendee;
     commentPinInput.value = scheduleLoggedInPin.value;
-  } else if (!commentNicknameInput.value) {
-    try {
-      commentNicknameInput.value = localStorage.getItem('mahjong_guest_comment_nick') || '';
-    } catch {}
+  } else {
+    commentNicknameInput.value = '';
+    commentPinInput.value = '';
   }
 };
 
@@ -4162,11 +4203,7 @@ const toggleGuestCommentMode = () => {
     commentNicknameInput.value = scheduleLoggedInName.value;
     commentPinInput.value = scheduleLoggedInPin.value;
   } else {
-    try {
-      commentNicknameInput.value = localStorage.getItem('mahjong_guest_comment_nick') || '';
-    } catch {
-      commentNicknameInput.value = '';
-    }
+    commentNicknameInput.value = '';
     commentPinInput.value = '';
   }
 };
@@ -4180,11 +4217,6 @@ const getRecordCommentCount = (rec: HighlightRecord): number => {
   void highlightStorageTick.value;
   return getEffectiveHighlightComments(rec).length;
 };
-
-const filteredTileEmotesByTab = computed(() => {
-  if (activeEmoteTab.value === 'action') return [];
-  return MAHJONG_TILE_EMOTES.filter(t => t.group === activeEmoteTab.value);
-});
 
 const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' = 'new') => {
   const token = `[${tokenLabel}]`;
@@ -4250,12 +4282,6 @@ const submitNewHighlightComment = async () => {
   if (!content) {
     commentFormError.value = '댓글 내용을 입력해 주세요.';
     return;
-  }
-
-  if (!isUsingScheduleIdentity.value) {
-    try {
-      localStorage.setItem('mahjong_guest_comment_nick', author);
-    } catch {}
   }
 
   isSubmittingComment.value = true;
@@ -4398,6 +4424,7 @@ const confirmDeleteComment = async (cmt: HighlightComment, explicitPin?: string)
 };
 
 const openHighlightLightbox = (rec: HighlightRecord) => {
+  preloadMahjongTileImages();
   refreshGalleryAuthState();
   useGuestCommentMode.value = false;
   syncScheduleLoginForComment();
@@ -6006,7 +6033,7 @@ const openGamePopupFromLightbox = async (
                           {{ hl.winnerName }} {{ hl.yakumanTypes.join('·') }}
                         </template>
                         <template v-else-if="hl.category === 'nanikiru'">
-                          나니키루
+                          나니키루{{ hl.yakumanTypes && hl.yakumanTypes.length > 0 ? ' · ' + hl.yakumanTypes.join('·') : '' }}
                         </template>
                         <template v-else>
                           그 외 화료
@@ -6105,15 +6132,29 @@ const openGamePopupFromLightbox = async (
                       <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ formatCardRoundKorean(rec.roundName) }}</span>
                       <span v-else-if="rec.roundName" class="hl-round-tag">{{ formatCardRoundKorean(rec.roundName) }}</span>
                       <span v-if="getRecordCommentCount(rec) > 0" class="hl-comment-cnt-badge" title="댓글 수">
-                        💬 {{ getRecordCommentCount(rec) }}
+                        <svg class="hl-comment-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span>{{ getRecordCommentCount(rec) }}</span>
                       </span>
                     </div>
                     <div v-if="rec.yakumanTypes && rec.yakumanTypes.length > 0" class="hl-yakuman-badges">
-                      <span v-for="yt in rec.yakumanTypes" :key="yt" class="hl-y-badge">{{ yt }}</span>
+                      <span
+                        v-for="yt in rec.yakumanTypes"
+                        :key="yt"
+                        class="hl-y-badge"
+                        :class="{ 'is-nanikiru-tag': rec.category === 'nanikiru' }"
+                      >{{ yt }}</span>
                     </div>
                     <div v-if="rec.winnerName" class="hl-winner-line">
-                      <strong>{{ rec.winnerName }}</strong>
-                      <span v-if="rec.winType" class="hl-wintype">({{ rec.winType === 'tsumo' ? '쯔모' : `론${rec.loserName ? ' ← ' + rec.loserName : ''}` }})</span>
+                      <strong
+                        class="hl-player-link"
+                        title="클릭하여 스탯 보기"
+                        @click.stop="openPlayerByName(rec.winnerName, true)"
+                      >{{ rec.winnerName }}</strong>
+                      <span v-if="rec.winType && rec.category !== 'nanikiru' && rec.category !== 'session'" class="hl-wintype">
+                        ({{ rec.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="rec.winType === 'ron' && rec.loserName"> ← <span class="hl-player-link" title="클릭하여 스탯 보기" @click.stop="openPlayerByName(rec.loserName, true)">{{ rec.loserName }}</span></template>)
+                      </span>
                     </div>
                     <div v-if="rec.caption" class="hl-caption">
                       <template v-for="(seg, sIdx) in parseRichMahjongText(rec.caption)" :key="`s-cap-${rec.id}-${sIdx}`">
@@ -6338,16 +6379,28 @@ const openGamePopupFromLightbox = async (
                 <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ formatCardRoundKorean(rec.roundName) }}</span>
                 <span v-else-if="rec.roundName" class="hl-round-tag">{{ formatCardRoundKorean(rec.roundName) }}</span>
                 <span v-if="getRecordCommentCount(rec) > 0" class="hl-comment-cnt-badge" title="댓글 수">
-                  💬 {{ getRecordCommentCount(rec) }}
+                  <svg class="hl-comment-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                  <span>{{ getRecordCommentCount(rec) }}</span>
                 </span>
               </div>
               <div v-if="rec.yakumanTypes && rec.yakumanTypes.length > 0" class="hl-yakuman-badges">
-                <span v-for="yt in rec.yakumanTypes" :key="yt" class="hl-y-badge">{{ yt }}</span>
+                <span
+                  v-for="yt in rec.yakumanTypes"
+                  :key="yt"
+                  class="hl-y-badge"
+                  :class="{ 'is-nanikiru-tag': rec.category === 'nanikiru' }"
+                >{{ yt }}</span>
               </div>
               <div v-if="rec.winnerName" class="hl-winner-line">
-                <strong>{{ rec.winnerName }}</strong>
-                <span v-if="rec.winType" class="hl-wintype">
-                  ({{ rec.winType === 'tsumo' ? '쯔모 화료' : `론 화료${rec.loserName ? ' ← ' + rec.loserName : ''}` }})
+                <strong
+                  class="hl-player-link"
+                  title="클릭하여 스탯 보기"
+                  @click.stop="openPlayerByName(rec.winnerName, false)"
+                >{{ rec.winnerName }}</strong>
+                <span v-if="rec.winType && rec.category !== 'nanikiru' && rec.category !== 'session'" class="hl-wintype">
+                  ({{ rec.winType === 'tsumo' ? '쯔모 화료' : '론 화료' }}<template v-if="rec.winType === 'ron' && rec.loserName"> ← <span class="hl-player-link" title="클릭하여 스탯 보기" @click.stop="openPlayerByName(rec.loserName, false)">{{ rec.loserName }}</span></template>)
                 </span>
               </div>
               <div v-if="rec.caption" class="hl-caption">
@@ -6443,7 +6496,7 @@ const openGamePopupFromLightbox = async (
               </div>
               <div v-else class="session_modal_body">
                 <template v-if="currentSessionPlayerStats.totalRounds > 0">
-                  <!-- 7개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 / 레이팅 추이 / 역만 / 자주 만나는 상대 -->
+                  <!-- 7개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 / 레이팅 추이 / 역만 / 상대 전적 -->
                   <div class="tab-menu-wrap" :class="{ 'has-scroll-indicator': modalTabScrollIndicator.visible }">
                     <div
                       :ref="setModalTabMenuRef"
@@ -6502,7 +6555,7 @@ const openGamePopupFromLightbox = async (
                         :class="{ active: sessionModalActiveTab === 'opponents' }" 
                         @click="sessionModalActiveTab = 'opponents'"
                       >
-                        자주 만나는 상대
+                        상대 전적
                       </button>
                     </div>
                     <div
@@ -7200,7 +7253,7 @@ const openGamePopupFromLightbox = async (
                         :class="{ active: sessionModalActiveTab === 'opponents' }"
                         @click="sessionModalActiveTab = 'opponents'"
                       >
-                        자주 만나는 상대
+                        상대 전적
                       </button>
                     </div>
                     <div
@@ -7341,7 +7394,7 @@ const openGamePopupFromLightbox = async (
             <!-- 2) 전체 기간 스탯 뷰 -->
             <template v-else>
 
-            <!-- 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 / 레이팅 추이 / 역만 / 자주 만나는 상대 -->
+            <!-- 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 / 레이팅 추이 / 역만 / 상대 전적 -->
             <div class="tab-menu-wrap" :class="{ 'has-scroll-indicator': modalTabScrollIndicator.visible }">
               <div
                 :ref="setModalTabMenuRef"
@@ -7400,7 +7453,7 @@ const openGamePopupFromLightbox = async (
                   :class="{ active: modalActiveTab === 'opponents' }" 
                   @click="modalActiveTab = 'opponents'"
                 >
-                  자주 만나는 상대
+                  상대 전적
                 </button>
               </div>
               <div
@@ -8347,12 +8400,28 @@ const openGamePopupFromLightbox = async (
                       <span v-for="yk in item.yakumanTypes" :key="yk" class="badge-yakuman-sm">{{ yk }}</span>
                     </template>
                     <span v-else-if="item.category === 'fun'" class="badge-fun-sm">그 외 화료</span>
-                    <span v-else-if="item.category === 'nanikiru'" class="badge-nanikiru-sm">나니키루</span>
+                    <template v-else-if="item.category === 'nanikiru'">
+                      <span class="badge-nanikiru-sm">나니키루</span>
+                      <span v-for="ntag in item.yakumanTypes" :key="`gdm-nt-${ntag}`" class="badge-nanikiru-tag-sm">{{ ntag }}</span>
+                    </template>
                     <span v-else class="badge-session-sm">회차 사진</span>
                   </div>
                   <div v-if="item.winnerName" class="gdm-highlight-players">
-                    {{ item.category === 'session' || item.category === 'nanikiru' ? '인원:' : '화료:' }} <strong>{{ item.winnerName }}</strong>
-                    <span v-if="item.winType && item.category !== 'nanikiru' && item.category !== 'session'"> ({{ item.winType === 'tsumo' ? '쯔모' : `론${item.loserName ? ' ← ' + item.loserName : ''}` }})</span>
+                    {{ item.category === 'session' || item.category === 'nanikiru' ? '인원:' : '화료:' }}
+                    <button
+                      type="button"
+                      class="hl-player-link strong"
+                      @click.stop="openPlayerByName(item.winnerName, true, false, true)"
+                      title="클릭하여 대국자 스탯 보기"
+                    >{{ item.winnerName }}</button>
+                    <span v-if="item.winType && item.category !== 'nanikiru' && item.category !== 'session'">
+                      ({{ item.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="item.winType === 'ron' && item.loserName"> ← <button
+                        type="button"
+                        class="hl-player-link"
+                        @click.stop="openPlayerByName(item.loserName, true, false, true)"
+                        title="클릭하여 방총자 스탯 보기"
+                      >{{ item.loserName }}</button></template>)
+                    </span>
                   </div>
                   <div v-if="item.caption" class="gdm-highlight-note">{{ item.caption }}</div>
                 </div>
@@ -8637,7 +8706,7 @@ const openGamePopupFromLightbox = async (
 
             <!-- 국 선택 (점수 변동 그래프 기반 실제 진행 국/본장 선택) -->
             <div v-if="uploadForm.category !== 'session'" class="form-group">
-              <label class="form-label">국 선택 (선택)</label>
+              <label class="form-label">국 (선택)</label>
               <select v-model="uploadForm.roundName" class="form-select">
                 <option value="">선택 안 함</option>
                 <option v-for="rl in uploadCandidateRounds" :key="`up-r-${rl}`" :value="rl">
@@ -8719,7 +8788,7 @@ const openGamePopupFromLightbox = async (
               </div>
             </div>
             <div v-else class="form-group">
-              <label class="form-label">{{ uploadForm.category === 'nanikiru' ? '질문자 / 대국자 (선택)' : '인원 선택 (선택)' }}</label>
+              <label class="form-label">인원 (선택)</label>
               <select v-model="uploadForm.winnerName" class="form-select">
                 <option value="">선택 안 함</option>
                 <option v-for="pName in uploadCandidatePlayers" :key="`up-ws-${pName}`" :value="pName">
@@ -8751,6 +8820,23 @@ const openGamePopupFromLightbox = async (
                   @click="toggleYakumanTypeInForm(yDef.key)"
                 >
                   {{ yDef.label }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 나니키루 판단 주제 뱃지 태그 선택 (5종, 복수 선택 가능) -->
+            <div v-if="uploadForm.category === 'nanikiru'" class="form-group">
+              <label class="form-label">나니키루 뱃지 태그 (선택, 복수 선택 가능)</label>
+              <div class="yakuman-chips-selector">
+                <button
+                  v-for="nTag in NANIKIRU_TAG_DEFINITIONS"
+                  :key="`sel-nt-${nTag}`"
+                  type="button"
+                  class="yakuman-select-chip nanikiru-chip"
+                  :class="{ selected: uploadForm.yakumanTypes.includes(nTag) }"
+                  @click="toggleYakumanTypeInForm(nTag)"
+                >
+                  {{ nTag }}
                 </button>
               </div>
             </div>
@@ -8787,7 +8873,7 @@ const openGamePopupFromLightbox = async (
                 v-model="uploadForm.caption" 
                 rows="3"
                 class="form-textarea" 
-                :placeholder="uploadForm.category === 'nanikiru' ? '현재 순목, 도라, 점수 상황, 고민되는 타패 후보 등을 적어보세요 (예: [3만] [7통] [리치] 중 무엇을 버릴까요?)' : '역만 달성 상황, 대기패/도라 설명, 대국 비하인드 메모를 자유롭게 남겨보세요'"
+                placeholder=""
                 maxlength="500"
               ></textarea>
             </div>
@@ -8837,7 +8923,7 @@ const openGamePopupFromLightbox = async (
         class="modal-overlay lightbox-overlay" 
         @click.self="lightboxHighlight = null"
       >
-        <div class="lightbox-modal-card">
+        <div class="lightbox-modal-card" @click="closeEmotePickers">
           <div class="lightbox-header">
             <div class="lightbox-title-meta">
               <span
@@ -8863,7 +8949,12 @@ const openGamePopupFromLightbox = async (
                 </span>
               </template>
               <span v-else-if="lightboxHighlight.category === 'fun'" class="badge-fun">그 외 화료</span>
-              <span v-else-if="lightboxHighlight.category === 'nanikiru'" class="badge-nanikiru">나니키루</span>
+              <template v-else-if="lightboxHighlight.category === 'nanikiru'">
+                <span class="badge-nanikiru">나니키루</span>
+                <span v-for="ntag in lightboxHighlight.yakumanTypes" :key="`lb-nt-${ntag}`" class="badge-nanikiru-tag">
+                  {{ ntag }}
+                </span>
+              </template>
               <span v-else class="badge-session-photo">회차 사진</span>
             </div>
             <button class="btn-close" @click="lightboxHighlight = null" title="닫기">✕</button>
@@ -8875,12 +8966,52 @@ const openGamePopupFromLightbox = async (
 
           <div class="lightbox-info-footer">
             <div class="lightbox-details">
-              <div v-if="lightboxHighlight.winnerName" class="lightbox-players">
-                {{ lightboxHighlight.category === 'session' ? '인원:' : lightboxHighlight.category === 'nanikiru' ? '질문자:' : '화료:' }} <strong>{{ lightboxHighlight.winnerName }}</strong>
-                <span v-if="lightboxHighlight.winType && lightboxHighlight.category !== 'session' && lightboxHighlight.category !== 'nanikiru'">
-                  ({{ lightboxHighlight.winType === 'tsumo' ? '쯔모' : `론${lightboxHighlight.loserName ? ' ← ' + lightboxHighlight.loserName : ''}` }})
-                </span>
+              <!-- 상단 대국자 정보 및 수정/삭제 컨트롤 바 (100% 폭 고정) -->
+              <div class="lightbox-meta-action-row">
+                <div v-if="lightboxHighlight.winnerName" class="lightbox-players">
+                  {{ lightboxHighlight.category === 'session' || lightboxHighlight.category === 'nanikiru' ? '인원:' : '화료:' }}
+                  <button
+                    type="button"
+                    class="hl-player-link strong"
+                    @click.stop="openPlayerByName(lightboxHighlight.winnerName, true, false, true)"
+                    title="클릭하여 대국자 스탯 보기"
+                  >{{ lightboxHighlight.winnerName }}</button>
+                  <span v-if="lightboxHighlight.winType && lightboxHighlight.category !== 'session' && lightboxHighlight.category !== 'nanikiru'">
+                    ({{ lightboxHighlight.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="lightboxHighlight.winType === 'ron' && lightboxHighlight.loserName"> ← <button
+                      type="button"
+                      class="hl-player-link"
+                      @click.stop="openPlayerByName(lightboxHighlight.loserName, true, false, true)"
+                      title="클릭하여 방총자 스탯 보기"
+                    >{{ lightboxHighlight.loserName }}</button></template>)
+                  </span>
+                </div>
+                <div v-else class="lightbox-players-spacer"></div>
+
+                <div class="lightbox-delete-zone">
+                  <button
+                    type="button"
+                    class="btn-edit-highlight"
+                    @click="openEditHighlightModal(lightboxHighlight)"
+                  >
+                    기록 / 사진 수정
+                  </button>
+                  <input 
+                    v-if="needsPinInput"
+                    v-model="deletePinPromptInput" 
+                    type="password" 
+                    class="delete-pin-input" 
+                    placeholder="삭제 시 공통 PIN 입력"
+                  />
+                  <button 
+                    class="btn-delete-highlight" 
+                    :disabled="isDeletingHighlight"
+                    @click="confirmDeleteHighlight(lightboxHighlight)"
+                  >
+                    {{ isDeletingHighlight ? '삭제 중...' : '기록 삭제' }}
+                  </button>
+                </div>
               </div>
+              <div v-if="deleteHighlightError" class="upload-error-msg">{{ deleteHighlightError }}</div>
 
               <!-- 메모 표시 및 수정 영역 -->
               <div class="lightbox-memo-section">
@@ -8895,7 +9026,7 @@ const openGamePopupFromLightbox = async (
                     <template v-for="(seg, sIdx) in parseRichMahjongText(lightboxHighlight.caption)" :key="`lb-memo-seg-${sIdx}`">
                       <span v-if="seg.type === 'text'">{{ seg.text }}</span>
                       <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
-                        <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="lazy" />
+                        <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
                       </span>
                       <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
                         {{ seg.action.label }}
@@ -8911,7 +9042,7 @@ const openGamePopupFromLightbox = async (
                     rows="3"
                     maxlength="500"
                     class="form-textarea"
-                    placeholder="역만/나니키루/사진에 대한 메모를 입력하세요 (최대 500자)"
+                    placeholder=""
                   ></textarea>
                   <div class="lightbox-memo-editor-actions">
                     <input
@@ -8961,9 +9092,15 @@ const openGamePopupFromLightbox = async (
                   >
                     <div class="lb-comment-top">
                       <div class="lb-comment-author-box">
-                        <strong class="lb-comment-author">{{ cmt.authorName }}</strong>
-                        <span v-if="cmt.isLoggedInUser" class="lb-comment-user-badge" title="로그인 사용자">고정</span>
-                        <span v-else class="lb-comment-guest-badge" title="유동 닉네임">유동</span>
+                        <button
+                          v-if="isKnownPlayerName(cmt.authorName)"
+                          type="button"
+                          class="lb-comment-author is-clickable"
+                          @click.stop="openPlayerByName(cmt.authorName, true, false, true)"
+                          title="클릭하여 대국자 스탯 보기"
+                        >{{ cmt.authorName }}</button>
+                        <strong v-else class="lb-comment-author">{{ cmt.authorName }}</strong>
+                        <span v-if="!cmt.isLoggedInUser" class="lb-comment-guest-badge" title="유동 닉네임">유동</span>
                         <span class="lb-comment-time">
                           {{ formatCommentTime(cmt.createdAt) }}
                           <template v-if="cmt.updatedAt"> (수정됨)</template>
@@ -8988,7 +9125,7 @@ const openGamePopupFromLightbox = async (
                       <template v-for="(seg, sIdx) in parseRichMahjongText(cmt.content)" :key="`cmt-${cmt.id}-seg-${sIdx}`">
                         <span v-if="seg.type === 'text'">{{ seg.text }}</span>
                         <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
-                          <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="lazy" />
+                          <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
                         </span>
                         <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
                           {{ seg.action.label }}
@@ -8997,23 +9134,67 @@ const openGamePopupFromLightbox = async (
                     </div>
 
                     <!-- 댓글 수정 인라인 폼 -->
-                    <div v-else class="lb-comment-edit-box">
+                    <div v-else class="lb-comment-edit-box" @click.stop>
                       <textarea
                         v-model="editingCommentContent"
                         rows="2"
                         maxlength="400"
                         class="form-textarea lb-cmt-edit-textarea"
-                        placeholder="댓글 내용을 수정하세요"
+                        placeholder=""
                       ></textarea>
                       <div class="lb-cmt-edit-toolbar">
-                        <button
-                          type="button"
-                          class="btn-toggle-emote-picker sm"
-                          :class="{ active: isEditingCommentPickerOpen }"
-                          @click="isEditingCommentPickerOpen = !isEditingCommentPickerOpen"
-                        >
-                          나니키루콘
-                        </button>
+                        <div class="emote-picker-anchor">
+                          <button
+                            type="button"
+                            class="btn-toggle-emote-picker sm"
+                            :class="{ active: isEditingCommentPickerOpen }"
+                            @click.stop="isEditingCommentPickerOpen = !isEditingCommentPickerOpen; isCommentEmotePickerOpen = false"
+                          >
+                            나니키루콘
+                          </button>
+
+                          <!-- 댓글 수정용 플로팅 팝업 팔레트 -->
+                          <div v-show="isEditingCommentPickerOpen" class="mahjong-emote-picker compact" @click.stop>
+                            <div class="mep-tabs">
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'man' }" @click="activeEmoteTab = 'man'">만수</button>
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'pin' }" @click="activeEmoteTab = 'pin'">통수</button>
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'sou' }" @click="activeEmoteTab = 'sou'">삭수</button>
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'honor' }" @click="activeEmoteTab = 'honor'">자패</button>
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
+                            </div>
+                            <div v-show="activeEmoteTab === 'action'" class="mep-actions-grid">
+                              <button
+                                v-for="act in MAHJONG_ACTION_EMOTES"
+                                :key="`ed-act-${act.key}`"
+                                type="button"
+                                class="mep-action-btn"
+                                :class="act.colorClass"
+                                @click="insertEmoteTokenToComment(act.label, 'edit')"
+                              >
+                                {{ act.label }}
+                              </button>
+                            </div>
+                            <div
+                              v-for="grp in TILE_EMOTE_GROUPS"
+                              :key="`ed-grp-${grp.key}`"
+                              v-show="activeEmoteTab === grp.key"
+                              class="mep-tiles-grid"
+                            >
+                              <button
+                                v-for="tl in grp.tiles"
+                                :key="`ed-tl-${tl.code}`"
+                                type="button"
+                                class="mep-tile-btn"
+                                :title="tl.label"
+                                @click="insertEmoteTokenToComment(tl.label, 'edit')"
+                              >
+                                <img :src="getMahjongTileImageUrl(tl.fileName)" :alt="tl.label" loading="eager" decoding="sync" />
+                                <span class="mep-tile-sub">{{ tl.label }}</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
                         <div class="lb-cmt-edit-right">
                           <input
                             v-if="!canAutoAuthComment(cmt)"
@@ -9033,42 +9214,6 @@ const openGamePopupFromLightbox = async (
                         </div>
                       </div>
 
-                      <!-- 댓글 수정용 미니 아이콘 팔레트 -->
-                      <div v-if="isEditingCommentPickerOpen" class="mahjong-emote-picker compact">
-                        <div class="mep-tabs">
-                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
-                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'man' }" @click="activeEmoteTab = 'man'">만수패 (1~9만)</button>
-                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'pin' }" @click="activeEmoteTab = 'pin'">통수패 (1~9통)</button>
-                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'sou' }" @click="activeEmoteTab = 'sou'">삭수패 (1~9삭)</button>
-                          <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'honor' }" @click="activeEmoteTab = 'honor'">자패 (동남서북백발중)</button>
-                        </div>
-                        <div v-if="activeEmoteTab === 'action'" class="mep-actions-grid">
-                          <button
-                            v-for="act in MAHJONG_ACTION_EMOTES"
-                            :key="`ed-act-${act.key}`"
-                            type="button"
-                            class="mep-action-btn"
-                            :class="act.colorClass"
-                            @click="insertEmoteTokenToComment(act.label, 'edit')"
-                          >
-                            {{ act.label }}
-                          </button>
-                        </div>
-                        <div v-else class="mep-tiles-grid">
-                          <button
-                            v-for="tl in filteredTileEmotesByTab"
-                            :key="`ed-tl-${tl.code}`"
-                            type="button"
-                            class="mep-tile-btn"
-                            :title="tl.label"
-                            @click="insertEmoteTokenToComment(tl.label, 'edit')"
-                          >
-                            <img :src="getMahjongTileImageUrl(tl.fileName)" :alt="tl.label" />
-                            <span class="mep-tile-sub">{{ tl.label }}</span>
-                          </button>
-                        </div>
-                      </div>
-
                       <div v-if="commentActionError && editingCommentId === cmt.id" class="upload-error-msg">{{ commentActionError }}</div>
                     </div>
 
@@ -9084,7 +9229,6 @@ const openGamePopupFromLightbox = async (
                         @keyup.enter="confirmDeleteComment(cmt)"
                       />
                       <button
-                        type="button"
                         class="btn-delete-highlight sm"
                         :disabled="isProcessingCommentAction"
                         @click="confirmDeleteComment(cmt)"
@@ -9149,7 +9293,7 @@ const openGamePopupFromLightbox = async (
                       rows="2"
                       maxlength="400"
                       class="form-textarea lb-cf-textarea"
-                      placeholder="댓글을 입력하세요"
+                      placeholder=""
                       @keydown.ctrl.enter.prevent="submitNewHighlightComment"
                     ></textarea>
                   </div>
@@ -9164,7 +9308,7 @@ const openGamePopupFromLightbox = async (
                       <template v-for="(seg, sIdx) in parseRichMahjongText(commentContentInput)" :key="`prev-seg-${sIdx}`">
                         <span v-if="seg.type === 'text'">{{ seg.text }}</span>
                         <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
-                          <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" />
+                          <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
                         </span>
                         <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
                           {{ seg.action.label }}
@@ -9173,16 +9317,99 @@ const openGamePopupFromLightbox = async (
                     </div>
                   </div>
 
-                  <!-- 하단 툴바: 나니키루콘 팔레트 토글 + 등록 버튼 -->
+                  <!-- 하단 툴바: 나니키루콘 플로팅 팝업 토글 + 등록 버튼 -->
                   <div class="lb-cf-bottom-bar">
-                    <button
-                      type="button"
-                      class="btn-toggle-emote-picker"
-                      :class="{ active: isCommentEmotePickerOpen }"
-                      @click="isCommentEmotePickerOpen = !isCommentEmotePickerOpen"
-                    >
-                      나니키루콘
-                    </button>
+                    <div class="emote-picker-anchor">
+                      <button
+                        type="button"
+                        class="btn-toggle-emote-picker"
+                        :class="{ active: isCommentEmotePickerOpen }"
+                        @click.stop="isCommentEmotePickerOpen = !isCommentEmotePickerOpen; isEditingCommentPickerOpen = false"
+                      >
+                        나니키루콘
+                      </button>
+
+                      <!-- 마작패(34종) & 액션 버튼(8종) 플로팅 팝업 팔레트 -->
+                      <div v-show="isCommentEmotePickerOpen" class="mahjong-emote-picker" @click.stop>
+                        <div class="mep-tabs">
+                          <button
+                            type="button"
+                            class="mep-tab"
+                            :class="{ active: activeEmoteTab === 'man' }"
+                            @click="activeEmoteTab = 'man'"
+                          >
+                            만수
+                          </button>
+                          <button
+                            type="button"
+                            class="mep-tab"
+                            :class="{ active: activeEmoteTab === 'pin' }"
+                            @click="activeEmoteTab = 'pin'"
+                          >
+                            통수
+                          </button>
+                          <button
+                            type="button"
+                            class="mep-tab"
+                            :class="{ active: activeEmoteTab === 'sou' }"
+                            @click="activeEmoteTab = 'sou'"
+                          >
+                            삭수
+                          </button>
+                          <button
+                            type="button"
+                            class="mep-tab"
+                            :class="{ active: activeEmoteTab === 'honor' }"
+                            @click="activeEmoteTab = 'honor'"
+                          >
+                            자패
+                          </button>
+                          <button
+                            type="button"
+                            class="mep-tab"
+                            :class="{ active: activeEmoteTab === 'action' }"
+                            @click="activeEmoteTab = 'action'"
+                          >
+                            액션 버튼
+                          </button>
+                        </div>
+
+                        <!-- 액션 버튼 8종 (리치/다마/치/퐁/깡/론/쯔모/스킵) -->
+                        <div v-show="activeEmoteTab === 'action'" class="mep-actions-grid">
+                          <button
+                            v-for="act in MAHJONG_ACTION_EMOTES"
+                            :key="`new-act-${act.key}`"
+                            type="button"
+                            class="mep-action-btn"
+                            :class="act.colorClass"
+                            @click="insertEmoteTokenToComment(act.label, 'new')"
+                          >
+                            {{ act.label }}
+                          </button>
+                        </div>
+
+                        <!-- 마작패 이미지 그리드 (만수/통수/삭수/자패, DOM 상시 마운트로 0ms 전환) -->
+                        <div
+                          v-for="grp in TILE_EMOTE_GROUPS"
+                          :key="`new-grp-${grp.key}`"
+                          v-show="activeEmoteTab === grp.key"
+                          class="mep-tiles-grid"
+                        >
+                          <button
+                            v-for="tl in grp.tiles"
+                            :key="`new-tl-${tl.code}`"
+                            type="button"
+                            class="mep-tile-btn"
+                            :title="`${tl.label} 넣기`"
+                            @click="insertEmoteTokenToComment(tl.label, 'new')"
+                          >
+                            <img :src="getMahjongTileImageUrl(tl.fileName)" :alt="tl.label" loading="eager" decoding="sync" />
+                            <span class="mep-tile-sub">{{ tl.label }}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
                     <button
                       type="button"
                       class="btn-submit-comment"
@@ -9193,110 +9420,10 @@ const openGamePopupFromLightbox = async (
                     </button>
                   </div>
 
-                  <!-- 마작패(34종) & 액션 버튼(8종) 디시콘 선택 팔레트 -->
-                  <div v-if="isCommentEmotePickerOpen" class="mahjong-emote-picker">
-                    <div class="mep-tabs">
-                      <button
-                        type="button"
-                        class="mep-tab"
-                        :class="{ active: activeEmoteTab === 'action' }"
-                        @click="activeEmoteTab = 'action'"
-                      >
-                        액션 버튼 (8)
-                      </button>
-                      <button
-                        type="button"
-                        class="mep-tab"
-                        :class="{ active: activeEmoteTab === 'man' }"
-                        @click="activeEmoteTab = 'man'"
-                      >
-                        만수패 (1~9만)
-                      </button>
-                      <button
-                        type="button"
-                        class="mep-tab"
-                        :class="{ active: activeEmoteTab === 'pin' }"
-                        @click="activeEmoteTab = 'pin'"
-                      >
-                        통수패 (1~9통)
-                      </button>
-                      <button
-                        type="button"
-                        class="mep-tab"
-                        :class="{ active: activeEmoteTab === 'sou' }"
-                        @click="activeEmoteTab = 'sou'"
-                      >
-                        삭수패 (1~9삭)
-                      </button>
-                      <button
-                        type="button"
-                        class="mep-tab"
-                        :class="{ active: activeEmoteTab === 'honor' }"
-                        @click="activeEmoteTab = 'honor'"
-                      >
-                        자패 (동남서북백발중)
-                      </button>
-                    </div>
-
-                    <!-- 액션 버튼 8종 (리치/다마/퐁/치/깡/론/쯔모/스킵) -->
-                    <div v-if="activeEmoteTab === 'action'" class="mep-actions-grid">
-                      <button
-                        v-for="act in MAHJONG_ACTION_EMOTES"
-                        :key="`new-act-${act.key}`"
-                        type="button"
-                        class="mep-action-btn"
-                        :class="act.colorClass"
-                        @click="insertEmoteTokenToComment(act.label, 'new')"
-                      >
-                        {{ act.label }}
-                      </button>
-                    </div>
-
-                    <!-- 마작패 이미지 그리드 (1~9만 / 1~9통 / 1~9삭 / 동남서북백발중) -->
-                    <div v-else class="mep-tiles-grid">
-                      <button
-                        v-for="tl in filteredTileEmotesByTab"
-                        :key="`new-tl-${tl.code}`"
-                        type="button"
-                        class="mep-tile-btn"
-                        :title="`${tl.label} 넣기`"
-                        @click="insertEmoteTokenToComment(tl.label, 'new')"
-                      >
-                        <img :src="getMahjongTileImageUrl(tl.fileName)" :alt="tl.label" />
-                        <span class="mep-tile-sub">{{ tl.label }}</span>
-                      </button>
-                    </div>
-                  </div>
-
                   <div v-if="commentFormError" class="upload-error-msg">{{ commentFormError }}</div>
                 </div>
               </div>
             </div>
-
-            <div class="lightbox-delete-zone">
-              <button
-                type="button"
-                class="btn-edit-highlight"
-                @click="openEditHighlightModal(lightboxHighlight)"
-              >
-                기록 / 사진 수정
-              </button>
-              <input 
-                v-if="needsPinInput"
-                v-model="deletePinPromptInput" 
-                type="password" 
-                class="delete-pin-input" 
-                placeholder="삭제 시 공통 PIN 입력"
-              />
-              <button 
-                class="btn-delete-highlight" 
-                :disabled="isDeletingHighlight"
-                @click="confirmDeleteHighlight(lightboxHighlight)"
-              >
-                {{ isDeletingHighlight ? '삭제 중...' : '기록 삭제' }}
-              </button>
-            </div>
-            <div v-if="deleteHighlightError" class="upload-error-msg">{{ deleteHighlightError }}</div>
           </div>
         </div>
       </div>
@@ -9675,7 +9802,7 @@ const openGamePopupFromLightbox = async (
   position: fixed;
   transform: translate(-50%, -100%);
   pointer-events: none;
-  z-index: 2500;
+  z-index: 2880;
   width: 215px;
   background: rgba(255, 255, 255, 0.98);
   color: #0f172a;
@@ -10846,7 +10973,7 @@ html.dark .gp-rating-delta.neg {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 2000;
+  z-index: 2850;
   padding: 16px;
 }
 .player-modal-card {
@@ -13402,20 +13529,41 @@ html.dark .lightbox-header {
   display: block;
 }
 .lightbox-info-footer {
-  padding: 1rem 1.2rem;
+  padding: 1rem 1.25rem 1.25rem;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 1rem;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
+  gap: 0.75rem;
 }
 .lightbox-details {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  gap: 0.65rem;
+}
+.lightbox-meta-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  width: 100%;
+  padding-bottom: 0.35rem;
+}
+.lightbox-players-spacer {
+  flex: 1;
 }
 .lightbox-players {
   font-size: 0.92rem;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
 }
 .lightbox-note {
   font-size: 0.88rem;
@@ -13430,6 +13578,7 @@ html.dark .lightbox-header {
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 0.45rem;
+  margin-left: auto;
 }
 .btn-edit-highlight {
   padding: 0.42rem 0.78rem;
@@ -13946,14 +14095,16 @@ html.dark .form-textarea {
   border-color: #3f3f46;
 }
 .lightbox-memo-section {
-  margin-top: 0.35rem;
-  padding: 0.65rem 0.8rem;
-  border-radius: 8px;
+  margin-top: 0.1rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 10px;
   background: var(--bg-soft, #f8fafc);
   border: 1px solid var(--border-color, #e2e8f0);
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.45rem;
+  width: 100%;
+  box-sizing: border-box;
 }
 html.dark .lightbox-memo-section {
   background: #27272a;
@@ -14888,7 +15039,7 @@ html.dark .opp_right {
   position: fixed;
   transform: translate(-50%, -100%);
   pointer-events: none;
-  z-index: 2650;
+  z-index: 2890;
   min-width: 260px;
   background: rgba(28, 28, 30, 0.97);
   color: #ffffff;
@@ -15275,32 +15426,108 @@ html.dark .badge-nanikiru-sm {
   border-color: rgba(45, 212, 191, 0.38);
 }
 
-/* 카드 내 댓글 개수 뱃지 */
+/* 나니키루 판단 뱃지 태그 (리치 판단 / 공수 판단 / 안전패 선택 / 패효율 / 후로 판단) */
+.yakuman-select-chip.nanikiru-chip.selected {
+  background: #0d9488;
+  color: #ffffff;
+  border-color: #0d9488;
+}
+.hl-y-badge.is-nanikiru-tag,
+.sg-yk-chip.is-nanikiru-tag,
+.badge-nanikiru-tag,
+.badge-nanikiru-tag-sm {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(13, 148, 136, 0.12);
+  color: #0f766e;
+  border: 1px solid rgba(13, 148, 136, 0.3);
+  font-weight: 700;
+  border-radius: 6px;
+}
+.badge-nanikiru-tag {
+  font-size: 11.5px;
+  padding: 2.5px 8px;
+}
+.badge-nanikiru-tag-sm {
+  font-size: 10.5px;
+  padding: 1.5px 6px;
+  border-radius: 4px;
+}
+html.dark .hl-y-badge.is-nanikiru-tag,
+html.dark .sg-yk-chip.is-nanikiru-tag,
+html.dark .badge-nanikiru-tag,
+html.dark .badge-nanikiru-tag-sm {
+  background: rgba(20, 184, 166, 0.18);
+  color: #5eead4;
+  border-color: rgba(45, 212, 191, 0.35);
+}
+
+/* 카드 내 댓글 개수 SVG 뱃지 (다크/라이트모드 대응) */
+.hl-comment-cnt-badge,
 .hl-comment-count-badge,
 .sg-comment-chip {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 3.5px;
   font-size: 11px;
   font-weight: 700;
-  padding: 1.5px 6px;
+  padding: 2px 7px;
   border-radius: 999px;
   background: rgba(59, 130, 246, 0.12);
   color: #2563eb;
   margin-left: auto;
+  line-height: 1.2;
+}
+.hl-comment-svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  display: block;
 }
 .sg-comment-chip {
   background: rgba(15, 23, 42, 0.72);
   color: #93c5fd;
   border: 1px solid rgba(147, 197, 253, 0.35);
 }
+html.dark .hl-comment-cnt-badge,
 html.dark .hl-comment-count-badge {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.22);
   color: #60a5fa;
 }
 
+/* 갤러리/라이트박스 대국자 닉네임 스탯 모달 오픈 링크 */
+.hl-player-link {
+  background: none;
+  border: none;
+  padding: 0 1px;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  text-decoration: underline;
+  text-decoration-color: rgba(37, 99, 235, 0.35);
+  text-underline-offset: 2px;
+}
+.hl-player-link.strong {
+  font-weight: 800;
+}
+.hl-player-link:hover {
+  color: var(--color-toggle-on, #2563eb);
+  background-color: rgba(59, 130, 246, 0.1);
+  text-decoration-color: currentColor;
+}
+html.dark .hl-player-link {
+  text-decoration-color: rgba(96, 165, 250, 0.4);
+}
+html.dark .hl-player-link:hover {
+  color: #60a5fa;
+  background-color: rgba(96, 165, 250, 0.15);
+}
+
 /* =====================================================================
-   인라인 마작패 이미지 & 마작 액션 버튼 (디시콘 스타일)
+   인라인 마작패 이미지 & 마작 액션 버튼 (투명 배경 적용)
    ===================================================================== */
 .rich-mahjong-content {
   line-height: 1.65;
@@ -15314,11 +15541,10 @@ html.dark .hl-comment-count-badge {
   width: 24px;
   height: 33px;
   margin: 1px 1.5px;
-  padding: 1px;
-  border-radius: 3.5px;
-  background: linear-gradient(180deg, #fffdf9 0%, #f1ece1 100%);
-  border: 1px solid #cbd5e1;
-  box-shadow: 0 1.5px 0 #94a3b8, 0 2px 3px rgba(0, 0, 0, 0.14);
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
   box-sizing: border-box;
 }
 .inline-mahjong-tile img {
@@ -15326,14 +15552,19 @@ html.dark .hl-comment-count-badge {
   height: 100%;
   object-fit: contain;
   display: block;
+  background: transparent;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.22));
 }
 html.dark .inline-mahjong-tile {
-  background: linear-gradient(180deg, #faf8f5 0%, #e5e0d5 100%);
-  border-color: #94a3b8;
-  box-shadow: 0 1.5px 0 #475569, 0 2px 4px rgba(0, 0, 0, 0.45);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+html.dark .inline-mahjong-tile img {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
 }
 
-/* 마작 선언/액션 버튼 (리치/쯔모/론/깡/퐁/치/다마/스킵 - 세련된 톤다운 컬러) */
+/* 마작 선언/액션 버튼 (리치/다마/치/퐁/깡/론/쯔모/스킵 - 세련된 톤다운 컬러) */
 .inline-mahjong-action,
 .mep-action-btn {
   display: inline-flex;
@@ -15396,15 +15627,17 @@ html.dark .inline-mahjong-tile {
 }
 
 /* =====================================================================
-   라이트박스 사진 댓글 영역 스타일
+   라이트박스 사진 댓글 영역 스타일 (100% 너비 고정)
    ===================================================================== */
 .lightbox-comments-section {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: 4px;
+  padding-top: 12px;
   border-top: 1px solid var(--border-color, #e2e8f0);
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
 }
 html.dark .lightbox-comments-section {
   border-top-color: #27272a;
@@ -15454,6 +15687,8 @@ html.dark .lb-comments-count {
   max-height: 290px;
   overflow-y: auto;
   padding-right: 2px;
+  width: 100%;
+  box-sizing: border-box;
 }
 .lb-comment-item {
   padding: 8px 11px;
@@ -15463,6 +15698,8 @@ html.dark .lb-comments-count {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  width: 100%;
+  box-sizing: border-box;
 }
 html.dark .lb-comment-item {
   background: #222226;
@@ -15486,20 +15723,30 @@ html.dark .lb-comment-item {
   font-weight: 800;
   color: var(--text-color, #0f172a);
 }
+.lb-comment-author.is-clickable {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  margin: 0;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+  text-decoration: underline;
+  text-decoration-color: rgba(37, 99, 235, 0.35);
+  text-underline-offset: 2px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.lb-comment-author.is-clickable:hover {
+  color: var(--color-toggle-on, #2563eb);
+  background-color: rgba(59, 130, 246, 0.1);
+  text-decoration-color: currentColor;
+}
 html.dark .lb-comment-author {
   color: #f4f4f5;
 }
-.lb-comment-user-badge {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(37, 99, 235, 0.14);
-  color: #2563eb;
-}
-html.dark .lb-comment-user-badge {
-  background: rgba(59, 130, 246, 0.22);
+html.dark .lb-comment-author.is-clickable:hover {
   color: #60a5fa;
+  background-color: rgba(96, 165, 250, 0.15);
 }
 .lb-comment-guest-badge {
   font-size: 10px;
@@ -15544,20 +15791,6 @@ html.dark .lb-comment-user-badge {
 }
 html.dark .lb-comment-body {
   color: #e4e4e7;
-}
-
-.lb-comments-empty {
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-dimmed, #64748b);
-  padding: 12px 8px;
-  background: var(--bg-card, #f8fafc);
-  border: 1px dashed var(--border-color, #cbd5e1);
-  border-radius: 8px;
-}
-html.dark .lb-comments-empty {
-  background: rgba(255, 255, 255, 0.02);
-  border-color: #3f3f46;
 }
 
 /* 댓글 수정 / 삭제 인라인 박스 */
@@ -15626,6 +15859,8 @@ html.dark .lb-comment-delete-box {
   border-radius: 10px;
   background: var(--bg-card, #f8fafc);
   border: 1px solid var(--border-color, #cbd5e1);
+  width: 100%;
+  box-sizing: border-box;
 }
 html.dark .lb-comment-form-card {
   background: #1e1e22;
@@ -15754,6 +15989,11 @@ html.dark .lb-cf-preview-label {
   gap: 8px;
   flex-wrap: wrap;
 }
+.emote-picker-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
 .btn-toggle-emote-picker {
   display: inline-flex;
   align-items: center;
@@ -15816,19 +16056,30 @@ html.dark .btn-toggle-emote-picker.active {
   border-radius: 5px;
 }
 
-/* 마작패 / 액션 디시콘 팔레트 */
+/* 나니키루콘 플로팅 팝업(Popover) 팔레트 - 댓글 박스 레이아웃 변형 방지 */
 .mahjong-emote-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 250;
+  width: min(440px, 86vw);
   border: 1px solid var(--border-color, #cbd5e1);
-  border-radius: 8px;
-  padding: 8px;
+  border-radius: 10px;
+  padding: 10px;
   background: var(--bg-modal, #ffffff);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-sizing: border-box;
+}
+.mahjong-emote-picker.compact {
+  width: min(410px, 84vw);
 }
 html.dark .mahjong-emote-picker {
-  background: #141417;
-  border-color: #323238;
+  background: #18181c;
+  border-color: #383842;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
 }
 .mep-tabs {
   display: flex;
@@ -15836,7 +16087,7 @@ html.dark .mahjong-emote-picker {
   gap: 4px;
   overflow-x: auto;
   scrollbar-width: none;
-  padding-bottom: 4px;
+  padding-bottom: 5px;
   border-bottom: 1px solid var(--border-color, #e2e8f0);
 }
 .mep-tabs::-webkit-scrollbar {
@@ -15846,7 +16097,7 @@ html.dark .mep-tabs {
   border-bottom-color: #27272a;
 }
 .mep-tab {
-  padding: 4px 8px;
+  padding: 4px 9px;
   border-radius: 5px;
   font-size: 11.5px;
   font-weight: 700;
@@ -15866,7 +16117,7 @@ html.dark .mep-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 2px 0;
+  padding: 4px 0 2px;
 }
 .mep-action-btn {
   cursor: pointer;
@@ -15908,29 +16159,37 @@ html.dark .mep-tabs {
   gap: 2px;
   padding: 4px 2px;
   border-radius: 6px;
-  border: 1px solid var(--border-color, #e2e8f0);
-  background: var(--bg-card, #f8fafc);
+  border: 1px solid transparent;
+  background: transparent;
   cursor: pointer;
   transition: transform 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
 }
 .mep-tile-btn:hover {
   transform: translateY(-1.5px);
-  border-color: var(--color-toggle-on, #3b82f6);
+  border-color: rgba(59, 130, 246, 0.35);
   background: rgba(59, 130, 246, 0.08);
 }
 html.dark .mep-tile-btn {
-  background: #222226;
-  border-color: #323238;
+  background: transparent;
+  border-color: transparent;
+}
+html.dark .mep-tile-btn:hover {
+  border-color: rgba(96, 165, 250, 0.4);
+  background: rgba(96, 165, 250, 0.12);
 }
 .mep-tile-btn img {
-  width: 26px;
-  height: 36px;
+  width: 28px;
+  height: 38px;
   object-fit: contain;
-  border-radius: 3px;
-  background: linear-gradient(180deg, #fffdf9 0%, #f1ece1 100%);
-  padding: 1px;
-  border: 1px solid #cbd5e1;
-  box-shadow: 0 1px 0 #94a3b8;
+  display: block;
+  background: transparent;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.24));
+}
+html.dark .mep-tile-btn img {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
 }
 .mep-tile-sub {
   font-size: 10px;

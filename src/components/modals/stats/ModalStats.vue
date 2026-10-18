@@ -1318,7 +1318,7 @@ const emptyScopeMessage = computed(() => {
         :class="{ active: activeTab === 'opponents' }" 
         @click="selectModalTab('opponents', $event)"
       >
-        자주 만나는 상대
+        상대 전적
       </button>
     </div>
     <div
