@@ -878,6 +878,9 @@ export const NANIKIRU_TAG_DEFINITIONS: string[] = [
   '안전패 선택',
   '패효율',
   '후로 판단',
+  '서반',
+  '오라스',
+  '조건전',
 ];
 
 export const MAHJONG_ACTION_EMOTES: MahjongActionEmoteDef[] = [

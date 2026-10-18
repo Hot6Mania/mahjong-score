@@ -9511,7 +9511,7 @@ const openGamePopupFromLightbox = async (
               </div>
             </div>
 
-            <!-- 나니키루 판단 주제 뱃지 태그 선택 (5종, 복수 선택 가능) -->
+            <!-- 나니키루 판단 주제 뱃지 태그 선택 (8종, 복수 선택 가능) -->
             <div v-if="uploadForm.category === 'nanikiru'" class="form-group">
               <label class="form-label">나니키루 뱃지 태그 (선택, 복수 선택 가능)</label>
               <div class="yakuman-chips-selector">
