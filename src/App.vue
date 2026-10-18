@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, repairStatsSheetSpillError, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, isGoogleAuthError, type SessionMigrationBackup } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, isGoogleAuthError, type SessionMigrationBackup } from "@/utils/googleSheets"
 import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
@@ -1932,13 +1932,12 @@ const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) =
         }
       }
 
-      // 2. 구글 스프레드시트 Spill 에러 자가 치유(Self-Healing) 및 서식 동기화 (70%)
+      // 2. 구글 스프레드시트 서식 동기화 (70%)
       syncProgress.value = 70;
       try {
-        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
         await syncStatsSheetFormatting(googleInfo.spreadsheetId);
       } catch (selfHealingErr) {
-        console.warn("스프레드시트 Spill 복구/서식 동기화 중 오류 (무시 가능):", selfHealingErr);
+        console.warn("스프레드시트 서식 동기화 중 오류 (무시 가능):", selfHealingErr);
       }
 
       // 3. 전체 멤버 목록 로드 (85%)
@@ -1985,11 +1984,8 @@ const onGoogleTokenReceived = async (_token: string, expiresIn: number = 3600) =
   await loadMemberList();
   await loadTodayMembers();
 
-  // 자동 로그인 완료 직후에도 시트 스키마 자동 보정 및 전체 기간 통계 동기화
+  // 자동 로그인 완료 직후 전체 기간 통계 동기화
   if (googleInfo.spreadsheetId) {
-    try {
-      await repairStatsSheetSpillError(googleInfo.spreadsheetId);
-    } catch (_) {}
     try {
       const stats = await fetchMemberStats(googleInfo.spreadsheetId);
       googleMemberStats.value = stats;
@@ -2647,10 +2643,7 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
     if (!isValid) return false;
 
     if (todayGamesHistory.length === 0) {
-      try {
-        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
-      } catch (_) {}
-      if (!skipConfirm) alert("오늘 기록된 로컬 대국 이력이 없습니다. (시트 구조 및 통계 수식은 최신 상태로 점검되었습니다.)");
+      if (!skipConfirm) alert("오늘 기록된 로컬 대국 이력이 없습니다.");
       return false;
     }
 
@@ -2972,12 +2965,6 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
         console.warn("'통계' 시트 최종우마 동기화 중 오류:", statsSyncErr);
       }
 
-      // [7] '전체 멤버별 통계' 시트 Spill Error(#REF!) 자동 복구
-      try {
-        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
-      } catch (spillErr) {
-        console.warn("'전체 멤버별 통계' 시트 Spill Error 자동 복구 중 오류:", spillErr);
-      }
       syncProgress.value = 98;
       
       // 일괄 동기화 완료 후 구글 전체 통계 바로 새로고침
@@ -2992,12 +2979,9 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       triggerToast("동기화 성공!");
       return true;
     } else {
-      try {
-        await repairStatsSheetSpillError(googleInfo.spreadsheetId);
-      } catch (_) {}
       if (skipCount > 0) {
         if (!skipConfirm) {
-          alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재하며, 시트 통계 수식이 최신 상태로 점검되었습니다.)`);
+          alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재합니다.)`);
         } else {
           triggerToast("이미 구글 시트에 최신 반영되어 있습니다.");
         }

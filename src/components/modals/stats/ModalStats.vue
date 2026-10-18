@@ -280,7 +280,7 @@ const selectedPlayerRatingHistory = computed(() => {
   if (props.googleMemberStats) {
     const s = props.googleMemberStats.find((x: any) => x.name === name)
     if (s && s.ratingHistory && s.ratingHistory.length > 0) {
-      return s.ratingHistory
+      return s.ratingHistory.filter((h: any) => h.sessionLabel !== '초기값' && h.gameIndex !== 0)
     }
   }
 
@@ -289,15 +289,17 @@ const selectedPlayerRatingHistory = computed(() => {
     if (raw) {
       const parsed = JSON.parse(raw)
       if (parsed[name]?.history && parsed[name].history.length > 0) {
-        return parsed[name].history.map((h: any, idx: number) => ({
-          gameIndex: idx + 1,
-          ordinal: h.newOrdinal ?? h.ordinal ?? 1320,
-          delta: h.delta ?? 0,
-          score: 0,
-          rank: 0,
-          session: h.sessionLabel,
-          date: h.date
-        }))
+        return parsed[name].history
+          .filter((h: any) => h.sessionLabel !== '초기값' && h.gameIndex !== 0)
+          .map((h: any, idx: number) => ({
+            gameIndex: idx + 1,
+            ordinal: h.newOrdinal ?? h.ordinal ?? 1320,
+            delta: h.delta ?? 0,
+            score: 0,
+            rank: 0,
+            session: h.sessionLabel,
+            date: h.date
+          }))
       }
     }
   } catch (e) {}

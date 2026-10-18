@@ -606,6 +606,115 @@ let cachedAllStats: MemberStatItem[] | null = null;
 let cachedSessionsDetail: Record<string, SessionDetail> = {};
 let cachedSessionDetailedStats: Record<string, Record<string, MemberStatItem>> = {};
 let cachedAllRoundsTable: any = null;
+let cachedSessionRoundsMap: Record<string, any[]> = {};
+let pendingSessionRoundsPromises: Record<string, Promise<any[]> | undefined> = {};
+let cachedStatsMatrix: StatsMatrixData | null = null;
+let pendingStatsMatrixPromise: Promise<StatsMatrixData> | null = null;
+
+const PAST_SESSION_CACHE_PREFIX = 'mahjong_past_sess_v2_';
+
+function isPastImmutableSessionClient(sessionName: string): boolean {
+  const m = String(sessionName || '').match(/(\d{2})(\d{2})(\d{2})/);
+  if (!m) return false;
+  const year = 2000 + parseInt(m[1], 10);
+  const month = parseInt(m[2], 10) - 1;
+  const day = parseInt(m[3], 10);
+  const sessionDateMs = Date.UTC(year, month, day) - 9 * 60 * 60 * 1000;
+  return Date.now() - sessionDateMs > 2 * 24 * 60 * 60 * 1000;
+}
+
+function readPastSessionLocalCache<T>(subKey: string): T | null {
+  try {
+    const raw = localStorage.getItem(`${PAST_SESSION_CACHE_PREFIX}${subKey}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writePastSessionLocalCache<T>(subKey: string, value: T): void {
+  try {
+    localStorage.setItem(`${PAST_SESSION_CACHE_PREFIX}${subKey}`, JSON.stringify(value));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+async function fetchSessionRoundsRows(sessionName: string, spreadsheetId?: string): Promise<any[]> {
+  const sessTargetMatch = sessionName.match(/제\d+회/);
+  const sessPrefix = sessTargetMatch ? sessTargetMatch[0] : sessionName.trim();
+  if (!sessPrefix) return [];
+
+  if (cachedSessionRoundsMap[sessPrefix]) {
+    return cachedSessionRoundsMap[sessPrefix];
+  }
+
+  if (cachedAllRoundsTable && Array.isArray(cachedAllRoundsTable.rows)) {
+    const filtered = cachedAllRoundsTable.rows.filter((r: any) => {
+      if (!r?.c) return false;
+      const rowSess = getCellStr(r.c[15]);
+      return rowSess.includes(sessPrefix) || sessPrefix.includes(rowSess);
+    });
+    cachedSessionRoundsMap[sessPrefix] = filtered;
+    return filtered;
+  }
+
+  const existingPromise = pendingSessionRoundsPromises[sessPrefix];
+  if (existingPromise !== undefined) {
+    return existingPromise;
+  }
+
+  const promise = (async () => {
+    try {
+      const workerUrl = getWorkerUrl();
+      if (workerUrl) {
+        try {
+          const res = await fetch(`${workerUrl}/api/public/rounds?session=${encodeURIComponent(sessPrefix)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.table && Array.isArray(data.table.rows)) {
+              cachedSessionRoundsMap[sessPrefix] = data.table.rows;
+              return data.table.rows;
+            }
+          }
+        } catch (e) {
+          console.warn(`Worker per-session rounds fetch failed (${sessPrefix}):`, e);
+        }
+      }
+
+      const sId = spreadsheetId || await resolveSpreadsheetId();
+      if (!cachedAllRoundsTable && sId) {
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
+        const res = await fetch(gvizUrl);
+        if (res.ok) {
+          const text = await res.text();
+          const json = parseGVizResponse(text);
+          if (json && json.table) {
+            cachedAllRoundsTable = json.table;
+          }
+        }
+      }
+
+      if (cachedAllRoundsTable && Array.isArray(cachedAllRoundsTable.rows)) {
+        const filtered = cachedAllRoundsTable.rows.filter((r: any) => {
+          if (!r?.c) return false;
+          const rowSess = getCellStr(r.c[15]);
+          return rowSess.includes(sessPrefix) || sessPrefix.includes(rowSess);
+        });
+        cachedSessionRoundsMap[sessPrefix] = filtered;
+        return filtered;
+      }
+
+      return [];
+    } finally {
+      delete pendingSessionRoundsPromises[sessPrefix];
+    }
+  })();
+
+  pendingSessionRoundsPromises[sessPrefix] = promise;
+  return promise;
+}
 
 /**
  * 1. 전체 멤버별 종합 통계 로드 ('통계' 시트 총합 + '전체 멤버별 통계' 탭 직접 매핑)
@@ -742,82 +851,6 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
           totalScore: getCellNum(row[32]),
         };
       });
-    }
-
-    // 2-1) '전체 국별기록 (데이터)'에서 촌보/벌부 횟수 및 촌보율/벌부율 정밀 보정
-    try {
-      if (!cachedAllRoundsTable) {
-        if (workerUrl) {
-          try {
-            const res = await fetch(`${workerUrl}/api/public/rounds`);
-            if (res.ok) {
-              const data = await res.json();
-              if (data.table) cachedAllRoundsTable = data.table;
-            }
-          } catch (e) {}
-        }
-        if (!cachedAllRoundsTable && sId) {
-          try {
-            const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
-            const res = await fetch(gvizUrl);
-            if (res.ok) {
-              const text = await res.text();
-              const json = parseGVizResponse(text);
-              if (json && json.table) cachedAllRoundsTable = json.table;
-            }
-          } catch (e) {}
-        }
-      }
-
-      if (cachedAllRoundsTable && cachedAllRoundsTable.rows) {
-        const penaltyMap: Record<string, { rounds: number; cheat: number; beolbu: number; games: Set<string>; tobiGames: Set<string> }> = {};
-        cachedAllRoundsTable.rows.forEach((r: any) => {
-          if (!r.c) return;
-          const pName = getCellStr(r.c[5]).trim();
-          if (!pName) return;
-          if (!penaltyMap[pName]) {
-            penaltyMap[pName] = { rounds: 0, cheat: 0, beolbu: 0, games: new Set<string>(), tobiGames: new Set<string>() };
-          }
-          penaltyMap[pName].rounds++;
-
-          const gameId = getCellStr(r.c[1]).trim();
-          const finalScore = getCellNum(r.c[8]);
-          if (gameId) {
-            penaltyMap[pName].games.add(gameId);
-            if (finalScore < 0) {
-              penaltyMap[pName].tobiGames.add(gameId);
-            }
-          }
-
-          const endStatus = getCellStr(r.c[4]).toLowerCase();
-          const delta = getCellNum(r.c[7]);
-          const uVal = r.c[20]?.v;
-          const isCheat = uVal === true || uVal === "TRUE" || uVal === 1 || (uVal === undefined && endStatus === "cheat" && delta < 0);
-          const beolbuCnt = getCellNum(r.c[21], 0);
-
-          if (isCheat) penaltyMap[pName].cheat++;
-          if (beolbuCnt > 0) penaltyMap[pName].beolbu += beolbuCnt;
-        });
-
-        Object.entries(penaltyMap).forEach(([pName, counts]) => {
-          const item = detailedStatsMap[pName];
-          if (item) {
-            const denom = item.totalRounds > 0 ? item.totalRounds : counts.rounds;
-            item.cheatCount = counts.cheat;
-            item.beolbuCount = counts.beolbu;
-            if (denom > 0) {
-              item.cheatRate = parseFloat(((counts.cheat / denom) * 100).toFixed(4));
-              item.beolbuRate = parseFloat(((counts.beolbu / denom) * 100).toFixed(4));
-            }
-            const gameDenom = item.totalGames > 0 ? item.totalGames : counts.games.size;
-            if (gameDenom > 0) {
-              item.tobiRate = parseFloat(((counts.tobiGames.size / gameDenom) * 100).toFixed(2));
-            }
-          }
-        });
-      }
-    } catch (e) {
-      console.warn("촌보/벌부/토비 카운트 보정 실패:", e);
     }
 
     // 3) '통계' 시트의 모든 멤버가 누락 없이 포함되도록 통합 (에러 셀 및 비정상 명칭 제외)
@@ -1164,6 +1197,15 @@ export async function fetchPublicSessionDetail(
     return cachedSessionsDetail[sessionName];
   }
 
+  const isPastSession = isPastImmutableSessionClient(sessionName);
+  if (isPastSession) {
+    const localCached = readPastSessionLocalCache<SessionDetail>(`detail_${sessionName}`);
+    if (localCached && Array.isArray(localCached.games) && localCached.games.length > 0) {
+      cachedSessionsDetail[sessionName] = localCached;
+      return localCached;
+    }
+  }
+
   const match = sessionName.match(/제(\d+)회/);
   const sessionNum = match ? parseInt(match[1], 10) : 0;
 
@@ -1259,13 +1301,16 @@ export async function fetchPublicSessionDetail(
   }
 
   cachedSessionsDetail[sessionName] = detail;
+  if (isPastSession && detail.games.length > 0) {
+    writePastSessionLocalCache(`detail_${sessionName}`, detail);
+  }
   return detail;
 }
 
 /**
  * 3-1. 9회차 이후 특정 회차의 출전자 전원 세부 스탯 (화료율, 방총율, 리치스탯, 국수지 등 4대 탭 전체 통계) 집계
- * - 1순위: 스프레드시트에 `${sessionName} 통계` 시트가 존재할 경우 우선 로드
- * - 2순위: `'전체 국별기록 (데이터)'` 시트의 전수 국별 기록을 실시간 필터링/집계하여 완벽한 MemberStatItem 생성
+ * - 1순위: 과거 완료 회차인 경우 localStorage 캐시 우선 반환
+ * - 2순위: Worker 회차별 국별 기록(`/api/public/rounds?session=...`)을 조회하여 실시간 집계
  */
 export async function fetchSessionDetailedStats(
   sessionName: string,
@@ -1282,40 +1327,19 @@ export async function fetchSessionDetailedStats(
     return {};
   }
 
-  const workerUrl = getWorkerUrl();
-  const sId = spreadsheetId || await resolveSpreadsheetId();
-  if (!workerUrl && !sId) return {};
-
-  // '전체 국별기록 (데이터)' 시트에서 실시간 전수 직접 집계
-  try {
-    if (!cachedAllRoundsTable) {
-      if (workerUrl) {
-        try {
-          const res = await fetch(`${workerUrl}/api/public/rounds`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.table) {
-              cachedAllRoundsTable = data.table;
-            }
-          }
-        } catch (e) {
-          console.warn("fetch cachedAllRoundsTable from worker failed:", e);
-        }
-      }
-      if (!cachedAllRoundsTable && sId) {
-        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
-        const res = await fetch(gvizUrl);
-        if (res.ok) {
-          const text = await res.text();
-          const json = parseGVizResponse(text);
-          if (json && json.table) {
-            cachedAllRoundsTable = json.table;
-          }
-        }
-      }
+  const isPastSession = isPastImmutableSessionClient(sessionName);
+  if (isPastSession) {
+    const localCached = readPastSessionLocalCache<Record<string, MemberStatItem>>(`stats_${sessionName}`);
+    if (localCached && Object.keys(localCached).length > 0) {
+      cachedSessionDetailedStats[sessionName] = localCached;
+      return localCached;
     }
+  }
 
-    if (!cachedAllRoundsTable || !cachedAllRoundsTable.rows) {
+  // 회차별 국별 기록에서 직접 집계
+  try {
+    const sessionRows = await fetchSessionRoundsRows(sessionName, spreadsheetId);
+    if (!sessionRows || sessionRows.length === 0) {
       return {};
     }
 
@@ -1359,7 +1383,7 @@ export async function fetchSessionDetailedStats(
       beolbuCount: number;
     }> = {};
 
-    cachedAllRoundsTable.rows.forEach((r: any) => {
+    sessionRows.forEach((r: any) => {
       if (!r.c) return;
       const rowSess = getCellStr(r.c[15]);
       if (!rowSess.includes(sessPrefix) && !sessPrefix.includes(rowSess)) return;
@@ -1592,6 +1616,9 @@ export async function fetchSessionDetailedStats(
     }
 
     cachedSessionDetailedStats[sessionName] = resultMap;
+    if (isPastSession && Object.keys(resultMap).length > 0) {
+      writePastSessionLocalCache(`stats_${sessionName}`, resultMap);
+    }
     return resultMap;
   } catch (err) {
     console.error("fetchSessionDetailedStats failed:", err);
@@ -1615,122 +1642,141 @@ export interface StatsMatrixData {
 }
 
 export async function fetchPublicStatsMatrix(spreadsheetId?: string): Promise<StatsMatrixData> {
-  const workerUrl = getWorkerUrl();
-  let table: any = null;
+  if (cachedStatsMatrix && cachedStatsMatrix.rows.length > 0) {
+    return cachedStatsMatrix;
+  }
+  if (pendingStatsMatrixPromise) {
+    return pendingStatsMatrixPromise;
+  }
 
-  // A. Worker 시도 (스프레드시트 ID는 서버 내부 Secret에서 자동 복호화)
-  if (workerUrl) {
+  pendingStatsMatrixPromise = (async () => {
     try {
-      const res = await fetch(`${workerUrl}/api/public/stats-matrix`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.table) table = data.table;
-      }
-    } catch (e) {
-      console.warn("Worker stats matrix request failed, falling back to direct GViz:", e);
-    }
-  }
+      const workerUrl = getWorkerUrl();
+      let table: any = null;
 
-  // B. Google GViz 폴백 (클라이언트 암호화 토큰 복호화 ID 사용)
-  if (!table) {
-    const sId = spreadsheetId || await resolveSpreadsheetId();
-    if (sId) {
-      const sheetParam = encodeURIComponent("통계");
-      const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${sheetParam}`;
-      const res = await fetch(gvizUrl);
-      if (!res.ok) {
-        throw new Error(`Google GViz stats matrix request failed: ${res.status}`);
-      }
-      const text = await res.text();
-      const gvizData = parseGVizResponse(text);
-      table = gvizData.table;
-    }
-  }
-
-  if (!table || !table.cols || !table.rows) {
-    return { sessions: [], sessionLabels: {}, rows: [] };
-  }
-
-  const cols = table.cols;
-  const sessions: string[] = [];
-  const sessionLabels: Record<string, string> = {};
-
-  for (let c = 2; c < cols.length; c++) {
-    const label = cols[c]?.label || "";
-    if (!label.trim()) continue;
-    const match = label.match(/제\d+회/);
-    if (match) {
-      const sessName = match[0];
-
-      // 해당 열에 실측 데이터가 1건이라도 존재하는지 검증
-      let hasValidValue = false;
-      for (let r = 0; r < table.rows.length; r++) {
-        const cell = table.rows[r]?.c?.[c];
-        if (cell && cell.v !== null && cell.v !== undefined && cell.v !== '') {
-          hasValidValue = true;
-          break;
+      // A. Worker 시도 (스프레드시트 ID는 서버 내부 Secret에서 자동 복호화)
+      if (workerUrl) {
+        try {
+          const res = await fetch(`${workerUrl}/api/public/stats-matrix`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.table) table = data.table;
+          }
+        } catch (e) {
+          console.warn("Worker stats matrix request failed, falling back to direct GViz:", e);
         }
       }
 
-      const hasGameCountHeader = /\d+\s*국/.test(label);
-
-      // 데이터가 아예 없거나, 헤더에 '국' 표기가 없는 미개최 회차는 제외
-      if (!hasValidValue && !hasGameCountHeader) {
-        continue;
-      }
-      if (!hasValidValue) {
-        continue;
-      }
-
-      if (!sessions.includes(sessName)) {
-        sessions.push(sessName);
-        const sub = label.replace(sessName, '').trim();
-        if (sub) {
-          sessionLabels[sessName] = sub.replace(/\n/g, ' ');
+      // B. Google GViz 폴백 (클라이언트 암호화 토큰 복호화 ID 사용)
+      if (!table) {
+        const sId = spreadsheetId || await resolveSpreadsheetId();
+        if (sId) {
+          const sheetParam = encodeURIComponent("통계");
+          const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${sheetParam}`;
+          const res = await fetch(gvizUrl);
+          if (!res.ok) {
+            throw new Error(`Google GViz stats matrix request failed: ${res.status}`);
+          }
+          const text = await res.text();
+          const gvizData = parseGVizResponse(text);
+          table = gvizData.table;
         }
       }
-    }
-  }
 
-  const rows: StatsMatrixRow[] = [];
-  table.rows.forEach((r: any) => {
-    if (!r.c) return;
-    const name = getCellStr(r.c[0]).trim();
-    if (!name || name === "이름" || name.startsWith("#")) return;
+      if (!table || !table.cols || !table.rows) {
+        return { sessions: [], sessionLabels: {}, rows: [] };
+      }
 
-    const total = parseFloat(getCellNum(r.c[1]).toFixed(1));
-    const sessionUmas: Record<string, number | null> = {};
+      const cols = table.cols;
+      const sessions: string[] = [];
+      const sessionLabels: Record<string, string> = {};
 
-    for (let c = 2; c < cols.length; c++) {
-      const label = cols[c]?.label || "";
-      const match = label.match(/제\d+회/);
-      if (match) {
-        const sessName = match[0];
-        if (!sessions.includes(sessName)) continue; // 미개최 회차 스킵
-        const cell = r.c[c];
-        if (cell && (cell.v !== null && cell.v !== undefined || cell.f !== null && cell.f !== undefined)) {
-          sessionUmas[sessName] = parseFloat(getCellNum(cell).toFixed(1));
-        } else {
-          sessionUmas[sessName] = null;
+      for (let c = 2; c < cols.length; c++) {
+        const label = cols[c]?.label || "";
+        if (!label.trim()) continue;
+        const match = label.match(/제\d+회/);
+        if (match) {
+          const sessName = match[0];
+
+          // 해당 열에 실측 데이터가 1건이라도 존재하는지 검증
+          let hasValidValue = false;
+          for (let r = 0; r < table.rows.length; r++) {
+            const cell = table.rows[r]?.c?.[c];
+            if (cell && cell.v !== null && cell.v !== undefined && cell.v !== '') {
+              hasValidValue = true;
+              break;
+            }
+          }
+
+          const hasGameCountHeader = /\d+\s*국/.test(label);
+
+          // 데이터가 아예 없거나, 헤더에 '국' 표기가 없는 미개최 회차는 제외
+          if (!hasValidValue && !hasGameCountHeader) {
+            continue;
+          }
+          if (!hasValidValue) {
+            continue;
+          }
+
+          if (!sessions.includes(sessName)) {
+            sessions.push(sessName);
+            const sub = label.replace(sessName, '').trim();
+            if (sub) {
+              sessionLabels[sessName] = sub.replace(/\n/g, ' ');
+            }
+          }
         }
       }
+
+      const rows: StatsMatrixRow[] = [];
+      table.rows.forEach((r: any) => {
+        if (!r.c) return;
+        const name = getCellStr(r.c[0]).trim();
+        if (!name || name === "이름" || name.startsWith("#")) return;
+
+        const total = parseFloat(getCellNum(r.c[1]).toFixed(1));
+        const sessionUmas: Record<string, number | null> = {};
+
+        for (let c = 2; c < cols.length; c++) {
+          const label = cols[c]?.label || "";
+          const match = label.match(/제\d+회/);
+          if (match) {
+            const sessName = match[0];
+            if (!sessions.includes(sessName)) continue; // 미개최 회차 스킵
+            const cell = r.c[c];
+            if (cell && (cell.v !== null && cell.v !== undefined || cell.f !== null && cell.f !== undefined)) {
+              sessionUmas[sessName] = parseFloat(getCellNum(cell).toFixed(1));
+            } else {
+              sessionUmas[sessName] = null;
+            }
+          }
+        }
+
+        rows.push({
+          name,
+          total,
+          sessionUmas,
+        });
+      });
+
+      // 총합 내림차순 정렬
+      rows.sort((a, b) => b.total - a.total);
+
+      const matrixResult = {
+        sessions,
+        sessionLabels,
+        rows,
+      };
+      if (rows.length > 0) {
+        cachedStatsMatrix = matrixResult;
+      }
+      return matrixResult;
+    } finally {
+      pendingStatsMatrixPromise = null;
     }
+  })();
 
-    rows.push({
-      name,
-      total,
-      sessionUmas,
-    });
-  });
-
-  // 총합 내림차순 정렬
-  rows.sort((a, b) => b.total - a.total);
-
-  return {
-    sessions,
-    sessionLabels,
-    rows,
-  };
+  return pendingStatsMatrixPromise;
 }
 
 /**
@@ -2507,87 +2553,56 @@ export async function fetchSessionGameDetail(
     console.warn("localStorage check for gameDetail failed:", e);
   }
 
-  // 2. 9회차 이상인 경우 '전체 국별기록 (데이터)' 시트에서 실시간 조회
+  // 2. 9회차 이상인 경우 회차별 국별기록에서 실시간 조회
   const match = sessionName.match(/제(\d+)회/);
   const sessionNum = match ? parseInt(match[1], 10) : 0;
 
   if (sessionNum >= 9) {
-    const workerUrl = getWorkerUrl();
-    const sId = spreadsheetId || await resolveSpreadsheetId();
-    if (!cachedAllRoundsTable) {
-      if (workerUrl) {
-        try {
-          const res = await fetch(`${workerUrl}/api/public/rounds`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.table) {
-              cachedAllRoundsTable = data.table;
-            }
+    const sessionRows = await fetchSessionRoundsRows(sessionName, spreadsheetId);
+
+    if (sessionRows && sessionRows.length > 0) {
+      const cleanGId = game.gameId ? game.gameId.trim() : "";
+      let gameRows: any[] = [];
+
+      // gameId 일치 행 검색
+      if (cleanGId) {
+        gameRows = sessionRows.filter((r: any) => {
+          if (!r.c) return false;
+          const rowGId = getCellStr(r.c[1]).trim();
+          return rowGId === cleanGId || rowGId.includes(cleanGId) || cleanGId.includes(rowGId);
+        });
+      }
+
+      // gameId가 완전 일치하지 않을 경우 세션명 + 선수 4인 일치 행 검색
+      if (gameRows.length === 0 && game.players && game.players.length === 4) {
+        const sessTargetMatch = sessionName.match(/제\d+회/);
+        const sessPrefix = sessTargetMatch ? sessTargetMatch[0] : sessionName;
+        const gamePlayerNames = new Set(game.players.map(p => p.name.trim()));
+
+        const sessionRowsByGame: Record<string, any[]> = {};
+        sessionRows.forEach((r: any) => {
+          if (!r.c) return;
+          const rowSess = getCellStr(r.c[15]);
+          if (!rowSess.includes(sessPrefix) && !sessPrefix.includes(rowSess)) return;
+          const gid = getCellStr(r.c[1]).trim();
+          if (!gid) return;
+          if (!sessionRowsByGame[gid]) sessionRowsByGame[gid] = [];
+          sessionRowsByGame[gid].push(r);
+        });
+
+        for (const gid of Object.keys(sessionRowsByGame)) {
+          const rows = sessionRowsByGame[gid];
+          const pSet = new Set(rows.map(r => getCellStr(r.c[5]).trim()));
+          let allMatched = true;
+          for (const name of gamePlayerNames) {
+            if (!pSet.has(name)) { allMatched = false; break; }
           }
-        } catch (e) {
-          console.warn("fetch cachedAllRoundsTable for gameDetail from worker failed:", e);
+          if (allMatched && rows.length >= 4) {
+            gameRows = rows;
+            break;
+          }
         }
       }
-      if (!cachedAllRoundsTable && sId) {
-        try {
-          const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
-          const res = await fetch(gvizUrl);
-          if (res.ok) {
-            const text = await res.text();
-            const json = parseGVizResponse(text);
-            if (json && json.table) {
-              cachedAllRoundsTable = json.table;
-            }
-          }
-        } catch (e) {
-          console.warn("fetch cachedAllRoundsTable for gameDetail failed:", e);
-        }
-      }
-    }
-
-      if (cachedAllRoundsTable && cachedAllRoundsTable.rows) {
-        const cleanGId = game.gameId ? game.gameId.trim() : "";
-        let gameRows: any[] = [];
-
-        // gameId 일치 행 검색
-        if (cleanGId) {
-          gameRows = cachedAllRoundsTable.rows.filter((r: any) => {
-            if (!r.c) return false;
-            const rowGId = getCellStr(r.c[1]).trim();
-            return rowGId === cleanGId || rowGId.includes(cleanGId) || cleanGId.includes(rowGId);
-          });
-        }
-
-        // gameId가 완전 일치하지 않을 경우 세션명 + 선수 4인 일치 행 검색
-        if (gameRows.length === 0 && game.players && game.players.length === 4) {
-          const sessTargetMatch = sessionName.match(/제\d+회/);
-          const sessPrefix = sessTargetMatch ? sessTargetMatch[0] : sessionName;
-          const gamePlayerNames = new Set(game.players.map(p => p.name.trim()));
-
-          const sessionRowsByGame: Record<string, any[]> = {};
-          cachedAllRoundsTable.rows.forEach((r: any) => {
-            if (!r.c) return;
-            const rowSess = getCellStr(r.c[15]);
-            if (!rowSess.includes(sessPrefix) && !sessPrefix.includes(rowSess)) return;
-            const gid = getCellStr(r.c[1]).trim();
-            if (!gid) return;
-            if (!sessionRowsByGame[gid]) sessionRowsByGame[gid] = [];
-            sessionRowsByGame[gid].push(r);
-          });
-
-          for (const gid of Object.keys(sessionRowsByGame)) {
-            const rows = sessionRowsByGame[gid];
-            const pSet = new Set(rows.map(r => getCellStr(r.c[5]).trim()));
-            let allMatched = true;
-            for (const name of gamePlayerNames) {
-              if (!pSet.has(name)) { allMatched = false; break; }
-            }
-            if (allMatched && rows.length >= 4) {
-              gameRows = rows;
-              break;
-            }
-          }
-        }
 
         if (gameRows.length > 0) {
           // 국별 행 매핑

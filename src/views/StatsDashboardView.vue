@@ -1080,7 +1080,7 @@ const loadAllData = async () => {
       ratingTimeline.value = timeline;
       filterRatingTopN(5);
     }
-    if (selectedSession.value) {
+    if (selectedSession.value && !isLoadingSession.value && currentSessionDetail.value?.sessionName !== selectedSession.value) {
       await loadSessionDetail(selectedSession.value);
     }
   } catch (err: any) {
@@ -1416,7 +1416,9 @@ const ratingLeaderboard = computed(() => {
 const modalPlayerRatingHistory = computed(() => {
   if (!selectedPlayer.value) return [];
   if (selectedPlayer.value.ratingHistory && selectedPlayer.value.ratingHistory.length > 0) {
-    return selectedPlayer.value.ratingHistory;
+    return selectedPlayer.value.ratingHistory.filter(
+      h => h.sessionLabel !== '초기값' && h.gameIndex !== 0
+    );
   }
   const pName = selectedPlayer.value.name;
   if (pName && ratingTimeline.value) {
@@ -1638,7 +1640,7 @@ const modalSessionRegionsAndCrosshairPlugin = {
       const midX = (xLeft + xRight) / 2;
 
       if (colWidth >= 24) {
-        ctx.font = '700 10.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.font = "700 10.5px 'Noto Serif KR', serif";
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
 
@@ -4237,8 +4239,8 @@ const getRankClass = (rank: number) => {
               </div>
               <div class="gdm-content-col score_contents">
                 <div v-for="p in selectedGameDetail.playerStats" :key="'score-' + p.seat + p.name">
-                  {{ p.score.toLocaleString() }}
-                  (<span :class="p.uma >= 0 ? 'text_pos' : 'text_neg'"><span v-if="p.uma > 0">+</span>{{ p.uma }}</span>)
+                  <span class="gdm-score-val">{{ p.score.toLocaleString() }}</span>
+                  <span class="gdm-score-uma">(<span :class="p.uma >= 0 ? 'text_pos' : 'text_neg'"><span v-if="p.uma > 0">+</span>{{ p.uma }}</span>)</span>
                 </div>
               </div>
               <div class="gdm-content-col riichi_contents">
@@ -6463,6 +6465,10 @@ html.dark .gdm-content-col > div {
 .gdm-content-col.score_contents > div {
   font-size: 13px;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
 }
 .gdm-content-col.rating_contents > div {
   font-size: 13px;
@@ -6576,19 +6582,46 @@ html.dark .gdm-legacy-notice {
     justify-content: space-between;
   }
   .gdm-resultsheet {
-    grid-template-columns: 34px minmax(50px, 1fr) minmax(90px, 1.4fr) repeat(4, 30px);
-    font-size: 12px;
-  }
-  .gdm-header-cell {
-    font-size: 11px;
-    padding: 5px 1px;
-  }
-  .gdm-content-col > div {
-    height: 34px;
+    grid-template-columns: 28px minmax(46px, 0.95fr) minmax(56px, 1.1fr) minmax(64px, 1.25fr) repeat(4, 25px);
     font-size: 11.5px;
   }
-  .gdm-content-col.score_contents > div {
+  .gdm-header-cell {
     font-size: 10.5px;
+    padding: 6px 1px;
+    white-space: nowrap;
+    letter-spacing: -0.3px;
+  }
+  .gdm-content-col > div {
+    height: 42px;
+    font-size: 11.5px;
+    overflow: hidden;
+  }
+  .gdm-content-col.name_contents > div {
+    font-size: 11px;
+    padding: 0 2px;
+    white-space: normal;
+    word-break: keep-all;
+    line-height: 1.15;
+  }
+  .gdm-content-col.rating_contents > div,
+  .gdm-content-col.score_contents > div {
+    flex-direction: column;
+    gap: 1px;
+    line-height: 1.15;
+    padding: 2px 1px;
+  }
+  .gdm-rating-val {
+    font-size: 11.5px;
+  }
+  .gdm-rating-delta {
+    font-size: 10px;
+  }
+  .gdm-score-val {
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .gdm-score-uma {
+    font-size: 10px;
   }
   .gdm-chart-box {
     height: 220px;

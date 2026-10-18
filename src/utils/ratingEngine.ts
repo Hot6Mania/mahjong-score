@@ -132,15 +132,7 @@ export function createInitialRating(name: string): PlayerRating {
     lowestOrdinal: ord,
     recentDelta: 0,
     recentDeltas: [],
-    history: [
-      {
-        gameIndex: 0,
-        ordinal: ord,
-        delta: 0,
-        sessionLabel: '초기값',
-        date: ''
-      }
-    ]
+    history: []
   };
 }
 
