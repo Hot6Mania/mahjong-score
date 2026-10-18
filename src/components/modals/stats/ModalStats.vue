@@ -81,27 +81,43 @@ let tabDragStartX = 0
 let tabDragStartScrollLeft = 0
 let tabResizeObserver: ResizeObserver | null = null
 
+const setTabScrollIndicatorIfChanged = (next: {
+  canScroll: boolean
+  thumbWidthPct: number
+  thumbLeftPct: number
+}) => {
+  const prev = tabScrollIndicator.value
+  if (
+    prev.canScroll === next.canScroll &&
+    Math.abs(prev.thumbWidthPct - next.thumbWidthPct) < 0.05 &&
+    Math.abs(prev.thumbLeftPct - next.thumbLeftPct) < 0.05
+  ) {
+    return
+  }
+  tabScrollIndicator.value = next
+}
+
 const updateTabScrollIndicator = () => {
   const nav = tabMenuRef.value
   if (!nav) {
-    tabScrollIndicator.value = { canScroll: false, thumbWidthPct: 100, thumbLeftPct: 0 }
+    setTabScrollIndicatorIfChanged({ canScroll: false, thumbWidthPct: 100, thumbLeftPct: 0 })
     return
   }
   const { scrollLeft, scrollWidth, clientWidth } = nav
   const maxScroll = scrollWidth - clientWidth
   if (maxScroll <= 2) {
-    tabScrollIndicator.value = { canScroll: false, thumbWidthPct: 100, thumbLeftPct: 0 }
+    setTabScrollIndicatorIfChanged({ canScroll: false, thumbWidthPct: 100, thumbLeftPct: 0 })
     return
   }
   const rawThumbWidth = (clientWidth / scrollWidth) * 100
   const thumbWidthPct = Math.max(18, Math.min(92, rawThumbWidth))
   const progress = Math.max(0, Math.min(1, scrollLeft / maxScroll))
   const thumbLeftPct = progress * (100 - thumbWidthPct)
-  tabScrollIndicator.value = {
+  setTabScrollIndicatorIfChanged({
     canScroll: true,
     thumbWidthPct,
     thumbLeftPct,
-  }
+  })
 }
 
 const onTabWheel = (e: WheelEvent) => {
@@ -1939,6 +1955,10 @@ html.dark .container_stats_modal {
   -ms-overflow-style: none;
   user-select: none;
   -webkit-user-select: none;
+  cursor: default;
+}
+
+.tab-menu-wrap.has-scroll-indicator .tab_menu {
   cursor: grab;
 }
 

@@ -705,6 +705,100 @@ export async function updateHighlightMemo(
   }
 }
 
+export async function updateHighlightRecord(params: {
+  id: string;
+  category: HighlightCategory;
+  sessionName: string;
+  gameId?: string;
+  gameIndex?: number;
+  roundName?: string;
+  winnerName?: string;
+  loserName?: string;
+  winType?: 'tsumo' | 'ron' | null;
+  yakumanTypes?: string[];
+  caption?: string;
+  imageFile?: File | null;
+  removeImage?: boolean;
+  uploadPin?: string;
+}): Promise<{
+  success: boolean;
+  record?: HighlightRecord;
+  records?: HighlightRecord[];
+  storage?: HighlightStorageInfo;
+  pinInvalidated?: boolean;
+  error?: string;
+}> {
+  try {
+    const auth = getClientAuthPayload(params.uploadPin);
+    const formData = new FormData();
+    const metadata = {
+      id: params.id,
+      category: params.category,
+      sessionName: params.sessionName,
+      gameId: params.gameId || '',
+      gameIndex: params.gameIndex,
+      roundName: params.roundName || '',
+      winnerName: params.winnerName || '',
+      loserName: params.loserName || '',
+      winType: params.winType || null,
+      yakumanTypes: params.yakumanTypes || [],
+      caption: params.caption || '',
+      removeImage: Boolean(params.removeImage),
+    };
+
+    formData.append('metadata', JSON.stringify(metadata));
+    formData.append('upload_pin', auth.upload_pin);
+    formData.append('access_token', auth.access_token);
+    formData.append('refresh_cipher', auth.refresh_cipher);
+    formData.append('admin_passcode', auth.admin_passcode);
+
+    if (params.imageFile) {
+      formData.append('image', params.imageFile, params.imageFile.name);
+    }
+
+    const res = await fetch(`${getWorkerUrl()}/api/public/highlights`, {
+      method: 'PUT',
+      body: formData,
+    });
+
+    const data = await res.json().catch(() => null);
+    if (res.ok && data?.success) {
+      if (auth.upload_pin) {
+        saveHighlightPin(auth.upload_pin);
+      }
+      if (data.storage && typeof data.storage.usedBytes === 'number') {
+        cachedStorageInfo = data.storage;
+      }
+      if (Array.isArray(data.records)) {
+        cachedHighlights = data.records;
+      }
+      return {
+        success: true,
+        record: data.record,
+        records: data.records || [],
+        storage: data.storage,
+      };
+    }
+    if (res.status === 403) {
+      clearHighlightPin();
+      return {
+        success: false,
+        pinInvalidated: true,
+        error: data?.error || '수정 권한이 없거나 공통 PIN이 일치하지 않습니다.',
+      };
+    }
+    return {
+      success: false,
+      error: data?.error || '기록 수정에 실패했습니다.',
+    };
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e.message || '서버 통신 중 오류가 발생했습니다.',
+    };
+  }
+}
+
 export function matchHighlightSession(recordSession: string, targetSession: string): boolean {
   if (!targetSession) return true;
   const m1 = recordSession.match(/제\s*(\d+)\s*회/);
@@ -842,9 +936,11 @@ MAHJONG_ACTION_EMOTES.forEach((a) => {
   ACTION_BY_TOKEN_MAP[a.key] = a;
 });
 
-export function getMahjongTileImageUrl(fileName: string): string {
+export function getMahjongTileImageUrl(codeOrFileName: string): string {
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-  return `${base}/assets/tiles/${fileName}`;
+  const cleanName = (codeOrFileName || '').trim();
+  const file = cleanName.endsWith('.png') ? cleanName : `${cleanName}.png`;
+  return `${base}/assets/tiles/${file}`;
 }
 
 export type CommentSegment =
