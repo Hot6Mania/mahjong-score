@@ -6131,7 +6131,11 @@ const openGamePopupFromLightbox = async (
                       </span>
                       <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ formatCardRoundKorean(rec.roundName) }}</span>
                       <span v-else-if="rec.roundName" class="hl-round-tag">{{ formatCardRoundKorean(rec.roundName) }}</span>
-                      <span v-if="getRecordCommentCount(rec) > 0" class="hl-comment-cnt-badge" title="댓글 수">
+                      <span
+                        v-if="getRecordCommentCount(rec) > 0 && (!rec.yakumanTypes || rec.yakumanTypes.length === 0) && !rec.winnerName"
+                        class="hl-comment-cnt-badge"
+                        title="댓글 수"
+                      >
                         <svg class="hl-comment-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                         </svg>
@@ -6145,6 +6149,12 @@ const openGamePopupFromLightbox = async (
                         class="hl-y-badge"
                         :class="{ 'is-nanikiru-tag': rec.category === 'nanikiru' }"
                       >{{ yt }}</span>
+                      <span v-if="getRecordCommentCount(rec) > 0" class="hl-comment-cnt-badge" title="댓글 수">
+                        <svg class="hl-comment-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span>{{ getRecordCommentCount(rec) }}</span>
+                      </span>
                     </div>
                     <div v-if="rec.winnerName" class="hl-winner-line">
                       <strong
@@ -6154,6 +6164,16 @@ const openGamePopupFromLightbox = async (
                       >{{ rec.winnerName }}</strong>
                       <span v-if="rec.winType && rec.category !== 'nanikiru' && rec.category !== 'session'" class="hl-wintype">
                         ({{ rec.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="rec.winType === 'ron' && rec.loserName"> ← <span class="hl-player-link" title="클릭하여 스탯 보기" @click.stop="openPlayerByName(rec.loserName, true)">{{ rec.loserName }}</span></template>)
+                      </span>
+                      <span
+                        v-if="getRecordCommentCount(rec) > 0 && (!rec.yakumanTypes || rec.yakumanTypes.length === 0)"
+                        class="hl-comment-cnt-badge"
+                        title="댓글 수"
+                      >
+                        <svg class="hl-comment-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span>{{ getRecordCommentCount(rec) }}</span>
                       </span>
                     </div>
                     <div v-if="rec.caption" class="hl-caption">
@@ -6378,7 +6398,11 @@ const openGamePopupFromLightbox = async (
                 <span class="hl-session-tag">{{ rec.sessionName }}</span>
                 <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ formatCardRoundKorean(rec.roundName) }}</span>
                 <span v-else-if="rec.roundName" class="hl-round-tag">{{ formatCardRoundKorean(rec.roundName) }}</span>
-                <span v-if="getRecordCommentCount(rec) > 0" class="hl-comment-cnt-badge" title="댓글 수">
+                <span
+                  v-if="getRecordCommentCount(rec) > 0 && (!rec.yakumanTypes || rec.yakumanTypes.length === 0) && !rec.winnerName"
+                  class="hl-comment-cnt-badge"
+                  title="댓글 수"
+                >
                   <svg class="hl-comment-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                   </svg>
@@ -6392,6 +6416,12 @@ const openGamePopupFromLightbox = async (
                   class="hl-y-badge"
                   :class="{ 'is-nanikiru-tag': rec.category === 'nanikiru' }"
                 >{{ yt }}</span>
+                <span v-if="getRecordCommentCount(rec) > 0" class="hl-comment-cnt-badge" title="댓글 수">
+                  <svg class="hl-comment-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                  <span>{{ getRecordCommentCount(rec) }}</span>
+                </span>
               </div>
               <div v-if="rec.winnerName" class="hl-winner-line">
                 <strong
@@ -6401,6 +6431,16 @@ const openGamePopupFromLightbox = async (
                 >{{ rec.winnerName }}</strong>
                 <span v-if="rec.winType && rec.category !== 'nanikiru' && rec.category !== 'session'" class="hl-wintype">
                   ({{ rec.winType === 'tsumo' ? '쯔모 화료' : '론 화료' }}<template v-if="rec.winType === 'ron' && rec.loserName"> ← <span class="hl-player-link" title="클릭하여 스탯 보기" @click.stop="openPlayerByName(rec.loserName, false)">{{ rec.loserName }}</span></template>)
+                </span>
+                <span
+                  v-if="getRecordCommentCount(rec) > 0 && (!rec.yakumanTypes || rec.yakumanTypes.length === 0)"
+                  class="hl-comment-cnt-badge"
+                  title="댓글 수"
+                >
+                  <svg class="hl-comment-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                  <span>{{ getRecordCommentCount(rec) }}</span>
                 </span>
               </div>
               <div v-if="rec.caption" class="hl-caption">
@@ -13898,7 +13938,12 @@ html.dark .hl-no-img-banner.is-fun-banner .hl-yakuman-kanji {
   flex-direction: column;
   gap: 0.38rem;
 }
-.hl-meta-top,
+.hl-meta-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
 .hl-yakuman-badges {
   display: flex;
   flex-wrap: wrap;
@@ -13940,12 +13985,15 @@ html.dark .hl-round-tag {
   color: #cbd5e1;
 }
 .hl-winner-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
   font-size: 0.83rem;
 }
 .hl-wintype {
   font-size: 0.76rem;
   color: var(--text-muted, #64748b);
-  margin-left: 0.25rem;
 }
 .hl-caption {
   font-size: 0.78rem;
@@ -15850,6 +15898,7 @@ html.dark .lb-comment-body {
   border: 1px solid var(--border-color, #cbd5e1);
   background: var(--bg-modal, #ffffff);
   color: var(--text-color, #0f172a);
+  text-align: center;
 }
 html.dark .lb-cmt-pin-input {
   background: #18181b;
@@ -15942,6 +15991,7 @@ html.dark .lb-cf-logged-name {
   background: var(--bg-modal, #ffffff);
   color: var(--text-color, #0f172a);
   box-sizing: border-box;
+  text-align: center;
 }
 .lb-cf-input.nick {
   width: 120px;
