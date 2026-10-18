@@ -3965,6 +3965,7 @@ const closeHighlightUploadModal = () => {
 };
 
 const handleHighlightFileSelect = (e: Event) => {
+  if (editingHighlightRecord.value && !isGalleryAdmin.value) return;
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
@@ -3978,6 +3979,7 @@ const handleHighlightFileSelect = (e: Event) => {
 };
 
 const handleRemoveUploadPreview = () => {
+  if (editingHighlightRecord.value && !isGalleryAdmin.value) return;
   if (selectedUploadPreviewUrl.value && selectedUploadPreviewUrl.value.startsWith('blob:')) {
     URL.revokeObjectURL(selectedUploadPreviewUrl.value);
   }
@@ -4006,9 +4008,12 @@ const submitHighlightUpload = async () => {
   highlightUploadError.value = '';
   const f = uploadForm.value;
   const editingRec = editingHighlightRecord.value;
+  const canModifyImage = !editingRec || isGalleryAdmin.value;
+  const effectiveUploadFile = canModifyImage ? selectedUploadFile.value : null;
+  const effectiveRemoveImage = canModifyImage ? removeExistingHighlightImage.value : false;
   const hasFinalImage = Boolean(
-    selectedUploadFile.value ||
-    (editingRec && editingRec.hasImage && !removeExistingHighlightImage.value)
+    effectiveUploadFile ||
+    (editingRec && editingRec.hasImage && !effectiveRemoveImage)
   );
 
   if (!f.sessionName) {
@@ -4055,8 +4060,8 @@ const submitHighlightUpload = async () => {
         winType: (f.category === 'session' || f.category === 'nanikiru' || !f.winnerName.trim()) ? null : f.winType,
         yakumanTypes: (f.category === 'yakuman' || f.category === 'nanikiru') ? f.yakumanTypes : [],
         caption: f.caption,
-        imageFile: selectedUploadFile.value,
-        removeImage: removeExistingHighlightImage.value,
+        imageFile: effectiveUploadFile,
+        removeImage: effectiveRemoveImage,
         uploadPin: f.uploadPin,
       });
 
@@ -4139,8 +4144,13 @@ const isSavingLightboxMemo = ref(false);
 const memoEditError = ref('');
 
 // ==========================================
-// 6-2. 사진 댓글 시스템 (일정 로그인 연동 + 디시인사이드 유동 스타일 + 마작패/액션 디시콘)
+// 6-2. 사진 댓글 & 대댓글 시스템 (일정 로그인 연동 + 디시인사이드 유동 스타일 + 마작패/액션 디시콘)
 // ==========================================
+interface ThreadedHighlightComment extends HighlightComment {
+  isReply: boolean;
+  isOrphanReply?: boolean;
+}
+
 const scheduleLoggedInName = ref<string>('');
 const scheduleLoggedInPin = ref<string>('');
 const useGuestCommentMode = ref<boolean>(false);
@@ -4163,7 +4173,7 @@ const TILE_EMOTE_GROUPS = [
   { key: 'honor' as const, label: '자패', tiles: MAHJONG_TILE_EMOTES.filter(t => t.group === 'honor') },
 ];
 
-// 개별 댓글 수정 / 삭제 상태
+// 개별 댓글 수정 / 삭제 / 답글(대댓글) 상태
 const editingCommentId = ref<string | null>(null);
 const editingCommentContent = ref<string>('');
 const editingCommentPin = ref<string>('');
@@ -4173,9 +4183,16 @@ const deletingCommentPin = ref<string>('');
 const commentActionError = ref<string>('');
 const isProcessingCommentAction = ref<boolean>(false);
 
+const replyingToComment = ref<HighlightComment | null>(null);
+const replyContentInput = ref<string>('');
+const isReplyEmotePickerOpen = ref<boolean>(false);
+const isSubmittingReply = ref<boolean>(false);
+const replyFormError = ref<string>('');
+
 const closeEmotePickers = () => {
   isCommentEmotePickerOpen.value = false;
   isEditingCommentPickerOpen.value = false;
+  isReplyEmotePickerOpen.value = false;
 };
 
 const syncScheduleLoginForComment = () => {
@@ -4199,6 +4216,7 @@ const isUsingScheduleIdentity = computed(() => {
 const toggleGuestCommentMode = () => {
   useGuestCommentMode.value = !useGuestCommentMode.value;
   commentFormError.value = '';
+  replyFormError.value = '';
   if (isUsingScheduleIdentity.value) {
     commentNicknameInput.value = scheduleLoggedInName.value;
     commentPinInput.value = scheduleLoggedInPin.value;
@@ -4213,15 +4231,60 @@ const lightboxComments = computed<HighlightComment[]>(() => {
   return getEffectiveHighlightComments(lightboxHighlight.value);
 });
 
+const threadedLightboxComments = computed<ThreadedHighlightComment[]>(() => {
+  const all = lightboxComments.value;
+  if (all.length === 0) return [];
+  const byId = new Map<string, HighlightComment>();
+  for (const c of all) {
+    byId.set(c.id, c);
+  }
+  const roots: HighlightComment[] = [];
+  const repliesByParent = new Map<string, HighlightComment[]>();
+  const orphans: HighlightComment[] = [];
+
+  for (const c of all) {
+    if (!c.parentId) {
+      roots.push(c);
+    } else if (byId.has(c.parentId)) {
+      const parentObj = byId.get(c.parentId);
+      const rootId = parentObj?.parentId && byId.has(parentObj.parentId) ? parentObj.parentId : c.parentId;
+      const arr = repliesByParent.get(rootId) || [];
+      arr.push(c);
+      repliesByParent.set(rootId, arr);
+    } else {
+      orphans.push(c);
+    }
+  }
+
+  const result: ThreadedHighlightComment[] = [];
+  for (const root of roots) {
+    result.push({ ...root, isReply: false });
+    const replies = repliesByParent.get(root.id);
+    if (replies && replies.length > 0) {
+      for (const r of replies) {
+        result.push({ ...r, isReply: true });
+      }
+    }
+  }
+  for (const orp of orphans) {
+    result.push({ ...orp, isReply: true, isOrphanReply: true });
+  }
+  return result;
+});
+
 const getRecordCommentCount = (rec: HighlightRecord): number => {
   void highlightStorageTick.value;
   return getEffectiveHighlightComments(rec).length;
 };
 
-const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' = 'new') => {
+const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' | 'reply' = 'new') => {
   const token = `[${tokenLabel}]`;
   if (target === 'edit') {
     editingCommentContent.value = `${editingCommentContent.value}${token}`;
+    return;
+  }
+  if (target === 'reply') {
+    replyContentInput.value = `${replyContentInput.value}${token}`;
     return;
   }
   const el = commentTextareaRef.value;
@@ -4312,7 +4375,87 @@ const submitNewHighlightComment = async () => {
   }
 };
 
+const startReplyComment = (cmt: HighlightComment) => {
+  if (replyingToComment.value?.id === cmt.id) {
+    cancelReplyComment();
+    return;
+  }
+  cancelEditComment();
+  deletingCommentId.value = null;
+  commentActionError.value = '';
+  replyFormError.value = '';
+  replyingToComment.value = cmt;
+  replyContentInput.value = '';
+  isReplyEmotePickerOpen.value = false;
+  isCommentEmotePickerOpen.value = false;
+};
+
+const cancelReplyComment = () => {
+  replyingToComment.value = null;
+  replyContentInput.value = '';
+  isReplyEmotePickerOpen.value = false;
+  replyFormError.value = '';
+};
+
+const submitReplyHighlightComment = async (targetCmt: HighlightComment) => {
+  if (!lightboxHighlight.value || isSubmittingReply.value) return;
+  replyFormError.value = '';
+
+  const author = isUsingScheduleIdentity.value
+    ? scheduleLoggedInName.value.trim()
+    : commentNicknameInput.value.trim();
+  const pin = isUsingScheduleIdentity.value
+    ? (scheduleLoggedInPin.value || 'schedule_user')
+    : commentPinInput.value.trim();
+  const content = replyContentInput.value.trim();
+
+  if (!author) {
+    replyFormError.value = '닉네임을 입력해 주세요.';
+    return;
+  }
+  if (!isUsingScheduleIdentity.value && (!pin || pin.length < 2)) {
+    replyFormError.value = '답글 수정/삭제에 사용할 비밀번호(PIN 2자리 이상)를 입력해 주세요.';
+    return;
+  }
+  if (!content) {
+    replyFormError.value = '답글 내용을 입력해 주세요.';
+    return;
+  }
+
+  const rootParentId = targetCmt.parentId || targetCmt.id;
+  const replyToAuthor = targetCmt.parentId ? targetCmt.authorName : undefined;
+
+  isSubmittingReply.value = true;
+  try {
+    const res = await addHighlightComment({
+      highlightId: lightboxHighlight.value.id,
+      parentId: rootParentId,
+      replyToAuthor,
+      authorName: author,
+      content,
+      pin,
+      isLoggedInUser: isUsingScheduleIdentity.value,
+    });
+    if (res.success) {
+      if (res.records) {
+        highlightsList.value = res.records;
+      }
+      if (res.record) {
+        lightboxHighlight.value = res.record;
+      }
+      highlightStorageTick.value++;
+      cancelReplyComment();
+      showToast('답글이 등록되었습니다.');
+    } else {
+      replyFormError.value = res.error || '답글 등록에 실패했습니다.';
+    }
+  } finally {
+    isSubmittingReply.value = false;
+  }
+};
+
 const startEditComment = (cmt: HighlightComment) => {
+  cancelReplyComment();
   deletingCommentId.value = null;
   commentActionError.value = '';
   editingCommentId.value = cmt.id;
@@ -4373,6 +4516,7 @@ const confirmUpdateComment = async (cmt: HighlightComment) => {
 };
 
 const startDeleteComment = async (cmt: HighlightComment) => {
+  cancelReplyComment();
   editingCommentId.value = null;
   commentActionError.value = '';
   if (canAutoAuthComment(cmt)) {
@@ -4442,6 +4586,7 @@ const openHighlightLightbox = (rec: HighlightRecord) => {
   commentFormError.value = '';
   isCommentEmotePickerOpen.value = false;
   cancelEditComment();
+  cancelReplyComment();
   deletingCommentId.value = null;
 };
 
@@ -4498,16 +4643,17 @@ const saveLightboxMemo = async () => {
 
 const confirmDeleteHighlight = async (rec: HighlightRecord) => {
   deleteHighlightError.value = '';
-  if (!needsPinInput.value && !window.confirm('이 기록을 정말 삭제하시겠습니까?')) {
+  if (!isGalleryAdmin.value) {
+    deleteHighlightError.value = '기록 및 사진 삭제는 관리자만 가능합니다.';
+    return;
+  }
+  if (!window.confirm('이 기록을 정말 삭제하시겠습니까?')) {
     return;
   }
   isDeletingHighlight.value = true;
   try {
     const res = await deleteHighlight(rec.id, deletePinPromptInput.value);
     if (res.success) {
-      if (getSavedHighlightPin()) {
-        hasSavedValidPin.value = true;
-      }
       if (res.records) {
         highlightsList.value = res.records;
       } else {
@@ -4517,11 +4663,7 @@ const confirmDeleteHighlight = async (rec: HighlightRecord) => {
       showDeletePinInput.value = false;
       showToast('기록이 삭제되었습니다.');
     } else {
-      if (res.pinInvalidated) {
-        hasSavedValidPin.value = false;
-        deletePinPromptInput.value = '';
-      }
-      deleteHighlightError.value = res.error || '공통 PIN이 일치하지 않거나 권한이 없습니다.';
+      deleteHighlightError.value = res.error || '기록 및 사진 삭제는 관리자만 가능합니다.';
     }
   } finally {
     isDeletingHighlight.value = false;
@@ -8484,9 +8626,9 @@ const openGamePopupFromLightbox = async (
         <div class="highlight-upload-modal-card large-upload-modal">
           <div class="highlight-modal-header">
             <div>
-              <h3>{{ editingHighlightRecord ? '등록 기록 / 사진 수정' : '역만 / 화료 / 나니키루 / 회차별 사진 등록' }}</h3>
+              <h3>{{ editingHighlightRecord ? (isGalleryAdmin ? '등록 기록 / 사진 수정' : '등록 기록 정보 수정') : '역만 / 화료 / 나니키루 / 회차별 사진 등록' }}</h3>
               <p class="upload-modal-subdesc">
-                {{ editingHighlightRecord ? '등록된 기록의 분류, 회차, 경기, 국, 인원, 역만, 사진 및 메모를 수정합니다.' : '역만, 그 외 화료, 나니키루(무엇을 버릴까), 회차별 현장 사진을 등록합니다.' }}
+                {{ editingHighlightRecord ? (isGalleryAdmin ? '등록된 기록의 분류, 회차, 경기, 국, 인원, 역만, 사진 및 메모를 수정합니다.' : '등록된 기록의 분류, 회차, 경기, 국, 인원, 역만 및 메모를 수정합니다. (사진 변경/삭제는 관리자 전용)') : '역만, 그 외 화료, 나니키루(무엇을 버릴까), 회차별 현장 사진을 등록합니다.' }}
               </p>
             </div>
             <button class="btn-close" @click="closeHighlightUploadModal" title="닫기">✕</button>
@@ -8577,6 +8719,7 @@ const openGamePopupFromLightbox = async (
                   type="button"
                   class="cat-radio-btn nanikiru" 
                   :class="{ active: uploadForm.category === 'nanikiru' }"
+                  :disabled="Boolean(editingHighlightRecord && !isGalleryAdmin && !editingHighlightRecord.hasImage)"
                   @click="uploadForm.category = 'nanikiru'"
                 >
                   나니키루 (무엇을 버릴까)
@@ -8585,6 +8728,7 @@ const openGamePopupFromLightbox = async (
                   type="button"
                   class="cat-radio-btn" 
                   :class="{ active: uploadForm.category === 'session' }"
+                  :disabled="Boolean(editingHighlightRecord && !isGalleryAdmin && !editingHighlightRecord.hasImage)"
                   @click="uploadForm.category = 'session'"
                 >
                   회차별 사진 등록
@@ -8884,26 +9028,36 @@ const openGamePopupFromLightbox = async (
             <!-- 사진 업로드 -->
             <div class="form-group">
               <label class="form-label">
-                {{ editingHighlightRecord ? '사진 교체 / 첨부' : '사진 첨부' }}
-                {{ uploadForm.category === 'session' || uploadForm.category === 'nanikiru' ? '*' : '(선택)' }}
+                {{ editingHighlightRecord ? (isGalleryAdmin ? '사진 교체 / 첨부' : '등록된 사진') : '사진 첨부' }}
+                {{ !editingHighlightRecord && (uploadForm.category === 'session' || uploadForm.category === 'nanikiru') ? '*' : (!editingHighlightRecord ? '(선택)' : '') }}
               </label>
-              <input 
-                ref="highlightFileInputRef"
-                type="file" 
-                accept="image/*" 
-                class="form-file-input"
-                @change="handleHighlightFileSelect"
-              />
-              <div v-if="selectedUploadPreviewUrl" class="upload-preview-box">
-                <img :src="selectedUploadPreviewUrl" alt="미리보기" class="upload-preview-img" />
-                <button 
-                  type="button" 
-                  class="btn-remove-preview" 
-                  @click="handleRemoveUploadPreview"
-                >
-                  사진 제거
-                </button>
-              </div>
+              <template v-if="!editingHighlightRecord || isGalleryAdmin">
+                <input 
+                  ref="highlightFileInputRef"
+                  type="file" 
+                  accept="image/*" 
+                  class="form-file-input"
+                  @change="handleHighlightFileSelect"
+                />
+                <div v-if="selectedUploadPreviewUrl" class="upload-preview-box">
+                  <img :src="selectedUploadPreviewUrl" alt="미리보기" class="upload-preview-img" />
+                  <button 
+                    type="button" 
+                    class="btn-remove-preview" 
+                    @click="handleRemoveUploadPreview"
+                  >
+                    사진 제거
+                  </button>
+                </div>
+              </template>
+              <template v-else>
+                <div class="photo-edit-locked-notice">
+                  등록된 사진의 변경 및 삭제는 관리자만 가능합니다.
+                </div>
+                <div v-if="selectedUploadPreviewUrl" class="upload-preview-box">
+                  <img :src="selectedUploadPreviewUrl" alt="미리보기" class="upload-preview-img" />
+                </div>
+              </template>
             </div>
 
             <!-- 멀티라인 메모 -->
@@ -9033,16 +9187,10 @@ const openGamePopupFromLightbox = async (
                     class="btn-edit-highlight"
                     @click="openEditHighlightModal(lightboxHighlight)"
                   >
-                    기록 / 사진 수정
+                    {{ isGalleryAdmin ? '기록 / 사진 수정' : '기록 정보 수정' }}
                   </button>
-                  <input 
-                    v-if="needsPinInput"
-                    v-model="deletePinPromptInput" 
-                    type="password" 
-                    class="delete-pin-input" 
-                    placeholder="삭제 시 공통 PIN 입력"
-                  />
                   <button 
+                    v-if="isGalleryAdmin"
                     class="btn-delete-highlight" 
                     :disabled="isDeletingHighlight"
                     @click="confirmDeleteHighlight(lightboxHighlight)"
@@ -9123,15 +9271,17 @@ const openGamePopupFromLightbox = async (
                   </div>
                 </div>
 
-                <!-- 댓글 목록 -->
-                <div v-if="lightboxComments.length > 0" class="lb-comments-list">
+                <!-- 댓글 목록 (대댓글 트리 정렬) -->
+                <div v-if="threadedLightboxComments.length > 0" class="lb-comments-list">
                   <div
-                    v-for="cmt in lightboxComments"
+                    v-for="cmt in threadedLightboxComments"
                     :key="cmt.id"
                     class="lb-comment-item"
+                    :class="{ 'is-reply': cmt.isReply }"
                   >
                     <div class="lb-comment-top">
                       <div class="lb-comment-author-box">
+                        <span v-if="cmt.isReply" class="lb-reply-prefix" title="답글">↳</span>
                         <button
                           v-if="isKnownPlayerName(cmt.authorName)"
                           type="button"
@@ -9141,12 +9291,24 @@ const openGamePopupFromLightbox = async (
                         >{{ cmt.authorName }}</button>
                         <strong v-else class="lb-comment-author">{{ cmt.authorName }}</strong>
                         <span v-if="!cmt.isLoggedInUser" class="lb-comment-guest-badge" title="유동 닉네임">유동</span>
+                        <span v-if="cmt.replyToAuthor" class="lb-reply-target-badge">
+                          @{{ cmt.replyToAuthor }}
+                        </span>
+                        <span v-if="cmt.isOrphanReply" class="lb-orphan-reply-badge">
+                          삭제된 댓글의 답글
+                        </span>
                         <span class="lb-comment-time">
                           {{ formatCommentTime(cmt.createdAt) }}
                           <template v-if="cmt.updatedAt"> (수정됨)</template>
                         </span>
                       </div>
                       <div class="lb-comment-actions">
+                        <button
+                          type="button"
+                          class="btn-cmt-act reply"
+                          :class="{ active: replyingToComment?.id === cmt.id }"
+                          @click="startReplyComment(cmt)"
+                        >답글</button>
                         <button
                           type="button"
                           class="btn-cmt-act"
@@ -9188,7 +9350,7 @@ const openGamePopupFromLightbox = async (
                             type="button"
                             class="btn-toggle-emote-picker sm"
                             :class="{ active: isEditingCommentPickerOpen }"
-                            @click.stop="isEditingCommentPickerOpen = !isEditingCommentPickerOpen; isCommentEmotePickerOpen = false"
+                            @click.stop="isEditingCommentPickerOpen = !isEditingCommentPickerOpen; isCommentEmotePickerOpen = false; isReplyEmotePickerOpen = false"
                           >
                             <img :src="getMahjongTileImageUrl('7z.png')" alt="중" class="btn-emote-chun-icon" />
                             <span>나니키루콘</span>
@@ -9281,6 +9443,146 @@ const openGamePopupFromLightbox = async (
                       >취소</button>
                       <div v-if="commentActionError && deletingCommentId === cmt.id" class="upload-error-msg">{{ commentActionError }}</div>
                     </div>
+
+                    <!-- 대댓글(답글) 작성 인라인 폼 -->
+                    <div v-if="replyingToComment?.id === cmt.id" class="lb-reply-form-box" @click.stop>
+                      <div class="lb-reply-form-header">
+                        <span class="lb-reply-form-target">
+                          <strong>↳ {{ cmt.authorName }}</strong>님에게 답글 작성
+                        </span>
+                        <div class="lb-cf-author-row compact">
+                          <template v-if="isUsingScheduleIdentity">
+                            <div class="lb-cf-logged-in">
+                              <span class="lb-cf-logged-badge">로그인</span>
+                              <strong class="lb-cf-logged-name">{{ scheduleLoggedInName }}</strong>
+                            </div>
+                            <button type="button" class="btn-switch-guest-mode" @click="toggleGuestCommentMode">
+                              유동 전환
+                            </button>
+                          </template>
+                          <template v-else>
+                            <div class="lb-cf-guest-inputs">
+                              <input
+                                v-model="commentNicknameInput"
+                                type="text"
+                                maxlength="24"
+                                class="lb-cf-input nick"
+                                placeholder="닉네임"
+                              />
+                              <input
+                                v-model="commentPinInput"
+                                type="password"
+                                maxlength="20"
+                                class="lb-cf-input pin"
+                                placeholder="비밀번호"
+                                autocomplete="off"
+                              />
+                            </div>
+                            <button
+                              v-if="scheduleLoggedInName"
+                              type="button"
+                              class="btn-switch-guest-mode"
+                              @click="toggleGuestCommentMode"
+                            >
+                              로그인 전환
+                            </button>
+                          </template>
+                        </div>
+                      </div>
+
+                      <textarea
+                        v-model="replyContentInput"
+                        rows="2"
+                        maxlength="400"
+                        class="form-textarea lb-cmt-edit-textarea"
+                        placeholder=""
+                        @keydown.ctrl.enter.prevent="submitReplyHighlightComment(cmt)"
+                      ></textarea>
+
+                      <div
+                        v-if="replyContentInput.includes('[') && replyContentInput.includes(']')"
+                        class="lb-cf-live-preview"
+                      >
+                        <span class="lb-cf-preview-label">미리보기</span>
+                        <div class="lb-cf-preview-body rich-mahjong-content">
+                          <template v-for="(seg, sIdx) in parseRichMahjongText(replyContentInput)" :key="`rep-prev-seg-${sIdx}`">
+                            <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                            <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                              <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
+                            </span>
+                            <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                              {{ seg.action.label }}
+                            </span>
+                          </template>
+                        </div>
+                      </div>
+
+                      <div class="lb-cmt-edit-toolbar">
+                        <div class="emote-picker-anchor">
+                          <button
+                            type="button"
+                            class="btn-toggle-emote-picker sm"
+                            :class="{ active: isReplyEmotePickerOpen }"
+                            @click.stop="isReplyEmotePickerOpen = !isReplyEmotePickerOpen; isCommentEmotePickerOpen = false; isEditingCommentPickerOpen = false"
+                          >
+                            <img :src="getMahjongTileImageUrl('7z.png')" alt="중" class="btn-emote-chun-icon" />
+                            <span>나니키루콘</span>
+                          </button>
+
+                          <div v-show="isReplyEmotePickerOpen" class="mahjong-emote-picker compact" @click.stop>
+                            <div class="mep-tabs">
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'man' }" @click="activeEmoteTab = 'man'">만수</button>
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'pin' }" @click="activeEmoteTab = 'pin'">통수</button>
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'sou' }" @click="activeEmoteTab = 'sou'">삭수</button>
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'honor' }" @click="activeEmoteTab = 'honor'">자패</button>
+                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
+                            </div>
+                            <div v-show="activeEmoteTab === 'action'" class="mep-actions-grid">
+                              <button
+                                v-for="act in MAHJONG_ACTION_EMOTES"
+                                :key="`rep-act-${act.key}`"
+                                type="button"
+                                class="mep-action-btn"
+                                :class="act.colorClass"
+                                @click="insertEmoteTokenToComment(act.label, 'reply')"
+                              >
+                                {{ act.label }}
+                              </button>
+                            </div>
+                            <div
+                              v-for="grp in TILE_EMOTE_GROUPS"
+                              :key="`rep-grp-${grp.key}`"
+                              v-show="activeEmoteTab === grp.key"
+                              class="mep-tiles-grid"
+                            >
+                              <button
+                                v-for="tl in grp.tiles"
+                                :key="`rep-tl-${tl.code}`"
+                                type="button"
+                                class="mep-tile-btn"
+                                :title="tl.label"
+                                @click="insertEmoteTokenToComment(tl.label, 'reply')"
+                              >
+                                <img :src="getMahjongTileImageUrl(tl.fileName)" :alt="tl.label" loading="eager" decoding="sync" />
+                                <span class="mep-tile-sub">{{ tl.label }}</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div class="lb-cmt-edit-right">
+                          <button type="button" class="btn-cancel-modal sm" @click="cancelReplyComment">취소</button>
+                          <button
+                            type="button"
+                            class="btn-submit-modal sm"
+                            :disabled="isSubmittingReply"
+                            @click="submitReplyHighlightComment(cmt)"
+                          >{{ isSubmittingReply ? '등록 중...' : '답글 등록' }}</button>
+                        </div>
+                      </div>
+
+                      <div v-if="replyFormError && replyingToComment?.id === cmt.id" class="upload-error-msg">{{ replyFormError }}</div>
+                    </div>
                   </div>
                 </div>
 
@@ -9365,7 +9667,7 @@ const openGamePopupFromLightbox = async (
                         type="button"
                         class="btn-toggle-emote-picker"
                         :class="{ active: isCommentEmotePickerOpen }"
-                        @click.stop="isCommentEmotePickerOpen = !isCommentEmotePickerOpen; isEditingCommentPickerOpen = false"
+                        @click.stop="isCommentEmotePickerOpen = !isCommentEmotePickerOpen; isEditingCommentPickerOpen = false; isReplyEmotePickerOpen = false"
                       >
                         <img :src="getMahjongTileImageUrl('7z.png')" alt="중" class="btn-emote-chun-icon" />
                         <span>나니키루콘</span>
@@ -9606,8 +9908,8 @@ const openGamePopupFromLightbox = async (
           </div>
           <div class="highlight-modal-body">
             <p class="pin-admin-desc">
-              이 PIN 번호를 알고 있는 모든 부원은 역만 기록, 그 외 화료 사진, 회차별 사진을 등록하거나 삭제할 수 있습니다.
-              (보안을 위해 PIN 번호는 코드에 포함되지 않고 서버 보안 스토리지에서만 관리됩니다.)
+              이 PIN 번호를 알고 있는 모든 부원은 화료 기록 및 사진을 등록하거나, 기존 기록의 사진 외 정보(회차·대국·승자·설명 등)를 수정할 수 있습니다.
+              (사진 교체/삭제 및 기록 전체 삭제는 관리자만 가능합니다.)
             </p>
 
             <template v-if="!isPinAdminVerified">
@@ -16287,7 +16589,111 @@ html.dark .mep-tile-btn img {
 html.dark .mep-tile-sub {
   color: #a1a1aa;
 }
+
+/* =====================================================================
+   사진 수정 잠금 안내 & 대댓글(답글) 스타일
+   ===================================================================== */
+.photo-edit-locked-notice {
+  margin-top: 8px;
+  padding: 8px 11px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px dashed rgba(59, 130, 246, 0.35);
+  color: var(--text-dimmed, #475569);
+}
+html.dark .photo-edit-locked-notice {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(96, 165, 250, 0.38);
+  color: #cbd5e1;
+}
+
+/* 대댓글(답글) 아이템 들여쓰기 */
+.lb-comment-item.is-reply {
+  margin-left: 20px;
+  width: calc(100% - 20px);
+  background: rgba(59, 130, 246, 0.035);
+  border-left: 3px solid rgba(59, 130, 246, 0.45);
+}
+html.dark .lb-comment-item.is-reply {
+  background: rgba(39, 39, 46, 0.85);
+  border-left: 3px solid rgba(96, 165, 250, 0.5);
+}
+.lb-reply-prefix {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--color-toggle-on, #2563eb);
+  margin-right: 1px;
+  user-select: none;
+}
+html.dark .lb-reply-prefix {
+  color: #60a5fa;
+}
+.lb-reply-target-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+html.dark .lb-reply-target-badge {
+  background: rgba(59, 130, 246, 0.22);
+  color: #93c5fd;
+}
+.lb-orphan-reply-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-dimmed, #64748b);
+}
+.btn-cmt-act.reply.active {
+  color: var(--color-toggle-on, #2563eb);
+  background: rgba(59, 130, 246, 0.12);
+  font-weight: 700;
+}
+html.dark .btn-cmt-act.reply.active {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.18);
+}
+
+/* 대댓글 인라인 작성 박스 */
+.lb-reply-form-box {
+  margin-top: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--bg-modal, #ffffff);
+  border: 1px dashed rgba(59, 130, 246, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+html.dark .lb-reply-form-box {
+  background: #18181c;
+  border-color: rgba(96, 165, 250, 0.45);
+}
+.lb-reply-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.lb-reply-form-target {
+  font-size: 11.5px;
+  color: var(--color-toggle-on, #2563eb);
+}
+html.dark .lb-reply-form-target {
+  color: #93c5fd;
+}
+.lb-cf-author-row.compact {
+  gap: 6px;
+}
 </style>
+
 
 
 

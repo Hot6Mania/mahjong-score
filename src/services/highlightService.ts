@@ -35,6 +35,8 @@ export type HighlightCategory = 'yakuman' | 'fun' | 'nanikiru' | 'session';
 
 export interface HighlightComment {
   id: string;
+  parentId?: string;
+  replyToAuthor?: string;
   authorName: string;
   isLoggedInUser?: boolean;
   content: string;
@@ -625,16 +627,15 @@ export async function deleteHighlight(
       };
     }
     if (res.status === 403) {
-      clearHighlightPin();
       return {
         success: false,
-        pinInvalidated: true,
-        error: data?.error || '삭제 권한이 없거나 공통 PIN이 일치하지 않습니다.',
+        pinInvalidated: false,
+        error: data?.error || '기록 및 사진 삭제는 관리자만 가능합니다.',
       };
     }
     return {
       success: false,
-      error: data?.error || '삭제 권한이 없거나 PIN이 일치하지 않습니다.',
+      error: data?.error || '기록 및 사진 삭제는 관리자만 가능합니다.',
     };
   } catch (e: any) {
     return {
@@ -780,10 +781,12 @@ export async function updateHighlightRecord(params: {
       };
     }
     if (res.status === 403) {
-      clearHighlightPin();
+      if (!data?.permissionDenied) {
+        clearHighlightPin();
+      }
       return {
         success: false,
-        pinInvalidated: true,
+        pinInvalidated: !data?.permissionDenied,
         error: data?.error || '수정 권한이 없거나 공통 PIN이 일치하지 않습니다.',
       };
     }
@@ -1051,6 +1054,8 @@ export function getEffectiveHighlightComments(rec?: HighlightRecord | null): Hig
 
 export async function addHighlightComment(params: {
   highlightId: string;
+  parentId?: string;
+  replyToAuthor?: string;
   authorName: string;
   content: string;
   pin: string;
@@ -1064,6 +1069,8 @@ export async function addHighlightComment(params: {
   const cleanAuthor = params.authorName.trim();
   const cleanContent = params.content.trim();
   const cleanPin = params.pin.trim();
+  const cleanParentId = params.parentId ? params.parentId.trim() : undefined;
+  const cleanReplyToAuthor = params.replyToAuthor ? params.replyToAuthor.trim() : undefined;
 
   if (!cleanAuthor) return { success: false, error: '닉네임을 입력해 주세요.' };
   if (!cleanContent) return { success: false, error: '댓글 내용을 입력해 주세요.' };
@@ -1079,6 +1086,8 @@ export async function addHighlightComment(params: {
       body: JSON.stringify({
         action: 'create',
         highlightId: params.highlightId,
+        ...(cleanParentId ? { parentId: cleanParentId } : {}),
+        ...(cleanReplyToAuthor ? { replyToAuthor: cleanReplyToAuthor } : {}),
         authorName: cleanAuthor,
         content: cleanContent,
         pin: cleanPin,
@@ -1114,6 +1123,8 @@ export async function addHighlightComment(params: {
   const list = Array.isArray(localMap[params.highlightId]) ? localMap[params.highlightId] : [];
   const newComment: LocalCommentStored = {
     id: `cmt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    ...(cleanParentId ? { parentId: cleanParentId } : {}),
+    ...(cleanReplyToAuthor ? { replyToAuthor: cleanReplyToAuthor } : {}),
     authorName: cleanAuthor,
     isLoggedInUser: !!params.isLoggedInUser,
     content: cleanContent,
