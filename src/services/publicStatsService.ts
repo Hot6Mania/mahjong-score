@@ -1494,9 +1494,11 @@ export async function fetchPublicSessionDetail(
     detail = parseSessionSheetTable(table, sessionName);
   }
 
-  cachedSessionsDetail[sessionName] = detail;
-  if (isPastSession && detail.games.length > 0) {
-    writePastSessionLocalCache(`detail_${sessionName}`, detail);
+  if (detail.games.length > 0 || detail.members.length > 0) {
+    cachedSessionsDetail[sessionName] = detail;
+    if (isPastSession && detail.games.length > 0) {
+      writePastSessionLocalCache(`detail_${sessionName}`, detail);
+    }
   }
   return detail;
 }
@@ -2792,17 +2794,27 @@ export async function fetchSessionGameDetail(
     return seatOrder.indexOf(a.seat) - seatOrder.indexOf(b.seat);
   });
 
-  // 1. 로컬 스토리지 확인
+  // 1. 로컬 스토리지 확인 (다른 회차의 동일 경기 번호 오매칭 방지를 위해 gameId 우선 검증 및 참가자 4인 전원 일치 검증)
   try {
     const rawHistory = localStorage.getItem("today_games_history");
     if (rawHistory) {
       const historyList = JSON.parse(rawHistory);
-      const found = historyList.find((g: any) =>
-        (g.timestamp && game.gameId && String(g.timestamp) === String(game.gameId)) ||
-        (g.id && String(g.id) === String(game.gameId)) ||
-        (g.gameId && String(g.gameId) === String(game.gameId)) ||
-        (g.gameIndex && g.gameIndex === game.gameIndex && g.results?.length === 4)
-      );
+      const cleanTargetGameId = game.gameId ? String(game.gameId).trim() : '';
+      const targetPlayerNames = new Set((game.players || []).map(p => p.name.trim()));
+      const found = historyList.find((g: any) => {
+        if (!g) return false;
+        const gIdCandidates = [g.timestamp, g.id, g.gameId]
+          .filter(v => v !== undefined && v !== null && String(v).trim() !== '')
+          .map(v => String(v).trim());
+        if (cleanTargetGameId) {
+          return gIdCandidates.includes(cleanTargetGameId);
+        }
+        if (g.gameIndex && g.gameIndex === game.gameIndex && g.results?.length === 4) {
+          const histPlayers: string[] = g.playerNames || g.results.map((r: any) => String(r?.name || '').trim());
+          return histPlayers.length === 4 && histPlayers.every(name => targetPlayerNames.has(name.trim()));
+        }
+        return false;
+      });
       if (found && found.records && Array.isArray(found.records.score) && found.records.score.length >= 4) {
         return buildGameDetailFromLocalRecords(game, found.records, found.playerNames || found.results?.map((r: any) => r.name));
       }

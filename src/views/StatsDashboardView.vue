@@ -806,13 +806,48 @@ const isKnownPlayerName = (name?: string): boolean => {
   return Boolean(findMemberStatByName(name));
 };
 
-const openPlayerByName = (
+const availableSessions = ref<string[]>([]);
+
+const resolveMatchedSessionName = (rawSessionName?: string): string => {
+  const raw = (rawSessionName || '').trim();
+  if (!raw) return '';
+  const found = availableSessions.value.find(s => matchHighlightSession(s, raw));
+  return found || raw;
+};
+
+const openPlayerByName = async (
   name: string,
   fromSession: boolean = false,
   keepScopeTab: boolean = false,
-  keepActiveTab: boolean = false
+  keepActiveTab: boolean = false,
+  targetSessionName?: string
 ) => {
-  const match = findMemberStatByName(name);
+  const clean = (name || '').trim();
+  if (!clean) return;
+
+  const rawSess = (targetSessionName || (fromSession && lightboxHighlight.value?.sessionName) || '').trim();
+  if (fromSession && rawSess) {
+    const matchedSess = resolveMatchedSessionName(rawSess);
+    if (matchedSess) {
+      if (selectedSession.value !== matchedSess) {
+        selectedSession.value = matchedSess;
+      }
+      if (!currentSessionDetail.value || !matchHighlightSession(currentSessionDetail.value.sessionName, matchedSess)) {
+        loadSessionDetail(matchedSess);
+      }
+    }
+  }
+
+  let match = findMemberStatByName(clean);
+  if (!match && allStats.value.length === 0) {
+    try {
+      const loaded = await fetchPublicAllStats();
+      if (loaded.length > 0) {
+        allStats.value = loaded;
+      }
+      match = findMemberStatByName(clean);
+    } catch {}
+  }
   if (match) {
     openPlayerModal(match, fromSession, keepScopeTab, keepActiveTab);
   }
@@ -821,7 +856,6 @@ const openPlayerByName = (
 // ==========================================
 // 3. 회차별 경기 상세 데이터 & 꺾은선 차트
 // ==========================================
-const availableSessions = ref<string[]>([]);
 
 // 미진행 회차(16~25회) 배제된 실제 노출용 회차 목록
 const displayedAvailableSessions = computed(() => {
@@ -844,9 +878,19 @@ const selectedSession = ref('');
 const currentSessionDetail = ref<SessionDetail | null>(null);
 const isLoadingSession = ref(false);
 
-// 유효 회차가 결정되면 selectedSession 자동 동기화
+// 유효 회차가 결정되면 selectedSession 자동 동기화 (라이트박스 등에서 이미 선택된 회차가 있으면 매칭 유지)
 watch(displayedAvailableSessions, (newSessions) => {
-  if (newSessions.length > 0 && !newSessions.includes(selectedSession.value)) {
+  if (newSessions.length === 0) return;
+  if (selectedSession.value) {
+    const matched = newSessions.find(s => matchHighlightSession(s, selectedSession.value));
+    if (matched) {
+      if (selectedSession.value !== matched) {
+        selectedSession.value = matched;
+      }
+      return;
+    }
+  }
+  if (!newSessions.includes(selectedSession.value)) {
     selectedSession.value = newSessions[0];
   }
 }, { immediate: true });
@@ -866,6 +910,10 @@ watch(modalScopeTab, (newScope) => {
 const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = false) => {
   if (!sessionName) return;
 
+  if (!currentSessionDetail.value || !matchHighlightSession(currentSessionDetail.value.sessionName, sessionName)) {
+    currentSessionDetailedStatsMap.value = {};
+  }
+
   // 1) 이미 로드된 캐시 또는 '레이팅 이력'에서 0ms 즉시 렌더링하여 로딩 스피너 대기 제거
   if (!forceRefresh) {
     const optimistic = buildSessionDetailFromRatingHistory(sessionName);
@@ -876,13 +924,13 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
       isLoadingSession.value = true;
     }
   } else {
-    isLoadingSession.value = !currentSessionDetail.value || currentSessionDetail.value.sessionName !== sessionName;
+    isLoadingSession.value = !currentSessionDetail.value || !matchHighlightSession(currentSessionDetail.value.sessionName, sessionName);
   }
 
   // 2) 개인 모달용 국별 상세 통계는 화면 렌더링을 블로킹하지 않고 병렬 백그라운드로 로드
   fetchSessionDetailedStats(sessionName, undefined, forceRefresh)
     .then(detailedMap => {
-      if (selectedSession.value === sessionName) {
+      if (matchHighlightSession(selectedSession.value, sessionName)) {
         currentSessionDetailedStatsMap.value = detailedMap;
       }
     })
@@ -898,7 +946,7 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
     if (historyRecords.length > 0) {
       allRatingHistoryRecords.value = historyRecords;
     }
-    if (selectedSession.value !== sessionName) return;
+    if (!matchHighlightSession(selectedSession.value, sessionName)) return;
     if (detail && detail.games && historyRecords.length > 0) {
       attachRatingToSessionGames(sessionName, detail.games, historyRecords);
     }
@@ -915,7 +963,7 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
   } catch (err: any) {
     console.error("회차 상세 로드 실패:", err);
   } finally {
-    if (selectedSession.value === sessionName) {
+    if (matchHighlightSession(selectedSession.value, sessionName)) {
       isLoadingSession.value = false;
     }
   }
@@ -1566,19 +1614,46 @@ const loadAllData = async (forceRefresh: boolean = false) => {
           });
 
     const [stats, matrix, timeline, sessions, highlights] = await Promise.all([
-      fetchPublicAllStats(undefined, forceRefresh),
-      fetchPublicStatsMatrix(undefined, forceRefresh).catch(e => {
-        console.warn("통계 매트릭스 로드 실패:", e);
-        return null;
+      fetchPublicAllStats(undefined, forceRefresh).then(res => {
+        if (res && res.length > 0) {
+          allStats.value = res;
+        }
+        return res;
       }),
-      fetchPublicRatingTimeline(undefined, forceRefresh).catch(e => {
-        console.warn("레이팅 타임라인 로드 실패:", e);
-        return null;
-      }),
-      fetchPublicSessions(undefined, forceRefresh).catch(e => {
-        console.error("회차 목록 로드 실패:", e);
-        return [] as string[];
-      }),
+      fetchPublicStatsMatrix(undefined, forceRefresh)
+        .then(res => {
+          if (res) {
+            statsMatrix.value = res;
+          }
+          return res;
+        })
+        .catch(e => {
+          console.warn("통계 매트릭스 로드 실패:", e);
+          return null;
+        }),
+      fetchPublicRatingTimeline(undefined, forceRefresh)
+        .then(res => {
+          if (res) {
+            ratingTimeline.value = res;
+            filterRatingTopN(5);
+          }
+          return res;
+        })
+        .catch(e => {
+          console.warn("레이팅 타임라인 로드 실패:", e);
+          return null;
+        }),
+      fetchPublicSessions(undefined, forceRefresh)
+        .then(res => {
+          if (res && res.length > 0) {
+            availableSessions.value = res;
+          }
+          return res;
+        })
+        .catch(e => {
+          console.error("회차 목록 로드 실패:", e);
+          return [] as string[];
+        }),
       highlightsPromise
     ]);
     allStats.value = stats;
@@ -1598,11 +1673,24 @@ const loadAllData = async (forceRefresh: boolean = false) => {
     if (sessions.length > 0) {
       availableSessions.value = sessions;
       const valid = displayedAvailableSessions.value;
-      if (valid.length > 0 && (!selectedSession.value || !valid.includes(selectedSession.value))) {
-        selectedSession.value = valid[0];
+      if (valid.length > 0) {
+        const matchedCurrent = selectedSession.value
+          ? valid.find(s => matchHighlightSession(s, selectedSession.value))
+          : undefined;
+        if (matchedCurrent) {
+          selectedSession.value = matchedCurrent;
+        } else if (!selectedSession.value || !valid.includes(selectedSession.value)) {
+          selectedSession.value = valid[0];
+        }
       }
     }
-    if (selectedSession.value && (forceRefresh || (!isLoadingSession.value && currentSessionDetail.value?.sessionName !== selectedSession.value))) {
+    if (
+      selectedSession.value &&
+      (forceRefresh ||
+        (!isLoadingSession.value &&
+          (!currentSessionDetail.value ||
+            !matchHighlightSession(currentSessionDetail.value.sessionName, selectedSession.value))))
+    ) {
       await loadSessionDetail(selectedSession.value, forceRefresh);
     }
     if (forceRefresh) {
@@ -4644,13 +4732,7 @@ const closeFullImageZoom = () => {
 };
 
 const cycleFullImageFitMode = () => {
-  if (fullImageFitMode.value === 'contain') {
-    fullImageFitMode.value = 'width';
-  } else if (fullImageFitMode.value === 'width') {
-    fullImageFitMode.value = 'original';
-  } else {
-    fullImageFitMode.value = 'contain';
-  }
+  fullImageFitMode.value = fullImageFitMode.value === 'contain' ? 'original' : 'contain';
 };
 
 watch(lightboxHighlight, (val, oldVal) => {
@@ -4946,6 +5028,17 @@ const openHighlightLightbox = (rec: HighlightRecord, updateUrl = true) => {
   fullImageFitMode.value = 'contain';
   showLightboxCommentFab.value = true;
   lightboxHighlight.value = rec;
+  if (rec.sessionName) {
+    const matchedSess = resolveMatchedSessionName(rec.sessionName);
+    if (matchedSess) {
+      if (selectedSession.value !== matchedSess) {
+        selectedSession.value = matchedSess;
+      }
+      if (!currentSessionDetail.value || !matchHighlightSession(currentSessionDetail.value.sessionName, matchedSess)) {
+        loadSessionDetail(matchedSess);
+      }
+    }
+  }
   if (updateUrl && typeof window !== 'undefined' && rec.id) {
     const nextUrl = buildDashboardRelativeUrl(activeTab.value, rec.id);
     window.history.replaceState(null, '', nextUrl);
@@ -5365,13 +5458,6 @@ onUnmounted(() => {
 const lightboxSessionPopupDetail = ref<SessionDetail | null>(null);
 const isLoadingLightboxSessionPopup = ref(false);
 
-const resolveMatchedSessionName = (rawSessionName?: string): string => {
-  const raw = (rawSessionName || '').trim();
-  if (!raw) return '';
-  const found = availableSessions.value.find(s => matchHighlightSession(s, raw));
-  return found || raw;
-};
-
 const lightboxSessionPopupMembersWithRanks = computed(() => {
   const detail = lightboxSessionPopupDetail.value;
   if (!detail) return [];
@@ -5404,7 +5490,11 @@ const openSessionPopupFromLightbox = async (rec: HighlightRecord) => {
   const sessName = resolveMatchedSessionName(rec.sessionName);
   if (!sessName) return;
 
-  if (currentSessionDetail.value && matchHighlightSession(currentSessionDetail.value.sessionName, sessName)) {
+  if (
+    currentSessionDetail.value &&
+    matchHighlightSession(currentSessionDetail.value.sessionName, sessName) &&
+    currentSessionDetail.value.games.length > 0
+  ) {
     lightboxSessionPopupDetail.value = currentSessionDetail.value;
     return;
   }
@@ -5451,9 +5541,17 @@ const openGamePopupFromLightbox = async (
   if (!sessName) return;
 
   let sessDetail: SessionDetail | null = null;
-  if (currentSessionDetail.value && matchHighlightSession(currentSessionDetail.value.sessionName, sessName)) {
+  if (
+    currentSessionDetail.value &&
+    matchHighlightSession(currentSessionDetail.value.sessionName, sessName) &&
+    currentSessionDetail.value.games.length > 0
+  ) {
     sessDetail = currentSessionDetail.value;
-  } else if (lightboxSessionPopupDetail.value && matchHighlightSession(lightboxSessionPopupDetail.value.sessionName, sessName) && lightboxSessionPopupDetail.value.games.length > 0) {
+  } else if (
+    lightboxSessionPopupDetail.value &&
+    matchHighlightSession(lightboxSessionPopupDetail.value.sessionName, sessName) &&
+    lightboxSessionPopupDetail.value.games.length > 0
+  ) {
     sessDetail = lightboxSessionPopupDetail.value;
   } else {
     try {
@@ -5486,7 +5584,9 @@ const openGamePopupFromLightbox = async (
     matchedGame = sessDetail.games[0];
   }
 
-  await openGameDetailModal(matchedGame, false, sessName);
+  gameModalMode.value = targetMode === 'rounds' ? 'rounds' : 'sheet';
+  gameModalSelectedRound.value = '__all__';
+  await openGameDetailModal(matchedGame, targetMode === 'rounds', sessName);
 
   if (targetMode === 'rounds') {
     gameModalMode.value = 'rounds';
@@ -6694,10 +6794,10 @@ const openGamePopupFromLightbox = async (
                       <strong
                         class="hl-player-link"
                         title="클릭하여 스탯 보기"
-                        @click.stop="openPlayerByName(rec.winnerName, true)"
+                        @click.stop="openPlayerByName(rec.winnerName, true, false, false, rec.sessionName || selectedSession)"
                       >{{ rec.winnerName }}</strong>
                       <span v-if="rec.winType && rec.category !== 'nanikiru' && rec.category !== 'session'" class="hl-wintype">
-                        ({{ rec.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="rec.winType === 'ron' && rec.loserName"> ← <span class="hl-player-link" title="클릭하여 스탯 보기" @click.stop="openPlayerByName(rec.loserName, true)">{{ rec.loserName }}</span></template>)
+                        ({{ rec.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="rec.winType === 'ron' && rec.loserName"> ← <span class="hl-player-link" title="클릭하여 스탯 보기" @click.stop="openPlayerByName(rec.loserName, true, false, false, rec.sessionName || selectedSession)">{{ rec.loserName }}</span></template>)
                       </span>
                       <span
                         v-if="getRecordCommentCount(rec) > 0 && (!rec.yakumanTypes || rec.yakumanTypes.length === 0)"
@@ -6968,10 +7068,10 @@ const openGamePopupFromLightbox = async (
                 <strong
                   class="hl-player-link"
                   title="클릭하여 스탯 보기"
-                  @click.stop="openPlayerByName(rec.winnerName, false)"
+                  @click.stop="openPlayerByName(rec.winnerName, Boolean(rec.sessionName), false, false, rec.sessionName)"
                 >{{ rec.winnerName }}</strong>
                 <span v-if="rec.winType && rec.category !== 'nanikiru' && rec.category !== 'session'" class="hl-wintype">
-                  ({{ rec.winType === 'tsumo' ? '쯔모 화료' : '론 화료' }}<template v-if="rec.winType === 'ron' && rec.loserName"> ← <span class="hl-player-link" title="클릭하여 스탯 보기" @click.stop="openPlayerByName(rec.loserName, false)">{{ rec.loserName }}</span></template>)
+                  ({{ rec.winType === 'tsumo' ? '쯔모 화료' : '론 화료' }}<template v-if="rec.winType === 'ron' && rec.loserName"> ← <span class="hl-player-link" title="클릭하여 스탯 보기" @click.stop="openPlayerByName(rec.loserName, Boolean(rec.sessionName), false, false, rec.sessionName)">{{ rec.loserName }}</span></template>)
                 </span>
                 <span
                   v-if="getRecordCommentCount(rec) > 0 && (!rec.yakumanTypes || rec.yakumanTypes.length === 0)"
@@ -7044,7 +7144,7 @@ const openGamePopupFromLightbox = async (
             </div>
 
             <!-- 모달 스코프 탭 (회차 상세에서 진입했을 때만 노출) -->
-            <div class="modal_scope_tabs" v-if="isModalFromSession && currentSessionDetail">
+            <div class="modal_scope_tabs" v-if="isModalFromSession && (currentSessionDetail || selectedSession)">
               <button 
                 class="modal_scope_tab" 
                 :class="{ active: modalScopeTab === 'session' }" 
@@ -7072,8 +7172,11 @@ const openGamePopupFromLightbox = async (
 
             <!-- 1) 이번 회차 스탯 뷰 -->
             <div v-if="isModalFromSession && modalScopeTab === 'session'" class="session_modal_content">
-              <div v-if="!currentSessionPlayerStats || currentSessionPlayerStats.totalGames === 0" class="no_data_modal">
-                {{ currentSessionDetail?.sessionName }}에 '{{ selectedPlayer.name }}'님이 플레이한 대국 기록이 없습니다.
+              <div v-if="isLoadingSession && (!currentSessionPlayerStats || currentSessionPlayerStats.totalGames === 0)" class="no_data_modal">
+                {{ selectedSession || currentSessionDetail?.sessionName }} 데이터를 불러오는 중입니다...
+              </div>
+              <div v-else-if="!currentSessionPlayerStats || currentSessionPlayerStats.totalGames === 0" class="no_data_modal">
+                {{ currentSessionDetail?.sessionName || selectedSession }}에 '{{ selectedPlayer.name }}'님이 플레이한 대국 기록이 없습니다.
               </div>
               <div v-else class="session_modal_body">
                 <template v-if="currentSessionPlayerStats.totalRounds > 0">
@@ -8948,7 +9051,7 @@ const openGamePopupFromLightbox = async (
                 </div>
               </div>
             </div>
-            <div v-else class="gdm-empty-chart">
+            <div v-else-if="!isLoadingGameDetail" class="gdm-empty-chart">
               국별 점수 이동 내역이 없습니다.
             </div>
           </div>
@@ -8992,14 +9095,14 @@ const openGamePopupFromLightbox = async (
                     <button
                       type="button"
                       class="hl-player-link strong"
-                      @click.stop="openPlayerByName(item.winnerName, true, false, true)"
+                      @click.stop="openPlayerByName(item.winnerName, true, false, true, item.sessionName || gameModalSessionName)"
                       title="클릭하여 대국자 스탯 보기"
                     >{{ item.winnerName }}</button>
                     <span v-if="item.winType && item.category !== 'nanikiru' && item.category !== 'session'">
                       ({{ item.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="item.winType === 'ron' && item.loserName"> ← <button
                         type="button"
                         class="hl-player-link"
-                        @click.stop="openPlayerByName(item.loserName, true, false, true)"
+                        @click.stop="openPlayerByName(item.loserName, true, false, true, item.sessionName || gameModalSessionName)"
                         title="클릭하여 방총자 스탯 보기"
                       >{{ item.loserName }}</button></template>)
                     </span>
@@ -9600,14 +9703,14 @@ const openGamePopupFromLightbox = async (
                     <button
                       type="button"
                       class="hl-player-link strong"
-                      @click.stop="openPlayerByName(lightboxHighlight.winnerName, true, false, true)"
+                      @click.stop="openPlayerByName(lightboxHighlight.winnerName, Boolean(lightboxHighlight.sessionName), false, true, lightboxHighlight.sessionName)"
                       title="클릭하여 대국자 스탯 보기"
                     >{{ lightboxHighlight.winnerName }}</button>
                     <span v-if="lightboxHighlight.winType && lightboxHighlight.category !== 'session' && lightboxHighlight.category !== 'nanikiru'">
                       ({{ lightboxHighlight.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="lightboxHighlight.winType === 'ron' && lightboxHighlight.loserName"> ← <button
                         type="button"
                         class="hl-player-link"
-                        @click.stop="openPlayerByName(lightboxHighlight.loserName, true, false, true)"
+                        @click.stop="openPlayerByName(lightboxHighlight.loserName, Boolean(lightboxHighlight.sessionName), false, true, lightboxHighlight.sessionName)"
                         title="클릭하여 방총자 스탯 보기"
                       >{{ lightboxHighlight.loserName }}</button></template>)
                     </span>
@@ -9725,8 +9828,8 @@ const openGamePopupFromLightbox = async (
                   <div
                     v-for="cmt in threadedLightboxComments"
                     :key="cmt.id"
-                    class="lb-comment-item"
                     :class="{ 'is-reply': cmt.isReply }"
+                    class="lb-comment-item"
                   >
                     <div class="lb-comment-top">
                       <div class="lb-comment-author-box">
@@ -9735,7 +9838,7 @@ const openGamePopupFromLightbox = async (
                           v-if="isKnownPlayerName(cmt.authorName)"
                           type="button"
                           class="lb-comment-author is-clickable"
-                          @click.stop="openPlayerByName(cmt.authorName, true, false, true)"
+                          @click.stop="openPlayerByName(cmt.authorName, false, false, true)"
                           title="클릭하여 대국자 스탯 보기"
                         >{{ cmt.authorName }}</button>
                         <strong v-else class="lb-comment-author">{{ cmt.authorName }}</strong>
@@ -14663,6 +14766,7 @@ html.dark .btn-share-highlight-header:hover {
   height: auto;
   max-width: none;
   max-height: none;
+  cursor: zoom-out;
 }
 .full-image-zoom-img.fit-height {
   height: 90vh;
@@ -14671,6 +14775,7 @@ html.dark .btn-share-highlight-header:hover {
   width: auto;
   max-width: none;
   max-height: none;
+  cursor: zoom-out;
 }
 .full-image-zoom-img.fit-original {
   width: auto;
