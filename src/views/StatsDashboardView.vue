@@ -4138,6 +4138,11 @@ const submitHighlightUpload = async () => {
 
 // 원본 화질 사진 확대 라이트박스, 메모 수정 & 삭제 모달
 const lightboxHighlight = ref<HighlightRecord | null>(null);
+const lightboxScrollAreaRef = ref<HTMLElement | null>(null);
+const lightboxCommentsSectionRef = ref<HTMLElement | null>(null);
+const showLightboxCommentFab = ref<boolean>(false);
+const isFullImageZoomOpen = ref<boolean>(false);
+const isFullImageZoomScaled = ref<boolean>(false);
 const deletePinPromptInput = ref('');
 const isDeletingHighlight = ref(false);
 const showDeletePinInput = ref(false);
@@ -4382,10 +4387,69 @@ const submitNewHighlightComment = async () => {
   }
 };
 
+const updateLightboxFloatingBtnState = () => {
+  const scrollEl = lightboxScrollAreaRef.value;
+  const commentsEl = lightboxCommentsSectionRef.value;
+  if (!scrollEl || !commentsEl) {
+    showLightboxCommentFab.value = false;
+    return;
+  }
+  const remainingScroll = scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop;
+  if (scrollEl.scrollHeight <= scrollEl.clientHeight + 24 || remainingScroll <= 36) {
+    showLightboxCommentFab.value = false;
+    return;
+  }
+  const scrollRect = scrollEl.getBoundingClientRect();
+  const commentsRect = commentsEl.getBoundingClientRect();
+  const visibleHeightInModal = scrollRect.bottom - commentsRect.top;
+  showLightboxCommentFab.value = visibleHeightInModal < 90;
+};
+
+const scrollToLightboxComments = () => {
+  const scrollEl = lightboxScrollAreaRef.value;
+  const commentsEl = lightboxCommentsSectionRef.value;
+  if (!scrollEl || !commentsEl) return;
+  const scrollRect = scrollEl.getBoundingClientRect();
+  const commentsRect = commentsEl.getBoundingClientRect();
+  const targetDelta = commentsRect.top - scrollRect.top - 12;
+  scrollEl.scrollBy({ top: targetDelta, behavior: 'smooth' });
+};
+
+const handleLightboxImageLoad = () => {
+  if (lightboxScrollAreaRef.value && lightboxScrollAreaRef.value.scrollTop < 10) {
+    lightboxScrollAreaRef.value.scrollTop = 0;
+  }
+  requestAnimationFrame(() => {
+    updateLightboxFloatingBtnState();
+  });
+};
+
+const openFullImageZoom = () => {
+  if (!lightboxHighlight.value?.hasImage || !lightboxHighlight.value?.imageId) return;
+  isFullImageZoomScaled.value = false;
+  isFullImageZoomOpen.value = true;
+};
+
+const closeFullImageZoom = () => {
+  isFullImageZoomOpen.value = false;
+  isFullImageZoomScaled.value = false;
+};
+
+watch(lightboxHighlight, (val) => {
+  if (!val) {
+    isFullImageZoomOpen.value = false;
+    isFullImageZoomScaled.value = false;
+    showLightboxCommentFab.value = false;
+  }
+});
+
 const scrollCommentActionBoxIntoView = (boxSelector: string, focusSelector?: string) => {
   nextTick(() => {
     requestAnimationFrame(() => {
-      const modalEl = document.querySelector('.lightbox-modal-card') as HTMLElement | null;
+      const modalEl =
+        lightboxScrollAreaRef.value ||
+        (document.querySelector('.lightbox-scroll-area') as HTMLElement | null) ||
+        (document.querySelector('.lightbox-modal-card') as HTMLElement | null);
       if (!modalEl) return;
       const boxEl = modalEl.querySelector(boxSelector) as HTMLElement | null;
       if (!boxEl) return;
@@ -4401,7 +4465,7 @@ const scrollCommentActionBoxIntoView = (boxSelector: string, focusSelector?: str
       let actualListScroll = 0;
 
       const listEl = boxEl.closest('.lb-comments-list') as HTMLElement | null;
-      if (listEl) {
+      if (listEl && listEl.scrollHeight > listEl.clientHeight + 2) {
         const listRect = listEl.getBoundingClientRect();
         const bottomPadding = 14;
         const topPadding = 8;
@@ -4652,6 +4716,8 @@ const openHighlightLightbox = (rec: HighlightRecord) => {
   syncScheduleLoginForComment();
   selectedGameDetail.value = null;
   lightboxSessionPopupDetail.value = null;
+  isFullImageZoomOpen.value = false;
+  isFullImageZoomScaled.value = false;
   lightboxHighlight.value = rec;
   showDeletePinInput.value = false;
   deletePinPromptInput.value = getSavedHighlightPin();
@@ -4666,6 +4732,14 @@ const openHighlightLightbox = (rec: HighlightRecord) => {
   cancelEditComment();
   cancelReplyComment();
   deletingCommentId.value = null;
+  nextTick(() => {
+    if (lightboxScrollAreaRef.value) {
+      lightboxScrollAreaRef.value.scrollTop = 0;
+    }
+    requestAnimationFrame(() => {
+      updateLightboxFloatingBtnState();
+    });
+  });
 };
 
 const startEditLightboxMemo = () => {
@@ -9234,122 +9308,138 @@ const openGamePopupFromLightbox = async (
             <button class="btn-close" @click="lightboxHighlight = null" title="닫기">✕</button>
           </div>
 
-          <div v-if="lightboxHighlight.hasImage && lightboxHighlight.imageId" class="lightbox-img-container">
-            <img :src="getHighlightImageUrl(lightboxHighlight.imageId)" class="lightbox-full-img" alt="사진" />
-          </div>
+          <div
+            ref="lightboxScrollAreaRef"
+            class="lightbox-scroll-area"
+            @scroll.passive="updateLightboxFloatingBtnState"
+          >
+            <div
+              v-if="lightboxHighlight.hasImage && lightboxHighlight.imageId"
+              class="lightbox-img-container"
+              title="클릭하여 사진 크게 보기"
+              @click.stop="openFullImageZoom"
+            >
+              <img
+                :src="getHighlightImageUrl(lightboxHighlight.imageId)"
+                class="lightbox-full-img"
+                alt="사진"
+                @load="handleLightboxImageLoad"
+              />
+              <span class="lightbox-zoom-hint-badge">클릭하여 크게 보기</span>
+            </div>
 
-          <div class="lightbox-info-footer">
-            <div class="lightbox-details">
-              <!-- 상단 대국자 정보 및 수정/삭제 컨트롤 바 (100% 폭 고정) -->
-              <div class="lightbox-meta-action-row">
-                <div v-if="lightboxHighlight.winnerName" class="lightbox-players">
-                  {{ lightboxHighlight.category === 'session' || lightboxHighlight.category === 'nanikiru' ? '인원:' : '화료:' }}
-                  <button
-                    type="button"
-                    class="hl-player-link strong"
-                    @click.stop="openPlayerByName(lightboxHighlight.winnerName, true, false, true)"
-                    title="클릭하여 대국자 스탯 보기"
-                  >{{ lightboxHighlight.winnerName }}</button>
-                  <span v-if="lightboxHighlight.winType && lightboxHighlight.category !== 'session' && lightboxHighlight.category !== 'nanikiru'">
-                    ({{ lightboxHighlight.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="lightboxHighlight.winType === 'ron' && lightboxHighlight.loserName"> ← <button
-                      type="button"
-                      class="hl-player-link"
-                      @click.stop="openPlayerByName(lightboxHighlight.loserName, true, false, true)"
-                      title="클릭하여 방총자 스탯 보기"
-                    >{{ lightboxHighlight.loserName }}</button></template>)
-                  </span>
-                </div>
-                <div v-else class="lightbox-players-spacer"></div>
-
-                <div class="lightbox-delete-zone">
-                  <button
-                    type="button"
-                    class="btn-edit-highlight"
-                    @click="openEditHighlightModal(lightboxHighlight)"
-                  >
-                    {{ isGalleryAdmin ? '기록 / 사진 수정' : '기록 정보 수정' }}
-                  </button>
-                  <button 
-                    v-if="isGalleryAdmin"
-                    class="btn-delete-highlight" 
-                    :disabled="isDeletingHighlight"
-                    @click="confirmDeleteHighlight(lightboxHighlight)"
-                  >
-                    {{ isDeletingHighlight ? '삭제 중...' : '기록 삭제' }}
-                  </button>
-                </div>
-              </div>
-              <div v-if="deleteHighlightError" class="upload-error-msg">{{ deleteHighlightError }}</div>
-
-              <!-- 메모 표시 및 수정 영역 -->
-              <div class="lightbox-memo-section">
-                <template v-if="!isEditingLightboxMemo">
-                  <div class="lightbox-memo-header">
-                    <span class="lightbox-memo-label">메모</span>
-                    <button type="button" class="btn-edit-memo" @click="startEditLightboxMemo">
-                      {{ lightboxHighlight.caption ? '메모 수정' : '+ 메모 추가' }}
-                    </button>
-                  </div>
-                  <div v-if="lightboxHighlight.caption" class="lightbox-note rich-mahjong-content">
-                    <template v-for="(seg, sIdx) in parseRichMahjongText(lightboxHighlight.caption)" :key="`lb-memo-seg-${sIdx}`">
-                      <span v-if="seg.type === 'text'">{{ seg.text }}</span>
-                      <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
-                        <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
-                      </span>
-                      <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
-                        {{ seg.action.label }}
-                      </span>
-                    </template>
-                  </div>
-                  <div v-else class="lightbox-note-empty">등록된 메모가 없습니다.</div>
-                </template>
-
-                <div v-else class="lightbox-memo-editor">
-                  <textarea
-                    v-model="editingMemoText"
-                    rows="3"
-                    maxlength="500"
-                    class="form-textarea"
-                    placeholder=""
-                  ></textarea>
-                  <div class="lightbox-memo-editor-actions">
-                    <input
-                      v-if="needsPinInput"
-                      v-model="editingMemoPin"
-                      type="password"
-                      class="delete-pin-input"
-                      placeholder="공통 PIN 입력"
-                    />
+            <div class="lightbox-info-footer">
+              <div class="lightbox-details">
+                <!-- 상단 대국자 정보 및 수정/삭제 컨트롤 바 (100% 폭 고정) -->
+                <div class="lightbox-meta-action-row">
+                  <div v-if="lightboxHighlight.winnerName" class="lightbox-players">
+                    {{ lightboxHighlight.category === 'session' || lightboxHighlight.category === 'nanikiru' ? '인원:' : '화료:' }}
                     <button
                       type="button"
-                      class="btn-cancel-modal"
-                      @click="isEditingLightboxMemo = false"
-                    >
-                      취소
-                    </button>
+                      class="hl-player-link strong"
+                      @click.stop="openPlayerByName(lightboxHighlight.winnerName, true, false, true)"
+                      title="클릭하여 대국자 스탯 보기"
+                    >{{ lightboxHighlight.winnerName }}</button>
+                    <span v-if="lightboxHighlight.winType && lightboxHighlight.category !== 'session' && lightboxHighlight.category !== 'nanikiru'">
+                      ({{ lightboxHighlight.winType === 'tsumo' ? '쯔모' : '론' }}<template v-if="lightboxHighlight.winType === 'ron' && lightboxHighlight.loserName"> ← <button
+                        type="button"
+                        class="hl-player-link"
+                        @click.stop="openPlayerByName(lightboxHighlight.loserName, true, false, true)"
+                        title="클릭하여 방총자 스탯 보기"
+                      >{{ lightboxHighlight.loserName }}</button></template>)
+                    </span>
+                  </div>
+                  <div v-else class="lightbox-players-spacer"></div>
+
+                  <div class="lightbox-delete-zone">
                     <button
                       type="button"
-                      class="btn-submit-modal"
-                      :disabled="isSavingLightboxMemo"
-                      @click="saveLightboxMemo"
+                      class="btn-edit-highlight"
+                      @click="openEditHighlightModal(lightboxHighlight)"
                     >
-                      {{ isSavingLightboxMemo ? '저장 중...' : '메모 저장' }}
+                      {{ isGalleryAdmin ? '기록 / 사진 수정' : '기록 정보 수정' }}
+                    </button>
+                    <button 
+                      v-if="isGalleryAdmin"
+                      class="btn-delete-highlight" 
+                      :disabled="isDeletingHighlight"
+                      @click="confirmDeleteHighlight(lightboxHighlight)"
+                    >
+                      {{ isDeletingHighlight ? '삭제 중...' : '기록 삭제' }}
                     </button>
                   </div>
-                  <div v-if="memoEditError" class="upload-error-msg">{{ memoEditError }}</div>
                 </div>
-              </div>
+                <div v-if="deleteHighlightError" class="upload-error-msg">{{ deleteHighlightError }}</div>
 
-              <!-- ============================================== -->
-              <!-- 사진 댓글 영역 -->
-              <!-- ============================================== -->
-              <div class="lightbox-comments-section">
-                <div class="lb-comments-header">
-                  <div class="lb-comments-title-wrap">
-                    <span class="lb-comments-title">댓글</span>
-                    <span class="lb-comments-count">{{ lightboxComments.length }}</span>
+                <!-- 메모 표시 및 수정 영역 -->
+                <div class="lightbox-memo-section">
+                  <template v-if="!isEditingLightboxMemo">
+                    <div class="lightbox-memo-header">
+                      <span class="lightbox-memo-label">메모</span>
+                      <button type="button" class="btn-edit-memo" @click="startEditLightboxMemo">
+                        {{ lightboxHighlight.caption ? '메모 수정' : '+ 메모 추가' }}
+                      </button>
+                    </div>
+                    <div v-if="lightboxHighlight.caption" class="lightbox-note rich-mahjong-content">
+                      <template v-for="(seg, sIdx) in parseRichMahjongText(lightboxHighlight.caption)" :key="`lb-memo-seg-${sIdx}`">
+                        <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                          <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
+                        </span>
+                        <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                          {{ seg.action.label }}
+                        </span>
+                      </template>
+                    </div>
+                    <div v-else class="lightbox-note-empty">등록된 메모가 없습니다.</div>
+                  </template>
+
+                  <div v-else class="lightbox-memo-editor">
+                    <textarea
+                      v-model="editingMemoText"
+                      rows="3"
+                      maxlength="500"
+                      class="form-textarea"
+                      placeholder=""
+                    ></textarea>
+                    <div class="lightbox-memo-editor-actions">
+                      <input
+                        v-if="needsPinInput"
+                        v-model="editingMemoPin"
+                        type="password"
+                        class="delete-pin-input"
+                        placeholder="공통 PIN 입력"
+                      />
+                      <button
+                        type="button"
+                        class="btn-cancel-modal"
+                        @click="isEditingLightboxMemo = false"
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-submit-modal"
+                        :disabled="isSavingLightboxMemo"
+                        @click="saveLightboxMemo"
+                      >
+                        {{ isSavingLightboxMemo ? '저장 중...' : '메모 저장' }}
+                      </button>
+                    </div>
+                    <div v-if="memoEditError" class="upload-error-msg">{{ memoEditError }}</div>
                   </div>
                 </div>
+
+                <!-- ============================================== -->
+                <!-- 사진 댓글 영역 -->
+                <!-- ============================================== -->
+                <div ref="lightboxCommentsSectionRef" class="lightbox-comments-section">
+                  <div class="lb-comments-header">
+                    <div class="lb-comments-title-wrap">
+                      <span class="lb-comments-title">댓글</span>
+                      <span class="lb-comments-count">{{ lightboxComments.length }}</span>
+                    </div>
+                  </div>
 
                 <!-- 댓글 목록 (대댓글 트리 정렬) -->
                 <div
@@ -9853,6 +9943,67 @@ const openGamePopupFromLightbox = async (
               </div>
             </div>
           </div>
+          </div>
+
+          <!-- 우하단 플로팅 댓글/스크롤 이동 버튼 (댓글 영역이 화면에 보이면 자동 숨김) -->
+          <Transition name="lb-fab-fade">
+            <button
+              v-if="showLightboxCommentFab"
+              type="button"
+              class="lightbox-comment-fab"
+              title="댓글 및 상세 정보로 아래 스크롤"
+              @click.stop="scrollToLightboxComments"
+            >
+              <span class="lb-fab-icon-wrap">
+                <svg class="lb-fab-comment-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                </svg>
+                <span v-if="lightboxComments.length > 0" class="lb-fab-badge">{{ lightboxComments.length }}</span>
+              </span>
+              <span class="lb-fab-arrow">↓</span>
+            </button>
+          </Transition>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ============================================== -->
+    <!-- 라이트박스 내 사진 클릭 시 전체화면 크게 보기 모달 -->
+    <!-- ============================================== -->
+    <Transition name="modal-fade">
+      <div
+        v-if="isFullImageZoomOpen && lightboxHighlight?.hasImage && lightboxHighlight?.imageId"
+        class="modal-overlay full-image-zoom-overlay"
+        @click="closeFullImageZoom"
+      >
+        <div class="full-image-zoom-topbar" @click.stop>
+          <button
+            type="button"
+            class="btn-zoom-scale-toggle"
+            @click="isFullImageZoomScaled = !isFullImageZoomScaled"
+          >
+            {{ isFullImageZoomScaled ? '화면 맞춤 (1x)' : '더 크게 확대 (1.8x)' }}
+          </button>
+          <button
+            type="button"
+            class="btn-zoom-close"
+            title="닫기"
+            @click="closeFullImageZoom"
+          >
+            ✕ 닫기
+          </button>
+        </div>
+        <div
+          class="full-image-zoom-stage"
+          :class="{ 'is-scaled': isFullImageZoomScaled }"
+        >
+          <img
+            :src="getHighlightImageUrl(lightboxHighlight.imageId)"
+            alt="원본 크게 보기"
+            class="full-image-zoom-img"
+            :class="{ 'is-scaled': isFullImageZoomScaled }"
+            @click.stop="isFullImageZoomScaled = !isFullImageZoomScaled"
+          />
         </div>
       </div>
     </Transition>
@@ -13912,9 +14063,10 @@ html.dark .btn-cancel-modal {
 
 /* 라이트박스 모달 */
 .lightbox-modal-card {
+  position: relative;
   width: min(960px, 96vw);
   max-height: 92vh;
-  overflow-y: auto;
+  overflow: hidden;
   background: var(--card-bg, #ffffff);
   color: var(--text-primary, #1e293b);
   border-radius: 16px;
@@ -13929,6 +14081,7 @@ html.dark .lightbox-modal-card {
   border-color: #27272a;
 }
 .lightbox-header {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -13944,21 +14097,61 @@ html.dark .lightbox-header {
   gap: 0.35rem;
   align-items: center;
 }
+.lightbox-scroll-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
 .lightbox-img-container {
+  flex-shrink: 0;
+  position: relative;
+  width: 100%;
   background: #09090b;
   display: flex;
   justify-content: center;
   align-items: center;
-  max-height: 70vh;
-  overflow: auto;
+  overflow: hidden;
+  cursor: zoom-in;
 }
 .lightbox-full-img {
   max-width: 100%;
-  max-height: 70vh;
+  max-height: min(74vh, 720px);
+  width: auto;
+  height: auto;
   object-fit: contain;
   display: block;
 }
+@media (max-width: 640px) {
+  .lightbox-full-img {
+    max-height: 68vh;
+  }
+}
+.lightbox-zoom-hint-badge {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.72);
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+  opacity: 0.86;
+  transition: opacity 0.18s ease;
+}
+.lightbox-img-container:hover .lightbox-zoom-hint-badge {
+  opacity: 1;
+}
 .lightbox-info-footer {
+  flex-shrink: 0;
   padding: 1rem 1.25rem 1.25rem;
   display: flex;
   flex-direction: column;
@@ -13966,6 +14159,147 @@ html.dark .lightbox-header {
   width: 100%;
   box-sizing: border-box;
   gap: 0.75rem;
+}
+
+/* 라이트박스 우하단 플로팅 댓글/아래 스크롤 이동 버튼 */
+.lightbox-comment-fab {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 35;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 48px;
+  height: 46px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.94), rgba(29, 78, 216, 0.96));
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.lightbox-comment-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.45);
+}
+.lightbox-comment-fab:active {
+  transform: translateY(0);
+}
+.lb-fab-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.lb-fab-comment-svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+.lb-fab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+.lb-fab-arrow {
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1;
+}
+.lb-fab-fade-enter-active,
+.lb-fab-fade-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.lb-fab-fade-enter-from,
+.lb-fab-fade-leave-to {
+  opacity: 0;
+  transform: translateY(10px) scale(0.92);
+}
+
+/* 라이트박스 사진 클릭 시 전체화면 크게 보기 모달 */
+.modal-overlay.full-image-zoom-overlay {
+  z-index: 2980;
+  background: rgba(5, 5, 8, 0.94);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.full-image-zoom-topbar {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 2990;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn-zoom-scale-toggle,
+.btn-zoom-close {
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(24, 24, 27, 0.85);
+  color: #f8fafc;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.btn-zoom-scale-toggle:hover,
+.btn-zoom-close:hover {
+  background: rgba(59, 130, 246, 0.85);
+  border-color: rgba(147, 197, 253, 0.6);
+}
+.full-image-zoom-stage {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 16px;
+  box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
+}
+.full-image-zoom-stage.is-scaled {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.full-image-zoom-img {
+  max-width: 96vw;
+  max-height: 92vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  margin: auto;
+  cursor: zoom-in;
+  user-select: none;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+}
+.full-image-zoom-img.is-scaled {
+  max-width: none;
+  max-height: none;
+  width: min(175vw, 1800px);
+  cursor: zoom-out;
 }
 .lightbox-details {
   display: flex;
@@ -16142,16 +16476,11 @@ html.dark .lb-comments-count {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  max-height: 290px;
-  overflow-y: auto;
-  padding-right: 2px;
   padding-bottom: 4px;
   width: 100%;
   box-sizing: border-box;
-  scroll-behavior: smooth;
 }
 .lb-comments-list.has-active-form {
-  max-height: 380px;
   padding-bottom: 10px;
 }
 .lb-comment-item {
