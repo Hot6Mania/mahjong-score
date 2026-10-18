@@ -27,6 +27,8 @@ import {
   fetchPublicRatingTimeline,
   fetchPublicRatingHistoryRecords,
   attachRatingToSessionGames,
+  clearPublicStatsCache,
+  buildSessionDetailFromRatingHistory,
   type AllPlayersRatingTrajectory,
   type MemberStatItem,
   type SessionDetail,
@@ -477,9 +479,9 @@ watch(displayedAvailableSessions, (newSessions) => {
   }
 }, { immediate: true });
 
-const loadSessionsList = async () => {
+const loadSessionsList = async (forceRefresh: boolean = false) => {
   try {
-    const sessions = await fetchPublicSessions();
+    const sessions = await fetchPublicSessions(undefined, forceRefresh);
     availableSessions.value = sessions;
     if (sessions.length > 0 && !selectedSession.value) {
       selectedSession.value = sessions[0];
@@ -492,24 +494,51 @@ const loadSessionsList = async () => {
 const currentSessionDetailedStatsMap = ref<Record<string, MemberStatItem>>({});
 const sessionModalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
 
-const loadSessionDetail = async (sessionName: string) => {
+const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = false) => {
   if (!sessionName) return;
-  isLoadingSession.value = true;
+
+  // 1) 이미 로드된 캐시 또는 '레이팅 이력'에서 0ms 즉시 렌더링하여 로딩 스피너 대기 제거
+  if (!forceRefresh) {
+    const optimistic = buildSessionDetailFromRatingHistory(sessionName);
+    if (optimistic && optimistic.games.length > 0) {
+      currentSessionDetail.value = optimistic;
+      isLoadingSession.value = false;
+    } else {
+      isLoadingSession.value = true;
+    }
+  } else {
+    isLoadingSession.value = !currentSessionDetail.value || currentSessionDetail.value.sessionName !== sessionName;
+  }
+
+  // 2) 개인 모달용 국별 상세 통계는 화면 렌더링을 블로킹하지 않고 병렬 백그라운드로 로드
+  fetchSessionDetailedStats(sessionName, undefined, forceRefresh)
+    .then(detailedMap => {
+      if (selectedSession.value === sessionName) {
+        currentSessionDetailedStatsMap.value = detailedMap;
+      }
+    })
+    .catch(err => {
+      console.warn("회차 국별 세부 통계 백그라운드 로드 실패:", err);
+    });
+
   try {
     const [detail, historyRecords] = await Promise.all([
-      fetchPublicSessionDetail(sessionName),
-      fetchPublicRatingHistoryRecords()
+      fetchPublicSessionDetail(sessionName, undefined, forceRefresh),
+      fetchPublicRatingHistoryRecords(undefined, forceRefresh)
     ]);
+    if (selectedSession.value !== sessionName) return;
     if (detail && detail.games && historyRecords.length > 0) {
       attachRatingToSessionGames(sessionName, detail.games, historyRecords);
     }
-    currentSessionDetail.value = detail;
-    const detailedMap = await fetchSessionDetailedStats(sessionName);
-    currentSessionDetailedStatsMap.value = detailedMap;
+    if (detail && (detail.games.length > 0 || detail.members.length > 0 || !currentSessionDetail.value)) {
+      currentSessionDetail.value = detail;
+    }
   } catch (err: any) {
     console.error("회차 상세 로드 실패:", err);
   } finally {
-    isLoadingSession.value = false;
+    if (selectedSession.value === sessionName) {
+      isLoadingSession.value = false;
+    }
   }
 };
 
@@ -1057,22 +1086,25 @@ const onLeaveMetric = () => {
   activeDist.value = null;
 };
 
-// 전체 초기 데이터 로드
-const loadAllData = async () => {
+// 전체 초기 데이터 로드 (forceRefresh=true 시 메모리 캐시 초기화 및 서버 최신 강제 조회)
+const loadAllData = async (forceRefresh: boolean = false) => {
+  if (forceRefresh) {
+    clearPublicStatsCache({ keepPastSessions: true });
+  }
   isLoading.value = true;
   errorMessage.value = '';
   try {
     const [stats, matrix, timeline] = await Promise.all([
-      fetchPublicAllStats(),
-      fetchPublicStatsMatrix().catch(e => {
+      fetchPublicAllStats(undefined, forceRefresh),
+      fetchPublicStatsMatrix(undefined, forceRefresh).catch(e => {
         console.warn("통계 매트릭스 로드 실패:", e);
         return null;
       }),
-      fetchPublicRatingTimeline().catch(e => {
+      fetchPublicRatingTimeline(undefined, forceRefresh).catch(e => {
         console.warn("레이팅 타임라인 로드 실패:", e);
         return null;
       }),
-      loadSessionsList()
+      loadSessionsList(forceRefresh)
     ]);
     allStats.value = stats;
     statsMatrix.value = matrix;
@@ -1080,8 +1112,11 @@ const loadAllData = async () => {
       ratingTimeline.value = timeline;
       filterRatingTopN(5);
     }
-    if (selectedSession.value && !isLoadingSession.value && currentSessionDetail.value?.sessionName !== selectedSession.value) {
-      await loadSessionDetail(selectedSession.value);
+    if (selectedSession.value && (forceRefresh || (!isLoadingSession.value && currentSessionDetail.value?.sessionName !== selectedSession.value))) {
+      await loadSessionDetail(selectedSession.value, forceRefresh);
+    }
+    if (forceRefresh) {
+      showToast('최신 데이터로 새로고침되었습니다.');
     }
   } catch (err: any) {
     console.error("데이터 로드 실패:", err);
@@ -1979,7 +2014,7 @@ const getRankClass = (rank: number) => {
         <button class="btn-action" @click="copyDashboardLink" title="대시보드 링크 복사">
           <span>링크 복사</span>
         </button>
-        <button class="btn-action" @click="loadAllData" title="데이터 새로고침">
+        <button class="btn-action" @click="loadAllData(true)" title="데이터 새로고침">
           <span>새로고침</span>
         </button>
         <button class="btn-action btn-theme" @click="toggleTheme" :title="isDark ? '라이트 모드로 전환' : '다크 모드로 전환'">
@@ -2067,7 +2102,7 @@ const getRankClass = (rank: number) => {
     <div v-else-if="errorMessage && activeTab !== 'rules'" class="error-state">
       <p class="error-title">데이터를 불러오지 못했습니다</p>
       <p class="error-detail">{{ errorMessage }}</p>
-      <button class="btn-retry" @click="loadAllData">다시 시도</button>
+      <button class="btn-retry" @click="loadAllData(true)">다시 시도</button>
     </div>
 
     <!-- 메인 콘텐츠 영역 -->
@@ -2936,7 +2971,7 @@ const getRankClass = (rank: number) => {
             <div v-if="isNoticeVisible" class="modal_notice_text">
               <div class="notice_text_content">
                 ※ 제9회부터의 기록이 반영되어 있으며, 초기 오류로 세부 스탯이 기록되지 못한 일부 경기는 제외되어 있습니다.<br />
-                ※ 일부 스탯들은 종합 대국 통계(세부 스탯이 집계된 대국 통계) 형식으로 표기됩니다.
+                ※ 일부 스탯들은 '종합 대국 통계(세부 스탯이 집계된 대국 통계)' 형식으로 표기됩니다.
               </div>
               <button class="notice_close_btn" @click="dismissNotice" title="닫기">✕</button>
             </div>
@@ -5903,7 +5938,7 @@ html.dark .text_negative {
     max-height: 72dvh;
   }
   .stats_group {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
   .stat_row {
@@ -5919,7 +5954,12 @@ html.dark .text_negative {
 }
 @media (max-width: 360px) {
   .stats_group {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+  }
+  .stat_row {
+    padding: 5px 6px;
+    min-height: 42px;
   }
 }
 
@@ -6433,6 +6473,7 @@ html.dark .gdm-resultsheet {
   color: var(--text-dimmed, #64748b);
   background: rgba(0, 0, 0, 0.03);
   border-bottom: 1px solid var(--border-color, #e2e8f0);
+  box-sizing: border-box;
 }
 html.dark .gdm-header-cell {
   background: rgba(255, 255, 255, 0.04);
@@ -6441,6 +6482,7 @@ html.dark .gdm-header-cell {
 }
 .gdm-content-col > div {
   height: 38px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6568,9 +6610,12 @@ html.dark .gdm-legacy-notice {
 }
 
 @media (max-width: 600px) {
+  .game-detail-modal-overlay {
+    padding: 8px;
+  }
   .game-detail-modal-card {
-    padding: 12px 10px;
-    max-width: 96vw;
+    padding: 12px 8px;
+    max-width: 98vw;
   }
   .gdm-header {
     flex-direction: column;
@@ -6582,46 +6627,55 @@ html.dark .gdm-legacy-notice {
     justify-content: space-between;
   }
   .gdm-resultsheet {
-    grid-template-columns: 28px minmax(46px, 0.95fr) minmax(56px, 1.1fr) minmax(64px, 1.25fr) repeat(4, 25px);
-    font-size: 11.5px;
+    grid-template-columns: 24px minmax(42px, 0.8fr) minmax(68px, 1.25fr) minmax(78px, 1.4fr) repeat(4, 22px);
+    font-size: 11px;
   }
   .gdm-header-cell {
-    font-size: 10.5px;
-    padding: 6px 1px;
+    height: 30px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    padding: 0 1px;
     white-space: nowrap;
-    letter-spacing: -0.3px;
+    letter-spacing: -0.4px;
   }
   .gdm-content-col > div {
-    height: 42px;
-    font-size: 11.5px;
+    height: 36px;
+    box-sizing: border-box;
+    padding: 0 1px;
+    font-size: 11px;
     overflow: hidden;
   }
   .gdm-content-col.name_contents > div {
-    font-size: 11px;
+    font-size: 10.5px;
     padding: 0 2px;
-    white-space: normal;
-    word-break: keep-all;
-    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .gdm-content-col.rating_contents > div,
   .gdm-content-col.score_contents > div {
-    flex-direction: column;
-    gap: 1px;
-    line-height: 1.15;
-    padding: 2px 1px;
+    flex-direction: row;
+    gap: 1.5px;
+    padding: 0 1px;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
   }
   .gdm-rating-val {
-    font-size: 11.5px;
+    font-size: 10.5px;
+    font-weight: 800;
   }
   .gdm-rating-delta {
-    font-size: 10px;
+    font-size: 9.5px;
   }
   .gdm-score-val {
-    font-size: 11.5px;
+    font-size: 10.5px;
     font-weight: 600;
   }
   .gdm-score-uma {
-    font-size: 10px;
+    font-size: 9.5px;
   }
   .gdm-chart-box {
     height: 220px;

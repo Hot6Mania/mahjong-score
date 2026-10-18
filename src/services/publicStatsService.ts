@@ -623,6 +623,154 @@ function isPastImmutableSessionClient(sessionName: string): boolean {
   return Date.now() - sessionDateMs > 2 * 24 * 60 * 60 * 1000;
 }
 
+/**
+ * 대국 저장/동기화/삭제 직후 또는 [새로고침] 버튼 클릭 시 클라이언트 메모리 캐시를 초기화합니다.
+ * keepPastSessions=true 인 경우 수정될 일이 없는 과거 완료 회차 캐시는 유지하고 최신 회차 및 전체 통계만 초기화합니다.
+ */
+export function clearPublicStatsCache(options?: { keepPastSessions?: boolean; sessionName?: string }): void {
+  const keepPast = options?.keepPastSessions ?? true;
+  cachedAllStats = null;
+  cachedStatsMatrix = null;
+  pendingStatsMatrixPromise = null;
+  cachedRatings = null;
+  cachedRatingTrajectory = null;
+  cachedRatingHistoryRecords = null;
+  pendingRatingTimelinePromise = null;
+  cachedAllRoundsTable = null;
+
+  const targetMatch = options?.sessionName?.match(/제\s*(\d+)\s*회/);
+  const targetPrefix = targetMatch ? `제${targetMatch[1]}회` : '';
+
+  if (!keepPast) {
+    cachedSessionsDetail = {};
+    cachedSessionDetailedStats = {};
+    cachedSessionRoundsMap = {};
+  } else {
+    for (const k of Object.keys(cachedSessionsDetail)) {
+      if (!isPastImmutableSessionClient(k) || (targetPrefix && k.includes(targetPrefix))) {
+        delete cachedSessionsDetail[k];
+      }
+    }
+    for (const k of Object.keys(cachedSessionDetailedStats)) {
+      if (!isPastImmutableSessionClient(k) || (targetPrefix && k.includes(targetPrefix))) {
+        delete cachedSessionDetailedStats[k];
+      }
+    }
+    // cachedSessionRoundsMap은 key가 '제19회' 형태이므로 최신 회차 번호 이상이거나 targetPrefix와 일치하면 제거
+    let maxRoundSessNum = 0;
+    for (const k of Object.keys(cachedSessionRoundsMap)) {
+      const m = k.match(/제(\d+)회/);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n > maxRoundSessNum) maxRoundSessNum = n;
+      }
+    }
+    for (const k of Object.keys(cachedSessionRoundsMap)) {
+      const m = k.match(/제(\d+)회/);
+      const n = m ? parseInt(m[1], 10) : 0;
+      if (n === maxRoundSessNum || (targetPrefix && k === targetPrefix)) {
+        delete cachedSessionRoundsMap[k];
+      }
+    }
+  }
+}
+
+/**
+ * 이미 로드된 '레이팅 이력'(cachedRatingHistoryRecords)에서 특정 회차의 SessionDetail을 0ms 만에 즉시 조립합니다.
+ * 회차 전환 시 네트워크 응답을 기다리지 않고 즉시 순위표/우마 그래프/대국 카드를 먼저 보여주는 용도로 사용됩니다.
+ */
+export function buildSessionDetailFromRatingHistory(
+  sessionName: string,
+  historyRecords?: GameRatingHistoryRecord[]
+): SessionDetail | null {
+  if (cachedSessionsDetail[sessionName]) {
+    return cachedSessionsDetail[sessionName];
+  }
+
+  const isPastSession = isPastImmutableSessionClient(sessionName);
+  if (isPastSession) {
+    const localCached = readPastSessionLocalCache<SessionDetail>(`detail_${sessionName}`);
+    if (localCached && Array.isArray(localCached.games) && localCached.games.length > 0) {
+      cachedSessionsDetail[sessionName] = localCached;
+      return localCached;
+    }
+  }
+
+  const sessMatch = sessionName.match(/제\s*(\d+)\s*회/);
+  const sessionNum = sessMatch ? parseInt(sessMatch[1], 10) : 0;
+  if (sessionNum >= 1 && sessionNum <= 8) {
+    const legacy = getLegacyConsolidatedSessionDetail(sessionName);
+    if (legacy && legacy.games.length > 0) {
+      cachedSessionsDetail[sessionName] = legacy;
+      return legacy;
+    }
+  }
+
+  const records = historyRecords && historyRecords.length > 0 ? historyRecords : cachedRatingHistoryRecords;
+  if (!records || records.length === 0 || !sessionNum) return null;
+
+  const matched = records.filter(r => {
+    const m = r.sessionLabel?.match(/제\s*(\d+)\s*회/);
+    return m && parseInt(m[1], 10) === sessionNum;
+  });
+
+  if (matched.length === 0) return null;
+
+  const seats = ["東", "南", "西", "北"];
+  const memberMap: Record<string, { totalUma: number; rankSum: number; gamesCount: number; scoresSum: number }> = {};
+
+  const games: SessionGame[] = matched.map((r, idx) => {
+    const players: SessionGamePlayer[] = r.players.map((p, pIdx) => {
+      const uma = p.uma !== undefined ? parseFloat(Number(p.uma).toFixed(1)) : 0;
+      if (!memberMap[p.name]) {
+        memberMap[p.name] = { totalUma: 0, rankSum: 0, gamesCount: 0, scoresSum: 0 };
+      }
+      memberMap[p.name].totalUma += uma;
+      memberMap[p.name].rankSum += p.rank;
+      memberMap[p.name].gamesCount += 1;
+      memberMap[p.name].scoresSum += p.score;
+
+      return {
+        seat: seats[pIdx % 4],
+        name: p.name,
+        rank: p.rank,
+        score: p.score,
+        uma,
+        ratingAfter: p.ordinal,
+        ratingDelta: p.delta,
+        ratingBefore: p.ordinal - p.delta,
+      };
+    });
+
+    players.sort((a, b) => a.rank - b.rank);
+
+    return {
+      gameIndex: idx + 1,
+      gameId: `${sessionName}_${idx + 1}`,
+      time: r.date || `${idx + 1}회전`,
+      players,
+    };
+  });
+
+  const members: SessionMemberSummary[] = Object.keys(memberMap).map(name => {
+    const s = memberMap[name];
+    return {
+      name,
+      totalUma: parseFloat(s.totalUma.toFixed(1)),
+      avgRank: s.gamesCount > 0 ? parseFloat((s.rankSum / s.gamesCount).toFixed(3)) : 0,
+      totalGames: s.gamesCount,
+      deltaScore: s.scoresSum,
+    };
+  });
+  members.sort((a, b) => b.totalUma - a.totalUma);
+
+  return {
+    sessionName,
+    members,
+    games,
+  };
+}
+
 function readPastSessionLocalCache<T>(subKey: string): T | null {
   try {
     const raw = localStorage.getItem(`${PAST_SESSION_CACHE_PREFIX}${subKey}`);
@@ -641,26 +789,43 @@ function writePastSessionLocalCache<T>(subKey: string, value: T): void {
   }
 }
 
-async function fetchSessionRoundsRows(sessionName: string, spreadsheetId?: string): Promise<any[]> {
+/**
+ * 전체 국별기록 행 배열을 1회 순회하여 모든 회차(제9회~)별로 사전 인덱싱합니다.
+ */
+function indexAllRoundsBySession(rows: any[]): void {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  const grouped: Record<string, any[]> = {};
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r?.c) continue;
+    const rowSess = getCellStr(r.c[15]);
+    const m = rowSess.match(/제\s*(\d+)\s*회/);
+    if (m) {
+      const key = `제${m[1]}회`;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(r);
+    }
+  }
+  for (const [k, list] of Object.entries(grouped)) {
+    cachedSessionRoundsMap[k] = list;
+  }
+}
+
+async function fetchSessionRoundsRows(sessionName: string, spreadsheetId?: string, forceRefresh: boolean = false): Promise<any[]> {
   const sessTargetMatch = sessionName.match(/제\d+회/);
   const sessPrefix = sessTargetMatch ? sessTargetMatch[0] : sessionName.trim();
   if (!sessPrefix) return [];
 
-  if (cachedSessionRoundsMap[sessPrefix]) {
+  if (!forceRefresh && cachedSessionRoundsMap[sessPrefix]) {
     return cachedSessionRoundsMap[sessPrefix];
   }
 
-  if (cachedAllRoundsTable && Array.isArray(cachedAllRoundsTable.rows)) {
-    const filtered = cachedAllRoundsTable.rows.filter((r: any) => {
-      if (!r?.c) return false;
-      const rowSess = getCellStr(r.c[15]);
-      return rowSess.includes(sessPrefix) || sessPrefix.includes(rowSess);
-    });
-    cachedSessionRoundsMap[sessPrefix] = filtered;
-    return filtered;
+  if (!forceRefresh && cachedAllRoundsTable && Array.isArray(cachedAllRoundsTable.rows)) {
+    indexAllRoundsBySession(cachedAllRoundsTable.rows);
+    return cachedSessionRoundsMap[sessPrefix] || [];
   }
 
-  const existingPromise = pendingSessionRoundsPromises[sessPrefix];
+  const existingPromise = !forceRefresh ? pendingSessionRoundsPromises[sessPrefix] : undefined;
   if (existingPromise !== undefined) {
     return existingPromise;
   }
@@ -670,12 +835,20 @@ async function fetchSessionRoundsRows(sessionName: string, spreadsheetId?: strin
       const workerUrl = getWorkerUrl();
       if (workerUrl) {
         try {
-          const res = await fetch(`${workerUrl}/api/public/rounds?session=${encodeURIComponent(sessPrefix)}`);
+          const refreshParam = forceRefresh ? '&refresh=1' : '';
+          const res = await fetch(`${workerUrl}/api/public/rounds?session=${encodeURIComponent(sessPrefix)}${refreshParam}`);
           if (res.ok) {
             const data = await res.json();
             if (data.table && Array.isArray(data.table.rows)) {
-              cachedSessionRoundsMap[sessPrefix] = data.table.rows;
-              return data.table.rows;
+              const rows = data.table.rows;
+              // 만약 구버전 Worker여서 전체 회차 행이 한꺼번에 내려온 경우 전 회차를 한 번에 인덱싱
+              if (!data.session && rows.length > 400) {
+                cachedAllRoundsTable = data.table;
+                indexAllRoundsBySession(rows);
+                return cachedSessionRoundsMap[sessPrefix] || [];
+              }
+              cachedSessionRoundsMap[sessPrefix] = rows;
+              return rows;
             }
           }
         } catch (e) {
@@ -684,7 +857,7 @@ async function fetchSessionRoundsRows(sessionName: string, spreadsheetId?: strin
       }
 
       const sId = spreadsheetId || await resolveSpreadsheetId();
-      if (!cachedAllRoundsTable && sId) {
+      if ((forceRefresh || !cachedAllRoundsTable) && sId) {
         const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent("전체 국별기록 (데이터)")}`;
         const res = await fetch(gvizUrl);
         if (res.ok) {
@@ -697,13 +870,8 @@ async function fetchSessionRoundsRows(sessionName: string, spreadsheetId?: strin
       }
 
       if (cachedAllRoundsTable && Array.isArray(cachedAllRoundsTable.rows)) {
-        const filtered = cachedAllRoundsTable.rows.filter((r: any) => {
-          if (!r?.c) return false;
-          const rowSess = getCellStr(r.c[15]);
-          return rowSess.includes(sessPrefix) || sessPrefix.includes(rowSess);
-        });
-        cachedSessionRoundsMap[sessPrefix] = filtered;
-        return filtered;
+        indexAllRoundsBySession(cachedAllRoundsTable.rows);
+        return cachedSessionRoundsMap[sessPrefix] || [];
       }
 
       return [];
@@ -719,8 +887,8 @@ async function fetchSessionRoundsRows(sessionName: string, spreadsheetId?: strin
 /**
  * 1. 전체 멤버별 종합 통계 로드 ('통계' 시트 총합 + '전체 멤버별 통계' 탭 직접 매핑)
  */
-export async function fetchPublicAllStats(spreadsheetId?: string): Promise<MemberStatItem[]> {
-  if (cachedAllStats) {
+export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: boolean = false): Promise<MemberStatItem[]> {
+  if (!forceRefresh && cachedAllStats) {
     return cachedAllStats;
   }
 
@@ -728,7 +896,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
     const sId = spreadsheetId || await resolveSpreadsheetId();
 
     // 1) '통계' 탭(gid=0) 로드 (공인 27명 및 총합 누적 우마 확보)
-    const statsMatrix = await fetchPublicStatsMatrix(sId);
+    const statsMatrix = await fetchPublicStatsMatrix(sId, forceRefresh);
     const tonggeMap: Record<string, number> = {};
     if (statsMatrix && statsMatrix.rows) {
       statsMatrix.rows.forEach(r => {
@@ -743,7 +911,8 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
 
     if (workerUrl) {
       try {
-        const res = await fetch(`${workerUrl}/api/public/stats`);
+        const refreshQuery = forceRefresh ? '?refresh=1' : '';
+        const res = await fetch(`${workerUrl}/api/public/stats${refreshQuery}`);
         if (res.ok) {
           const data = await res.json();
           if (data.table) table = data.table;
@@ -993,7 +1162,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string): Promise<Membe
 
     // OpenSkill 레이팅 데이터 주입
     try {
-      const ratingsMap = await fetchPublicRatings(sId);
+      const ratingsMap = await fetchPublicRatings(sId, forceRefresh);
       items.forEach(item => {
         const cleanName = item.name.replace(/★/g, '').trim();
         const r = ratingsMap[item.name] || ratingsMap[cleanName];
@@ -1030,8 +1199,8 @@ let cachedRatings: Record<string, PlayerRating> | null = null;
 /**
  * '레이팅' 시트에서 현재 전체 선수 레이팅을 조회하고 타임라인 이력과 병합합니다.
  */
-export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record<string, PlayerRating>> {
-  if (cachedRatings && Object.keys(cachedRatings).length >= 15) {
+export async function fetchPublicRatings(spreadsheetId?: string, forceRefresh: boolean = false): Promise<Record<string, PlayerRating>> {
+  if (!forceRefresh && cachedRatings && Object.keys(cachedRatings).length >= 15) {
     return cachedRatings;
   }
 
@@ -1041,7 +1210,8 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
   // A. Worker 시도 (서버가 자체 Secret에서 스프레드시트 ID 복호화)
   if (workerUrl) {
     try {
-      const res = await fetch(`${workerUrl}/api/public/ratings`);
+      const refreshQuery = forceRefresh ? '?refresh=1' : '';
+      const res = await fetch(`${workerUrl}/api/public/ratings${refreshQuery}`);
       if (res.ok) {
         const data = await res.json();
         if (data.table) table = data.table;
@@ -1123,7 +1293,7 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
 
   // '레이팅 이력' 시트 타임라인 조회 및 이력(history) 병합
   try {
-    await fetchPublicRatingTimeline(spreadsheetId);
+    await fetchPublicRatingTimeline(spreadsheetId, forceRefresh);
   } catch (e) {
     console.warn("Timeline replay in fetchPublicRatings failed:", e);
   }
@@ -1156,13 +1326,14 @@ export async function fetchPublicRatings(spreadsheetId?: string): Promise<Record
 /**
  * 2. 사용 가능한 회차 목록 조회
  */
-export async function fetchPublicSessions(_spreadsheetId?: string): Promise<string[]> {
+export async function fetchPublicSessions(_spreadsheetId?: string, forceRefresh: boolean = false): Promise<string[]> {
   const workerUrl = getWorkerUrl();
 
   // A. Worker 시도 (서버가 자체 Secret에서 스프레드시트 ID 복호화)
   if (workerUrl) {
     try {
-      const res = await fetch(`${workerUrl}/api/public/sessions`);
+      const refreshQuery = forceRefresh ? '?refresh=1' : '';
+      const res = await fetch(`${workerUrl}/api/public/sessions${refreshQuery}`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.sessions) && data.sessions.length > 0) {
@@ -1191,14 +1362,15 @@ export async function fetchPublicSessions(_spreadsheetId?: string): Promise<stri
  */
 export async function fetchPublicSessionDetail(
   sessionName: string,
-  spreadsheetId?: string
+  spreadsheetId?: string,
+  forceRefresh: boolean = false
 ): Promise<SessionDetail> {
-  if (cachedSessionsDetail[sessionName]) {
+  if (!forceRefresh && cachedSessionsDetail[sessionName]) {
     return cachedSessionsDetail[sessionName];
   }
 
   const isPastSession = isPastImmutableSessionClient(sessionName);
-  if (isPastSession) {
+  if (!forceRefresh && isPastSession) {
     const localCached = readPastSessionLocalCache<SessionDetail>(`detail_${sessionName}`);
     if (localCached && Array.isArray(localCached.games) && localCached.games.length > 0) {
       cachedSessionsDetail[sessionName] = localCached;
@@ -1227,8 +1399,9 @@ export async function fetchPublicSessionDetail(
   // A. Worker 시도 (스프레드시트 ID는 서버 내부 Secret에서 자동 복호화)
   if (workerUrl) {
     try {
+      const refreshParam = (forceRefresh || !isPastSession) ? '&refresh=1' : '';
       const res = await fetch(
-        `${workerUrl}/api/public/session-detail?session=${encodeURIComponent(sessionName)}`
+        `${workerUrl}/api/public/session-detail?session=${encodeURIComponent(sessionName)}${forceRefresh ? refreshParam : ''}`
       );
       if (res.ok) {
         const data = await res.json();
@@ -1314,9 +1487,10 @@ export async function fetchPublicSessionDetail(
  */
 export async function fetchSessionDetailedStats(
   sessionName: string,
-  spreadsheetId?: string
+  spreadsheetId?: string,
+  forceRefresh: boolean = false
 ): Promise<Record<string, MemberStatItem>> {
-  if (cachedSessionDetailedStats[sessionName]) {
+  if (!forceRefresh && cachedSessionDetailedStats[sessionName]) {
     return cachedSessionDetailedStats[sessionName];
   }
 
@@ -1328,7 +1502,7 @@ export async function fetchSessionDetailedStats(
   }
 
   const isPastSession = isPastImmutableSessionClient(sessionName);
-  if (isPastSession) {
+  if (!forceRefresh && isPastSession) {
     const localCached = readPastSessionLocalCache<Record<string, MemberStatItem>>(`stats_${sessionName}`);
     if (localCached && Object.keys(localCached).length > 0) {
       cachedSessionDetailedStats[sessionName] = localCached;
@@ -1338,7 +1512,7 @@ export async function fetchSessionDetailedStats(
 
   // 회차별 국별 기록에서 직접 집계
   try {
-    const sessionRows = await fetchSessionRoundsRows(sessionName, spreadsheetId);
+    const sessionRows = await fetchSessionRoundsRows(sessionName, spreadsheetId, forceRefresh);
     if (!sessionRows || sessionRows.length === 0) {
       return {};
     }
@@ -1641,11 +1815,11 @@ export interface StatsMatrixData {
   rows: StatsMatrixRow[];
 }
 
-export async function fetchPublicStatsMatrix(spreadsheetId?: string): Promise<StatsMatrixData> {
-  if (cachedStatsMatrix && cachedStatsMatrix.rows.length > 0) {
+export async function fetchPublicStatsMatrix(spreadsheetId?: string, forceRefresh: boolean = false): Promise<StatsMatrixData> {
+  if (!forceRefresh && cachedStatsMatrix && cachedStatsMatrix.rows.length > 0) {
     return cachedStatsMatrix;
   }
-  if (pendingStatsMatrixPromise) {
+  if (!forceRefresh && pendingStatsMatrixPromise) {
     return pendingStatsMatrixPromise;
   }
 
@@ -1657,7 +1831,8 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string): Promise<St
       // A. Worker 시도 (스프레드시트 ID는 서버 내부 Secret에서 자동 복호화)
       if (workerUrl) {
         try {
-          const res = await fetch(`${workerUrl}/api/public/stats-matrix`);
+          const refreshQuery = forceRefresh ? '?refresh=1' : '';
+          const res = await fetch(`${workerUrl}/api/public/stats-matrix${refreshQuery}`);
           if (res.ok) {
             const data = await res.json();
             if (data.table) table = data.table;
@@ -2016,20 +2191,20 @@ let pendingRatingTimelinePromise: Promise<AllPlayersRatingTrajectory> | null = n
 /**
  * 경기별 레이팅 변화 이력 전체 조회 (캐시 활용)
  */
-export async function fetchPublicRatingHistoryRecords(spreadsheetId?: string): Promise<GameRatingHistoryRecord[]> {
-  if (cachedRatingHistoryRecords && cachedRatingHistoryRecords.length > 0) {
+export async function fetchPublicRatingHistoryRecords(spreadsheetId?: string, forceRefresh: boolean = false): Promise<GameRatingHistoryRecord[]> {
+  if (!forceRefresh && cachedRatingHistoryRecords && cachedRatingHistoryRecords.length > 0) {
     return cachedRatingHistoryRecords;
   }
-  await fetchPublicRatingTimeline(spreadsheetId);
+  await fetchPublicRatingTimeline(spreadsheetId, forceRefresh);
   return cachedRatingHistoryRecords || [];
 }
 
 /**
  * 5-2. '레이팅 이력' 시트 또는 온디맨드 리플레이를 통해 전체 플레이어 레이팅 타임라인 조회
  */
-export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise<AllPlayersRatingTrajectory> {
-  if (cachedRatingTrajectory) return cachedRatingTrajectory;
-  if (pendingRatingTimelinePromise) return pendingRatingTimelinePromise;
+export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRefresh: boolean = false): Promise<AllPlayersRatingTrajectory> {
+  if (!forceRefresh && cachedRatingTrajectory) return cachedRatingTrajectory;
+  if (!forceRefresh && pendingRatingTimelinePromise) return pendingRatingTimelinePromise;
 
   pendingRatingTimelinePromise = (async () => {
     try {
@@ -2039,7 +2214,8 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string): Promise
       // A. Worker 시도 (서버가 자체 Secret에서 스프레드시트 ID 복호화)
       if (workerUrl) {
         try {
-          const res = await fetch(`${workerUrl}/api/public/rating-history`);
+          const refreshQuery = forceRefresh ? '?refresh=1' : '';
+          const res = await fetch(`${workerUrl}/api/public/rating-history${refreshQuery}`);
           if (res.ok) {
             const data = await res.json();
             if (data.table) table = data.table;

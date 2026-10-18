@@ -6,7 +6,7 @@ import {
   sortRatingsDesc,
   replayAllHistoricalGames
 } from './ratingEngine';
-import { LEGACY_CONSOLIDATED_RAW } from '@/services/publicStatsService';
+import { LEGACY_CONSOLIDATED_RAW, clearPublicStatsCache } from '@/services/publicStatsService';
 import { getKSTNowParts, getKSTTodayString, formatKSTTimestamp } from '@/utils/kstTime';
 
 let tokenClient: any = null;
@@ -1265,11 +1265,15 @@ export const expandSessionSheetRowsIfNeeded = async (
   }
 };
 
-const notifyWorkerCacheInvalidate = (sessionTitle?: string) => {
+export const notifyWorkerCacheInvalidate = (sessionTitle?: string) => {
   try {
-    const workerUrl = ((import.meta as any).env?.VITE_GOOGLE_AUTH_WORKER_URL || '').replace(/\/$/, '');
-    if (!workerUrl) return;
     const cleanSession = sessionTitle ? sessionTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim() : undefined;
+    clearPublicStatsCache({ keepPastSessions: true, sessionName: cleanSession });
+
+    const envWorkerUrl = (import.meta as any).env?.VITE_GOOGLE_AUTH_WORKER_URL;
+    const savedWorkerUrl = typeof localStorage !== 'undefined' ? localStorage.getItem('google_auth_worker_url') : '';
+    const workerUrl = (envWorkerUrl || savedWorkerUrl || 'https://mahjong-score.cnabe.workers.dev').trim().replace(/\/+$/, '');
+    if (!workerUrl) return;
     fetch(`${workerUrl}/api/public/cache-invalidate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1351,6 +1355,7 @@ export const appendSessionSummaryRecords = async (spreadsheetId: string, sheetTi
       }
     });
     console.log(`${sheetTitle} 표시 시트 F${targetRow} 행부터 대국 요약 정보 ${summaryRows.length}개 적재 완료`);
+    notifyWorkerCacheInvalidate(sheetTitle);
   } catch (err) {
     console.error(`${sheetTitle} 요약 정보 적재 실패:`, err);
     throw err;
@@ -2547,6 +2552,7 @@ export const updateMatchRatingsInSheet = async (
     console.warn("'레이팅 이력' 실시간 행 추가 실패 (무시 가능):", e);
   }
 
+  notifyWorkerCacheInvalidate(sessionLabel);
   return { updatedRatings, matchDeltas };
 };
 
@@ -2627,6 +2633,7 @@ export const recalculateAndSyncAllRatings = async (
     // 5. '레이팅 이력' 시트에 전체 경기별 변화 이력 일괄 기입
     await batchSaveRatingHistoryToSheet(spreadsheetId, matchHistory);
 
+    notifyWorkerCacheInvalidate();
     const playerCount = Object.keys(finalRatings).length;
     return {
       success: true,
