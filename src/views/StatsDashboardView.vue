@@ -4375,6 +4375,74 @@ const submitNewHighlightComment = async () => {
   }
 };
 
+const scrollCommentActionBoxIntoView = (boxSelector: string, focusSelector?: string) => {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const modalEl = document.querySelector('.lightbox-modal-card') as HTMLElement | null;
+      if (!modalEl) return;
+      const boxEl = modalEl.querySelector(boxSelector) as HTMLElement | null;
+      if (!boxEl) return;
+
+      if (focusSelector) {
+        const inputEl = boxEl.querySelector(focusSelector) as HTMLElement | null;
+        if (inputEl && typeof inputEl.focus === 'function') {
+          inputEl.focus({ preventScroll: true });
+        }
+      }
+
+      const boxRect = boxEl.getBoundingClientRect();
+      let actualListScroll = 0;
+
+      const listEl = boxEl.closest('.lb-comments-list') as HTMLElement | null;
+      if (listEl) {
+        const listRect = listEl.getBoundingClientRect();
+        const bottomPadding = 14;
+        const topPadding = 8;
+        if (boxRect.bottom + bottomPadding > listRect.bottom) {
+          const desiredDelta = (boxRect.bottom + bottomPadding) - listRect.bottom;
+          const maxScrollLeft = Math.max(0, listEl.scrollHeight - listEl.clientHeight - listEl.scrollTop);
+          actualListScroll = Math.min(desiredDelta, maxScrollLeft);
+          listEl.scrollBy({ top: desiredDelta, behavior: 'smooth' });
+        } else if (boxRect.top - topPadding < listRect.top) {
+          const desiredDelta = (boxRect.top - topPadding) - listRect.top;
+          actualListScroll = Math.max(desiredDelta, -listEl.scrollTop);
+          listEl.scrollBy({ top: desiredDelta, behavior: 'smooth' });
+        }
+      }
+
+      const modalRect = modalEl.getBoundingClientRect();
+      const projectedBoxBottom = boxRect.bottom - actualListScroll;
+      const modalBottomPadding = 24;
+      if (projectedBoxBottom + modalBottomPadding > modalRect.bottom) {
+        const modalDelta = (projectedBoxBottom + modalBottomPadding) - modalRect.bottom;
+        modalEl.scrollBy({ top: modalDelta, behavior: 'smooth' });
+      }
+    });
+  });
+};
+
+watch(
+  [
+    () => Boolean(replyContentInput.value.includes('[') && replyContentInput.value.includes(']')),
+    replyFormError,
+    useGuestCommentMode,
+  ],
+  () => {
+    if (replyingToComment.value) {
+      scrollCommentActionBoxIntoView('.lb-reply-form-box');
+    }
+  }
+);
+
+watch(commentActionError, (err) => {
+  if (!err) return;
+  if (editingCommentId.value) {
+    scrollCommentActionBoxIntoView('.lb-comment-edit-box');
+  } else if (deletingCommentId.value) {
+    scrollCommentActionBoxIntoView('.lb-comment-delete-box');
+  }
+});
+
 const startReplyComment = (cmt: HighlightComment) => {
   if (replyingToComment.value?.id === cmt.id) {
     cancelReplyComment();
@@ -4388,6 +4456,7 @@ const startReplyComment = (cmt: HighlightComment) => {
   replyContentInput.value = '';
   isReplyEmotePickerOpen.value = false;
   isCommentEmotePickerOpen.value = false;
+  scrollCommentActionBoxIntoView('.lb-reply-form-box', 'textarea');
 };
 
 const cancelReplyComment = () => {
@@ -4466,6 +4535,7 @@ const startEditComment = (cmt: HighlightComment) => {
   } else {
     editingCommentPin.value = '';
   }
+  scrollCommentActionBoxIntoView('.lb-comment-edit-box', 'textarea');
 };
 
 const cancelEditComment = () => {
@@ -4526,6 +4596,7 @@ const startDeleteComment = async (cmt: HighlightComment) => {
   }
   deletingCommentId.value = cmt.id;
   deletingCommentPin.value = '';
+  scrollCommentActionBoxIntoView('.lb-comment-delete-box', 'input');
 };
 
 const confirmDeleteComment = async (cmt: HighlightComment, explicitPin?: string) => {
@@ -9272,7 +9343,11 @@ const openGamePopupFromLightbox = async (
                 </div>
 
                 <!-- 댓글 목록 (대댓글 트리 정렬) -->
-                <div v-if="threadedLightboxComments.length > 0" class="lb-comments-list">
+                <div
+                  v-if="threadedLightboxComments.length > 0"
+                  class="lb-comments-list"
+                  :class="{ 'has-active-form': Boolean(replyingToComment || editingCommentId || deletingCommentId) }"
+                >
                   <div
                     v-for="cmt in threadedLightboxComments"
                     :key="cmt.id"
@@ -16061,8 +16136,14 @@ html.dark .lb-comments-count {
   max-height: 290px;
   overflow-y: auto;
   padding-right: 2px;
+  padding-bottom: 4px;
   width: 100%;
   box-sizing: border-box;
+  scroll-behavior: smooth;
+}
+.lb-comments-list.has-active-form {
+  max-height: 380px;
+  padding-bottom: 10px;
 }
 .lb-comment-item {
   padding: 8px 11px;
