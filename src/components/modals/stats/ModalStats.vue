@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue"
+import { ref, computed, watch, onMounted } from "vue"
 import { useRouter } from "vue-router"
 import type { Player, Option } from "@/types/types.d"
 import { getRatingColor } from "@/utils/ratingEngine"
+import {
+  computeFrequentOpponentsStats,
+  fetchPublicRatingHistoryRecords,
+  type GameRatingHistoryRecord,
+  type OpponentHeadToHeadStat
+} from "@/services/publicStatsService"
 import {
   Chart as ChartJS,
   Title,
@@ -58,8 +64,62 @@ const activeHistory = computed(() => {
 })
 
 // 탭 종류
-type TabType = 'basic' | 'riichi' | 'other' | 'rank' | 'rating'
+type TabType = 'basic' | 'riichi' | 'other' | 'rank' | 'rating' | 'opponents'
 const activeTab = ref<TabType>('basic')
+
+// 자주 만나는 상대 (전체 기간 대국 기록 & 필터/툴팁 상태)
+const allRatingHistoryRecords = ref<GameRatingHistoryRecord[]>([])
+const opponentsGameLimit = ref<number>(0)
+const activeOpponentStat = ref<OpponentHeadToHeadStat | null>(null)
+const oppTooltipPos = ref<{ x: number; y: number }>({ x: 0, y: 0 })
+const isOppTooltipBelow = ref(false)
+
+onMounted(async () => {
+  try {
+    const records = await fetchPublicRatingHistoryRecords()
+    if (records && records.length > 0) {
+      allRatingHistoryRecords.value = records
+    }
+  } catch (err) {
+    console.warn("Failed to load rating history records for opponents tab:", err)
+  }
+})
+
+function updateOppTooltipPosition(el: HTMLElement) {
+  const rect = el.getBoundingClientRect()
+  const viewportWidth = window.innerWidth
+  const tooltipHalfWidth = Math.min(200, viewportWidth * 0.46)
+  const centerX = rect.left + rect.width / 2
+  const clampedX = Math.max(tooltipHalfWidth + 12, Math.min(viewportWidth - tooltipHalfWidth - 12, centerX))
+
+  if (rect.top < 250) {
+    isOppTooltipBelow.value = true
+    oppTooltipPos.value = { x: clampedX, y: rect.bottom + 8 }
+  } else {
+    isOppTooltipBelow.value = false
+    oppTooltipPos.value = { x: clampedX, y: rect.top - 8 }
+  }
+}
+
+function onHoverOpponent(opp: OpponentHeadToHeadStat, event: MouseEvent) {
+  activeOpponentStat.value = opp
+  const target = event.currentTarget as HTMLElement | null
+  if (target) updateOppTooltipPosition(target)
+}
+
+function onLeaveOpponent() {
+  activeOpponentStat.value = null
+}
+
+function onToggleOpponent(opp: OpponentHeadToHeadStat, event: MouseEvent) {
+  if (activeOpponentStat.value?.opponentName === opp.opponentName) {
+    activeOpponentStat.value = null
+    return
+  }
+  activeOpponentStat.value = opp
+  const target = event.currentTarget as HTMLElement | null
+  if (target) updateOppTooltipPosition(target)
+}
 
 // 호버 중인 순위 카드/차트 세그먼트 (1, 2, 3, 4)
 const hoveredRank = ref<number | null>(null)
@@ -943,6 +1003,52 @@ const stats = computed(() => {
   }
 })
 
+const frequentOpponentsStats = computed(() => {
+  const name = selectedPlayer.value
+  if (!name) return { totalPlayerGames: 0, opponents: [] }
+
+  // 로컬 대국 데이터를 { players } 포맷으로 변환하는 헬퍼
+  const mapLocalGames = (games: any[]) => {
+    return (games || []).map((g: any) => {
+      if (Array.isArray(g?.players)) return { players: g.players }
+      if (Array.isArray(g?.results)) {
+        return {
+          players: g.results.map((r: any) => ({
+            name: r?.name || r?.playerName || '',
+            score: Number(r?.score ?? 0),
+            rank: Number(r?.rank ?? 0)
+          }))
+        }
+      }
+      if (g?.results && typeof g.results === 'object') {
+        return {
+          players: Object.entries(g.results).map(([k, r]: [string, any]) => ({
+            name: r?.name || r?.playerName || k,
+            score: Number(r?.score ?? 0),
+            rank: Number(r?.rank ?? 0)
+          }))
+        }
+      }
+      return { players: [] }
+    })
+  }
+
+  if (scopeTab.value === 'all' && allRatingHistoryRecords.value.length > 0) {
+    return computeFrequentOpponentsStats(
+      name,
+      allRatingHistoryRecords.value,
+      opponentsGameLimit.value
+    )
+  }
+
+  const localGames = mapLocalGames(activeHistory.value)
+  return computeFrequentOpponentsStats(
+    name,
+    localGames,
+    scopeTab.value === 'all' ? opponentsGameLimit.value : 0
+  )
+})
+
 const emptyScopeMessage = computed(() => {
   if (scopeTab.value === 'backup') {
     return `로컬 백업에 '${selectedPlayer.value}'님이 플레이한 대국 기록이 없습니다.`;
@@ -1042,6 +1148,13 @@ const emptyScopeMessage = computed(() => {
       @click="activeTab = 'rating'"
     >
       레이팅 추이
+    </button>
+    <button 
+      class="tab_btn" 
+      :class="{ active: activeTab === 'opponents' }" 
+      @click="activeTab = 'opponents'"
+    >
+      자주 만나는 상대
     </button>
   </div>
 
@@ -1442,6 +1555,92 @@ const emptyScopeMessage = computed(() => {
           </div>
         </div>
       </div>
+
+      <!-- 자주 만나는 상대 탭 -->
+      <div v-else-if="activeTab === 'opponents'" class="opponents_tab_wrapper">
+        <div class="opponents-header-row">
+          <span class="opponents-summary-text">
+            {{ scopeTab === 'all' ? '분석 대국 수' : '동탁 대국 수' }}: <strong>{{ frequentOpponentsStats.totalPlayerGames }}전</strong>
+            <span class="opponents-hint">(마우스 오버 또는 터치 시 상대 전적 표시)</span>
+          </span>
+          <div v-if="scopeTab === 'all'" class="opponents-limit-chips">
+            <button type="button" class="opp-limit-chip" :class="{ active: opponentsGameLimit === 0 }" @click="opponentsGameLimit = 0">전체</button>
+            <button type="button" class="opp-limit-chip" :class="{ active: opponentsGameLimit === 100 }" @click="opponentsGameLimit = 100">최근 100전</button>
+            <button type="button" class="opp-limit-chip" :class="{ active: opponentsGameLimit === 50 }" @click="opponentsGameLimit = 50">최근 50전</button>
+          </div>
+        </div>
+
+        <div v-if="frequentOpponentsStats.opponents.length > 0" class="opponents-grid">
+          <div
+            v-for="opp in frequentOpponentsStats.opponents"
+            :key="opp.opponentName"
+            class="opponent-item-card"
+            :class="{ active: activeOpponentStat?.opponentName === opp.opponentName }"
+            @mouseenter="onHoverOpponent(opp, $event)"
+            @mouseleave="onLeaveOpponent"
+            @click.stop="onToggleOpponent(opp, $event)"
+          >
+            <span class="opp-name">{{ opp.opponentName }}</span>
+            <span class="opp-count">{{ opp.encounterCount }}회 ({{ opp.encounterRate.toFixed(2) }}%)</span>
+          </div>
+        </div>
+        <div v-else class="no_rating_data">
+          집계 가능한 동탁 상대 기록이 없습니다.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 자주 만나는 상대 전적 비교 플로팅 팝오버 -->
+  <div
+    v-if="activeOpponentStat"
+    class="opponent-h2h-popover"
+    :class="{ 'is-below': isOppTooltipBelow }"
+    :style="{ left: oppTooltipPos.x + 'px', top: oppTooltipPos.y + 'px' }"
+  >
+    <div class="h2h-col h2h-left">
+      <div class="h2h-player-title">{{ selectedPlayer }}</div>
+      <div class="h2h-stat-val" :class="{ 'is-better': activeOpponentStat.winRate > (100 - activeOpponentStat.winRate) }">
+        {{ activeOpponentStat.winCount }}회 ({{ activeOpponentStat.winRate.toFixed(2) }}%)
+      </div>
+      <div class="h2h-stat-val" :class="{ 'is-better': activeOpponentStat.playerStats.avgScore > activeOpponentStat.opponentStats.avgScore }">
+        {{ Math.round(activeOpponentStat.playerStats.avgScore).toLocaleString() }}점
+      </div>
+      <div class="h2h-stat-val" :class="{ 'is-better': activeOpponentStat.playerStats.avgRank < activeOpponentStat.opponentStats.avgRank }">
+        {{ activeOpponentStat.playerStats.avgRank.toFixed(2) }}위
+      </div>
+      <div class="h2h-stat-val">{{ activeOpponentStat.playerStats.r1 }}회 ({{ activeOpponentStat.playerStats.p1.toFixed(2) }}%)</div>
+      <div class="h2h-stat-val">{{ activeOpponentStat.playerStats.r2 }}회 ({{ activeOpponentStat.playerStats.p2.toFixed(2) }}%)</div>
+      <div class="h2h-stat-val">{{ activeOpponentStat.playerStats.r3 }}회 ({{ activeOpponentStat.playerStats.p3.toFixed(2) }}%)</div>
+      <div class="h2h-stat-val">{{ activeOpponentStat.playerStats.r4 }}회 ({{ activeOpponentStat.playerStats.p4.toFixed(2) }}%)</div>
+    </div>
+
+    <div class="h2h-col h2h-center">
+      <div class="h2h-vs-badge">VS</div>
+      <div class="h2h-metric-label">상대 승리</div>
+      <div class="h2h-metric-label">평균 점수</div>
+      <div class="h2h-metric-label">평균 순위</div>
+      <div class="h2h-metric-label">1위</div>
+      <div class="h2h-metric-label">2위</div>
+      <div class="h2h-metric-label">3위</div>
+      <div class="h2h-metric-label">4위</div>
+    </div>
+
+    <div class="h2h-col h2h-right">
+      <div class="h2h-player-title">{{ activeOpponentStat.opponentName }}</div>
+      <div class="h2h-stat-val" :class="{ 'is-better': (100 - activeOpponentStat.winRate) > activeOpponentStat.winRate }">
+        {{ activeOpponentStat.encounterCount - activeOpponentStat.winCount }}회 ({{ (100 - activeOpponentStat.winRate).toFixed(2) }}%)
+      </div>
+      <div class="h2h-stat-val" :class="{ 'is-better': activeOpponentStat.opponentStats.avgScore > activeOpponentStat.playerStats.avgScore }">
+        {{ Math.round(activeOpponentStat.opponentStats.avgScore).toLocaleString() }}점
+      </div>
+      <div class="h2h-stat-val" :class="{ 'is-better': activeOpponentStat.opponentStats.avgRank < activeOpponentStat.playerStats.avgRank }">
+        {{ activeOpponentStat.opponentStats.avgRank.toFixed(2) }}위
+      </div>
+      <div class="h2h-stat-val">{{ activeOpponentStat.opponentStats.r1 }}회 ({{ activeOpponentStat.opponentStats.p1.toFixed(2) }}%)</div>
+      <div class="h2h-stat-val">{{ activeOpponentStat.opponentStats.r2 }}회 ({{ activeOpponentStat.opponentStats.p2.toFixed(2) }}%)</div>
+      <div class="h2h-stat-val">{{ activeOpponentStat.opponentStats.r3 }}회 ({{ activeOpponentStat.opponentStats.p3.toFixed(2) }}%)</div>
+      <div class="h2h-stat-val">{{ activeOpponentStat.opponentStats.r4 }}회 ({{ activeOpponentStat.opponentStats.p4.toFixed(2) }}%)</div>
     </div>
   </div>
 </div>
@@ -2039,5 +2238,207 @@ html:not(.dark) .rank_bar_track {
     opacity: 1;
     margin-left: 4px;
   }
+}
+
+/* 자주 만나는 상대 & 상대 전적 비교 팝오버 스타일 */
+.opponents_tab_wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.opponents-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 4px;
+}
+
+.opponents-summary-text {
+  font-size: 12.5px;
+  opacity: 0.85;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.opponents-summary-text strong {
+  color: var(--color-toggle-on, #4caf50);
+  font-weight: 800;
+}
+
+.opponents-hint {
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.opponents-limit-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.opp-limit-chip {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-color);
+  background: var(--bg-modal);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: all 0.15s ease;
+}
+
+.opp-limit-chip:hover {
+  opacity: 1;
+}
+
+.opp-limit-chip.active {
+  opacity: 1;
+  color: #ffffff;
+  background: var(--color-toggle-on, #3b82f6);
+  border-color: var(--color-toggle-on, #3b82f6);
+}
+
+.opponents-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0 20px;
+  background: var(--bg-modal);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px 14px;
+  max-height: 290px;
+  overflow-y: auto;
+}
+
+@media (max-width: 560px) {
+  .opponents-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.opponent-item-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  border-radius: 4px;
+}
+
+.opponent-item-card:hover,
+.opponent-item-card.active {
+  background-color: rgba(59, 130, 246, 0.12);
+}
+
+.opp-name {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.opp-count {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 플로팅 VS 상대 전적 툴팁 (다크 팝오버) */
+.opponent-h2h-popover {
+  position: fixed;
+  z-index: 9999;
+  transform: translate(-50%, -100%);
+  width: min(390px, 92vw);
+  background: rgba(24, 26, 31, 0.96);
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 14px 16px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 10px;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+.opponent-h2h-popover.is-below {
+  transform: translate(-50%, 0);
+}
+
+.h2h-col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.h2h-left {
+  text-align: left;
+  align-items: flex-start;
+}
+
+.h2h-center {
+  text-align: center;
+  align-items: center;
+  padding: 0 6px;
+}
+
+.h2h-right {
+  text-align: right;
+  align-items: flex-end;
+}
+
+.h2h-player-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 4px;
+  max-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.h2h-vs-badge {
+  font-size: 13px;
+  font-weight: 900;
+  color: #94a3b8;
+  margin-bottom: 4px;
+  letter-spacing: 0.04em;
+}
+
+.h2h-metric-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
+.h2h-stat-val {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #e2e8f0;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.h2h-stat-val.is-better {
+  color: #60a5fa;
+  font-weight: 800;
+}
+
+html:not(.dark) .opponents-grid,
+html:not(.dark) .opp-limit-chip:not(.active) {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
 }
 </style>

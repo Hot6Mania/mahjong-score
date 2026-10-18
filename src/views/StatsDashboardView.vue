@@ -29,7 +29,10 @@ import {
   attachRatingToSessionGames,
   clearPublicStatsCache,
   buildSessionDetailFromRatingHistory,
+  computeFrequentOpponentsStats,
   type AllPlayersRatingTrajectory,
+  type GameRatingHistoryRecord,
+  type OpponentHeadToHeadStat,
   type MemberStatItem,
   type SessionDetail,
   type SessionMemberSummary,
@@ -430,7 +433,7 @@ const displayPlayerStats = computed<MemberStatItem>(() => {
   }
   return selectedPlayer.value.detailedStats || selectedPlayer.value;
 });
-const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'yakuman' | 'rank' | 'rating'>('basic');
+const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'yakuman' | 'rank' | 'rating' | 'opponents'>('basic');
 const hoveredRank = ref<number | null>(null);
 
 // 모달 상단 안내 배너 가시성 상태 (새로고침 시 다시 표시)
@@ -647,20 +650,32 @@ const isModalFromSession = ref(false);
 // 모달 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
 const modalScopeTab = ref<'session' | 'all'>('all');
 
-const openPlayerModal = (player: MemberStatItem, fromSession: boolean = false, keepScopeTab: boolean = false) => {
+const openPlayerModal = (
+  player: MemberStatItem,
+  fromSession: boolean = false,
+  keepScopeTab: boolean = false,
+  keepActiveTab: boolean = false
+) => {
   selectedPlayer.value = player;
   isModalFromSession.value = fromSession;
   if (!keepScopeTab) {
     modalScopeTab.value = fromSession ? 'session' : 'all';
   }
-  sessionModalActiveTab.value = 'basic';
-  modalActiveTab.value = 'basic';
+  if (!keepActiveTab) {
+    sessionModalActiveTab.value = 'basic';
+    modalActiveTab.value = 'basic';
+  }
 };
 
-const openPlayerByName = (name: string, fromSession: boolean = false, keepScopeTab: boolean = false) => {
+const openPlayerByName = (
+  name: string,
+  fromSession: boolean = false,
+  keepScopeTab: boolean = false,
+  keepActiveTab: boolean = false
+) => {
   const match = allStats.value.find(m => m.name === name);
   if (match) {
-    openPlayerModal(match, fromSession, keepScopeTab);
+    openPlayerModal(match, fromSession, keepScopeTab, keepActiveTab);
   }
 };
 
@@ -698,7 +713,8 @@ watch(displayedAvailableSessions, (newSessions) => {
 }, { immediate: true });
 
 const currentSessionDetailedStatsMap = ref<Record<string, MemberStatItem>>({});
-const sessionModalActiveTab = ref<'basic' | 'riichi' | 'other' | 'yakuman' | 'rank' | 'rating'>('basic');
+const sessionModalActiveTab = ref<'basic' | 'riichi' | 'other' | 'yakuman' | 'rank' | 'rating' | 'opponents'>('basic');
+const allRatingHistoryRecords = ref<GameRatingHistoryRecord[]>([]);
 
 watch(modalScopeTab, (newScope) => {
   if (newScope === 'session') {
@@ -740,6 +756,9 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
       fetchPublicSessionDetail(sessionName, undefined, forceRefresh),
       fetchPublicRatingHistoryRecords(undefined, forceRefresh)
     ]);
+    if (historyRecords.length > 0) {
+      allRatingHistoryRecords.value = historyRecords;
+    }
     if (selectedSession.value !== sessionName) return;
     if (detail && detail.games && historyRecords.length > 0) {
       attachRatingToSessionGames(sessionName, detail.games, historyRecords);
@@ -1350,6 +1369,13 @@ const loadAllData = async (forceRefresh: boolean = false) => {
       ratingTimeline.value = timeline;
       filterRatingTopN(5);
     }
+    fetchPublicRatingHistoryRecords(undefined, false)
+      .then(recs => {
+        if (recs.length > 0) {
+          allRatingHistoryRecords.value = recs;
+        }
+      })
+      .catch(() => {});
     if (sessions.length > 0) {
       availableSessions.value = sessions;
       const valid = displayedAvailableSessions.value;
@@ -2385,7 +2411,7 @@ const currentGameHighlights = computed(() => {
   });
 });
 
-// 개인 통계 모달 - 선택된 선수의 17종 역만 화료 통계 (이번 회차 / 전체 기간 연동)
+// 개인 통계 모달 - 선택된 선수의 18종 역만 화료 통계 (이번 회차 / 전체 기간 연동)
 const modalPlayerYakumanStats = computed(() => {
   if (!selectedPlayer.value) {
     return computePlayerYakumanStats([], '');
@@ -2395,6 +2421,101 @@ const modalPlayerYakumanStats = computed(() => {
     : undefined;
   return computePlayerYakumanStats(highlightsList.value, selectedPlayer.value.name, sessFilter);
 });
+
+// ==========================================
+// 6-1. 개인 통계 모달 - 자주 만나는 상대 & 상대별 맞대결 승률 팝오버
+// ==========================================
+const opponentsGameLimit = ref<number>(0); // 0 = 전체 대국, 100 = 최근 100대국, 50 = 최근 50대국
+const activeOpponentStat = ref<OpponentHeadToHeadStat | null>(null);
+const oppTooltipPos = ref({ x: 0, y: 0, visible: false });
+const isOppTooltipBelow = ref(false);
+
+const allTimeFrequentOpponents = computed(() => {
+  if (!selectedPlayer.value) return { totalPlayerGames: 0, opponents: [] as OpponentHeadToHeadStat[] };
+  return computeFrequentOpponentsStats(
+    selectedPlayer.value.name,
+    allRatingHistoryRecords.value,
+    opponentsGameLimit.value > 0 ? opponentsGameLimit.value : undefined
+  );
+});
+
+const sessionFrequentOpponents = computed(() => {
+  if (!selectedPlayer.value || !currentSessionDetail.value?.games) {
+    return { totalPlayerGames: 0, opponents: [] as OpponentHeadToHeadStat[] };
+  }
+  return computeFrequentOpponentsStats(
+    selectedPlayer.value.name,
+    currentSessionDetail.value.games
+  );
+});
+
+const formatOpponentPct = (pct: number | undefined): string => {
+  if (!pct || pct === 0) return '0%';
+  return `${Number(pct).toFixed(2)}%`;
+};
+
+const formatSignedUma = (uma: number | undefined): string => {
+  const v = Number(uma || 0);
+  return `${v > 0 ? '+' : ''}${v.toFixed(1)}`;
+};
+
+const onHoverOpponent = (e: MouseEvent, opp: OpponentHeadToHeadStat) => {
+  activeOpponentStat.value = opp;
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const screenW = typeof window !== 'undefined' ? window.innerWidth : 360;
+  const rawX = rect.left + rect.width / 2;
+  const clampedX = Math.max(150, Math.min(screenW - 150, rawX));
+
+  if (rect.top < 290) {
+    isOppTooltipBelow.value = true;
+    oppTooltipPos.value = {
+      x: clampedX,
+      y: rect.bottom + 10,
+      visible: true,
+    };
+  } else {
+    isOppTooltipBelow.value = false;
+    oppTooltipPos.value = {
+      x: clampedX,
+      y: rect.top - 10,
+      visible: true,
+    };
+  }
+};
+
+const onLeaveOpponent = () => {
+  oppTooltipPos.value.visible = false;
+  activeOpponentStat.value = null;
+};
+
+const onToggleOpponent = (e: MouseEvent, opp: OpponentHeadToHeadStat) => {
+  if (oppTooltipPos.value.visible && activeOpponentStat.value?.opponentName === opp.opponentName) {
+    onLeaveOpponent();
+  } else {
+    onHoverOpponent(e, opp);
+  }
+};
+
+watch([selectedPlayer, modalActiveTab, sessionModalActiveTab, modalScopeTab], () => {
+  onLeaveOpponent();
+});
+
+// 갤러리 수동 새로고침
+const isRefreshingGallery = ref(false);
+const refreshGalleryData = async () => {
+  if (isRefreshingGallery.value) return;
+  isRefreshingGallery.value = true;
+  try {
+    const fresh = await fetchHighlights(true);
+    highlightsList.value = fresh;
+    highlightStorageTick.value++;
+    showToast('갤러리 목록이 새로고침되었습니다.');
+  } catch {
+    showToast('갤러리 새로고침에 실패했습니다.');
+  } finally {
+    isRefreshingGallery.value = false;
+  }
+};
 
 // 갤러리 탭 필터링된 목록
 const filteredGalleryHighlights = computed(() => {
@@ -4022,6 +4143,64 @@ const formatHighlightDate = (ts: number) => {
       </div>
     </Transition>
 
+    <!-- 상대 맞대결 승률/전적 비교 다크 팝오버 툴팁 -->
+    <div
+      v-if="oppTooltipPos.visible && activeOpponentStat"
+      class="opponent-h2h-popover"
+      :class="{ below: isOppTooltipBelow }"
+      :style="{ left: oppTooltipPos.x + 'px', top: oppTooltipPos.y + 'px' }"
+    >
+      <div class="opp-h2h-winrate">
+        승률: {{ formatOpponentPct(activeOpponentStat.winRate) }}
+      </div>
+      <table class="opp-h2h-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th>플레이어</th>
+            <th>상대</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="opp-h2h-label">평균 순위</td>
+            <td>{{ activeOpponentStat.playerStats.avgRank.toFixed(3) }}</td>
+            <td>{{ activeOpponentStat.opponentStats.avgRank.toFixed(3) }}</td>
+          </tr>
+          <tr>
+            <td class="opp-h2h-label">평균 우마</td>
+            <td>{{ formatSignedUma(activeOpponentStat.playerStats.avgUma) }}</td>
+            <td>{{ formatSignedUma(activeOpponentStat.opponentStats.avgUma) }}</td>
+          </tr>
+          <tr>
+            <td class="opp-h2h-label">평균 득점</td>
+            <td>{{ activeOpponentStat.playerStats.avgScore.toLocaleString() }}</td>
+            <td>{{ activeOpponentStat.opponentStats.avgScore.toLocaleString() }}</td>
+          </tr>
+          <tr>
+            <td class="opp-h2h-label">1위</td>
+            <td>{{ formatOpponentPct(activeOpponentStat.playerStats.p1) }} ({{ activeOpponentStat.playerStats.r1 }})</td>
+            <td>{{ formatOpponentPct(activeOpponentStat.opponentStats.p1) }} ({{ activeOpponentStat.opponentStats.r1 }})</td>
+          </tr>
+          <tr>
+            <td class="opp-h2h-label">2위</td>
+            <td>{{ formatOpponentPct(activeOpponentStat.playerStats.p2) }} ({{ activeOpponentStat.playerStats.r2 }})</td>
+            <td>{{ formatOpponentPct(activeOpponentStat.opponentStats.p2) }} ({{ activeOpponentStat.opponentStats.r2 }})</td>
+          </tr>
+          <tr>
+            <td class="opp-h2h-label">3위</td>
+            <td>{{ formatOpponentPct(activeOpponentStat.playerStats.p3) }} ({{ activeOpponentStat.playerStats.r3 }})</td>
+            <td>{{ formatOpponentPct(activeOpponentStat.opponentStats.p3) }} ({{ activeOpponentStat.opponentStats.r3 }})</td>
+          </tr>
+          <tr>
+            <td class="opp-h2h-label">4위</td>
+            <td>{{ formatOpponentPct(activeOpponentStat.playerStats.p4) }} ({{ activeOpponentStat.playerStats.r4 }})</td>
+            <td>{{ formatOpponentPct(activeOpponentStat.opponentStats.p4) }} ({{ activeOpponentStat.opponentStats.r4 }})</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
     <!-- 인터랙티브 연속 히스토그램 팝오버 툴팁 (폭 축소 및 50% 절반 구분선 적용) -->
     <div 
       v-if="tooltipPos.visible && activeDist" 
@@ -5214,6 +5393,19 @@ const formatHighlightDate = (ts: number) => {
 
             <div class="gh-actions">
               <button
+                type="button"
+                class="btn-hl-upload refresh-gallery-btn"
+                :disabled="isRefreshingGallery"
+                @click="refreshGalleryData"
+                title="갤러리 목록 및 서버 저장소 용량 새로고침"
+              >
+                <svg :class="{ 'spin-icon': isRefreshingGallery }" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+                  <path d="M21 3v5h-5"/>
+                </svg>
+                <span>{{ isRefreshingGallery ? '새로고침 중...' : '새로고침' }}</span>
+              </button>
+              <button
                 v-if="isGalleryAdmin"
                 class="btn-hl-upload admin-pin-btn"
                 @click="openPinAdminModal"
@@ -5425,6 +5617,13 @@ const formatHighlightDate = (ts: number) => {
                       @click="sessionModalActiveTab = 'yakuman'"
                     >
                       역만
+                    </button>
+                    <button 
+                      class="tab_btn" 
+                      :class="{ active: sessionModalActiveTab === 'opponents' }" 
+                      @click="sessionModalActiveTab = 'opponents'"
+                    >
+                      자주 만나는 상대
                     </button>
                   </div>
 
@@ -6033,6 +6232,43 @@ const formatHighlightDate = (ts: number) => {
                           </div>
                         </div>
                       </div>
+
+                      <!-- 6. 이번 회차 자주 만나는 상대 탭 -->
+                      <div v-else-if="sessionModalActiveTab === 'opponents'" class="opponents_tab_wrapper">
+                        <div class="opponents_filter_bar">
+                          <span class="opponents_scope_info">
+                            {{ currentSessionDetail?.sessionName }} 동탁 상대 (총 {{ sessionFrequentOpponents.totalPlayerGames }}전 기준)
+                          </span>
+                        </div>
+                        <div v-if="sessionFrequentOpponents.opponents.length > 0" class="opponents_grid">
+                          <div
+                            v-for="opp in sessionFrequentOpponents.opponents"
+                            :key="`sess-opp-${opp.opponentName}`"
+                            class="opponent_item_row"
+                            @mouseenter="onHoverOpponent($event, opp)"
+                            @mouseleave="onLeaveOpponent"
+                            @click.stop="onToggleOpponent($event, opp)"
+                          >
+                            <div class="opp_left">
+                              <button
+                                type="button"
+                                class="opp_name_link"
+                                @click.stop="openPlayerByName(opp.opponentName, true, true, true); onLeaveOpponent()"
+                                title="클릭하여 상대 스탯 보기"
+                              >
+                                {{ opp.opponentName }}
+                              </button>
+                              <span class="opp_detail_icon" title="맞대결 상세 전적 보기">☰</span>
+                            </div>
+                            <div class="opp_right">
+                              {{ formatOpponentPct(opp.encounterRate) }} ({{ opp.encounterCount }})
+                            </div>
+                          </div>
+                        </div>
+                        <div v-else class="no_rating_data">
+                          이번 회차에 함께 대국한 상대 기록이 없습니다.
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </template>
@@ -6042,7 +6278,7 @@ const formatHighlightDate = (ts: number) => {
                   <div class="tab_menu" style="margin-bottom: 12px;">
                     <button
                       class="tab_btn"
-                      :class="{ active: sessionModalActiveTab !== 'rating' }"
+                      :class="{ active: sessionModalActiveTab !== 'rating' && sessionModalActiveTab !== 'opponents' }"
                       @click="sessionModalActiveTab = 'basic'"
                     >
                       기본 및 순위
@@ -6053,6 +6289,13 @@ const formatHighlightDate = (ts: number) => {
                       @click="sessionModalActiveTab = 'rating'"
                     >
                       레이팅 추이
+                    </button>
+                    <button
+                      class="tab_btn"
+                      :class="{ active: sessionModalActiveTab === 'opponents' }"
+                      @click="sessionModalActiveTab = 'opponents'"
+                    >
+                      자주 만나는 상대
                     </button>
                   </div>
                   <template v-if="sessionModalActiveTab === 'rating'">
@@ -6090,6 +6333,43 @@ const formatHighlightDate = (ts: number) => {
                         <div v-else class="no_rating_data">
                           이번 회차에 기록된 레이팅 변동 이력이 없습니다.
                         </div>
+                      </div>
+                    </div>
+                  </template>
+                  <template v-else-if="sessionModalActiveTab === 'opponents'">
+                    <div class="opponents_tab_wrapper">
+                      <div class="opponents_filter_bar">
+                        <span class="opponents_scope_info">
+                          {{ currentSessionDetail?.sessionName }} 동탁 상대 (총 {{ sessionFrequentOpponents.totalPlayerGames }}전 기준)
+                        </span>
+                      </div>
+                      <div v-if="sessionFrequentOpponents.opponents.length > 0" class="opponents_grid">
+                        <div
+                          v-for="opp in sessionFrequentOpponents.opponents"
+                          :key="`leg-opp-${opp.opponentName}`"
+                          class="opponent_item_row"
+                          @mouseenter="onHoverOpponent($event, opp)"
+                          @mouseleave="onLeaveOpponent"
+                          @click.stop="onToggleOpponent($event, opp)"
+                        >
+                          <div class="opp_left">
+                            <button
+                              type="button"
+                              class="opp_name_link"
+                              @click.stop="openPlayerByName(opp.opponentName, true, true, true); onLeaveOpponent()"
+                              title="클릭하여 상대 스탯 보기"
+                            >
+                              {{ opp.opponentName }}
+                            </button>
+                            <span class="opp_detail_icon" title="맞대결 상세 전적 보기">☰</span>
+                          </div>
+                          <div class="opp_right">
+                            {{ formatOpponentPct(opp.encounterRate) }} ({{ opp.encounterCount }})
+                          </div>
+                        </div>
+                      </div>
+                      <div v-else class="no_rating_data">
+                        이번 회차에 함께 대국한 상대 기록이 없습니다.
                       </div>
                     </div>
                   </template>
@@ -6141,7 +6421,7 @@ const formatHighlightDate = (ts: number) => {
             <!-- 2) 전체 기간 스탯 뷰 -->
             <template v-else>
 
-            <!-- 4개 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 -->
+            <!-- 탭 메뉴: 기본 / 리치 스탯 / 그 외 / 순위 비율 / 레이팅 추이 / 역만 / 자주 만나는 상대 -->
             <div class="tab_menu">
               <button 
                 class="tab_btn" 
@@ -6184,6 +6464,13 @@ const formatHighlightDate = (ts: number) => {
                 @click="modalActiveTab = 'yakuman'"
               >
                 역만
+              </button>
+              <button 
+                class="tab_btn" 
+                :class="{ active: modalActiveTab === 'opponents' }" 
+                @click="modalActiveTab = 'opponents'"
+              >
+                자주 만나는 상대
               </button>
             </div>
 
@@ -6784,6 +7071,66 @@ const formatHighlightDate = (ts: number) => {
                 </div>
               </div>
             </div>
+
+            <!-- 6. 자주 만나는 상대 탭 -->
+            <div v-else-if="modalActiveTab === 'opponents'" class="opponents_tab_wrapper">
+              <div class="opponents_filter_bar">
+                <div class="opp_limit_pills">
+                  <button
+                    type="button"
+                    class="opp_limit_btn"
+                    :class="{ active: opponentsGameLimit === 0 }"
+                    @click="opponentsGameLimit = 0"
+                  >
+                    전체 대국
+                  </button>
+                  <button
+                    type="button"
+                    class="opp_limit_btn"
+                    :class="{ active: opponentsGameLimit === 100 }"
+                    @click="opponentsGameLimit = 100"
+                  >
+                    100 대국
+                  </button>
+                  <button
+                    type="button"
+                    class="opp_limit_btn"
+                    :class="{ active: opponentsGameLimit === 50 }"
+                    @click="opponentsGameLimit = 50"
+                  >
+                    50 대국
+                  </button>
+                </div>
+              </div>
+              <div v-if="allTimeFrequentOpponents.opponents.length > 0" class="opponents_grid">
+                <div
+                  v-for="opp in allTimeFrequentOpponents.opponents"
+                  :key="`all-opp-${opp.opponentName}`"
+                  class="opponent_item_row"
+                  @mouseenter="onHoverOpponent($event, opp)"
+                  @mouseleave="onLeaveOpponent"
+                  @click.stop="onToggleOpponent($event, opp)"
+                >
+                  <div class="opp_left">
+                    <button
+                      type="button"
+                      class="opp_name_link"
+                      @click.stop="openPlayerByName(opp.opponentName, isModalFromSession, true, true); onLeaveOpponent()"
+                      title="클릭하여 상대 스탯 보기"
+                    >
+                      {{ opp.opponentName }}
+                    </button>
+                    <span class="opp_detail_icon" title="맞대결 상세 전적 보기">☰</span>
+                  </div>
+                  <div class="opp_right">
+                    {{ formatOpponentPct(opp.encounterRate) }} ({{ opp.encounterCount }})
+                  </div>
+                </div>
+              </div>
+              <div v-else class="no_rating_data">
+                함께 대국한 상대 기록이 없습니다.
+              </div>
+            </div>
           </div>
         </div>
       </template>
@@ -7004,7 +7351,7 @@ const formatHighlightDate = (ts: number) => {
                       >역만</span>
                       <span v-if="pm.isRiichi" class="urm-tag riichi">리치</span>
                       <span v-if="pm.isWin" class="urm-tag win">
-                        {{ formatRoundStatusLabel(rm.roundStatus) === '쯔모' ? '쯔모' : '화료' }}
+                        {{ formatRoundStatusLabel(rm.roundStatus) === '쯔모' ? '쯔모' : '론' }}
                       </span>
                       <span v-if="pm.isLose" class="urm-tag lose">방총</span>
                     </div>
@@ -7372,7 +7719,7 @@ const formatHighlightDate = (ts: number) => {
                         >역만</span>
                         <span v-if="pm.isRiichi" class="urm-tag riichi">리치</span>
                         <span v-if="pm.isWin" class="urm-tag win">
-                          {{ formatRoundStatusLabel(rm.roundStatus) === '쯔모' ? '쯔모' : '화료' }}
+                          {{ formatRoundStatusLabel(rm.roundStatus) === '쯔모' ? '쯔모' : '론' }}
                         </span>
                         <span v-if="pm.isLose" class="urm-tag lose">방총</span>
                       </div>
@@ -12775,4 +13122,270 @@ html.dark .gh-storage-track {
     font-size: 9px;
   }
 }
+
+/* 탭 메뉴 다중 탭 대응 */
+.tab_menu {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab_menu::-webkit-scrollbar {
+  display: none;
+}
+.tab_btn {
+  white-space: nowrap;
+  padding: 8px 6px;
+  font-size: 13px;
+}
+
+/* 갤러리 새로고침 버튼 */
+.refresh-gallery-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-card, #f8fafc);
+  color: var(--text-color, #334155);
+  border: 1px solid var(--border-color, #cbd5e1);
+}
+.refresh-gallery-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+.refresh-gallery-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+html.dark .refresh-gallery-btn {
+  background: #27272a;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+html.dark .refresh-gallery-btn:hover:not(:disabled) {
+  background: #3f3f46;
+}
+@keyframes gallery-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.spin-icon {
+  animation: gallery-spin 0.8s linear infinite;
+}
+
+/* 자주 만나는 상대 탭 (패보옥/코로모 스타일) */
+.opponents_tab_wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 2px 10px;
+}
+.opponents_filter_bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.opponents_scope_info {
+  font-size: 12px;
+  color: var(--text-dimmed, #64748b);
+  font-weight: 600;
+}
+html.dark .opponents_scope_info {
+  color: #94a3b8;
+}
+.opp_limit_pills {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-card, #ffffff);
+}
+html.dark .opp_limit_pills {
+  border-color: #3f3f46;
+  background: #18181b;
+}
+.opp_limit_btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-right: 1px solid var(--border-color, #cbd5e1);
+  background: transparent;
+  color: var(--text-dimmed, #64748b);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.opp_limit_btn:last-child {
+  border-right: none;
+}
+html.dark .opp_limit_btn {
+  border-right-color: #3f3f46;
+  color: #94a3b8;
+}
+.opp_limit_btn:hover {
+  color: var(--text-color, #0f172a);
+  background: rgba(37, 99, 235, 0.05);
+}
+html.dark .opp_limit_btn:hover {
+  color: #f8fafc;
+  background: rgba(56, 189, 248, 0.08);
+}
+.opp_limit_btn.active {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  box-shadow: inset 0 0 0 1px #2563eb;
+}
+html.dark .opp_limit_btn.active {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+  box-shadow: inset 0 0 0 1px #38bdf8;
+}
+
+.opponents_grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 28px;
+  row-gap: 6px;
+}
+@media (max-width: 520px) {
+  .opponents_grid {
+    grid-template-columns: 1fr;
+    column-gap: 12px;
+  }
+}
+.opponent_item_row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.opponent_item_row:hover {
+  background-color: rgba(37, 99, 235, 0.06);
+}
+html.dark .opponent_item_row {
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+}
+html.dark .opponent_item_row:hover {
+  background-color: rgba(56, 189, 248, 0.1);
+}
+.opp_left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.opp_name_link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #2563eb;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.opp_name_link:hover {
+  text-decoration: underline;
+}
+html.dark .opp_name_link {
+  color: #60a5fa;
+}
+.opp_detail_icon {
+  font-size: 12px;
+  color: var(--text-dimmed, #64748b);
+  line-height: 1;
+  user-select: none;
+}
+html.dark .opp_detail_icon {
+  color: #94a3b8;
+}
+.opp_right {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-color, #0f172a);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+html.dark .opp_right {
+  color: #f1f5f9;
+}
+
+/* 상대 맞대결 승률/전적 비교 다크 팝오버 툴팁 */
+.opponent-h2h-popover {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  z-index: 2650;
+  min-width: 260px;
+  background: rgba(28, 28, 30, 0.97);
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 10px 14px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.opponent-h2h-popover::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 7px;
+  border-style: solid;
+  border-color: rgba(28, 28, 30, 0.97) transparent transparent transparent;
+}
+.opponent-h2h-popover.below {
+  transform: translate(-50%, 0);
+}
+.opponent-h2h-popover.below::after {
+  top: auto;
+  bottom: 100%;
+  border-color: transparent transparent rgba(28, 28, 30, 0.97) transparent;
+}
+.opp-h2h-winrate {
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 6px;
+  color: #ffffff;
+}
+.opp-h2h-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.opp-h2h-table th,
+.opp-h2h-table td {
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.opp-h2h-table th {
+  font-weight: 700;
+  color: #ffffff;
+  text-align: center;
+  padding-bottom: 4px;
+}
+.opp-h2h-table th:nth-child(2),
+.opp-h2h-table th:nth-child(3),
+.opp-h2h-table td:nth-child(2),
+.opp-h2h-table td:nth-child(3) {
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  text-align: right;
+}
+.opp-h2h-label {
+  font-weight: 700;
+  color: #f1f5f9;
+  text-align: left;
+  padding-left: 2px !important;
+  padding-right: 10px !important;
+}
 </style>
+

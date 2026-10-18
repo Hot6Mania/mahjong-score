@@ -12,6 +12,7 @@ import {
   DEFAULT_SIGMA,
   computeOrdinal
 } from '@/utils/ratingEngine';
+export type { GameRatingHistoryRecord };
 
 // 클라이언트 캐시된 스프레드시트 ID
 let resolvedClientSpreadsheetId: string | null = null;
@@ -3097,3 +3098,204 @@ export async function fetchSessionGameDetail(
     chartData: { labels: [], datasets: [] }
   };
 }
+
+export interface OpponentSideSummary {
+  avgRank: number;
+  avgUma: number;
+  avgScore: number;
+  r1: number;
+  r2: number;
+  r3: number;
+  r4: number;
+  p1: number;
+  p2: number;
+  p3: number;
+  p4: number;
+}
+
+export interface OpponentHeadToHeadStat {
+  opponentName: string;
+  encounterCount: number;
+  encounterRate: number;
+  winCount: number;
+  winRate: number;
+  playerStats: OpponentSideSummary;
+  opponentStats: OpponentSideSummary;
+}
+
+export interface FrequentOpponentsResult {
+  totalPlayerGames: number;
+  opponents: OpponentHeadToHeadStat[];
+}
+
+/**
+ * 특정 플레이어의 대국 기록 목록으로부터 자주 만나는 상대(동탁 비율/횟수) 및 상대별 맞대결 승률/비교 스탯을 계산합니다.
+ */
+export function computeFrequentOpponentsStats(
+  playerName: string,
+  games: Array<{ players: Array<{ name: string; rank: number; score: number; uma?: number }> }>,
+  limitGames?: number
+): FrequentOpponentsResult {
+  const targetClean = (playerName || '').trim();
+  if (!targetClean || !Array.isArray(games) || games.length === 0) {
+    return { totalPlayerGames: 0, opponents: [] };
+  }
+
+  const allPlayerGames = games.filter(
+    g => Array.isArray(g.players) && g.players.some(p => (p.name || '').trim() === targetClean)
+  );
+
+  const scopedGames =
+    limitGames && limitGames > 0 && allPlayerGames.length > limitGames
+      ? allPlayerGames.slice(-limitGames)
+      : allPlayerGames;
+
+  const totalPlayerGames = scopedGames.length;
+  if (totalPlayerGames === 0) {
+    return { totalPlayerGames: 0, opponents: [] };
+  }
+
+  interface Accumulator {
+    encounterCount: number;
+    winCount: number;
+    pSumRank: number;
+    pSumUma: number;
+    pSumScore: number;
+    pR1: number;
+    pR2: number;
+    pR3: number;
+    pR4: number;
+    oSumRank: number;
+    oSumUma: number;
+    oSumScore: number;
+    oR1: number;
+    oR2: number;
+    oR3: number;
+    oR4: number;
+  }
+
+  const map = new Map<string, Accumulator>();
+
+  const resolveUma = (p: { rank: number; score: number; uma?: number }): number => {
+    if (p.uma !== undefined && p.uma !== null && !isNaN(Number(p.uma))) {
+      return Number(p.uma);
+    }
+    const baseBonus = p.rank === 1 ? 40 : p.rank === 2 ? 10 : p.rank === 3 ? -10 : -20;
+    return parseFloat((((Number(p.score || 0) - 30000) / 1000) + baseBonus).toFixed(1));
+  };
+
+  for (const g of scopedGames) {
+    const me = g.players.find(p => (p.name || '').trim() === targetClean);
+    if (!me) continue;
+
+    const myRank = Number(me.rank) || 4;
+    const myScore = Number(me.score) || 0;
+    const myUma = resolveUma(me);
+
+    for (const opp of g.players) {
+      const oppName = (opp.name || '').trim();
+      if (!oppName || oppName === targetClean) continue;
+
+      const oppRank = Number(opp.rank) || 4;
+      const oppScore = Number(opp.score) || 0;
+      const oppUma = resolveUma(opp);
+
+      let acc = map.get(oppName);
+      if (!acc) {
+        acc = {
+          encounterCount: 0,
+          winCount: 0,
+          pSumRank: 0,
+          pSumUma: 0,
+          pSumScore: 0,
+          pR1: 0,
+          pR2: 0,
+          pR3: 0,
+          pR4: 0,
+          oSumRank: 0,
+          oSumUma: 0,
+          oSumScore: 0,
+          oR1: 0,
+          oR2: 0,
+          oR3: 0,
+          oR4: 0,
+        };
+        map.set(oppName, acc);
+      }
+
+      acc.encounterCount += 1;
+      if (myRank < oppRank) {
+        acc.winCount += 1;
+      }
+
+      acc.pSumRank += myRank;
+      acc.pSumUma += myUma;
+      acc.pSumScore += myScore;
+      if (myRank === 1) acc.pR1++;
+      else if (myRank === 2) acc.pR2++;
+      else if (myRank === 3) acc.pR3++;
+      else acc.pR4++;
+
+      acc.oSumRank += oppRank;
+      acc.oSumUma += oppUma;
+      acc.oSumScore += oppScore;
+      if (oppRank === 1) acc.oR1++;
+      else if (oppRank === 2) acc.oR2++;
+      else if (oppRank === 3) acc.oR3++;
+      else acc.oR4++;
+    }
+  }
+
+  const opponents: OpponentHeadToHeadStat[] = [];
+  for (const [opponentName, acc] of map.entries()) {
+    const n = acc.encounterCount;
+    if (n <= 0) continue;
+
+    opponents.push({
+      opponentName,
+      encounterCount: n,
+      encounterRate: Number(((n / totalPlayerGames) * 100).toFixed(2)),
+      winCount: acc.winCount,
+      winRate: Number(((acc.winCount / n) * 100).toFixed(2)),
+      playerStats: {
+        avgRank: Number((acc.pSumRank / n).toFixed(3)),
+        avgUma: Number((acc.pSumUma / n).toFixed(1)),
+        avgScore: Math.round(acc.pSumScore / n),
+        r1: acc.pR1,
+        r2: acc.pR2,
+        r3: acc.pR3,
+        r4: acc.pR4,
+        p1: Number(((acc.pR1 / n) * 100).toFixed(2)),
+        p2: Number(((acc.pR2 / n) * 100).toFixed(2)),
+        p3: Number(((acc.pR3 / n) * 100).toFixed(2)),
+        p4: Number(((acc.pR4 / n) * 100).toFixed(2)),
+      },
+      opponentStats: {
+        avgRank: Number((acc.oSumRank / n).toFixed(3)),
+        avgUma: Number((acc.oSumUma / n).toFixed(1)),
+        avgScore: Math.round(acc.oSumScore / n),
+        r1: acc.oR1,
+        r2: acc.oR2,
+        r3: acc.oR3,
+        r4: acc.oR4,
+        p1: Number(((acc.oR1 / n) * 100).toFixed(2)),
+        p2: Number(((acc.oR2 / n) * 100).toFixed(2)),
+        p3: Number(((acc.oR3 / n) * 100).toFixed(2)),
+        p4: Number(((acc.oR4 / n) * 100).toFixed(2)),
+      },
+    });
+  }
+
+  opponents.sort((a, b) => {
+    if (b.encounterCount !== a.encounterCount) return b.encounterCount - a.encounterCount;
+    if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+    if (b.playerStats.avgUma !== a.playerStats.avgUma) return b.playerStats.avgUma - a.playerStats.avgUma;
+    return a.opponentName.localeCompare(b.opponentName, 'ko');
+  });
+
+  return {
+    totalPlayerGames,
+    opponents,
+  };
+}
+
