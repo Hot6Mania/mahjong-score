@@ -2445,13 +2445,13 @@ const refreshGalleryAuthState = async () => {
   }
 };
 
-// 선택된 회차에 해당하는 역만/화료/회차 사진 목록
+// 선택된 회차에 해당하는 역만/화료/기타 사진 목록
 const currentSessionHighlights = computed(() => {
   if (!selectedSession.value) return [];
   return highlightsList.value.filter(r => matchHighlightSession(r.sessionName, selectedSession.value));
 });
 
-// 현재 열려 있는 대국 상세 모달에 해당하는 역만/화료 사진 목록
+// 현재 열려 있는 대국 상세 모달에 해당하는 역만/화료/기타 사진 목록
 const currentGameHighlights = computed(() => {
   const activeSess = gameModalSessionName.value || selectedSession.value;
   if (!selectedGameDetail.value || !activeSess) return [];
@@ -2459,7 +2459,6 @@ const currentGameHighlights = computed(() => {
   const gId = selectedGameDetail.value.gameId;
   return highlightsList.value.filter(r => {
     if (!matchHighlightSession(r.sessionName, activeSess)) return false;
-    if (r.category === 'session') return false;
     if (gId && r.gameId && r.gameId === gId) return true;
     if (gIdx && r.gameIndex && Number(r.gameIndex) === Number(gIdx)) return true;
     return false;
@@ -2652,11 +2651,10 @@ const galleryStorageStats = computed(() => {
   };
 });
 
-// 특정 경기에 역만/화료 기록이 있는지 뱃지 표시용 헬퍼
+// 특정 경기에 역만/화료/기타 기록이 있는지 뱃지 표시용 헬퍼
 const getGameHighlights = (game: SessionGame): HighlightRecord[] => {
   if (!selectedSession.value) return [];
   return currentSessionHighlights.value.filter(r => {
-    if (r.category === 'session') return false;
     if (game.gameId && r.gameId && r.gameId === game.gameId) return true;
     if (game.gameIndex && r.gameIndex && Number(r.gameIndex) === Number(game.gameIndex)) return true;
     return false;
@@ -3370,6 +3368,10 @@ const uploadCandidatePlayers = computed<string[]>(() => {
         if (p.name?.trim()) names.add(p.name.trim());
       });
     });
+  } else if (!uploadForm.value.sessionName) {
+    allStats.value.forEach(m => {
+      if (m.name?.trim()) names.add(m.name.trim());
+    });
   }
 
   if (editingHighlightRecord.value) {
@@ -3708,7 +3710,7 @@ const syncUploadModalSessionData = async (sessName: string, isInitialOpen = fals
 
 watch(() => uploadForm.value.sessionName, (newSess, oldSess) => {
   if (!isHighlightUploadModalOpen.value || isInitializingUploadModal) return;
-  if (newSess && newSess !== oldSess) {
+  if (newSess !== oldSess) {
     hasUserInteractedWithUploadForm = false;
     uploadForm.value.gameIndex = undefined;
     uploadForm.value.gameId = '';
@@ -3749,6 +3751,11 @@ watch(() => uploadForm.value.category, async (newCat, oldCat) => {
       uploadForm.value.loserName = '';
     } else {
       uploadForm.value.yakumanTypes = [];
+    }
+    if (newCat !== 'session' && !uploadForm.value.sessionName) {
+      const rawSess = selectedSession.value || displayedAvailableSessions.value[0] || '';
+      const matchedOpt = displayedAvailableSessions.value.find(s => matchHighlightSession(s, rawSess));
+      uploadForm.value.sessionName = matchedOpt || rawSess;
     }
   }
   if (!isHighlightUploadModalOpen.value || isInitializingUploadModal) return;
@@ -4016,7 +4023,7 @@ const submitHighlightUpload = async () => {
     (editingRec && editingRec.hasImage && !effectiveRemoveImage)
   );
 
-  if (!f.sessionName) {
+  if (f.category !== 'session' && !f.sessionName) {
     highlightUploadError.value = '회차를 선택해 주세요.';
     return;
   }
@@ -4036,7 +4043,7 @@ const submitHighlightUpload = async () => {
     }
   } else if (f.category === 'session') {
     if (!hasFinalImage) {
-      highlightUploadError.value = '회차별 사진 등록 시 업로드할 사진 파일을 선택해 주세요.';
+      highlightUploadError.value = '기타 사진 등록 시 업로드할 사진 파일을 선택해 주세요.';
       return;
     }
   }
@@ -4841,7 +4848,7 @@ const formatHighlightCategoryLabel = (cat?: HighlightCategory, isCard = false): 
   if (cat === 'yakuman') return '역만';
   if (cat === 'fun') return '그 외 화료';
   if (cat === 'nanikiru') return '나니키루';
-  return isCard ? '회차 사진' : '회차 사진';
+  return isCard ? '기타 사진' : '기타 사진';
 };
 
 // ==========================================
@@ -6293,7 +6300,7 @@ const openGamePopupFromLightbox = async (
               <div class="sg-header-row">
                 <div>
                   <h3 class="card-title">{{ currentSessionDetail.sessionName }} 사진 &amp; 역만 갤러리 ({{ currentSessionHighlights.length }})</h3>
-                  <p class="sg-sub-desc">이 회차에서 달성된 역만, 그 외 화료, 나니키루, 회차 현장 사진을 보관합니다.</p>
+                  <p class="sg-sub-desc">이 회차에서 달성된 역만, 그 외 화료, 나니키루, 기타 사진을 보관합니다.</p>
                 </div>
                 <div class="sg-btn-group">
                   <button
@@ -6312,7 +6319,7 @@ const openGamePopupFromLightbox = async (
                     class="btn-hl-upload secondary"
                     @click="openHighlightUploadModal({ category: 'session', sessionName: currentSessionDetail.sessionName })"
                   >
-                    회차별 사진 등록
+                    기타 사진 등록
                   </button>
                 </div>
               </div>
@@ -6499,7 +6506,7 @@ const openGamePopupFromLightbox = async (
                   나니키루 ({{ gallerySummaryStats.nanikiruCount }})
                 </button>
                 <button class="gh-cat-btn" :class="{ active: galleryCategoryFilter === 'session' }" @click="galleryCategoryFilter = 'session'">
-                  회차 사진 ({{ gallerySummaryStats.sessionPhotoCount }})
+                  기타 사진 ({{ gallerySummaryStats.sessionPhotoCount }})
                 </button>
               </div>
 
@@ -6544,7 +6551,7 @@ const openGamePopupFromLightbox = async (
                 나니키루 등록
               </button>
               <button class="btn-hl-upload secondary" @click="openHighlightUploadModal({ category: 'session' })">
-                회차별 사진 등록
+                기타 사진 등록
               </button>
             </div>
           </div>
@@ -6584,7 +6591,7 @@ const openGamePopupFromLightbox = async (
 
         <!-- Pinterest 스타일 Masonry 사진 그리드 -->
         <div v-if="filteredGalleryHighlights.length === 0" class="section-card sg-empty-box">
-          조건에 해당하는 기록이나 사진이 없습니다. 우측 상단 <strong>[역만 / 화료 등록]</strong>, <strong>[나니키루 등록]</strong> 또는 <strong>[회차별 사진 등록]</strong> 버튼으로 첫 기록을 남겨보세요.
+          조건에 해당하는 기록이나 사진이 없습니다. 우측 상단 <strong>[역만 / 화료 등록]</strong>, <strong>[나니키루 등록]</strong> 또는 <strong>[기타 사진 등록]</strong> 버튼으로 첫 기록을 남겨보세요.
         </div>
         <div v-else class="pinterest-masonry-grid">
           <div
@@ -6608,7 +6615,7 @@ const openGamePopupFromLightbox = async (
                 <span class="hl-type-tag" :class="rec.category">
                   {{ formatHighlightCategoryLabel(rec.category, true) }}
                 </span>
-                <span class="hl-session-tag">{{ rec.sessionName }}</span>
+                <span v-if="rec.sessionName" class="hl-session-tag">{{ rec.sessionName }}</span>
                 <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ formatCardRoundKorean(rec.roundName) }}</span>
                 <span v-else-if="rec.roundName" class="hl-round-tag">{{ formatCardRoundKorean(rec.roundName) }}</span>
                 <span
@@ -8657,7 +8664,7 @@ const openGamePopupFromLightbox = async (
                       <span class="badge-nanikiru-sm">나니키루</span>
                       <span v-for="ntag in item.yakumanTypes" :key="`gdm-nt-${ntag}`" class="badge-nanikiru-tag-sm">{{ ntag }}</span>
                     </template>
-                    <span v-else class="badge-session-sm">회차 사진</span>
+                    <span v-else class="badge-session-sm">기타 사진</span>
                   </div>
                   <div v-if="item.winnerName" class="gdm-highlight-players">
                     {{ item.category === 'session' || item.category === 'nanikiru' ? '인원:' : '화료:' }}
@@ -8686,7 +8693,7 @@ const openGamePopupFromLightbox = async (
     </Transition>
 
     <!-- ============================================== -->
-    <!-- 역만 / 화료 / 나니키루 / 회차별 사진 등록 대형 모달 -->
+    <!-- 역만 / 화료 / 나니키루 / 기타 사진 등록 대형 모달 -->
     <!-- ============================================== -->
     <Transition name="modal-fade">
       <div 
@@ -8697,9 +8704,9 @@ const openGamePopupFromLightbox = async (
         <div class="highlight-upload-modal-card large-upload-modal">
           <div class="highlight-modal-header">
             <div>
-              <h3>{{ editingHighlightRecord ? (isGalleryAdmin ? '등록 기록 / 사진 수정' : '등록 기록 정보 수정') : '역만 / 화료 / 나니키루 / 회차별 사진 등록' }}</h3>
+              <h3>{{ editingHighlightRecord ? (isGalleryAdmin ? '등록 기록 / 사진 수정' : '등록 기록 정보 수정') : '역만 / 화료 / 나니키루 / 기타 사진 등록' }}</h3>
               <p class="upload-modal-subdesc">
-                {{ editingHighlightRecord ? (isGalleryAdmin ? '등록된 기록의 분류, 회차, 경기, 국, 인원, 역만, 사진 및 메모를 수정합니다.' : '등록된 기록의 분류, 회차, 경기, 국, 인원, 역만 및 메모를 수정합니다. (사진 변경/삭제는 관리자 전용)') : '역만, 그 외 화료, 나니키루(무엇을 버릴까), 회차별 현장 사진을 등록합니다.' }}
+                {{ editingHighlightRecord ? (isGalleryAdmin ? '등록된 기록의 분류, 회차, 경기, 국, 인원, 역만, 사진 및 메모를 수정합니다.' : '등록된 기록의 분류, 회차, 경기, 국, 인원, 역만 및 메모를 수정합니다. (사진 변경/삭제는 관리자 전용)') : '역만, 그 외 화료, 나니키루(무엇을 버릴까), 기타 사진을 등록합니다.' }}
               </p>
             </div>
             <button class="btn-close" @click="closeHighlightUploadModal" title="닫기">✕</button>
@@ -8729,7 +8736,7 @@ const openGamePopupFromLightbox = async (
                 <span class="gh-stat-val">{{ highlightsList.filter(h => h.category === 'nanikiru').length }}건</span>
               </div>
               <div class="gh-stat-pill session">
-                <span class="gh-stat-label">회차 현장 사진</span>
+                <span class="gh-stat-label">기타 사진</span>
                 <span class="gh-stat-val">{{ highlightsList.filter(h => h.category === 'session').length }}건</span>
               </div>
             </div>
@@ -8802,24 +8809,25 @@ const openGamePopupFromLightbox = async (
                   :disabled="Boolean(editingHighlightRecord && !isGalleryAdmin && !editingHighlightRecord.hasImage)"
                   @click="uploadForm.category = 'session'"
                 >
-                  회차별 사진 등록
+                  기타 사진 등록
                 </button>
               </div>
             </div>
 
             <!-- 회차 및 경기 번호 (실제 회차 경기 정보 기반 선택) -->
-            <div :class="uploadForm.category !== 'session' ? 'form-row-2' : ''">
+            <div class="form-row-2">
               <div class="form-group">
-                <label class="form-label">회차 선택 *</label>
+                <label class="form-label">회차 선택 {{ uploadForm.category === 'session' ? '(선택)' : '*' }}</label>
                 <select v-model="uploadForm.sessionName" class="form-select">
+                  <option v-if="uploadForm.category === 'session'" value="">선택 안 함 (회차 무관)</option>
                   <option v-for="sName in displayedAvailableSessions" :key="`up-s-${sName}`" :value="sName">
                     {{ sName }}
                   </option>
                 </select>
               </div>
-              <div v-if="uploadForm.category !== 'session'" class="form-group">
+              <div class="form-group">
                 <label class="form-label">경기 선택 {{ uploadForm.category === 'yakuman' ? '*' : '(선택)' }}</label>
-                <select v-model="uploadForm.gameIndex" class="form-select">
+                <select v-model="uploadForm.gameIndex" class="form-select" :disabled="!uploadForm.sessionName">
                   <option :value="undefined">{{ uploadForm.category === 'yakuman' ? '경기를 선택하세요 (필수)' : '선택 안 함' }}</option>
                   <option
                     v-for="g in uploadModalGames"
@@ -8833,7 +8841,7 @@ const openGamePopupFromLightbox = async (
             </div>
 
             <!-- 선택한 경기의 결과 표 및 점수 변동 그래프 미리보기 -->
-            <div v-if="uploadForm.category !== 'session' && uploadModalGameDetail" class="upload-game-preview-box">
+            <div v-if="uploadModalGameDetail" class="upload-game-preview-box">
               <div class="upload-game-preview-header">
                 <div class="upload-game-preview-title">
                   <strong>{{ uploadModalGameDetail.gameIndex }}경기 결과</strong>
@@ -8960,9 +8968,9 @@ const openGamePopupFromLightbox = async (
             </div>
 
             <!-- 국 선택 (점수 변동 그래프 기반 실제 진행 국/본장 선택) -->
-            <div v-if="uploadForm.category !== 'session'" class="form-group">
+            <div class="form-group">
               <label class="form-label">국 (선택)</label>
-              <select v-model="uploadForm.roundName" class="form-select">
+              <select v-model="uploadForm.roundName" class="form-select" :disabled="!uploadForm.sessionName || uploadForm.gameIndex === undefined">
                 <option value="">선택 안 함</option>
                 <option v-for="rl in uploadCandidateRounds" :key="`up-r-${rl}`" :value="rl">
                   {{ getUploadRoundOptionLabel(rl) }}
@@ -9192,6 +9200,7 @@ const openGamePopupFromLightbox = async (
           <div class="lightbox-header">
             <div class="lightbox-title-meta">
               <span
+                v-if="lightboxHighlight.sessionName"
                 class="badge-session clickable-lb-badge"
                 title="클릭하여 해당 회차 정보 보기"
                 @click="openSessionPopupFromLightbox(lightboxHighlight)"
@@ -9220,7 +9229,7 @@ const openGamePopupFromLightbox = async (
                   {{ ntag }}
                 </span>
               </template>
-              <span v-else class="badge-session-photo">회차 사진</span>
+              <span v-else class="badge-session-photo">기타 사진</span>
             </div>
             <button class="btn-close" @click="lightboxHighlight = null" title="닫기">✕</button>
           </div>
