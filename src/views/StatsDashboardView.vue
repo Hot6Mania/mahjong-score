@@ -35,10 +35,31 @@ import {
   type SessionMemberSummary,
   type SessionGame,
   type GameDetailRecord,
+  type GameRoundMovement,
   type StatsMatrixData,
   type StatsMatrixRow,
   type DistributionData
 } from '@/services/publicStatsService';
+import {
+  YAKUMAN_DEFINITIONS,
+  fetchHighlights,
+  createHighlight,
+  deleteHighlight,
+  updateHighlightMemo,
+  getHighlightImageUrl,
+  getHighlightStorageInfo,
+  getSavedHighlightPin,
+  saveHighlightPin,
+  clearHighlightPin,
+  verifyHighlightUploadPin,
+  fetchHighlightUploadPinAsAdmin,
+  updateHighlightUploadPinAsAdmin,
+  matchHighlightSession,
+  computePlayerYakumanStats,
+  type HighlightRecord,
+  type HighlightCategory
+} from '@/services/highlightService';
+import { checkAdminStatus } from '@/services/scheduleService';
 import zoomPlugin from 'chartjs-plugin-zoom';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
@@ -54,8 +75,8 @@ const router = useRouter();
 const route = useRoute();
 
 // 탭 상태 타입 및 유효 탭 목록
-type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules';
-const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'schedule', 'rules'];
+type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'gallery' | 'schedule' | 'rules';
+const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'gallery', 'schedule', 'rules'];
 
 // URL 해시 및 쿼리 파라미터에서 현재 탭 추출 (기본값: 순수 /dashboard는 'ranking')
 const parseTabFromLocation = (): DashboardTab => {
@@ -72,9 +93,184 @@ const parseTabFromLocation = (): DashboardTab => {
   return 'ranking';
 };
 
-// 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules')
+// 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules' | 'gallery')
 const activeTab = ref<DashboardTab>(parseTabFromLocation());
 const tabsNavRef = ref<HTMLElement | null>(null);
+const isDraggingTabsNav = ref(false);
+const hasDraggedTabsNav = ref(false);
+let tabsNavDragStartX = 0;
+let tabsNavStartScrollLeft = 0;
+let tabsNavVelocitySamples: { x: number; t: number }[] = [];
+let tabsNavInertiaRaf = 0;
+let tabsNavResizeObserver: ResizeObserver | null = null;
+
+const tabsNavScrollIndicator = ref({
+  visible: false,
+  widthPct: 100,
+  leftPct: 0,
+});
+
+const cancelTabsNavInertia = () => {
+  if (tabsNavInertiaRaf) {
+    cancelAnimationFrame(tabsNavInertiaRaf);
+    tabsNavInertiaRaf = 0;
+  }
+};
+
+const updateTabsNavScrollIndicator = () => {
+  const el = tabsNavRef.value;
+  if (!el) return;
+  const sw = el.scrollWidth;
+  const cw = el.clientWidth;
+  if (sw <= cw + 2) {
+    tabsNavScrollIndicator.value = { visible: false, widthPct: 100, leftPct: 0 };
+    return;
+  }
+  const widthPct = Math.max(16, Math.min(100, (cw / sw) * 100));
+  const maxScroll = Math.max(1, sw - cw);
+  const ratio = Math.max(0, Math.min(1, el.scrollLeft / maxScroll));
+  const leftPct = ratio * (100 - widthPct);
+  tabsNavScrollIndicator.value = {
+    visible: true,
+    widthPct,
+    leftPct,
+  };
+};
+
+const onTabsNavTrackClick = (e: MouseEvent) => {
+  const el = tabsNavRef.value;
+  const track = e.currentTarget as HTMLElement | null;
+  if (!el || !track) return;
+  cancelTabsNavInertia();
+  const rect = track.getBoundingClientRect();
+  if (rect.width <= 0) return;
+  const clickRatio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+  el.scrollTo({
+    left: clickRatio * maxScroll,
+    behavior: 'smooth',
+  });
+};
+
+const onTabsNavWindowMouseMove = (e: MouseEvent) => {
+  if (!isDraggingTabsNav.value || !tabsNavRef.value) return;
+  const now = performance.now();
+  const dx = e.clientX - tabsNavDragStartX;
+  if (Math.abs(dx) > 4) {
+    hasDraggedTabsNav.value = true;
+  }
+  if (hasDraggedTabsNav.value) {
+    tabsNavRef.value.scrollLeft = tabsNavStartScrollLeft - dx;
+    updateTabsNavScrollIndicator();
+    tabsNavVelocitySamples.push({ x: e.clientX, t: now });
+    while (tabsNavVelocitySamples.length > 0 && now - tabsNavVelocitySamples[0].t > 110) {
+      tabsNavVelocitySamples.shift();
+    }
+  }
+};
+
+const startTabsNavInertia = (initialVelocityPxPerFrame: number) => {
+  cancelTabsNavInertia();
+  let velocity = initialVelocityPxPerFrame;
+  let lastTime = performance.now();
+
+  const step = (now: number) => {
+    const el = tabsNavRef.value;
+    if (!el) {
+      tabsNavInertiaRaf = 0;
+      return;
+    }
+    const dt = Math.min(34, Math.max(1, now - lastTime));
+    lastTime = now;
+    const frameScale = dt / 16;
+
+    const prevScroll = el.scrollLeft;
+    el.scrollLeft = prevScroll + velocity * frameScale;
+    updateTabsNavScrollIndicator();
+
+    // 가속도(관성) 마찰 감속 계수
+    velocity *= Math.pow(0.935, frameScale);
+
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const hitBound =
+      (el.scrollLeft <= 0 && velocity < 0) ||
+      (el.scrollLeft >= maxScroll && velocity > 0);
+
+    if (Math.abs(velocity) > 0.35 && !hitBound) {
+      tabsNavInertiaRaf = requestAnimationFrame(step);
+    } else {
+      tabsNavInertiaRaf = 0;
+    }
+  };
+
+  tabsNavInertiaRaf = requestAnimationFrame(step);
+};
+
+const onTabsNavWindowMouseUp = (e: MouseEvent) => {
+  if (!isDraggingTabsNav.value) return;
+  isDraggingTabsNav.value = false;
+  window.removeEventListener('mousemove', onTabsNavWindowMouseMove);
+  window.removeEventListener('mouseup', onTabsNavWindowMouseUp);
+
+  if (hasDraggedTabsNav.value && tabsNavVelocitySamples.length >= 2) {
+    const now = performance.now();
+    tabsNavVelocitySamples.push({ x: e.clientX, t: now });
+    while (tabsNavVelocitySamples.length > 2 && now - tabsNavVelocitySamples[0].t > 110) {
+      tabsNavVelocitySamples.shift();
+    }
+    const first = tabsNavVelocitySamples[0];
+    const last = tabsNavVelocitySamples[tabsNavVelocitySamples.length - 1];
+    const dt = last.t - first.t;
+    if (dt >= 8 && dt <= 160) {
+      const vxPxPerMs = (last.x - first.x) / dt;
+      // 마우스 이동 반대 방향으로 scrollLeft가 증가하므로 부호 반전
+      const scrollVelocityPerFrame = -vxPxPerMs * 16;
+      if (Math.abs(scrollVelocityPerFrame) > 1.8) {
+        startTabsNavInertia(scrollVelocityPerFrame);
+      }
+    }
+  }
+  tabsNavVelocitySamples = [];
+
+  setTimeout(() => {
+    hasDraggedTabsNav.value = false;
+  }, 60);
+};
+
+const onTabsNavMouseDown = (e: MouseEvent) => {
+  // 좌클릭(0) 또는 마우스 중간 휠 버튼(1) 드래그 이동 지원
+  if (e.button !== 0 && e.button !== 1) return;
+  if (!tabsNavRef.value) return;
+  if (e.button === 1) {
+    e.preventDefault();
+  }
+  cancelTabsNavInertia();
+  isDraggingTabsNav.value = true;
+  hasDraggedTabsNav.value = false;
+  tabsNavDragStartX = e.clientX;
+  tabsNavStartScrollLeft = tabsNavRef.value.scrollLeft;
+  tabsNavVelocitySamples = [{ x: e.clientX, t: performance.now() }];
+  window.addEventListener('mousemove', onTabsNavWindowMouseMove);
+  window.addEventListener('mouseup', onTabsNavWindowMouseUp);
+};
+
+const onTabsNavClickCapture = (e: MouseEvent) => {
+  if (hasDraggedTabsNav.value) {
+    e.stopPropagation();
+    e.preventDefault();
+    hasDraggedTabsNav.value = false;
+  }
+};
+
+const onTabsNavWheel = (e: WheelEvent) => {
+  if (!tabsNavRef.value) return;
+  if (tabsNavRef.value.scrollWidth > tabsNavRef.value.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+    e.preventDefault();
+    cancelTabsNavInertia();
+    tabsNavRef.value.scrollLeft += e.deltaY;
+    updateTabsNavScrollIndicator();
+  }
+};
 
 // 모바일/좁은 화면에서 선택된 탭이 잘리지 않도록 화면 중앙으로 자동 스크롤
 const scrollActiveTabIntoView = (smooth = true) => {
@@ -88,6 +284,9 @@ const scrollActiveTabIntoView = (smooth = true) => {
         block: 'nearest'
       });
     }
+    setTimeout(() => {
+      updateTabsNavScrollIndicator();
+    }, smooth ? 260 : 30);
   });
 };
 
@@ -134,22 +333,41 @@ onMounted(() => {
 
   // 브라우저 뒤로가기 / 앞으로가기 및 URL 해시 변경 동기화
   window.addEventListener('hashchange', handleHashChange);
+  window.addEventListener('resize', updateTabsNavScrollIndicator);
+
+  if (typeof ResizeObserver !== 'undefined') {
+    tabsNavResizeObserver = new ResizeObserver(() => {
+      updateTabsNavScrollIndicator();
+    });
+    if (tabsNavRef.value) {
+      tabsNavResizeObserver.observe(tabsNavRef.value);
+    }
+  }
 
   // 초기 URL 동기화
   const initial = parseTabFromLocation();
   switchTab(initial, initial !== 'ranking');
-  // 마운트 후 초기 활성 탭 스크롤
+  // 마운트 후 초기 활성 탭 스크롤 및 인디케이터 계산
   setTimeout(() => {
     scrollActiveTabIntoView(false);
+    updateTabsNavScrollIndicator();
   }, 100);
 });
 
 onUnmounted(() => {
+  cancelTabsNavInertia();
+  if (tabsNavResizeObserver) {
+    tabsNavResizeObserver.disconnect();
+    tabsNavResizeObserver = null;
+  }
   if (themeObserver) {
     themeObserver.disconnect();
     themeObserver = null;
   }
   window.removeEventListener('hashchange', handleHashChange);
+  window.removeEventListener('resize', updateTabsNavScrollIndicator);
+  window.removeEventListener('mousemove', onTabsNavWindowMouseMove);
+  window.removeEventListener('mouseup', onTabsNavWindowMouseUp);
 });
 
 // Vue 라우트 변화 감시
@@ -212,7 +430,7 @@ const displayPlayerStats = computed<MemberStatItem>(() => {
   }
   return selectedPlayer.value.detailedStats || selectedPlayer.value;
 });
-const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank' | 'rating'>('basic');
+const modalActiveTab = ref<'basic' | 'riichi' | 'other' | 'yakuman' | 'rank' | 'rating'>('basic');
 const hoveredRank = ref<number | null>(null);
 
 // 모달 상단 안내 배너 가시성 상태 (새로고침 시 다시 표시)
@@ -480,7 +698,15 @@ watch(displayedAvailableSessions, (newSessions) => {
 }, { immediate: true });
 
 const currentSessionDetailedStatsMap = ref<Record<string, MemberStatItem>>({});
-const sessionModalActiveTab = ref<'basic' | 'riichi' | 'other' | 'rank'>('basic');
+const sessionModalActiveTab = ref<'basic' | 'riichi' | 'other' | 'yakuman' | 'rank' | 'rating'>('basic');
+
+watch(modalScopeTab, (newScope) => {
+  if (newScope === 'session') {
+    sessionModalActiveTab.value = modalActiveTab.value;
+  } else {
+    modalActiveTab.value = sessionModalActiveTab.value;
+  }
+});
 
 const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = false) => {
   if (!sessionName) return;
@@ -854,10 +1080,11 @@ const sessionChartOptions = computed<ChartOptions<'line'>>(() => ({
 }));
 
 // ==========================================
-// 3-1. 회차 대국별 상세 모달 (결과 표 & 점수 변동 차트)
+// 3-1. 회차 대국별 상세 모달 (결과 표 & 점수 변동 차트 & 국별 점수 이동)
 // ==========================================
 const selectedGameDetail = ref<GameDetailRecord | null>(null);
-const gameModalMode = ref<'sheet' | 'chart'>('sheet');
+const gameModalMode = ref<'sheet' | 'chart' | 'rounds'>('sheet');
+const gameModalSelectedRound = ref<string>('__all__');
 const isLoadingGameDetail = ref(false);
 let gameDetailRequestId = 0;
 
@@ -866,6 +1093,7 @@ const openGameDetailModal = async (game: SessionGame) => {
   const reqId = ++gameDetailRequestId;
   isLoadingGameDetail.value = true;
   gameModalMode.value = 'sheet';
+  gameModalSelectedRound.value = '__all__';
 
   const seatOrder = ["東", "南", "西", "北"];
   const sortedPlayers = [...game.players].sort((a, b) => {
@@ -892,7 +1120,8 @@ const openGameDetailModal = async (game: SessionGame) => {
       cntTsumo: 0,
       cntLose: 0,
     })),
-    chartData: { labels: [], datasets: [] }
+    chartData: { labels: [], datasets: [] },
+    roundDetailsList: []
   };
 
   try {
@@ -1093,7 +1322,7 @@ const loadAllData = async (forceRefresh: boolean = false) => {
   isLoading.value = true;
   errorMessage.value = '';
   try {
-    const [stats, matrix, timeline, sessions] = await Promise.all([
+    const [stats, matrix, timeline, sessions, highlights] = await Promise.all([
       fetchPublicAllStats(undefined, forceRefresh),
       fetchPublicStatsMatrix(undefined, forceRefresh).catch(e => {
         console.warn("통계 매트릭스 로드 실패:", e);
@@ -1106,10 +1335,15 @@ const loadAllData = async (forceRefresh: boolean = false) => {
       fetchPublicSessions(undefined, forceRefresh).catch(e => {
         console.error("회차 목록 로드 실패:", e);
         return [] as string[];
+      }),
+      fetchHighlights(forceRefresh).catch(e => {
+        console.warn("역만/화료 갤러리 로드 실패:", e);
+        return [] as HighlightRecord[];
       })
     ]);
     allStats.value = stats;
     statsMatrix.value = matrix;
+    highlightsList.value = highlights;
     if (timeline) {
       ratingTimeline.value = timeline;
       filterRatingTopN(5);
@@ -1311,6 +1545,18 @@ const isChartFullyUnzoomed = (chart: any) => {
   return false;
 };
 
+const toggleRatingPlayerLegend = (name: string) => {
+  if (!name) return;
+  const newSet = new Set(hiddenRatingPlayerNames.value);
+  if (newSet.has(name)) {
+    newSet.delete(name);
+  } else {
+    newSet.add(name);
+  }
+  hiddenRatingPlayerNames.value = newSet;
+  activeRatingPreset.value = 'none';
+};
+
 const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
   responsive: true,
   maintainAspectRatio: false,
@@ -1318,29 +1564,7 @@ const ratingChartOptions = computed<ChartOptions<'line'>>(() => ({
   normalized: true, // 이미 X축 순차 인덱스 데이터이므로 Chart.js 내부 정렬/파싱 생략
   plugins: {
     legend: {
-      position: 'top',
-      labels: {
-        font: { family: "'Noto Serif KR', serif", size: 12 },
-        usePointStyle: true,
-        boxWidth: 8,
-        color: isDark.value ? '#cbd5e1' : '#334155',
-      },
-      onClick: (_e, legendItem) => {
-        const index = legendItem.datasetIndex;
-        if (index !== undefined) {
-          const ds = ratingChartData.value.datasets[index] as any;
-          if (!ds) return;
-          const name = ds.label;
-          const newSet = new Set(hiddenRatingPlayerNames.value);
-          if (newSet.has(name)) {
-            newSet.delete(name);
-          } else {
-            newSet.add(name);
-          }
-          hiddenRatingPlayerNames.value = newSet;
-          activeRatingPreset.value = 'none';
-        }
-      }
+      display: false
     },
     tooltip: {
       mode: 'index',
@@ -1837,6 +2061,232 @@ const modalPlayerRatingChartOptions = computed<ChartOptions<'line'>>(() => ({
   }
 }));
 
+// 개인 통계 모달 - '이번 회차' 전용 레이팅 추이 이력 및 차트
+interface SessionPlayerRatingStep {
+  gameIndex?: number;
+  ordinal: number;
+  delta: number;
+  ratingBefore: number;
+  sessionLabel: string;
+  rank?: number;
+  score?: number;
+  uma?: number;
+}
+
+const sessionModalPlayerRatingHistory = computed<SessionPlayerRatingStep[]>(() => {
+  if (!selectedPlayer.value) return [];
+  const pName = selectedPlayer.value.name.trim();
+  const cleanPName = pName.replace(/★/g, '').trim();
+  const sessName = (currentSessionDetail.value?.sessionName || selectedSession.value || '').trim();
+  if (!sessName) return [];
+
+  // 1) currentSessionDetail.games 에 대국별 레이팅 정보가 주입되어 있는 경우 우선 활용
+  const sessionGames = currentSessionDetail.value?.games || [];
+  const stepsFromGames: SessionPlayerRatingStep[] = [];
+  const sortedGames = [...sessionGames].sort((a, b) => Number(a.gameIndex) - Number(b.gameIndex));
+  for (const g of sortedGames) {
+    const p = g.players.find(
+      pl => pl.name.trim() === pName || pl.name.replace(/★/g, '').trim() === cleanPName
+    );
+    if (p && p.ratingAfter !== undefined) {
+      const delta = p.ratingDelta ?? (p.ratingBefore !== undefined ? p.ratingAfter - p.ratingBefore : 0);
+      const before = p.ratingBefore ?? (p.ratingAfter - delta);
+      stepsFromGames.push({
+        gameIndex: g.gameIndex,
+        ordinal: p.ratingAfter,
+        delta,
+        ratingBefore: before,
+        sessionLabel: `${sessName} ${g.gameIndex}경기`,
+        rank: p.rank,
+        score: p.score,
+        uma: p.uma,
+      });
+    }
+  }
+  if (stepsFromGames.length > 0) {
+    return stepsFromGames;
+  }
+
+  // 2) 폴백: 전체 레이팅 히스토리(modalPlayerRatingHistory)에서 해당 회차 기록 필터링
+  const allHist = modalPlayerRatingHistory.value;
+  const matched = allHist.filter(h => h.sessionLabel && matchHighlightSession(h.sessionLabel, sessName));
+  return matched.map((h, idx) => {
+    const gMatch = (h.sessionLabel || '').match(/(\d+)\s*(?:경기|게임|국)/);
+    const gIdx = gMatch ? Number(gMatch[1]) : idx + 1;
+    const delta = h.delta ?? 0;
+    const ordinal = h.ordinal;
+    return {
+      gameIndex: gIdx,
+      ordinal,
+      delta,
+      ratingBefore: ordinal - delta,
+      sessionLabel: h.sessionLabel || `${sessName} ${gIdx}경기`,
+      rank: h.rank,
+    };
+  });
+});
+
+const sessionModalPlayerRatingSummary = computed(() => {
+  const hist = sessionModalPlayerRatingHistory.value;
+  const fallbackRating = selectedPlayer.value?.rating ?? 1320;
+  if (!hist || hist.length === 0) {
+    return {
+      startRating: fallbackRating,
+      endRating: fallbackRating,
+      netDelta: 0,
+      peak: fallbackRating,
+      totalGames: 0,
+    };
+  }
+  const startRating = hist[0].ratingBefore;
+  const endRating = hist[hist.length - 1].ordinal;
+  const netDelta = endRating - startRating;
+  const allRatings = [startRating, ...hist.map(h => h.ordinal)];
+  return {
+    startRating,
+    endRating,
+    netDelta,
+    peak: Math.max(...allRatings),
+    totalGames: hist.length,
+  };
+});
+
+const sessionModalCrosshairPlugin = {
+  id: 'sessionModalCrosshair',
+  afterDraw(chart: any) {
+    const { ctx, chartArea } = chart;
+    if (!chartArea) return;
+    const active = chart.tooltip?.getActiveElements?.();
+    if (active && active.length > 0) {
+      const activeX = active[0].element.x;
+      ctx.save();
+      ctx.beginPath();
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = isDark.value ? 'rgba(255, 255, 255, 0.45)' : 'rgba(15, 23, 42, 0.4)';
+      ctx.moveTo(activeX, chartArea.top);
+      ctx.lineTo(activeX, chartArea.bottom);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+};
+
+const sessionModalRatingChartPlugins = computed(() => [codeforcesTierBandsPlugin, sessionModalCrosshairPlugin]);
+
+const sessionModalPlayerRatingChartData = computed(() => {
+  const hist = sessionModalPlayerRatingHistory.value;
+  if (!hist || hist.length === 0) {
+    return { labels: [], datasets: [] };
+  }
+  const startRating = hist[0].ratingBefore;
+  const ratingValues = [startRating, ...hist.map(h => h.ordinal)];
+  const pointColors = ratingValues.map(r => hexToRgba(getRatingColor(r), isDark.value ? 0.72 : 0.65));
+  const pointHoverColors = ratingValues.map(r => getRatingColor(r));
+
+  return {
+    labels: ['회차 시작', ...hist.map((h, i) => (h.gameIndex ? `${h.gameIndex}경기` : `${i + 1}전`))],
+    datasets: [{
+      label: selectedPlayer.value?.name || '',
+      data: ratingValues,
+      deltas: [null, ...hist.map(h => h.delta)],
+      historyRecords: [null, ...hist],
+      borderColor: isDark.value ? '#60a5fa' : '#2563eb',
+      backgroundColor: 'transparent',
+      borderWidth: 2.4,
+      pointRadius: 4.5,
+      pointHoverRadius: 7,
+      pointBackgroundColor: pointColors,
+      pointBorderColor: isDark.value ? 'rgba(24, 24, 27, 0.75)' : 'rgba(255, 255, 255, 0.9)',
+      pointBorderWidth: 1.5,
+      pointHoverBackgroundColor: pointHoverColors,
+      pointHoverBorderColor: isDark.value ? '#18181b' : '#ffffff',
+      pointHoverBorderWidth: 2,
+      tension: 0.15,
+      fill: false,
+    }],
+  };
+});
+
+const sessionModalPlayerRatingChartOptions = computed<ChartOptions<'line'>>(() => {
+  const hist = sessionModalPlayerRatingHistory.value;
+  const startRating = hist.length > 0 ? hist[0].ratingBefore : 1320;
+  const allVals = hist.length > 0 ? [startRating, ...hist.map(h => h.ordinal)] : [1320, 1500];
+  const minVal = Math.min(...allVals);
+  const maxVal = Math.max(...allVals);
+  const suggestedMin = Math.floor((minVal - 35) / 50) * 50;
+  const suggestedMax = Math.ceil((maxVal + 35) / 50) * 50;
+  const sessName = currentSessionDetail.value?.sessionName || selectedSession.value || '이번 회차';
+
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    layout: {
+      padding: {
+        top: 14,
+        right: 12,
+        left: 6,
+        bottom: 6,
+      },
+    },
+    interaction: {
+      mode: 'index',
+      intersect: false,
+      axis: 'x',
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        mode: 'index',
+        intersect: false,
+        callbacks: {
+          title: (items) => {
+            if (!items.length) return '';
+            const idx = items[0].dataIndex;
+            if (idx === 0) return `${sessName} 시작 (대국 전)`;
+            const rec = hist[idx - 1];
+            return `${rec?.sessionLabel || `${sessName} ${idx}전`} (회차 ${idx}번째 대국)`;
+          },
+          label: (context) => {
+            const val = context.parsed.y;
+            const dataset = context.dataset as any;
+            const idx = context.dataIndex;
+            if (idx === 0) return `회차 시작: R${val}`;
+            const delta = dataset.deltas?.[idx];
+            const dStr = delta !== null && delta !== undefined ? ` (${delta >= 0 ? '+' : ''}${delta})` : '';
+            const rec = dataset.historyRecords?.[idx];
+            const rStr = rec?.rank ? ` · ${rec.rank}위` : '';
+            return `레이팅: R${val}${dStr}${rStr}`;
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' },
+        ticks: {
+          color: isDark.value ? '#94a3b8' : '#64748b',
+          font: { family: "'Noto Serif KR', serif", size: 11 },
+          maxRotation: 0,
+          autoSkip: true,
+          maxTicksLimit: 12,
+        },
+      },
+      y: {
+        suggestedMin,
+        suggestedMax,
+        grid: { color: isDark.value ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' },
+        ticks: {
+          font: { family: "'Noto Serif KR', serif", size: 11 },
+          color: isDark.value ? '#94a3b8' : '#64748b',
+          callback: (value) => `R${value}`,
+          stepSize: 50,
+        },
+      },
+    },
+  };
+});
+
 const formatDonutPct = (pct: number): string => {
   if (pct >= 9) return pct.toFixed(1) + '%';
   return Math.round(pct) + '%';
@@ -1844,6 +2294,7 @@ const formatDonutPct = (pct: number): string => {
 
 onMounted(() => {
   loadAllData();
+  refreshGalleryAuthState();
 });
 
 // 링크 복사
@@ -1878,6 +2329,1639 @@ const getRankClass = (rank: number) => {
   if (rank === 2) return 'rank-2';
   if (rank === 3) return 'rank-3';
   return 'rank-4';
+};
+
+// ==========================================
+// 6. 역만 기록 & 회차/화료 사진 갤러리 (원본 화질 WebP & 공통 PIN 관리)
+// ==========================================
+const highlightsList = ref<HighlightRecord[]>([]);
+const galleryCategoryFilter = ref<'all' | HighlightCategory>('all');
+const gallerySessionFilter = ref<string>('');
+const galleryPlayerFilter = ref<string>('');
+
+// 관리자 로그인 여부 및 기존에 저장된 유효 PIN 보유 여부
+const isGalleryAdmin = ref(false);
+const hasSavedValidPin = ref(!!getSavedHighlightPin());
+const needsPinInput = computed(() => !isGalleryAdmin.value && !hasSavedValidPin.value);
+
+const refreshGalleryAuthState = async () => {
+  try {
+    const adminRes = await checkAdminStatus();
+    isGalleryAdmin.value = !!adminRes.isAdmin;
+    const savedPin = getSavedHighlightPin();
+    if (savedPin) {
+      const verifyRes = await verifyHighlightUploadPin(savedPin);
+      hasSavedValidPin.value = !!verifyRes.valid;
+      if (verifyRes.isAdmin) {
+        isGalleryAdmin.value = true;
+      }
+    } else {
+      hasSavedValidPin.value = false;
+    }
+  } catch {
+    // 네트워크 일시 오류 시 로컬 저장 여부 유지
+    hasSavedValidPin.value = !!getSavedHighlightPin();
+  }
+};
+
+// 선택된 회차에 해당하는 역만/화료/회차 사진 목록
+const currentSessionHighlights = computed(() => {
+  if (!selectedSession.value) return [];
+  return highlightsList.value.filter(r => matchHighlightSession(r.sessionName, selectedSession.value));
+});
+
+// 현재 열려 있는 대국 상세 모달에 해당하는 역만/화료 사진 목록
+const currentGameHighlights = computed(() => {
+  if (!selectedGameDetail.value || !selectedSession.value) return [];
+  const gIdx = selectedGameDetail.value.gameIndex;
+  const gId = selectedGameDetail.value.gameId;
+  return currentSessionHighlights.value.filter(r => {
+    if (r.category === 'session') return false;
+    if (gId && r.gameId && r.gameId === gId) return true;
+    if (gIdx && r.gameIndex && Number(r.gameIndex) === Number(gIdx)) return true;
+    return false;
+  });
+});
+
+// 개인 통계 모달 - 선택된 선수의 17종 역만 화료 통계 (이번 회차 / 전체 기간 연동)
+const modalPlayerYakumanStats = computed(() => {
+  if (!selectedPlayer.value) {
+    return computePlayerYakumanStats([], '');
+  }
+  const sessFilter = (isModalFromSession.value && modalScopeTab.value === 'session')
+    ? selectedSession.value
+    : undefined;
+  return computePlayerYakumanStats(highlightsList.value, selectedPlayer.value.name, sessFilter);
+});
+
+// 갤러리 탭 필터링된 목록
+const filteredGalleryHighlights = computed(() => {
+  return highlightsList.value.filter(rec => {
+    if (galleryCategoryFilter.value !== 'all' && rec.category !== galleryCategoryFilter.value) {
+      return false;
+    }
+    if (gallerySessionFilter.value && !matchHighlightSession(rec.sessionName, gallerySessionFilter.value)) {
+      return false;
+    }
+    if (galleryPlayerFilter.value) {
+      const target = galleryPlayerFilter.value.trim();
+      if (rec.winnerName?.trim() !== target && rec.loserName?.trim() !== target && rec.uploaderName?.trim() !== target) {
+        return false;
+      }
+    }
+    return true;
+  });
+});
+
+// 갤러리 상단 요약 지표
+const gallerySummaryStats = computed(() => {
+  const yakumanRecs = highlightsList.value.filter(r => r.category === 'yakuman');
+  const funRecs = highlightsList.value.filter(r => r.category === 'fun');
+  const sessionRecs = highlightsList.value.filter(r => r.category === 'session');
+  return {
+    totalCount: highlightsList.value.length,
+    yakumanCount: yakumanRecs.length,
+    funPhotoCount: funRecs.length,
+    sessionPhotoCount: sessionRecs.length,
+  };
+});
+
+const formatStorageBytes = (bytes: number): string => {
+  if (!bytes || bytes <= 0) return '0 KB';
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+};
+
+const highlightStorageTick = ref(0);
+const handleHighlightStorageUpdated = () => {
+  highlightStorageTick.value++;
+};
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('mahjong_highlight_storage_updated', handleHighlightStorageUpdated);
+  }
+});
+onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('mahjong_highlight_storage_updated', handleHighlightStorageUpdated);
+  }
+});
+
+const galleryStorageStats = computed(() => {
+  void highlightStorageTick.value;
+  const info = getHighlightStorageInfo(highlightsList.value);
+  const maxMB = (info.maxBytes / (1024 * 1024)).toFixed(0);
+  const remainingMB = (info.remainingBytes / (1024 * 1024)).toFixed(1);
+  const remainingPercent = Number(Math.max(0, 100 - info.usedPercent).toFixed(2));
+  const barWidthPct = info.usedBytes > 0 ? Math.min(100, Math.max(0.8, info.usedPercent)) : 0;
+  return {
+    ...info,
+    usedText: formatStorageBytes(info.usedBytes),
+    imageBytesText: formatStorageBytes(info.imageBytes ?? 0),
+    otherKvBytesText: formatStorageBytes(info.otherKvBytes ?? 0),
+    maxText: `${Number(maxMB).toLocaleString()} MB (1.0 GB)`,
+    remainingText: `${Number(remainingMB).toLocaleString()} MB`,
+    remainingPercent,
+    barWidthPct,
+  };
+});
+
+// 특정 경기에 역만/화료 기록이 있는지 뱃지 표시용 헬퍼
+const getGameHighlights = (game: SessionGame): HighlightRecord[] => {
+  if (!selectedSession.value) return [];
+  return currentSessionHighlights.value.filter(r => {
+    if (r.category === 'session') return false;
+    if (game.gameId && r.gameId && r.gameId === game.gameId) return true;
+    if (game.gameIndex && r.gameIndex && Number(r.gameIndex) === Number(game.gameIndex)) return true;
+    return false;
+  });
+};
+
+// 현재 선택된 회차에서 역만 화료 추정(오야 48,000점 / 자 32,000점 이상)이 감지된 경기 번호 집합
+const sessionEstimatedYakumanGameIndices = ref<Set<number>>(new Set());
+let sessionYakumanScanReqId = 0;
+
+// 업로드 모달 상태 및 기본 선택 인원 고정 (localStorage)
+const DEFAULT_UPLOAD_PLAYER_KEY = 'mahjong_default_upload_player';
+const getSavedDefaultUploadPlayer = (): string => {
+  try {
+    return localStorage.getItem(DEFAULT_UPLOAD_PLAYER_KEY)?.trim() || '';
+  } catch {
+    return '';
+  }
+};
+const saveDefaultUploadPlayer = (playerName: string): void => {
+  const clean = playerName.trim();
+  if (!clean) return;
+  try {
+    localStorage.setItem(DEFAULT_UPLOAD_PLAYER_KEY, clean);
+  } catch {
+    // ignore storage errors
+  }
+};
+
+const isHighlightUploadModalOpen = ref(false);
+const isSubmittingHighlight = ref(false);
+const highlightUploadError = ref('');
+const uploadModalSessionDetail = ref<SessionDetail | null>(null);
+const uploadModalGameDetail = ref<GameDetailRecord | null>(null);
+const uploadModalGameViewMode = ref<'sheet' | 'chart'>('sheet');
+const isLoadingUploadGameDetail = ref(false);
+let uploadModalSessionReqId = 0;
+let uploadModalGameReqId = 0;
+
+const uploadModalChartOptions = computed<ChartOptions<'line'>>(() => {
+  const textColor = isDark.value ? '#f1f5f9' : '#1e293b';
+  const tickColor = isDark.value ? '#94a3b8' : '#64748b';
+  const gridColor = isDark.value ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+
+  const datasets = uploadModalGameDetail.value?.chartData?.datasets || [];
+  const allScores = datasets.flatMap(d => d.data);
+  const minScore = allScores.length > 0 ? Math.min(...allScores, 25000) : 20000;
+  const maxScore = allScores.length > 0 ? Math.max(...allScores, 25000) : 30000;
+  const pad = Math.max(3000, Math.round((maxScore - minScore) * 0.1));
+
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 400, easing: 'easeOutQuart' },
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      x: {
+        ticks: { autoSkip: false, color: tickColor, font: { family: "'Noto Serif KR', serif" } },
+        grid: { color: gridColor }
+      },
+      y: {
+        suggestedMin: Math.floor((minScore - pad) / 1000) * 1000,
+        suggestedMax: Math.ceil((maxScore + pad) / 1000) * 1000,
+        ticks: {
+          color: tickColor,
+          font: { family: "'Noto Serif KR', serif" },
+          callback: (value) => Number(value).toLocaleString() + '점',
+        },
+        grid: { color: gridColor }
+      }
+    },
+    plugins: {
+      legend: {
+        position: 'top',
+        labels: {
+          usePointStyle: true,
+          pointStyle: 'rectRounded',
+          color: textColor,
+          font: { family: "'Noto Serif KR', serif", size: 12 },
+        }
+      },
+      tooltip: {
+        backgroundColor: isDark.value ? '#1e293b' : '#ffffff',
+        titleColor: isDark.value ? '#f8fafc' : '#0f172a',
+        bodyColor: isDark.value ? '#e2e8f0' : '#334155',
+        borderColor: isDark.value ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
+        borderWidth: 1,
+        callbacks: {
+          label: (context) => `${context.dataset.label}: ${Number(context.parsed.y).toLocaleString()}점`
+        }
+      }
+    }
+  };
+});
+
+const formatRoundStatusLabel = (status: string): string => {
+  const s = (status || '').toLowerCase();
+  if (s.includes('tsumo')) return '쯔모';
+  if (s.includes('ron')) return '론';
+  if (s.includes('draw') || s.includes('ryuu')) return '유국';
+  if (s.includes('chonbo') || s.includes('cheat')) return '촌보';
+  return '';
+};
+
+const computeRoundWindSeat = (initialSeat: string, fallbackIdx: number, roundLabel: string): string => {
+  const winds = ['東', '南', '西', '北'];
+  const baseIdx = winds.indexOf(initialSeat) !== -1 ? winds.indexOf(initialSeat) : (fallbackIdx % 4);
+  const kyokuMatch =
+    (roundLabel || '').match(/(?:[동남서북東南西北]\s*)?(\d+)\s*(?:국|局)/) ||
+    (roundLabel || '').match(/[동남서북東南西北]\s*(\d+)/);
+  if (!kyokuMatch) return winds[baseIdx];
+  const kyokuNum = Number(kyokuMatch[1]);
+  const shift = (((kyokuNum - 1) % 4) + 4) % 4;
+  return winds[(baseIdx - shift + 4) % 4];
+};
+
+const buildRoundMovementsFromGameDetail = (gDetail: GameDetailRecord | null): GameRoundMovement[] => {
+  if (!gDetail || !gDetail.hasRoundDetails) return [];
+  if (Array.isArray(gDetail.roundDetailsList) && gDetail.roundDetailsList.length > 0) {
+    return gDetail.roundDetailsList;
+  }
+
+  const labels = gDetail.chartData?.labels || [];
+  const datasets = gDetail.chartData?.datasets || [];
+  const results: GameRoundMovement[] = [];
+  const seatOrder = ['東', '南', '西', '北'];
+
+  for (let k = 1; k < labels.length; k++) {
+    const labelStr = labels[k] || `${k}국`;
+    results.push({
+      roundIndex: k,
+      roundName: labelStr,
+      roundStatus: '',
+      players: gDetail.playerStats.map((ps, idx) => {
+        const ds = datasets.find(d => d.label === ps.name) || datasets[idx];
+        const scoreBefore = ds?.data[k - 1] ?? 25000;
+        const scoreAfter = ds?.data[k] ?? scoreBefore;
+        const startSeat = ps.seat || seatOrder[idx] || '';
+        return {
+          seat: computeRoundWindSeat(startSeat, idx, labelStr),
+          name: ps.name,
+          scoreBefore,
+          deltaScore: scoreAfter - scoreBefore,
+          scoreAfter,
+          isRiichi: false,
+          isWin: scoreAfter - scoreBefore > 0,
+          isLose: scoreAfter - scoreBefore < -1000,
+        };
+      }),
+    });
+  }
+  return results;
+};
+
+// 유국만관(Nagashi Mangan) 추정 판별:
+// 유국(draw/ryuu) 상태에서 일반 텐파이 벌부(최대 +3,000점)를 넘어 단일 인원이 +6,000점 이상 획득하고
+// 최소 2명 이상이 점수를 지불(2,000/4,000 또는 4,000 올 이동, 리치봉 공탁/본장 편차 포함)한 경우
+const isEstimatedNagashiManganRound = (rm: GameRoundMovement): boolean => {
+  const stLabel = formatRoundStatusLabel(rm.roundStatus);
+  if (stLabel !== '유국') return false;
+  const maxDelta = Math.max(...rm.players.map(p => p.deltaScore));
+  const payersCount = rm.players.filter(p => p.deltaScore <= -1000).length;
+  return maxDelta >= 6000 && payersCount >= 2;
+};
+
+// 국 선택 드롭다운 요약 포맷 (유국/유국만관 여부 / 화료자 +점수 / 방총자 -점수)
+const formatRoundOptionSummary = (rm: GameRoundMovement | undefined): string => {
+  if (!rm) return '';
+  const stLabel = formatRoundStatusLabel(rm.roundStatus);
+  if (stLabel === '유국') {
+    if (isEstimatedNagashiManganRound(rm)) {
+      const nagashiWinners = rm.players
+        .filter(p => p.deltaScore >= 6000)
+        .sort((a, b) => b.deltaScore - a.deltaScore);
+      if (nagashiWinners.length > 0) {
+        return ` — 유국만관 | ${nagashiWinners.map(w => `${w.name} +${w.deltaScore.toLocaleString()}`).join(', ')}`;
+      }
+      return ' — 유국만관';
+    }
+    return ' — 유국';
+  }
+  if (stLabel === '촌보') {
+    const chonboPlayers = rm.players.filter(p => p.deltaScore < 0).sort((a, b) => a.deltaScore - b.deltaScore);
+    if (chonboPlayers.length > 0) {
+      return ` — 촌보 | ${chonboPlayers.map(p => `${p.name} ${p.deltaScore.toLocaleString()}`).join(', ')}`;
+    }
+    return ' — 촌보';
+  }
+
+  const explicitWinners = rm.players.filter(p => p.isWin);
+  const winners = (explicitWinners.length > 0 ? explicitWinners : rm.players.filter(p => p.deltaScore > 0))
+    .slice()
+    .sort((a, b) => b.deltaScore - a.deltaScore);
+  const losers = rm.players
+    .filter(p => p.isLose)
+    .slice()
+    .sort((a, b) => a.deltaScore - b.deltaScore);
+
+  if (winners.length === 0) {
+    if (rm.players.every(p => p.deltaScore === 0)) {
+      return stLabel ? ` — ${stLabel}` : ' — 유국';
+    }
+    const pos = rm.players.filter(p => p.deltaScore > 0).sort((a, b) => b.deltaScore - a.deltaScore);
+    if (pos.length === 0) return stLabel ? ` — ${stLabel}` : '';
+    return ` — ${stLabel || '유국'} | ${pos.map(p => `${p.name} +${p.deltaScore.toLocaleString()}`).join(', ')}`;
+  }
+
+  const winText = winners
+    .map(w => `${w.name} ${w.deltaScore >= 0 ? '+' : ''}${w.deltaScore.toLocaleString()}`)
+    .join(', ');
+  const loseText = losers
+    .map(l => `${l.name} ${l.deltaScore.toLocaleString()}`)
+    .join(', ');
+  const typePrefix = stLabel ? `${stLabel} | ` : '';
+
+  if (loseText) {
+    return ` — ${typePrefix}${winText} / ${loseText}`;
+  }
+  return ` — ${typePrefix}${winText}`;
+};
+
+// 회차 상세 -> 경기 상세 모달 내 국별 점수 이동 목록
+const gameModalAllRoundMovements = computed<GameRoundMovement[]>(() => {
+  return buildRoundMovementsFromGameDetail(selectedGameDetail.value);
+});
+
+const gameModalDisplayedRoundMovements = computed<GameRoundMovement[]>(() => {
+  const all = gameModalAllRoundMovements.value;
+  const sel = gameModalSelectedRound.value?.trim();
+  if (!sel || sel === '__all__') return all;
+  return all.filter(rm => rm.roundName.trim() === sel);
+});
+
+// 역만 화료 추정 판별 (해당 국 자풍 기준 오야 東: 48,000점 이상 / 자 南·西·北: 32,000점 이상)
+const isEstimatedYakumanPlayer = (pm: { seat: string; deltaScore: number; isWin: boolean }): boolean => {
+  if (!pm.isWin && pm.deltaScore < 32000) return false;
+  const threshold = pm.seat === '東' ? 48000 : 32000;
+  return pm.deltaScore >= threshold;
+};
+
+const isEstimatedYakumanRound = (rm: GameRoundMovement): boolean => {
+  return rm.players.some(pm => isEstimatedYakumanPlayer(pm));
+};
+
+// 특정 국에서 특정 플레이어가 역만을 화료했는지 판별 (점수 기반 추정 또는 갤러리 등록 역만 기록 연동)
+const isRoundPlayerYakuman = (
+  rm: GameRoundMovement,
+  pm: { seat: string; name: string; deltaScore: number; isWin: boolean },
+  gDetail: GameDetailRecord | null,
+  sessName?: string
+): boolean => {
+  if (isEstimatedYakumanPlayer(pm)) return true;
+  const cleanPlayer = pm.name?.trim();
+  const cleanSess = (sessName || selectedSession.value || '').trim();
+  if (!cleanPlayer || !cleanSess || !gDetail) return false;
+  const normRound = rm.roundName.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim();
+
+  return highlightsList.value.some(hl => {
+    if (hl.category !== 'yakuman') return false;
+    if (!matchHighlightSession(hl.sessionName, cleanSess)) return false;
+    const sameGame =
+      (gDetail.gameId && hl.gameId && hl.gameId === gDetail.gameId) ||
+      (gDetail.gameIndex !== undefined && hl.gameIndex !== undefined && Number(hl.gameIndex) === Number(gDetail.gameIndex));
+    if (!sameGame) return false;
+    if (hl.winnerName?.trim() !== cleanPlayer) return false;
+    if (!hl.roundName) return false;
+    const hlNormRound = hl.roundName.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim();
+    return hl.roundName.trim() === rm.roundName.trim() || hlNormRound === normRound;
+  });
+};
+
+// 특정 국에서 역만이 달성되었는지 판별 (점수 기반 추정 또는 갤러리 등록 역만 기록 연동)
+const isRoundYakuman = (
+  rm: GameRoundMovement,
+  gDetail: GameDetailRecord | null,
+  sessName?: string
+): boolean => {
+  if (isEstimatedYakumanRound(rm)) return true;
+  const cleanSess = (sessName || selectedSession.value || '').trim();
+  if (!cleanSess || !gDetail) return false;
+  const normRound = rm.roundName.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim();
+
+  return highlightsList.value.some(hl => {
+    if (hl.category !== 'yakuman') return false;
+    if (!matchHighlightSession(hl.sessionName, cleanSess)) return false;
+    const sameGame =
+      (gDetail.gameId && hl.gameId && hl.gameId === gDetail.gameId) ||
+      (gDetail.gameIndex !== undefined && hl.gameIndex !== undefined && Number(hl.gameIndex) === Number(gDetail.gameIndex));
+    if (!sameGame) return false;
+    if (!hl.roundName) return false;
+    const hlNormRound = hl.roundName.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim();
+    return hl.roundName.trim() === rm.roundName.trim() || hlNormRound === normRound;
+  });
+};
+
+// 특정 경기(결과 표)에서 특정 플레이어가 역만을 화료했는지 판별
+const isPlayerYakumanInGame = (
+  gDetail: GameDetailRecord | null,
+  playerName: string,
+  sessName?: string
+): boolean => {
+  const cleanPlayer = playerName?.trim();
+  if (!gDetail || !cleanPlayer) return false;
+
+  const allRounds = buildRoundMovementsFromGameDetail(gDetail);
+  if (allRounds.some(rm => rm.players.some(pm => pm.name.trim() === cleanPlayer && isEstimatedYakumanPlayer(pm)))) {
+    return true;
+  }
+
+  const cleanSess = (sessName || selectedSession.value || '').trim();
+  if (!cleanSess) return false;
+
+  return highlightsList.value.some(hl => {
+    if (hl.category !== 'yakuman') return false;
+    if (!matchHighlightSession(hl.sessionName, cleanSess)) return false;
+    const sameGame =
+      (gDetail.gameId && hl.gameId && hl.gameId === gDetail.gameId) ||
+      (gDetail.gameIndex !== undefined && hl.gameIndex !== undefined && Number(hl.gameIndex) === Number(gDetail.gameIndex));
+    if (!sameGame) return false;
+    return hl.winnerName?.trim() === cleanPlayer;
+  });
+};
+
+// 현재 선택된 회차의 경기별 역만 달성(추정 포함) 여부 백그라운드 스캔
+const syncSessionEstimatedYakumanGames = async (sessName: string, games: SessionGame[]) => {
+  const reqId = ++sessionYakumanScanReqId;
+  if (!sessName || !Array.isArray(games) || games.length === 0) {
+    sessionEstimatedYakumanGameIndices.value = new Set();
+    return;
+  }
+  const detected = new Set<number>();
+  try {
+    await Promise.all(
+      games.map(async (g) => {
+        try {
+          const detail = await fetchSessionGameDetail(sessName, g);
+          const rounds = buildRoundMovementsFromGameDetail(detail);
+          if (rounds.some(rm => isEstimatedYakumanRound(rm))) {
+            detected.add(Number(g.gameIndex));
+          }
+        } catch {
+          // ignore per-game error
+        }
+      })
+    );
+    if (reqId === sessionYakumanScanReqId) {
+      sessionEstimatedYakumanGameIndices.value = detected;
+    }
+  } catch {
+    // ignore scan error
+  }
+};
+
+watch(
+  () => [currentSessionDetail.value?.sessionName, currentSessionDetail.value?.games?.length] as const,
+  () => {
+    if (currentSessionDetail.value && Array.isArray(currentSessionDetail.value.games)) {
+      syncSessionEstimatedYakumanGames(currentSessionDetail.value.sessionName, currentSessionDetail.value.games);
+    } else {
+      sessionEstimatedYakumanGameIndices.value = new Set();
+    }
+  },
+  { immediate: true }
+);
+
+// 회차 상세 경기 카드에 '역만' 뱃지를 표시할지 여부 (등록된 역만 기록 또는 국별 기록상 역만 타점 존재 시)
+const hasGameYakumanBadge = (game: SessionGame): boolean => {
+  if (getGameHighlights(game).some(hl => hl.category === 'yakuman')) {
+    return true;
+  }
+  return sessionEstimatedYakumanGameIndices.value.has(Number(game.gameIndex));
+};
+
+const findUploadRoundMovementByLabel = (roundLabel: string): GameRoundMovement | undefined => {
+  const all = buildRoundMovementsFromGameDetail(uploadModalGameDetail.value);
+  const rName = roundLabel.trim();
+  return all.find(
+    rm => rm.roundName.trim() === rName || rm.roundName.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim() === rName
+  );
+};
+
+const getUploadRoundOptionLabel = (roundLabel: string): string => {
+  const matched = findUploadRoundMovementByLabel(roundLabel);
+  const summary = formatRoundOptionSummary(matched);
+  const yakumanTag =
+    uploadForm.value.category === 'yakuman' && matched && isEstimatedYakumanRound(matched)
+      ? ' [역만 추정]'
+      : '';
+  return `${roundLabel}${summary}${yakumanTag}`;
+};
+
+const selectedUploadRoundMovements = computed<GameRoundMovement[]>(() => {
+  const rName = uploadForm.value.roundName?.trim();
+  const all = buildRoundMovementsFromGameDetail(uploadModalGameDetail.value);
+  if (!rName || all.length === 0) return [];
+
+  const exactMatched = all.filter(rm => rm.roundName.trim() === rName);
+  if (exactMatched.length > 0) return exactMatched;
+  const baseMatched = all.filter(
+    rm => rm.roundName.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim() === rName
+  );
+  return baseMatched;
+});
+
+// 선택한 국의 화료자(복수 시 최고 득점자 우선), 화료 방식(쯔모/론), 방총자를 기본값으로 자동 반영
+const applyUploadRoundWinnerDefaults = (rm: GameRoundMovement | undefined) => {
+  if (!rm || uploadForm.value.category === 'session') return;
+  const explicitWinners = rm.players.filter(pm => pm.isWin);
+  const positiveDeltaPlayers = rm.players.filter(pm => pm.deltaScore > 0);
+  const winners = explicitWinners.length > 0 ? explicitWinners : positiveDeltaPlayers;
+
+  if (winners.length > 0) {
+    const sortedWinners = [...winners].sort((a, b) => b.deltaScore - a.deltaScore);
+    const topWinner = sortedWinners[0];
+    if (topWinner && topWinner.deltaScore > 0) {
+      uploadForm.value.winnerName = topWinner.name;
+    }
+  }
+
+  if (isEstimatedNagashiManganRound(rm)) {
+    uploadForm.value.winType = 'tsumo';
+    uploadForm.value.loserName = '';
+    return;
+  }
+
+  const st = (rm.roundStatus || '').toLowerCase();
+  const losers = rm.players.filter(pm => pm.isLose);
+  if (st.includes('tsumo')) {
+    uploadForm.value.winType = 'tsumo';
+    uploadForm.value.loserName = '';
+  } else if (st.includes('ron') || losers.length > 0) {
+    uploadForm.value.winType = 'ron';
+    if (losers.length > 0) {
+      const sortedLosers = [...losers].sort((a, b) => a.deltaScore - b.deltaScore);
+      uploadForm.value.loserName = sortedLosers[0].name;
+    }
+  }
+};
+
+// 특정 경기의 특정 국 역만이 이미 highlightsList에 등록되어 있는지 확인
+const isYakumanRoundAlreadyRegistered = (
+  sessName: string,
+  gameIndex: number | undefined,
+  gameId: string | undefined,
+  roundName: string
+): boolean => {
+  const normRound = roundName.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim();
+  return highlightsList.value.some(hl => {
+    if (hl.category !== 'yakuman') return false;
+    if (!matchHighlightSession(hl.sessionName, sessName)) return false;
+    const sameGame =
+      (gameId && hl.gameId && hl.gameId === gameId) ||
+      (gameIndex !== undefined && hl.gameIndex !== undefined && Number(hl.gameIndex) === Number(gameIndex));
+    if (!sameGame) return false;
+    if (!hl.roundName) return true;
+    const hlNormRound = hl.roundName.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim();
+    return hl.roundName.trim() === roundName.trim() || hlNormRound === normRound;
+  });
+};
+
+// 경기 내 '그 외 화료' 최적 포커싱 국 탐색:
+// 1순위: 유국만관 추정 국 (isEstimatedNagashiManganRound)
+// 2순위: 단일 플레이어 획득 점수(deltaScore)가 가장 높은 국
+const findBestFunRoundInGame = (allRounds: GameRoundMovement[]): GameRoundMovement | undefined => {
+  if (!Array.isArray(allRounds) || allRounds.length === 0) return undefined;
+
+  const nagashiRounds = allRounds.filter(rm => isEstimatedNagashiManganRound(rm));
+  if (nagashiRounds.length > 0) {
+    return [...nagashiRounds].sort((a, b) => {
+      const maxA = Math.max(...a.players.map(p => p.deltaScore));
+      const maxB = Math.max(...b.players.map(p => p.deltaScore));
+      return maxB - maxA;
+    })[0];
+  }
+
+  const positiveRounds = allRounds.filter(rm => Math.max(...rm.players.map(p => p.deltaScore)) > 0);
+  if (positiveRounds.length > 0) {
+    return [...positiveRounds].sort((a, b) => {
+      const maxA = Math.max(...a.players.map(p => p.deltaScore));
+      const maxB = Math.max(...b.players.map(p => p.deltaScore));
+      return maxB - maxA;
+    })[0];
+  }
+
+  return allRounds[0];
+};
+
+// '그 외 화료' 모드에서 유국만관(1순위) 또는 최고 획득 점수 국(2순위)에 자동 포커싱
+const tryAutoFocusFunRound = (): boolean => {
+  const allRounds = buildRoundMovementsFromGameDetail(uploadModalGameDetail.value);
+  if (allRounds.length === 0) return false;
+  const bestFunRound = findBestFunRoundInGame(allRounds);
+  if (bestFunRound) {
+    uploadForm.value.roundName = bestFunRound.roundName;
+    applyUploadRoundWinnerDefaults(bestFunRound);
+    return true;
+  }
+  return false;
+};
+
+// 역만 등록 시 오야 48,000점 / 자 32,000점 이상 역만 화료 추정 국에 자동 포커싱 (미등록 국 우선)
+const tryAutoFocusYakumanRound = (): boolean => {
+  if (uploadForm.value.category !== 'yakuman') return false;
+  const allRounds = buildRoundMovementsFromGameDetail(uploadModalGameDetail.value);
+  if (allRounds.length === 0) return false;
+
+  const yakumanRounds = allRounds.filter(rm => isEstimatedYakumanRound(rm));
+  if (yakumanRounds.length === 0) return false;
+
+  const sessName = uploadForm.value.sessionName;
+  const gIdx = uploadForm.value.gameIndex;
+  const gId = uploadForm.value.gameId;
+
+  const unregisteredYakumanRounds = yakumanRounds.filter(
+    rm => !isYakumanRoundAlreadyRegistered(sessName, gIdx, gId, rm.roundName)
+  );
+  const candidatePool = unregisteredYakumanRounds.length > 0 ? unregisteredYakumanRounds : yakumanRounds;
+
+  const bestYakumanRound = [...candidatePool].sort((a, b) => {
+    const maxA = Math.max(...a.players.map(p => p.deltaScore));
+    const maxB = Math.max(...b.players.map(p => p.deltaScore));
+    return maxB - maxA;
+  })[0];
+
+  if (bestYakumanRound) {
+    uploadForm.value.roundName = bestYakumanRound.roundName;
+    applyUploadRoundWinnerDefaults(bestYakumanRound);
+    return true;
+  }
+  return false;
+};
+
+// 회차 단위 스마트 타겟 탐색:
+// 1순위: 아직 역만 등록이 안 된 역만 추정 경기 및 국 -> category: 'yakuman'
+// 2순위: 역만 추정 국이 없으면 '그 외 화료'(category: 'fun')로 전환하고, 유국만관 국(우선) 또는 최고 획득 점수 국 포커싱
+const findTargetGameAndRoundForSession = async (
+  sessName: string,
+  games: SessionGame[],
+  allowSwitchToFun = true
+): Promise<{ category: HighlightCategory; gameIndex: number; roundName: string } | undefined> => {
+  if (!sessName || !Array.isArray(games) || games.length === 0) return undefined;
+  const sortedGames = [...games].sort((a, b) => Number(a.gameIndex) - Number(b.gameIndex));
+  const fallbackFirstGameIndex = Number(sortedGames[0].gameIndex);
+
+  let bestNagashiCandidate: { gameIndex: number; roundName: string; maxDelta: number } | null = null;
+  let bestHighScoreCandidate: { gameIndex: number; roundName: string; maxDelta: number } | null = null;
+
+  for (const g of sortedGames) {
+    try {
+      const detail = await fetchSessionGameDetail(sessName, g);
+      const rounds = buildRoundMovementsFromGameDetail(detail);
+      if (rounds.length === 0) continue;
+
+      const yakumanRounds = rounds.filter(rm => isEstimatedYakumanRound(rm));
+      if (yakumanRounds.length > 0) {
+        const unregisteredYakuman = yakumanRounds.filter(
+          rm => !isYakumanRoundAlreadyRegistered(sessName, g.gameIndex, g.gameId, rm.roundName)
+        );
+        if (unregisteredYakuman.length > 0) {
+          const bestYm = [...unregisteredYakuman].sort((a, b) => {
+            const maxA = Math.max(...a.players.map(p => p.deltaScore));
+            const maxB = Math.max(...b.players.map(p => p.deltaScore));
+            return maxB - maxA;
+          })[0];
+          return {
+            category: 'yakuman',
+            gameIndex: Number(g.gameIndex),
+            roundName: bestYm.roundName,
+          };
+        }
+      }
+
+      for (const rm of rounds) {
+        const maxDelta = Math.max(...rm.players.map(p => p.deltaScore));
+        if (isEstimatedNagashiManganRound(rm)) {
+          if (!bestNagashiCandidate || maxDelta > bestNagashiCandidate.maxDelta) {
+            bestNagashiCandidate = {
+              gameIndex: Number(g.gameIndex),
+              roundName: rm.roundName,
+              maxDelta,
+            };
+          }
+        }
+        if (maxDelta > 0) {
+          if (!bestHighScoreCandidate || maxDelta > bestHighScoreCandidate.maxDelta) {
+            bestHighScoreCandidate = {
+              gameIndex: Number(g.gameIndex),
+              roundName: rm.roundName,
+              maxDelta,
+            };
+          }
+        }
+      }
+    } catch {
+      // ignore per-game lookup error
+    }
+  }
+
+  if (allowSwitchToFun) {
+    if (bestNagashiCandidate) {
+      return {
+        category: 'fun',
+        gameIndex: bestNagashiCandidate.gameIndex,
+        roundName: bestNagashiCandidate.roundName,
+      };
+    }
+    if (bestHighScoreCandidate) {
+      return {
+        category: 'fun',
+        gameIndex: bestHighScoreCandidate.gameIndex,
+        roundName: bestHighScoreCandidate.roundName,
+      };
+    }
+  }
+
+  return {
+    category: allowSwitchToFun ? 'fun' : 'yakuman',
+    gameIndex: fallbackFirstGameIndex,
+    roundName: '',
+  };
+};
+
+let isInitializingUploadModal = false;
+
+const uploadForm = ref<{
+  category: HighlightCategory;
+  sessionName: string;
+  gameId: string;
+  gameIndex: number | undefined;
+  roundName: string;
+  winnerName: string;
+  loserName: string;
+  winType: 'tsumo' | 'ron';
+  yakumanTypes: string[];
+  caption: string;
+  uploaderName: string;
+  uploadPin: string;
+}>({
+  category: 'yakuman',
+  sessionName: '',
+  gameId: '',
+  gameIndex: undefined,
+  roundName: '',
+  winnerName: '',
+  loserName: '',
+  winType: 'tsumo',
+  yakumanTypes: [],
+  caption: '',
+  uploaderName: '',
+  uploadPin: '',
+});
+
+const selectedUploadFile = ref<File | null>(null);
+const selectedUploadPreviewUrl = ref<string>('');
+const selectedUploadDimensions = ref<string>('');
+const highlightFileInputRef = ref<HTMLInputElement | null>(null);
+
+// 선택된 회차의 실제 진행 경기 목록
+const uploadModalGames = computed<SessionGame[]>(() => {
+  const detail = uploadModalSessionDetail.value;
+  if (!detail || !Array.isArray(detail.games)) return [];
+  return [...detail.games].sort((a, b) => Number(a.gameIndex) - Number(b.gameIndex));
+});
+
+// 업로드 모달 내 인원 선택 후보 목록 (해당 회차에 참여한 인원만 표시)
+const uploadCandidatePlayers = computed<string[]>(() => {
+  const names = new Set<string>();
+  const detail = uploadModalSessionDetail.value;
+  const gIdx = uploadForm.value.gameIndex;
+
+  // 1) 선택된 경기가 있으면 해당 경기 대국자 4명을 최상단에 우선 배치
+  if (detail && gIdx !== undefined) {
+    const matchedGame = detail.games.find(g => Number(g.gameIndex) === Number(gIdx));
+    if (matchedGame && Array.isArray(matchedGame.players)) {
+      matchedGame.players.forEach(p => {
+        if (p.name?.trim()) names.add(p.name.trim());
+      });
+    }
+  } else if (selectedGameDetail.value && gIdx !== undefined && Number(gIdx) === Number(selectedGameDetail.value.gameIndex)) {
+    selectedGameDetail.value.playerStats.forEach(p => {
+      if (p.name?.trim()) names.add(p.name.trim());
+    });
+  }
+
+  // 2) 해당 회차에 참여한 전체 인원 추가
+  if (detail) {
+    if (Array.isArray(detail.members)) {
+      detail.members.forEach(m => {
+        if (m.name?.trim()) names.add(m.name.trim());
+      });
+    }
+    if (Array.isArray(detail.games)) {
+      detail.games.forEach(g => {
+        g.players?.forEach(p => {
+          if (p.name?.trim()) names.add(p.name.trim());
+        });
+      });
+    }
+  } else if (currentSessionDetail.value && matchHighlightSession(currentSessionDetail.value.sessionName, uploadForm.value.sessionName)) {
+    currentSessionDetail.value.members.forEach(m => {
+      if (m.name?.trim()) names.add(m.name.trim());
+    });
+    currentSessionDetail.value.games.forEach(g => {
+      g.players?.forEach(p => {
+        if (p.name?.trim()) names.add(p.name.trim());
+      });
+    });
+  }
+
+  return Array.from(names);
+});
+
+// 업로드 모달 내 국 선택 후보 목록 (점수 변동 그래프 라벨 연동)
+const uploadCandidateRounds = computed<string[]>(() => {
+  if (uploadModalGameDetail.value && uploadModalGameDetail.value.hasRoundDetails && uploadModalGameDetail.value.chartData?.labels?.length) {
+    const rounds = uploadModalGameDetail.value.chartData.labels.filter(l => l && l !== '시작');
+    if (rounds.length > 0) return rounds;
+  }
+  if (
+    selectedGameDetail.value &&
+    selectedGameDetail.value.hasRoundDetails &&
+    uploadForm.value.gameIndex !== undefined &&
+    Number(uploadForm.value.gameIndex) === Number(selectedGameDetail.value.gameIndex)
+  ) {
+    const rounds = selectedGameDetail.value.chartData.labels.filter(l => l && l !== '시작');
+    if (rounds.length > 0) return rounds;
+  }
+  return [
+    '동1국 0본장',
+    '동2국 0본장',
+    '동3국 0본장',
+    '동4국 0본장',
+    '남1국 0본장',
+    '남2국 0본장',
+    '남3국 0본장',
+    '남4국 0본장',
+  ];
+});
+
+// 회차 참여 인원이 갱신될 때 저장된 기본 인원을 자동 적용
+const syncDefaultUploadPlayerForCandidates = () => {
+  const candidates = uploadCandidatePlayers.value;
+  if (candidates.length === 0) return;
+
+  const currentWinner = uploadForm.value.winnerName.trim();
+  if (currentWinner && candidates.includes(currentWinner)) {
+    return;
+  }
+
+  const savedDefault = getSavedDefaultUploadPlayer();
+  if (savedDefault && candidates.includes(savedDefault)) {
+    uploadForm.value.winnerName = savedDefault;
+  } else if (currentWinner && !candidates.includes(currentWinner)) {
+    uploadForm.value.winnerName = '';
+  }
+
+  if (uploadForm.value.loserName && !candidates.includes(uploadForm.value.loserName)) {
+    uploadForm.value.loserName = '';
+  }
+};
+
+// 업로드 모달 내 국 이름이 후보 리스트와 일치하도록 정규화하고 미지정 시 스마트 포커싱 수행
+const resolveAndApplyUploadRoundSelection = (preserveRound: boolean, allowSwitchToFunWhenNoYakuman = false) => {
+  const candidates = uploadCandidateRounds.value;
+  const currentRound = (uploadForm.value.roundName || '').trim();
+
+  if (currentRound) {
+    const exact = candidates.find(c => c.trim() === currentRound);
+    const baseMatch =
+      exact ||
+      candidates.find(
+        c => c.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim() === currentRound.replace(/\s*\(\d+차[^)]*\)\s*$/, '').trim()
+      );
+    if (baseMatch) {
+      uploadForm.value.roundName = baseMatch;
+      if (selectedUploadRoundMovements.value.length > 0) {
+        applyUploadRoundWinnerDefaults(selectedUploadRoundMovements.value[0]);
+      }
+      return;
+    }
+    if (!preserveRound) {
+      uploadForm.value.roundName = '';
+    } else {
+      return;
+    }
+  }
+
+  if (!uploadForm.value.roundName) {
+    if (uploadForm.value.category === 'yakuman') {
+      const focusedYakuman = tryAutoFocusYakumanRound();
+      if (!focusedYakuman) {
+        if (allowSwitchToFunWhenNoYakuman) {
+          isInitializingUploadModal = true;
+          uploadForm.value.category = 'fun';
+          nextTick(() => {
+            isInitializingUploadModal = false;
+          });
+        }
+        tryAutoFocusFunRound();
+      }
+    } else if (uploadForm.value.category === 'fun') {
+      tryAutoFocusFunRound();
+    }
+  }
+};
+
+// 특정 경기 선택 시 해당 경기의 결과표, 점수 변동 그래프, 국별 기록 로드
+const syncUploadModalGameRounds = async (
+  gameIdx: number | undefined,
+  preserveRound = false,
+  allowSwitchToFunWhenNoYakuman = false
+) => {
+  const reqId = ++uploadModalGameReqId;
+  const sessName = uploadForm.value.sessionName;
+  if (!sessName || gameIdx === undefined) {
+    uploadModalGameDetail.value = null;
+    isLoadingUploadGameDetail.value = false;
+    uploadForm.value.gameId = '';
+    if (!preserveRound) uploadForm.value.roundName = '';
+    return;
+  }
+
+  const matchedGame = uploadModalGames.value.find(g => Number(g.gameIndex) === Number(gameIdx));
+  if (!matchedGame) {
+    uploadModalGameDetail.value = null;
+    isLoadingUploadGameDetail.value = false;
+    uploadForm.value.gameId = '';
+    return;
+  }
+
+  uploadForm.value.gameId = matchedGame.gameId || '';
+  uploadModalGameViewMode.value = 'sheet';
+
+  // 이미 열려 있는 대국 상세 모달과 동일 경기이고 상세 데이터가 있으면 즉시 재사용
+  if (
+    selectedGameDetail.value &&
+    selectedGameDetail.value.hasRoundDetails &&
+    Number(selectedGameDetail.value.gameIndex) === Number(gameIdx) &&
+    matchHighlightSession(selectedSession.value, sessName)
+  ) {
+    uploadModalGameDetail.value = selectedGameDetail.value;
+    isLoadingUploadGameDetail.value = false;
+    resolveAndApplyUploadRoundSelection(preserveRound, allowSwitchToFunWhenNoYakuman);
+    return;
+  }
+
+  // 초기 기본 결과표 즉시 렌더링
+  const seatOrder = ['東', '南', '西', '北'];
+  const sortedPlayers = [...matchedGame.players].sort((a, b) => seatOrder.indexOf(a.seat) - seatOrder.indexOf(b.seat));
+  uploadModalGameDetail.value = {
+    gameId: matchedGame.gameId,
+    gameIndex: matchedGame.gameIndex,
+    time: matchedGame.time,
+    hasRoundDetails: false,
+    playerStats: sortedPlayers.map((p, idx) => ({
+      seat: p.seat || seatOrder[idx],
+      name: p.name,
+      rank: p.rank,
+      score: p.score,
+      uma: p.uma,
+      ratingBefore: p.ratingBefore,
+      ratingAfter: p.ratingAfter,
+      ratingDelta: p.ratingDelta,
+      cntRiichi: 0,
+      cntRon: 0,
+      cntTsumo: 0,
+      cntLose: 0,
+    })),
+    chartData: { labels: [], datasets: [] },
+    roundDetailsList: [],
+  };
+
+  isLoadingUploadGameDetail.value = true;
+  try {
+    const detail = await fetchSessionGameDetail(sessName, matchedGame);
+    if (reqId !== uploadModalGameReqId) return;
+    detail.playerStats.forEach(dp => {
+      if (dp.ratingBefore === undefined) {
+        const orig = matchedGame.players.find(gp => gp.name === dp.name);
+        if (orig) {
+          dp.ratingBefore = orig.ratingBefore;
+          dp.ratingAfter = orig.ratingAfter;
+          dp.ratingDelta = orig.ratingDelta;
+        }
+      }
+    });
+    uploadModalGameDetail.value = detail;
+    resolveAndApplyUploadRoundSelection(preserveRound, allowSwitchToFunWhenNoYakuman);
+  } catch (err) {
+    console.warn('업로드 모달 경기 국별 정보 조회 실패:', err);
+  } finally {
+    if (reqId === uploadModalGameReqId) {
+      isLoadingUploadGameDetail.value = false;
+    }
+  }
+};
+
+// 모달에서 선택된 회차의 실제 경기 목록 및 참여 인원 로드
+const syncUploadModalSessionData = async (sessName: string, isInitialOpen = false) => {
+  const reqId = ++uploadModalSessionReqId;
+  if (!sessName) {
+    uploadModalSessionDetail.value = null;
+    uploadModalGameDetail.value = null;
+    return;
+  }
+
+  // 1) 현재 로드된 회차 상세 또는 레이팅 히스토리 캐시에서 즉시 반영
+  if (currentSessionDetail.value && matchHighlightSession(currentSessionDetail.value.sessionName, sessName)) {
+    uploadModalSessionDetail.value = currentSessionDetail.value;
+  } else {
+    const optimistic = buildSessionDetailFromRatingHistory(sessName);
+    if (optimistic && (optimistic.games.length > 0 || optimistic.members.length > 0)) {
+      uploadModalSessionDetail.value = optimistic;
+    } else {
+      uploadModalSessionDetail.value = null;
+    }
+  }
+
+  syncDefaultUploadPlayerForCandidates();
+  if (uploadForm.value.gameIndex !== undefined) {
+    syncUploadModalGameRounds(uploadForm.value.gameIndex, isInitialOpen, isInitialOpen && !uploadForm.value.roundName);
+  } else if (
+    uploadForm.value.category !== 'session' &&
+    uploadModalSessionDetail.value &&
+    uploadModalSessionDetail.value.games.length > 0
+  ) {
+    const target = await findTargetGameAndRoundForSession(
+      sessName,
+      uploadModalSessionDetail.value.games,
+      isInitialOpen
+    );
+    if (reqId !== uploadModalSessionReqId) return;
+    if (target && uploadForm.value.gameIndex === undefined) {
+      isInitializingUploadModal = true;
+      uploadForm.value.category = target.category;
+      uploadForm.value.gameIndex = target.gameIndex;
+      if (target.roundName) {
+        uploadForm.value.roundName = target.roundName;
+      }
+      await syncUploadModalGameRounds(target.gameIndex, true, false);
+      nextTick(() => {
+        isInitializingUploadModal = false;
+      });
+    }
+  }
+
+  // 2) 서버/시트에서 실제 회차 상세 및 레이팅 기록 비동기 조회하여 최신 반영
+  try {
+    const [detail, historyRecords] = await Promise.all([
+      fetchPublicSessionDetail(sessName),
+      fetchPublicRatingHistoryRecords()
+    ]);
+    if (reqId !== uploadModalSessionReqId) return;
+    if (detail && detail.games && historyRecords.length > 0) {
+      attachRatingToSessionGames(sessName, detail.games, historyRecords);
+    }
+    if (detail && (detail.games.length > 0 || detail.members.length > 0)) {
+      uploadModalSessionDetail.value = detail;
+      syncDefaultUploadPlayerForCandidates();
+      if (uploadForm.value.gameIndex !== undefined) {
+        const exists = detail.games.some(g => Number(g.gameIndex) === Number(uploadForm.value.gameIndex));
+        if (!exists) {
+          uploadForm.value.gameIndex = undefined;
+          uploadForm.value.gameId = '';
+          uploadForm.value.roundName = '';
+          uploadModalGameDetail.value = null;
+        } else {
+          syncUploadModalGameRounds(uploadForm.value.gameIndex, true, false);
+        }
+      }
+      if (uploadForm.value.gameIndex === undefined && uploadForm.value.category !== 'session' && detail.games.length > 0) {
+        const target = await findTargetGameAndRoundForSession(sessName, detail.games, isInitialOpen);
+        if (reqId !== uploadModalSessionReqId) return;
+        if (target && uploadForm.value.gameIndex === undefined) {
+          isInitializingUploadModal = true;
+          uploadForm.value.category = target.category;
+          uploadForm.value.gameIndex = target.gameIndex;
+          if (target.roundName) {
+            uploadForm.value.roundName = target.roundName;
+          }
+          await syncUploadModalGameRounds(target.gameIndex, true, false);
+          nextTick(() => {
+            isInitializingUploadModal = false;
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('업로드 모달 회차 상세 조회 실패:', err);
+  }
+};
+
+watch(() => uploadForm.value.sessionName, (newSess, oldSess) => {
+  if (!isHighlightUploadModalOpen.value || isInitializingUploadModal) return;
+  if (newSess && newSess !== oldSess) {
+    uploadForm.value.gameIndex = undefined;
+    uploadForm.value.gameId = '';
+    uploadForm.value.roundName = '';
+    uploadModalGameDetail.value = null;
+    syncUploadModalSessionData(newSess, false);
+  }
+});
+
+watch(() => uploadForm.value.gameIndex, (newGameIdx, oldGameIdx) => {
+  if (!isHighlightUploadModalOpen.value || isInitializingUploadModal) return;
+  if (newGameIdx !== oldGameIdx) {
+    uploadForm.value.roundName = '';
+    syncUploadModalGameRounds(newGameIdx, false, false);
+    syncDefaultUploadPlayerForCandidates();
+  }
+});
+
+// 국 선택 시 해당 국의 화료자(복수 시 최고 득점자), 화료 방식(쯔모/론), 방총자를 자동으로 기본 선택
+watch(() => uploadForm.value.roundName, (newRound) => {
+  if (!isHighlightUploadModalOpen.value || !newRound) return;
+  if (selectedUploadRoundMovements.value.length > 0) {
+    applyUploadRoundWinnerDefaults(selectedUploadRoundMovements.value[0]);
+  }
+});
+
+// 분류 전환 시 역만 추정 경기/국 또는 그 외 화료(유국만관/최고 득점 국)에 자동 포커싱
+watch(() => uploadForm.value.category, async (newCat) => {
+  if (!isHighlightUploadModalOpen.value || isInitializingUploadModal) return;
+  if (newCat === 'yakuman') {
+    if (uploadForm.value.gameIndex === undefined && uploadModalGames.value.length > 0) {
+      const target = await findTargetGameAndRoundForSession(
+        uploadForm.value.sessionName,
+        uploadModalGames.value,
+        false
+      );
+      if (target && uploadForm.value.gameIndex === undefined) {
+        isInitializingUploadModal = true;
+        uploadForm.value.gameIndex = target.gameIndex;
+        if (target.roundName) uploadForm.value.roundName = target.roundName;
+        await syncUploadModalGameRounds(target.gameIndex, !!target.roundName, false);
+        nextTick(() => {
+          isInitializingUploadModal = false;
+        });
+      }
+    } else {
+      tryAutoFocusYakumanRound();
+    }
+  } else if (newCat === 'fun') {
+    if (uploadForm.value.gameIndex === undefined && uploadModalGames.value.length > 0) {
+      isInitializingUploadModal = true;
+      uploadForm.value.gameIndex = Number(uploadModalGames.value[0].gameIndex);
+      await syncUploadModalGameRounds(uploadForm.value.gameIndex, false, false);
+      nextTick(() => {
+        isInitializingUploadModal = false;
+      });
+    } else if (
+      !uploadForm.value.roundName ||
+      (selectedUploadRoundMovements.value.length > 0 && isEstimatedYakumanRound(selectedUploadRoundMovements.value[0]))
+    ) {
+      tryAutoFocusFunRound();
+    }
+  }
+});
+
+// 인원을 한 번 선택하면 기본 인원으로 고정 저장
+watch(() => uploadForm.value.winnerName, (newWinner) => {
+  if (newWinner && newWinner.trim()) {
+    saveDefaultUploadPlayer(newWinner);
+  }
+});
+
+// 대국 상세 모달에서 '역만 / 사진 등록' 클릭 시 현재 보고 있는 탭/국 및 역만 타점 여부에 따라 분류 및 국 스마트 포커싱
+const handleOpenUploadFromGameModal = () => {
+  const gDetail = selectedGameDetail.value;
+  if (!gDetail) return;
+
+  let activeRoundName = '';
+  if (gameModalMode.value === 'rounds') {
+    if (gameModalSelectedRound.value && gameModalSelectedRound.value !== '__all__') {
+      activeRoundName = gameModalSelectedRound.value.trim();
+    } else if (gameModalAllRoundMovements.value.length === 1) {
+      activeRoundName = gameModalAllRoundMovements.value[0].roundName.trim();
+    }
+  }
+
+  // 1) '국별 점수 이동' 탭에서 특정 국을 선택해 보고 있는 경우: 해당 국으로 바로 포커싱
+  if (activeRoundName) {
+    const matchedRm = gameModalAllRoundMovements.value.find(
+      rm => rm.roundName.trim() === activeRoundName
+    );
+    const isYakuman = matchedRm ? isEstimatedYakumanRound(matchedRm) : false;
+    openHighlightUploadModal({
+      category: isYakuman ? 'yakuman' : 'fun',
+      sessionName: selectedSession.value,
+      gameId: gDetail.gameId,
+      gameIndex: gDetail.gameIndex,
+      roundName: activeRoundName,
+    });
+    return;
+  }
+
+  // 2) 전체 국 / 결과 표 / 점수 변동 그래프를 보고 있는 경우:
+  // 역만 추정 국이 있으면 '역만' + 해당 국 포커싱, 없으면 '그 외 화료' + 유국만관(1순위) / 최고 획득 점수 국(2순위) 포커싱
+  if (gameModalAllRoundMovements.value.length > 0) {
+    const yakumanRounds = gameModalAllRoundMovements.value.filter(rm => isEstimatedYakumanRound(rm));
+    if (yakumanRounds.length > 0) {
+      const unregisteredYm = yakumanRounds.filter(
+        rm => !isYakumanRoundAlreadyRegistered(selectedSession.value, gDetail.gameIndex, gDetail.gameId, rm.roundName)
+      );
+      const ymPool = unregisteredYm.length > 0 ? unregisteredYm : yakumanRounds;
+      const bestYm = [...ymPool].sort((a, b) => {
+        const maxA = Math.max(...a.players.map(p => p.deltaScore));
+        const maxB = Math.max(...b.players.map(p => p.deltaScore));
+        return maxB - maxA;
+      })[0];
+      openHighlightUploadModal({
+        category: 'yakuman',
+        sessionName: selectedSession.value,
+        gameId: gDetail.gameId,
+        gameIndex: gDetail.gameIndex,
+        roundName: bestYm?.roundName || '',
+      });
+    } else {
+      const bestFunRound = findBestFunRoundInGame(gameModalAllRoundMovements.value);
+      openHighlightUploadModal({
+        category: 'fun',
+        sessionName: selectedSession.value,
+        gameId: gDetail.gameId,
+        gameIndex: gDetail.gameIndex,
+        roundName: bestFunRound?.roundName || gameModalAllRoundMovements.value[0].roundName,
+      });
+    }
+    return;
+  }
+
+  openHighlightUploadModal({
+    category: 'yakuman',
+    sessionName: selectedSession.value,
+    gameId: gDetail.gameId,
+    gameIndex: gDetail.gameIndex,
+  });
+};
+
+const openHighlightUploadModal = (preset?: {
+  category?: HighlightCategory;
+  sessionName?: string;
+  gameId?: string;
+  gameIndex?: number;
+  roundName?: string;
+  winnerName?: string;
+}) => {
+  refreshGalleryAuthState();
+  const rawSession = preset?.sessionName || selectedSession.value || displayedAvailableSessions.value[0] || '';
+  const matchedOption = displayedAvailableSessions.value.find(s => matchHighlightSession(s, rawSession));
+  const defaultSession = matchedOption || rawSession;
+  const initialWinner = preset?.winnerName || getSavedDefaultUploadPlayer() || '';
+
+  isInitializingUploadModal = true;
+  uploadModalGameViewMode.value = 'sheet';
+  uploadForm.value = {
+    category: preset?.category || 'yakuman',
+    sessionName: defaultSession,
+    gameId: preset?.gameId || '',
+    gameIndex: preset?.gameIndex,
+    roundName: preset?.roundName || '',
+    winnerName: initialWinner,
+    loserName: '',
+    winType: 'tsumo',
+    yakumanTypes: [],
+    caption: '',
+    uploaderName: '',
+    uploadPin: getSavedHighlightPin(),
+  };
+  if (selectedUploadPreviewUrl.value) {
+    URL.revokeObjectURL(selectedUploadPreviewUrl.value);
+  }
+  selectedUploadFile.value = null;
+  selectedUploadPreviewUrl.value = '';
+  selectedUploadDimensions.value = '';
+  highlightUploadError.value = '';
+  isHighlightUploadModalOpen.value = true;
+
+  syncUploadModalSessionData(defaultSession, true);
+  nextTick(() => {
+    isInitializingUploadModal = false;
+  });
+};
+
+const closeHighlightUploadModal = () => {
+  if (selectedUploadPreviewUrl.value) {
+    URL.revokeObjectURL(selectedUploadPreviewUrl.value);
+  }
+  selectedUploadPreviewUrl.value = '';
+  selectedUploadFile.value = null;
+  isHighlightUploadModalOpen.value = false;
+};
+
+const handleHighlightFileSelect = (e: Event) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (selectedUploadPreviewUrl.value) {
+    URL.revokeObjectURL(selectedUploadPreviewUrl.value);
+  }
+  selectedUploadFile.value = file;
+  const url = URL.createObjectURL(file);
+  selectedUploadPreviewUrl.value = url;
+};
+
+const toggleYakumanTypeInForm = (key: string) => {
+  const list = uploadForm.value.yakumanTypes;
+  const idx = list.indexOf(key);
+  if (idx >= 0) {
+    list.splice(idx, 1);
+  } else {
+    list.push(key);
+  }
+};
+
+const submitHighlightUpload = async () => {
+  highlightUploadError.value = '';
+  const f = uploadForm.value;
+
+  if (!f.sessionName) {
+    highlightUploadError.value = '회차를 선택해 주세요.';
+    return;
+  }
+  if (f.category === 'yakuman') {
+    if (!f.gameIndex) {
+      highlightUploadError.value = '역만 등록 시 경기를 반드시 선택해 주세요.';
+      return;
+    }
+    if (f.yakumanTypes.length === 0 && !selectedUploadFile.value) {
+      highlightUploadError.value = '달성한 역만 종류를 선택하거나 사진을 첨부해 주세요.';
+      return;
+    }
+  } else if (f.category === 'session') {
+    if (!selectedUploadFile.value) {
+      highlightUploadError.value = '회차별 사진 등록 시 업로드할 사진 파일을 선택해 주세요.';
+      return;
+    }
+  }
+
+  if (f.winnerName && f.winnerName.trim()) {
+    saveDefaultUploadPlayer(f.winnerName);
+  }
+
+  isSubmittingHighlight.value = true;
+  try {
+    const res = await createHighlight({
+      category: f.category,
+      sessionName: f.sessionName,
+      gameId: f.gameId || undefined,
+      gameIndex: f.gameIndex || undefined,
+      roundName: f.roundName || undefined,
+      winnerName: f.winnerName.trim() || undefined,
+      loserName: f.category !== 'session' && f.winType === 'ron' && f.loserName.trim() ? f.loserName.trim() : undefined,
+      winType: f.category === 'session' || !f.winnerName.trim() ? undefined : f.winType,
+      yakumanTypes: f.category === 'yakuman' ? f.yakumanTypes : [],
+      caption: f.caption,
+      uploaderName: f.uploaderName,
+      imageFile: selectedUploadFile.value,
+      uploadPin: f.uploadPin,
+    });
+
+    if (res.success) {
+      if (getSavedHighlightPin()) {
+        hasSavedValidPin.value = true;
+      }
+      if (res.records) {
+        highlightsList.value = res.records;
+      } else {
+        highlightsList.value = await fetchHighlights(true);
+      }
+      closeHighlightUploadModal();
+      showToast('성공적으로 등록되었습니다!');
+    } else {
+      if (res.pinInvalidated) {
+        hasSavedValidPin.value = false;
+        uploadForm.value.uploadPin = '';
+      }
+      highlightUploadError.value = res.error || '등록에 실패했습니다. 공통 PIN을 확인해 주세요.';
+    }
+  } finally {
+    isSubmittingHighlight.value = false;
+  }
+};
+
+// 원본 화질 사진 확대 라이트박스, 메모 수정 & 삭제 모달
+const lightboxHighlight = ref<HighlightRecord | null>(null);
+const deletePinPromptInput = ref('');
+const isDeletingHighlight = ref(false);
+const showDeletePinInput = ref(false);
+const deleteHighlightError = ref('');
+
+// 라이트박스 내 메모 추가/수정 상태
+const isEditingLightboxMemo = ref(false);
+const editingMemoText = ref('');
+const editingMemoPin = ref('');
+const isSavingLightboxMemo = ref(false);
+const memoEditError = ref('');
+
+const openHighlightLightbox = (rec: HighlightRecord) => {
+  refreshGalleryAuthState();
+  lightboxHighlight.value = rec;
+  showDeletePinInput.value = false;
+  deletePinPromptInput.value = getSavedHighlightPin();
+  deleteHighlightError.value = '';
+  isEditingLightboxMemo.value = false;
+  editingMemoText.value = rec.caption || '';
+  editingMemoPin.value = getSavedHighlightPin();
+  memoEditError.value = '';
+};
+
+const startEditLightboxMemo = () => {
+  if (!lightboxHighlight.value) return;
+  editingMemoText.value = lightboxHighlight.value.caption || '';
+  editingMemoPin.value = getSavedHighlightPin();
+  memoEditError.value = '';
+  isEditingLightboxMemo.value = true;
+};
+
+const saveLightboxMemo = async () => {
+  if (!lightboxHighlight.value) return;
+  memoEditError.value = '';
+  isSavingLightboxMemo.value = true;
+  try {
+    const res = await updateHighlightMemo(
+      lightboxHighlight.value.id,
+      editingMemoText.value,
+      editingMemoPin.value
+    );
+    if (res.success) {
+      if (getSavedHighlightPin()) {
+        hasSavedValidPin.value = true;
+      }
+      if (res.records) {
+        highlightsList.value = res.records;
+      } else if (res.record) {
+        highlightsList.value = highlightsList.value.map(item =>
+          item.id === res.record!.id ? res.record! : item
+        );
+      }
+      if (res.record) {
+        lightboxHighlight.value = res.record;
+      } else if (lightboxHighlight.value) {
+        lightboxHighlight.value = {
+          ...lightboxHighlight.value,
+          caption: editingMemoText.value.trim(),
+        };
+      }
+      isEditingLightboxMemo.value = false;
+      showToast('메모가 저장되었습니다.');
+    } else {
+      if (res.pinInvalidated) {
+        hasSavedValidPin.value = false;
+        editingMemoPin.value = '';
+      }
+      memoEditError.value = res.error || '공통 PIN이 일치하지 않거나 수정 권한이 없습니다.';
+    }
+  } finally {
+    isSavingLightboxMemo.value = false;
+  }
+};
+
+const confirmDeleteHighlight = async (rec: HighlightRecord) => {
+  deleteHighlightError.value = '';
+  if (!needsPinInput.value && !window.confirm('이 기록을 정말 삭제하시겠습니까?')) {
+    return;
+  }
+  isDeletingHighlight.value = true;
+  try {
+    const res = await deleteHighlight(rec.id, deletePinPromptInput.value);
+    if (res.success) {
+      if (getSavedHighlightPin()) {
+        hasSavedValidPin.value = true;
+      }
+      if (res.records) {
+        highlightsList.value = res.records;
+      } else {
+        highlightsList.value = highlightsList.value.filter(item => item.id !== rec.id);
+      }
+      lightboxHighlight.value = null;
+      showDeletePinInput.value = false;
+      showToast('기록이 삭제되었습니다.');
+    } else {
+      if (res.pinInvalidated) {
+        hasSavedValidPin.value = false;
+        deletePinPromptInput.value = '';
+      }
+      deleteHighlightError.value = res.error || '공통 PIN이 일치하지 않거나 권한이 없습니다.';
+    }
+  } finally {
+    isDeletingHighlight.value = false;
+  }
+};
+
+// 관리자 전용 공통 업로드 PIN 관리 모달
+const isPinAdminModalOpen = ref(false);
+const isPinAdminVerified = ref(false);
+const adminPasscodeInputForPin = ref('');
+const currentServerUploadPin = ref('');
+const newServerUploadPin = ref('');
+const pinAdminMessage = ref('');
+const pinAdminError = ref('');
+const isPinAdminLoading = ref(false);
+
+const openPinAdminModal = async () => {
+  isPinAdminModalOpen.value = true;
+  pinAdminMessage.value = '';
+  pinAdminError.value = '';
+  isPinAdminLoading.value = true;
+  try {
+    const status = await checkAdminStatus();
+    if (status.isAdmin) {
+      isGalleryAdmin.value = true;
+      isPinAdminVerified.value = true;
+      const pinRes = await fetchHighlightUploadPinAsAdmin();
+      if (pinRes.success) {
+        currentServerUploadPin.value = pinRes.uploadPin || '';
+        newServerUploadPin.value = pinRes.uploadPin || '';
+      }
+    } else {
+      isGalleryAdmin.value = false;
+      isPinAdminVerified.value = false;
+    }
+  } finally {
+    isPinAdminLoading.value = false;
+  }
+};
+
+const verifyAdminForPinModal = async () => {
+  pinAdminError.value = '';
+  if (!adminPasscodeInputForPin.value.trim()) {
+    pinAdminError.value = '관리자 인증 코드를 입력해 주세요.';
+    return;
+  }
+  isPinAdminLoading.value = true;
+  try {
+    sessionStorage.setItem('schedule_admin_passcode', adminPasscodeInputForPin.value.trim());
+    const status = await checkAdminStatus();
+    if (status.isAdmin) {
+      isGalleryAdmin.value = true;
+      isPinAdminVerified.value = true;
+      const pinRes = await fetchHighlightUploadPinAsAdmin();
+      if (pinRes.success) {
+        currentServerUploadPin.value = pinRes.uploadPin || '';
+        newServerUploadPin.value = pinRes.uploadPin || '';
+      }
+    } else {
+      pinAdminError.value = '관리자 코드가 일치하지 않습니다.';
+    }
+  } finally {
+    isPinAdminLoading.value = false;
+  }
+};
+
+const saveNewServerUploadPin = async () => {
+  pinAdminError.value = '';
+  pinAdminMessage.value = '';
+  if (!newServerUploadPin.value.trim() || newServerUploadPin.value.trim().length < 4) {
+    pinAdminError.value = '새 공통 PIN은 4자리 이상이어야 합니다.';
+    return;
+  }
+  isPinAdminLoading.value = true;
+  try {
+    const res = await updateHighlightUploadPinAsAdmin(newServerUploadPin.value.trim());
+    if (res.success) {
+      currentServerUploadPin.value = res.uploadPin || newServerUploadPin.value.trim();
+      pinAdminMessage.value = res.message || '공통 업로드 PIN이 변경되었습니다.';
+      saveHighlightPin(currentServerUploadPin.value);
+      hasSavedValidPin.value = true;
+    } else {
+      pinAdminError.value = res.error || '변경에 실패했습니다.';
+    }
+  } finally {
+    isPinAdminLoading.value = false;
+  }
+};
+
+const formatHighlightDate = (ts: number) => {
+  if (!ts) return '';
+  try {
+    return new Date(ts).toLocaleDateString('ko-KR', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+  } catch {
+    return '';
+  }
 };
 </script>
 
@@ -2056,50 +4140,82 @@ const getRankClass = (rank: number) => {
     </header>
 
     <!-- 탭 네비게이션 (종합 랭킹 & 스탯) -->
-    <nav ref="tabsNavRef" class="tabs-nav">
-      <button 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'ranking' }" 
-        @click="switchTab('ranking')"
+    <div class="tabs-nav-wrap" :class="{ 'has-scroll-indicator': tabsNavScrollIndicator.visible }">
+      <nav
+        ref="tabsNavRef"
+        class="tabs-nav"
+        :class="{ 'is-dragging': isDraggingTabsNav }"
+        @mousedown="onTabsNavMouseDown"
+        @click.capture="onTabsNavClickCapture"
+        @auxclick.prevent
+        @wheel="onTabsNavWheel"
+        @scroll.passive="updateTabsNavScrollIndicator"
       >
-        종합 랭킹
-      </button>
-      <button 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'rating' }" 
-        @click="switchTab('rating')"
+        <button 
+          class="tab-btn" 
+          :class="{ active: activeTab === 'ranking' }" 
+          @click="switchTab('ranking')"
+        >
+          종합 랭킹
+        </button>
+        <button 
+          class="tab-btn" 
+          :class="{ active: activeTab === 'rating' }" 
+          @click="switchTab('rating')"
+        >
+          레이팅
+        </button>
+        <button 
+          class="tab-btn" 
+          :class="{ active: activeTab === 'matrix' }" 
+          @click="switchTab('matrix')"
+        >
+          역대 전적
+        </button>
+        <button 
+          class="tab-btn" 
+          :class="{ active: activeTab === 'sessions' }" 
+          @click="switchTab('sessions')"
+        >
+          회차 상세
+        </button>
+        <button 
+          class="tab-btn" 
+          :class="{ active: activeTab === 'schedule' }" 
+          @click="switchTab('schedule')"
+        >
+          일정
+        </button>
+        <button 
+          class="tab-btn" 
+          :class="{ active: activeTab === 'rules' }" 
+          @click="switchTab('rules')"
+        >
+          룰
+        </button>
+        <button 
+          class="tab-btn" 
+          :class="{ active: activeTab === 'gallery' }" 
+          @click="switchTab('gallery'); refreshGalleryAuthState()"
+        >
+          갤러리
+        </button>
+      </nav>
+      <div
+        v-show="tabsNavScrollIndicator.visible"
+        class="tabs-nav-scroll-track"
+        @click="onTabsNavTrackClick"
+        title="좌우 스크롤 위치 표시"
       >
-        레이팅
-      </button>
-      <button 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'matrix' }" 
-        @click="switchTab('matrix')"
-      >
-        역대 회차별 전적
-      </button>
-      <button 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'sessions' }" 
-        @click="switchTab('sessions')"
-      >
-        회차별 경기 상세
-      </button>
-      <button 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'schedule' }" 
-        @click="switchTab('schedule')"
-      >
-        일정
-      </button>
-      <button 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'rules' }" 
-        @click="switchTab('rules')"
-      >
-        룰
-      </button>
-    </nav>
+        <div
+          class="tabs-nav-scroll-thumb"
+          :style="{
+            width: tabsNavScrollIndicator.widthPct + '%',
+            left: tabsNavScrollIndicator.leftPct + '%'
+          }"
+        ></div>
+      </div>
+    </div>
 
     <!-- 로딩 상태 -->
     <div v-if="isLoading && activeTab !== 'rules'" class="loading-state">
@@ -2411,6 +4527,21 @@ const getRankClass = (rank: number) => {
                 줌 리셋
               </button>
             </div>
+          </div>
+
+          <!-- 선수 범례 (캔버스 외부 HTML 렌더링으로 좁은 화면에서 그래프 영역 침범 원천 방지) -->
+          <div v-if="ratingChartData.datasets.length > 0" class="rating-player-legend">
+            <button
+              v-for="ds in ratingChartData.datasets"
+              :key="`inline-leg-${ds.label}`"
+              type="button"
+              class="rating-legend-item"
+              :class="{ 'is-hidden': hiddenRatingPlayerNames.has(ds.label) }"
+              @click="toggleRatingPlayerLegend(ds.label)"
+            >
+              <span class="rating-legend-dot" :style="{ backgroundColor: String(ds.borderColor) }"></span>
+              <span class="rating-legend-label">{{ ds.label }}</span>
+            </button>
           </div>
 
           <!-- 차트 캔버스 영역 -->
@@ -2814,7 +4945,23 @@ const getRankClass = (rank: number) => {
                   title="클릭하여 대국 결과 표 및 점수 변동 그래프 보기"
                 >
                   <div class="game-card-header">
-                    <span class="game-index">{{ game.gameIndex }}경기</span>
+                    <div class="game-card-title-group">
+                      <span class="game-index">{{ game.gameIndex }}경기</span>
+                      <span v-if="hasGameYakumanBadge(game)" class="game-yakuman-badge">역만</span>
+                      <span
+                        v-for="hl in getGameHighlights(game)"
+                        :key="hl.id"
+                        class="game-hl-chip"
+                        :class="hl.category === 'yakuman' ? 'chip-yakuman' : 'chip-fun'"
+                      >
+                        <template v-if="hl.category === 'yakuman'">
+                          {{ hl.winnerName }} {{ hl.yakumanTypes.join('·') }}
+                        </template>
+                        <template v-else>
+                          그 외 화료
+                        </template>
+                      </span>
+                    </div>
                     <span class="game-card-action-hint">상세 결과 / 차트 보기 &gt;</span>
                     <span class="game-time">{{ game.time }}</span>
                   </div>
@@ -2845,6 +4992,70 @@ const getRankClass = (rank: number) => {
                         </span>
                       </div>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 해당 회차 사진 & 역만 갤러리 카드 -->
+            <div class="section-card session-gallery-card">
+              <div class="sg-header-row">
+                <div>
+                  <h3 class="card-title">{{ currentSessionDetail.sessionName }} 사진 &amp; 역만 갤러리 ({{ currentSessionHighlights.length }})</h3>
+                  <p class="sg-sub-desc">이 회차에서 달성된 역만, 그 외 화료, 회차 현장 사진을 보관합니다.</p>
+                </div>
+                <div class="sg-btn-group">
+                  <button
+                    class="btn-hl-upload primary"
+                    @click="openHighlightUploadModal({ category: 'yakuman', sessionName: currentSessionDetail.sessionName })"
+                  >
+                    역만 / 화료 등록
+                  </button>
+                  <button
+                    class="btn-hl-upload secondary"
+                    @click="openHighlightUploadModal({ category: 'session', sessionName: currentSessionDetail.sessionName })"
+                  >
+                    회차별 사진 등록
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="currentSessionHighlights.length === 0" class="sg-empty-box">
+                아직 이 회차에 등록된 역만 기록이나 사진이 없습니다. 우측 상단 버튼으로 첫 사진을 등록해 보세요.
+              </div>
+              <div v-else class="pinterest-masonry-grid session-masonry-grid">
+                <div
+                  v-for="rec in currentSessionHighlights"
+                  :key="rec.id"
+                  class="pinterest-pin-card"
+                  :class="'hl-cat-' + rec.category"
+                  @click="openHighlightLightbox(rec)"
+                >
+                  <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
+                    <img :src="getHighlightImageUrl(rec.imageId)" :alt="rec.caption || rec.winnerName" loading="lazy" class="pinterest-img" />
+                  </div>
+                  <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun' }">
+                    <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : '和了' }}</span>
+                    <span class="hl-yakuman-main-txt">
+                      {{ rec.category === 'yakuman' ? rec.yakumanTypes.join(' · ') : (rec.winnerName || '그 외 화료') }}
+                    </span>
+                  </div>
+                  <div class="hl-card-body">
+                    <div class="hl-meta-top">
+                      <span class="hl-type-tag" :class="rec.category">
+                        {{ rec.category === 'yakuman' ? '역만' : rec.category === 'fun' ? '그 외 화료' : '회차 사진' }}
+                      </span>
+                      <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ rec.roundName }}</span>
+                      <span v-else-if="rec.roundName" class="hl-round-tag">{{ rec.roundName }}</span>
+                    </div>
+                    <div v-if="rec.yakumanTypes && rec.yakumanTypes.length > 0" class="hl-yakuman-badges">
+                      <span v-for="yt in rec.yakumanTypes" :key="yt" class="hl-y-badge">{{ yt }}</span>
+                    </div>
+                    <div v-if="rec.winnerName" class="hl-winner-line">
+                      <strong>{{ rec.winnerName }}</strong>
+                      <span v-if="rec.winType" class="hl-wintype">({{ rec.winType === 'tsumo' ? '쯔모' : `론${rec.loserName ? ' ← ' + rec.loserName : ''}` }})</span>
+                    </div>
+                    <div v-if="rec.caption" class="hl-caption">{{ rec.caption }}</div>
                   </div>
                 </div>
               </div>
@@ -2916,6 +5127,137 @@ const getRankClass = (rank: number) => {
               </div>
             </div>
           </template>
+        </div>
+      </section>
+
+      <!-- ============================================== -->
+      <!-- TAB: 갤러리 (Pinterest 스타일 원본 화질 WebP 아카이브) -->
+      <!-- ============================================== -->
+      <section v-else-if="activeTab === 'gallery'" class="tab-gallery">
+        <div class="section-card gallery-toolbar-card">
+          <div class="gh-toolbar-row">
+            <div class="gh-filter-bar-compact">
+              <div class="gh-cat-tabs">
+                <button class="gh-cat-btn" :class="{ active: galleryCategoryFilter === 'all' }" @click="galleryCategoryFilter = 'all'">
+                  전체 ({{ gallerySummaryStats.totalCount }})
+                </button>
+                <button class="gh-cat-btn" :class="{ active: galleryCategoryFilter === 'yakuman' }" @click="galleryCategoryFilter = 'yakuman'">
+                  역만 ({{ gallerySummaryStats.yakumanCount }})
+                </button>
+                <button class="gh-cat-btn" :class="{ active: galleryCategoryFilter === 'fun' }" @click="galleryCategoryFilter = 'fun'">
+                  그 외 화료 ({{ gallerySummaryStats.funPhotoCount }})
+                </button>
+                <button class="gh-cat-btn" :class="{ active: galleryCategoryFilter === 'session' }" @click="galleryCategoryFilter = 'session'">
+                  회차 사진 ({{ gallerySummaryStats.sessionPhotoCount }})
+                </button>
+              </div>
+
+              <div class="gh-select-group">
+                <select v-model="gallerySessionFilter" class="gh-filter-select">
+                  <option value="">전체 회차</option>
+                  <option v-for="s in displayedAvailableSessions" :key="s" :value="s">{{ s }}</option>
+                </select>
+                <select v-model="galleryPlayerFilter" class="gh-filter-select">
+                  <option value="">전체 플레이어</option>
+                  <option v-for="m in allStats" :key="m.name" :value="m.name">{{ m.name }}</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="gh-actions">
+              <button
+                v-if="isGalleryAdmin"
+                class="btn-hl-upload admin-pin-btn"
+                @click="openPinAdminModal"
+                title="관리자 전용 공통 업로드 PIN 조회 및 변경"
+              >
+                공통 PIN 관리
+              </button>
+              <button class="btn-hl-upload primary" @click="openHighlightUploadModal({ category: 'yakuman' })">
+                역만 / 화료 등록
+              </button>
+              <button class="btn-hl-upload secondary" @click="openHighlightUploadModal({ category: 'session' })">
+                회차별 사진 등록
+              </button>
+            </div>
+          </div>
+
+          <!-- 서버 저장 용량 및 남은 용량 표시 바 -->
+          <div class="gh-storage-status-bar">
+            <div class="gh-storage-info">
+              <span class="gh-storage-title">서버 저장소 용량</span>
+              <span class="gh-storage-metrics">
+                남은 용량 <strong class="gh-storage-remain">{{ galleryStorageStats.remainingText }}</strong>
+                <span class="gh-storage-sub">
+                  (사용 {{ galleryStorageStats.usedText }} / 전체 {{ galleryStorageStats.maxText }} · 사진 {{ galleryStorageStats.imageCount }}장)
+                </span>
+              </span>
+              <span
+                class="gh-storage-pct-badge"
+                :class="{
+                  warn: galleryStorageStats.usedPercent >= 75 && galleryStorageStats.usedPercent < 90,
+                  danger: galleryStorageStats.usedPercent >= 90
+                }"
+              >
+                {{ galleryStorageStats.remainingPercent.toFixed(1) }}% 여유
+              </span>
+            </div>
+            <div class="gh-storage-track" :title="`사용 중: ${galleryStorageStats.usedText} (${galleryStorageStats.usedPercent.toFixed(2)}%) / 남은 용량: ${galleryStorageStats.remainingText}`">
+              <div
+                class="gh-storage-fill"
+                :class="{
+                  warn: galleryStorageStats.usedPercent >= 75 && galleryStorageStats.usedPercent < 90,
+                  danger: galleryStorageStats.usedPercent >= 90
+                }"
+                :style="{ width: Math.max(galleryStorageStats.usedPercent > 0 ? 1.5 : 0, galleryStorageStats.usedPercent) + '%' }"
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pinterest 스타일 Masonry 사진 그리드 -->
+        <div v-if="filteredGalleryHighlights.length === 0" class="section-card sg-empty-box">
+          조건에 해당하는 역만 기록이나 사진이 없습니다. 우측 상단 <strong>[역만 / 화료 등록]</strong> 또는 <strong>[회차별 사진 등록]</strong> 버튼으로 첫 기록을 남겨보세요.
+        </div>
+        <div v-else class="pinterest-masonry-grid">
+          <div
+            v-for="rec in filteredGalleryHighlights"
+            :key="rec.id"
+            class="pinterest-pin-card"
+            :class="'hl-cat-' + rec.category"
+            @click="openHighlightLightbox(rec)"
+          >
+            <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
+              <img :src="getHighlightImageUrl(rec.imageId)" :alt="rec.caption || rec.winnerName" loading="lazy" class="pinterest-img" />
+            </div>
+            <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun' }">
+              <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : '和了' }}</span>
+              <span class="hl-yakuman-main-txt">
+                {{ rec.category === 'yakuman' ? rec.yakumanTypes.join(' · ') : (rec.winnerName || '그 외 화료') }}
+              </span>
+            </div>
+            <div class="hl-card-body">
+              <div class="hl-meta-top">
+                <span class="hl-type-tag" :class="rec.category">
+                  {{ rec.category === 'yakuman' ? '역만' : rec.category === 'fun' ? '그 외 화료' : '회차 사진' }}
+                </span>
+                <span class="hl-session-tag">{{ rec.sessionName }}</span>
+                <span v-if="rec.gameIndex" class="hl-round-tag">{{ rec.gameIndex }}경기 {{ rec.roundName }}</span>
+                <span v-else-if="rec.roundName" class="hl-round-tag">{{ rec.roundName }}</span>
+              </div>
+              <div v-if="rec.yakumanTypes && rec.yakumanTypes.length > 0" class="hl-yakuman-badges">
+                <span v-for="yt in rec.yakumanTypes" :key="yt" class="hl-y-badge">{{ yt }}</span>
+              </div>
+              <div v-if="rec.winnerName" class="hl-winner-line">
+                <strong>{{ rec.winnerName }}</strong>
+                <span v-if="rec.winType" class="hl-wintype">
+                  ({{ rec.winType === 'tsumo' ? '쯔모 화료' : `론 화료${rec.loserName ? ' ← ' + rec.loserName : ''}` }})
+                </span>
+              </div>
+              <div v-if="rec.caption" class="hl-caption">{{ rec.caption }}</div>
+              <div class="hl-footer-date">{{ formatHighlightDate(rec.createdAt) }}</div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -3021,6 +5363,20 @@ const getRankClass = (rank: number) => {
                       @click="sessionModalActiveTab = 'rank'"
                     >
                       순위 비율
+                    </button>
+                    <button 
+                      class="tab_btn" 
+                      :class="{ active: sessionModalActiveTab === 'rating' }" 
+                      @click="sessionModalActiveTab = 'rating'"
+                    >
+                      레이팅 추이
+                    </button>
+                    <button 
+                      class="tab_btn" 
+                      :class="{ active: sessionModalActiveTab === 'yakuman' }" 
+                      @click="sessionModalActiveTab = 'yakuman'"
+                    >
+                      역만
                     </button>
                   </div>
 
@@ -3343,6 +5699,51 @@ const getRankClass = (rank: number) => {
                         </div>
                       </div>
 
+                      <!-- 3-1. 역만 탭 (이번 회차 17종 역만 화료 기록) -->
+                      <div v-else-if="sessionModalActiveTab === 'yakuman'" class="yakuman_tab_wrapper">
+                        <div class="yakuman_summary_bar">
+                          <span class="ym_summary_title">{{ currentSessionDetail?.sessionName }} 역만 화료 기록</span>
+                          <span class="ym_summary_badge" :class="{ achieved: modalPlayerYakumanStats.totalYakumanCount > 0 }">
+                            {{ modalPlayerYakumanStats.totalYakumanCount }}회
+                          </span>
+                        </div>
+                        <div class="yakuman_counts_grid">
+                          <div
+                            v-for="ym in modalPlayerYakumanStats.items"
+                            :key="ym.key"
+                            class="yakuman_count_row"
+                            :class="{ achieved: ym.count > 0, double: ym.isDouble }"
+                          >
+                            <span class="ym_name">{{ ym.label }}</span>
+                            <span class="ym_val">- {{ ym.count }}</span>
+                          </div>
+                        </div>
+                        <div v-if="modalPlayerYakumanStats.achievedRecords.length > 0" class="yakuman_achieved_list">
+                          <div class="ym_achieved_header">달성 상세 및 화료 사진</div>
+                          <div class="ym_achieved_cards">
+                            <div
+                              v-for="rec in modalPlayerYakumanStats.achievedRecords"
+                              :key="rec.id"
+                              class="ym_achieved_card"
+                              @click="openHighlightLightbox(rec)"
+                            >
+                              <img v-if="rec.hasImage && rec.imageId" :src="getHighlightImageUrl(rec.imageId)" class="ym_thumb" loading="lazy" />
+                              <div class="ym_achieved_info">
+                                <div class="ym_achieved_tags">
+                                  <span v-for="t in rec.yakumanTypes" :key="t" class="hl-y-badge">{{ t }}</span>
+                                </div>
+                                <div class="ym_achieved_meta">
+                                  {{ rec.sessionName }}
+                                  <template v-if="rec.gameIndex"> · {{ rec.gameIndex }}경기</template>
+                                  <template v-if="rec.roundName"> · {{ rec.roundName }}</template>
+                                </div>
+                                <div v-if="rec.caption" class="ym_achieved_caption">{{ rec.caption }}</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                       <!-- 4. 순위 비율 탭 -->
                       <div v-else-if="sessionModalActiveTab === 'rank'" class="rank_tab_wrapper">
                         <div class="rank_chart_section">
@@ -3545,51 +5946,146 @@ const getRankClass = (rank: number) => {
                           </div>
                         </div>
                       </div>
+
+                      <!-- 5. 이번 회차 레이팅 추이 탭 -->
+                      <div v-else-if="sessionModalActiveTab === 'rating'" class="rating_tab_wrapper">
+                        <div class="rating_summary_grid">
+                          <div class="summary_stat_box">
+                            <span class="summary_label">회차 레이팅(R)</span>
+                            <span class="summary_value highlight" :style="{ color: getRatingColor(sessionModalPlayerRatingSummary.endRating) }">
+                              R{{ sessionModalPlayerRatingSummary.endRating }}
+                              <small
+                                class="session_rating_delta_inline"
+                                :class="sessionModalPlayerRatingSummary.netDelta > 0 ? 'text_positive' : sessionModalPlayerRatingSummary.netDelta < 0 ? 'text_negative' : ''"
+                              >
+                                ({{ sessionModalPlayerRatingSummary.netDelta > 0 ? '+' : '' }}{{ sessionModalPlayerRatingSummary.netDelta }})
+                              </small>
+                            </span>
+                          </div>
+                          <div class="summary_stat_box">
+                            <span class="summary_label">회차 최고</span>
+                            <span class="summary_value" :style="{ color: getRatingColor(sessionModalPlayerRatingSummary.peak) }">R{{ sessionModalPlayerRatingSummary.peak }}</span>
+                          </div>
+                          <div class="summary_stat_box">
+                            <span class="summary_label">회차 대국 수</span>
+                            <span class="summary_value">{{ sessionModalPlayerRatingSummary.totalGames }}전</span>
+                          </div>
+                        </div>
+
+                        <div class="rating_chart_container">
+                          <div v-if="sessionModalPlayerRatingChartData.labels.length > 1" style="height: 280px; position: relative;">
+                            <LineChart
+                              :data="sessionModalPlayerRatingChartData"
+                              :options="sessionModalPlayerRatingChartOptions"
+                              :plugins="sessionModalRatingChartPlugins"
+                            />
+                          </div>
+                          <div v-else class="no_rating_data">
+                            이번 회차에 기록된 레이팅 변동 이력이 없습니다.
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </template>
 
                 <!-- 레거시 회차 (국별 세부 데이터 없음) -->
                 <div v-else class="session_legacy_view">
-                  <div class="legacy_session_banner">
-                    ※ 해당 회차(제1~8회)는 국별 세부 데이터가 기록되지 않은 레거시 회차로, 기본 성적과 순위 분포만 표시됩니다.
+                  <div class="tab_menu" style="margin-bottom: 12px;">
+                    <button
+                      class="tab_btn"
+                      :class="{ active: sessionModalActiveTab !== 'rating' }"
+                      @click="sessionModalActiveTab = 'basic'"
+                    >
+                      기본 및 순위
+                    </button>
+                    <button
+                      class="tab_btn"
+                      :class="{ active: sessionModalActiveTab === 'rating' }"
+                      @click="sessionModalActiveTab = 'rating'"
+                    >
+                      레이팅 추이
+                    </button>
                   </div>
-                  <div class="stats_group">
-                    <div class="stat_row">
-                      <span class="stat_label">기록 대국 수</span>
-                      <span class="stat_value">{{ formatDualMetric(sessionMember?.totalGames, currentSessionPlayerStats.totalGames) }}전</span>
+                  <template v-if="sessionModalActiveTab === 'rating'">
+                    <div class="rating_tab_wrapper">
+                      <div class="rating_summary_grid">
+                        <div class="summary_stat_box">
+                          <span class="summary_label">회차 레이팅(R)</span>
+                          <span class="summary_value highlight" :style="{ color: getRatingColor(sessionModalPlayerRatingSummary.endRating) }">
+                            R{{ sessionModalPlayerRatingSummary.endRating }}
+                            <small
+                              class="session_rating_delta_inline"
+                              :class="sessionModalPlayerRatingSummary.netDelta > 0 ? 'text_positive' : sessionModalPlayerRatingSummary.netDelta < 0 ? 'text_negative' : ''"
+                            >
+                              ({{ sessionModalPlayerRatingSummary.netDelta > 0 ? '+' : '' }}{{ sessionModalPlayerRatingSummary.netDelta }})
+                            </small>
+                          </span>
+                        </div>
+                        <div class="summary_stat_box">
+                          <span class="summary_label">회차 최고</span>
+                          <span class="summary_value" :style="{ color: getRatingColor(sessionModalPlayerRatingSummary.peak) }">R{{ sessionModalPlayerRatingSummary.peak }}</span>
+                        </div>
+                        <div class="summary_stat_box">
+                          <span class="summary_label">회차 대국 수</span>
+                          <span class="summary_value">{{ sessionModalPlayerRatingSummary.totalGames }}전</span>
+                        </div>
+                      </div>
+                      <div class="rating_chart_container">
+                        <div v-if="sessionModalPlayerRatingChartData.labels.length > 1" style="height: 280px; position: relative;">
+                          <LineChart
+                            :data="sessionModalPlayerRatingChartData"
+                            :options="sessionModalPlayerRatingChartOptions"
+                            :plugins="sessionModalRatingChartPlugins"
+                          />
+                        </div>
+                        <div v-else class="no_rating_data">
+                          이번 회차에 기록된 레이팅 변동 이력이 없습니다.
+                        </div>
+                      </div>
                     </div>
-                    <div class="stat_row">
-                      <span class="stat_label">누적 우마</span>
-                      <span class="stat_value" :class="currentSessionPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
-                        {{ formatDualMetric(sessionMember?.totalUma, currentSessionPlayerStats.totalUma, 1, true) }}pt
-                      </span>
+                  </template>
+                  <template v-else>
+                    <div class="legacy_session_banner">
+                      ※ 해당 회차(제1~8회)는 국별 세부 데이터가 기록되지 않은 레거시 회차로, 기본 성적과 순위 분포만 표시됩니다.
                     </div>
-                    <div class="stat_row">
-                      <span class="stat_label">평균 우마</span>
-                      <span class="stat_value" :class="currentSessionPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
-                        {{ formatDualMetric(sessionMember?.avgUma, currentSessionPlayerStats.avgUma, 1, true) }}pt
-                      </span>
+                    <div class="stats_group">
+                      <div class="stat_row">
+                        <span class="stat_label">기록 대국 수</span>
+                        <span class="stat_value">{{ formatDualMetric(sessionMember?.totalGames, currentSessionPlayerStats.totalGames) }}전</span>
+                      </div>
+                      <div class="stat_row">
+                        <span class="stat_label">누적 우마</span>
+                        <span class="stat_value" :class="currentSessionPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
+                          {{ formatDualMetric(sessionMember?.totalUma, currentSessionPlayerStats.totalUma, 1, true) }}pt
+                        </span>
+                      </div>
+                      <div class="stat_row">
+                        <span class="stat_label">평균 우마</span>
+                        <span class="stat_value" :class="currentSessionPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
+                          {{ formatDualMetric(sessionMember?.avgUma, currentSessionPlayerStats.avgUma, 1, true) }}pt
+                        </span>
+                      </div>
+                      <div class="stat_row">
+                        <span class="stat_label">평균 순위</span>
+                        <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 3) }}위</span>
+                      </div>
+                      <div class="stat_row">
+                        <span class="stat_label">연대율 (1·2위)</span>
+                        <span class="stat_value text_positive">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 2) }}%</span>
+                      </div>
                     </div>
-                    <div class="stat_row">
-                      <span class="stat_label">평균 순위</span>
-                      <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 3) }}위</span>
+                    <!-- 레거시 순위 분포 -->
+                    <div class="session_modal_rank_section">
+                      <div class="session_rank_title">이번 회차 순위 분포</div>
+                      <div class="session_rank_badges_row">
+                        <div class="dist-badge r1"><span class="dist-label">1등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank1Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank1Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                        <div class="dist-badge r2"><span class="dist-label">2등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank2Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank2Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                        <div class="dist-badge r3"><span class="dist-label">3등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank3Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank3Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                        <div class="dist-badge r4"><span class="dist-label">4등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank4Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank4Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
+                      </div>
                     </div>
-                    <div class="stat_row">
-                      <span class="stat_label">연대율 (1·2위)</span>
-                      <span class="stat_value text_positive">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 2) }}%</span>
-                    </div>
-                  </div>
-                  <!-- 레거시 순위 분포 -->
-                  <div class="session_modal_rank_section">
-                    <div class="session_rank_title">이번 회차 순위 분포</div>
-                    <div class="session_rank_badges_row">
-                      <div class="dist-badge r1"><span class="dist-label">1등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank1Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank1Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
-                      <div class="dist-badge r2"><span class="dist-label">2등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank2Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank2Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
-                      <div class="dist-badge r3"><span class="dist-label">3등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank3Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank3Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
-                      <div class="dist-badge r4"><span class="dist-label">4등</span> <span class="dist-cnt">{{ currentSessionPlayerStats.rank4Count }}</span><span class="dist-pct">({{ getDistPct(currentSessionPlayerStats.rank4Count, currentSessionPlayerStats.totalGames) }}%)</span></div>
-                    </div>
-                  </div>
+                  </template>
                 </div>
               </div>
             </div>
@@ -3633,6 +6129,13 @@ const getRankClass = (rank: number) => {
                 @click="modalActiveTab = 'rating'"
               >
                 레이팅 추이
+              </button>
+              <button 
+                class="tab_btn" 
+                :class="{ active: modalActiveTab === 'yakuman' }" 
+                @click="modalActiveTab = 'yakuman'"
+              >
+                역만
               </button>
             </div>
 
@@ -3953,6 +6456,51 @@ const getRankClass = (rank: number) => {
               </div>
             </div>
 
+            <!-- 3-2. 역만 탭 (개인별 17종 역만 화료 카운트 및 달성 사진) -->
+            <div v-else-if="modalActiveTab === 'yakuman'" class="yakuman_tab_wrapper">
+              <div class="yakuman_summary_bar">
+                <span class="ym_summary_title">통산 역만 화료 기록</span>
+                <span class="ym_summary_badge" :class="{ achieved: modalPlayerYakumanStats.totalYakumanCount > 0 }">
+                  {{ modalPlayerYakumanStats.totalYakumanCount }}회
+                </span>
+              </div>
+              <div class="yakuman_counts_grid">
+                <div
+                  v-for="ym in modalPlayerYakumanStats.items"
+                  :key="`all-ym-${ym.key}`"
+                  class="yakuman_count_row"
+                  :class="{ achieved: ym.count > 0, double: ym.isDouble }"
+                >
+                  <span class="ym_name">{{ ym.label }}</span>
+                  <span class="ym_val">- {{ ym.count }}</span>
+                </div>
+              </div>
+              <div v-if="modalPlayerYakumanStats.achievedRecords.length > 0" class="yakuman_achieved_list">
+                <div class="ym_achieved_header">달성 상세 및 화료 사진 ({{ modalPlayerYakumanStats.achievedRecords.length }}건)</div>
+                <div class="ym_achieved_cards">
+                  <div
+                    v-for="rec in modalPlayerYakumanStats.achievedRecords"
+                    :key="rec.id"
+                    class="ym_achieved_card"
+                    @click="openHighlightLightbox(rec)"
+                  >
+                    <img v-if="rec.hasImage && rec.imageId" :src="getHighlightImageUrl(rec.imageId)" class="ym_thumb" loading="lazy" alt="역만" />
+                    <div class="ym_achieved_info">
+                      <div class="ym_achieved_tags">
+                        <span v-for="t in rec.yakumanTypes" :key="t" class="hl-y-badge">{{ t }}</span>
+                      </div>
+                      <div class="ym_achieved_meta">
+                        {{ rec.sessionName }}
+                        <template v-if="rec.gameIndex"> · {{ rec.gameIndex }}경기</template>
+                        <template v-if="rec.roundName"> · {{ rec.roundName }}</template>
+                      </div>
+                      <div v-if="rec.caption" class="ym_achieved_caption">{{ rec.caption }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- 4. 순위 비율 탭 (ModalStats.vue와 완벽 일치하는 SVG 도넛 차트 및 상세 카드) -->
             <div v-else-if="modalActiveTab === 'rank'" class="rank_tab_wrapper">
               <div class="rank_chart_section">
@@ -4229,6 +6777,13 @@ const getRankClass = (rank: number) => {
                 >
                   점수 변동 그래프
                 </button>
+                <button 
+                  class="gdm-tab-btn" 
+                  :class="{ active: gameModalMode === 'rounds' }"
+                  @click="gameModalMode = 'rounds'"
+                >
+                  국별 점수 이동
+                </button>
               </div>
               <button class="gdm-close-btn" @click="selectedGameDetail = null" title="닫기">✕</button>
             </div>
@@ -4266,8 +6821,16 @@ const getRankClass = (rank: number) => {
                 </div>
               </div>
               <div class="gdm-content-col name_contents">
-                <div v-for="p in selectedGameDetail.playerStats" :key="'name-' + p.seat + p.name">
-                  {{ p.name }}
+                <div
+                  v-for="p in selectedGameDetail.playerStats"
+                  :key="'name-' + p.seat + p.name"
+                  class="gdm-name-cell-inner"
+                >
+                  <span class="gdm-player-name-txt">{{ p.name }}</span>
+                  <span
+                    v-if="isPlayerYakumanInGame(selectedGameDetail, p.name, currentSessionDetail?.sessionName || selectedSession)"
+                    class="gdm-inline-yakuman-badge"
+                  >역만</span>
                 </div>
               </div>
               <div class="gdm-content-col rating_contents">
@@ -4314,10 +6877,10 @@ const getRankClass = (rank: number) => {
               class="gdm-hint" 
               @click="gameModalMode = 'chart'"
             >
-              💡 표를 클릭하면 국별 점수 변동 그래프를 볼 수 있습니다.
+              표를 클릭하면 국별 점수 변동 그래프를 볼 수 있습니다.
             </div>
             <div v-else-if="!isLoadingGameDetail" class="gdm-legacy-notice">
-              ℹ️ 해당 대국은 국별 상세 기록(리치/론/쯔모/방총 및 국별 점수 변동)이 제공되지 않아 최종 점수와 우마만 표시됩니다.
+              해당 대국은 국별 상세 기록(리치/론/쯔모/방총 및 국별 점수 변동)이 제공되지 않아 최종 점수와 우마만 표시됩니다.
             </div>
           </div>
 
@@ -4340,8 +6903,755 @@ const getRankClass = (rank: number) => {
             </div>
 
             <div class="gdm-hint" @click="gameModalMode = 'sheet'">
-              💡 차트를 클릭하면 국별 결과 표로 돌아갑니다.
+              차트를 클릭하면 국별 결과 표로 돌아갑니다.
             </div>
+          </div>
+
+          <!-- 3) 국별 점수 이동 (Rounds) 뷰 -->
+          <div v-show="gameModalMode === 'rounds'" class="gdm-rounds-view">
+            <div class="gdm-rounds-filter-bar">
+              <label class="gdm-rounds-filter-label">국 선택</label>
+              <select v-model="gameModalSelectedRound" class="form-select gdm-rounds-select">
+                <option value="__all__">전체 국 모두 보기 ({{ gameModalAllRoundMovements.length }}국)</option>
+                <option
+                  v-for="(rm, idx) in gameModalAllRoundMovements"
+                  :key="`gdm-r-opt-${rm.roundIndex}-${idx}`"
+                  :value="rm.roundName"
+                >
+                  {{ rm.roundName }}{{ formatRoundOptionSummary(rm) }}{{ isRoundYakuman(rm, selectedGameDetail, currentSessionDetail?.sessionName || selectedSession) ? ' [역만]' : '' }}
+                </option>
+              </select>
+            </div>
+            <div v-if="gameModalDisplayedRoundMovements.length > 0" class="gdm-rounds-scroll-list">
+              <div
+                v-for="(rm, rmIdx) in gameModalDisplayedRoundMovements"
+                :key="`gdm-rm-${rm.roundIndex}-${rmIdx}`"
+                class="upload-round-movement-card"
+              >
+                <div class="urm-header">
+                  <div class="urm-title-group">
+                    <span class="urm-title">{{ rm.roundName }} 점수 이동 내역</span>
+                    <span
+                      v-if="isRoundYakuman(rm, selectedGameDetail, currentSessionDetail?.sessionName || selectedSession)"
+                      class="urm-yakuman-badge"
+                    >역만</span>
+                  </div>
+                  <span v-if="formatRoundStatusLabel(rm.roundStatus)" class="urm-status-badge">
+                    {{ formatRoundStatusLabel(rm.roundStatus) }}
+                  </span>
+                </div>
+                <div class="urm-players-grid">
+                  <div
+                    v-for="pm in rm.players"
+                    :key="`gdm-rm-p-${rm.roundIndex}-${pm.name}`"
+                    class="urm-player-row"
+                    :class="{ 'is-win': pm.isWin, 'is-lose': pm.isLose }"
+                  >
+                    <div class="urm-player-left">
+                      <span class="urm-seat" :class="{ 'is-east': pm.seat === '東' }">{{ pm.seat }}</span>
+                      <span class="urm-name">{{ pm.name }}</span>
+                      <span
+                        v-if="isRoundPlayerYakuman(rm, pm, selectedGameDetail, currentSessionDetail?.sessionName || selectedSession)"
+                        class="urm-tag yakuman"
+                      >역만</span>
+                      <span v-if="pm.isRiichi" class="urm-tag riichi">리치</span>
+                      <span v-if="pm.isWin" class="urm-tag win">
+                        {{ formatRoundStatusLabel(rm.roundStatus) === '쯔모' ? '쯔모' : '화료' }}
+                      </span>
+                      <span v-if="pm.isLose" class="urm-tag lose">방총</span>
+                    </div>
+                    <div class="urm-player-right">
+                      <span class="urm-score-flow">{{ pm.scoreBefore.toLocaleString() }} → {{ pm.scoreAfter.toLocaleString() }}</span>
+                      <span
+                        class="urm-score-delta"
+                        :class="pm.deltaScore > 0 ? 'pos' : pm.deltaScore < 0 ? 'neg' : 'zero'"
+                      >
+                        ({{ pm.deltaScore > 0 ? '+' : '' }}{{ pm.deltaScore.toLocaleString() }})
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="gdm-empty-chart">
+              국별 점수 이동 내역이 없습니다.
+            </div>
+          </div>
+
+          <!-- 이 경기의 역만/화료 기록 및 등록 버튼 (기록이 있을 때만 제목/목록 표기) -->
+          <div class="gdm-highlights-box">
+            <div class="gdm-highlights-header" :class="{ 'only-btn': currentGameHighlights.length === 0 }">
+              <span v-if="currentGameHighlights.length > 0" class="gdm-highlights-title">
+                이 경기의 역만/화료 기록 ({{ currentGameHighlights.length }})
+              </span>
+              <button 
+                class="btn-add-highlight-sm" 
+                @click="handleOpenUploadFromGameModal"
+              >
+                역만 / 사진 등록
+              </button>
+            </div>
+            <div v-if="currentGameHighlights.length > 0" class="gdm-highlights-list">
+              <div 
+                v-for="item in currentGameHighlights" 
+                :key="item.id" 
+                class="gdm-highlight-item"
+                @click="openHighlightLightbox(item)"
+              >
+                <img v-if="item.hasImage && item.imageId" :src="getHighlightImageUrl(item.imageId)" class="gdm-highlight-thumb" loading="lazy" alt="사진" />
+                <div class="gdm-highlight-info">
+                  <div class="gdm-highlight-badges">
+                    <span v-if="item.roundName" class="badge-round-sm">{{ item.roundName }}</span>
+                    <template v-if="item.category === 'yakuman'">
+                      <span v-for="yk in item.yakumanTypes" :key="yk" class="badge-yakuman-sm">{{ yk }}</span>
+                    </template>
+                    <span v-else-if="item.category === 'fun'" class="badge-fun-sm">그 외 화료</span>
+                    <span v-else class="badge-session-sm">회차 사진</span>
+                  </div>
+                  <div v-if="item.winnerName" class="gdm-highlight-players">
+                    화료: <strong>{{ item.winnerName }}</strong>
+                    <span v-if="item.winType"> ({{ item.winType === 'tsumo' ? '쯔모' : `론${item.loserName ? ' ← ' + item.loserName : ''}` }})</span>
+                  </div>
+                  <div v-if="item.caption" class="gdm-highlight-note">{{ item.caption }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ============================================== -->
+    <!-- 역만 / 화료 / 회차별 사진 등록 대형 모달 -->
+    <!-- ============================================== -->
+    <Transition name="modal-fade">
+      <div 
+        v-if="isHighlightUploadModalOpen" 
+        class="modal-overlay" 
+        @click.self="closeHighlightUploadModal"
+      >
+        <div class="highlight-upload-modal-card large-upload-modal">
+          <div class="highlight-modal-header">
+            <div>
+              <h3>역만 / 화료 / 회차별 사진 등록</h3>
+              <p class="upload-modal-subdesc">역만, 그 외 화료, 회차별 현장 사진을 등록합니다.</p>
+            </div>
+            <button class="btn-close" @click="closeHighlightUploadModal" title="닫기">✕</button>
+          </div>
+          <div class="highlight-modal-body">
+            <!-- 현재 아카이브 요약 현황 -->
+            <div class="gh-stats-row upload-modal-stats-row">
+              <div class="gh-stat-pill">
+                <span class="gh-stat-label">전체 아카이브</span>
+                <span class="gh-stat-val">{{ highlightsList.length }}건</span>
+              </div>
+              <div class="gh-stat-pill yakuman">
+                <span class="gh-stat-label">역만</span>
+                <span class="gh-stat-val text_gold">{{ highlightsList.filter(h => h.category === 'yakuman').length }}건</span>
+              </div>
+              <div class="gh-stat-pill fun">
+                <span class="gh-stat-label">그 외 화료</span>
+                <span class="gh-stat-val">{{ highlightsList.filter(h => h.category === 'fun').length }}건</span>
+              </div>
+              <div class="gh-stat-pill session">
+                <span class="gh-stat-label">회차 현장 사진</span>
+                <span class="gh-stat-val">{{ highlightsList.filter(h => h.category === 'session').length }}건</span>
+              </div>
+            </div>
+
+            <!-- 업로드 모달 내 서버 남은 용량 안내 -->
+            <div class="gh-storage-status-bar in-upload-modal">
+              <div class="gh-storage-info">
+                <span class="gh-storage-title">서버 남은 용량</span>
+                <span class="gh-storage-metrics">
+                  <strong class="gh-storage-remain">{{ galleryStorageStats.remainingText }}</strong> 사용 가능
+                  <span class="gh-storage-sub">
+                    (현재 {{ galleryStorageStats.usedText }} / {{ galleryStorageStats.maxText }} 사용 중)
+                  </span>
+                </span>
+                <span
+                  class="gh-storage-pct-badge"
+                  :class="{
+                    warn: galleryStorageStats.usedPercent >= 75 && galleryStorageStats.usedPercent < 90,
+                    danger: galleryStorageStats.usedPercent >= 90
+                  }"
+                >
+                  {{ galleryStorageStats.remainingPercent.toFixed(1) }}% 여유
+                </span>
+              </div>
+              <div class="gh-storage-track">
+                <div
+                  class="gh-storage-fill"
+                  :class="{
+                    warn: galleryStorageStats.usedPercent >= 75 && galleryStorageStats.usedPercent < 90,
+                    danger: galleryStorageStats.usedPercent >= 90
+                  }"
+                  :style="{ width: Math.max(galleryStorageStats.usedPercent > 0 ? 1.5 : 0, galleryStorageStats.usedPercent) + '%' }"
+                ></div>
+              </div>
+            </div>
+
+            <!-- 분류 선택 -->
+            <div class="form-group">
+              <label class="form-label">등록 분류</label>
+              <div class="category-radio-group">
+                <button 
+                  type="button"
+                  class="cat-radio-btn" 
+                  :class="{ active: uploadForm.category === 'yakuman' }"
+                  @click="uploadForm.category = 'yakuman'"
+                >
+                  역만
+                </button>
+                <button 
+                  type="button"
+                  class="cat-radio-btn" 
+                  :class="{ active: uploadForm.category === 'fun' }"
+                  @click="uploadForm.category = 'fun'"
+                >
+                  그 외 화료
+                </button>
+                <button 
+                  type="button"
+                  class="cat-radio-btn" 
+                  :class="{ active: uploadForm.category === 'session' }"
+                  @click="uploadForm.category = 'session'"
+                >
+                  회차별 사진 등록
+                </button>
+              </div>
+            </div>
+
+            <!-- 회차 및 경기 번호 (실제 회차 경기 정보 기반 선택) -->
+            <div :class="uploadForm.category !== 'session' ? 'form-row-2' : ''">
+              <div class="form-group">
+                <label class="form-label">회차 선택 *</label>
+                <select v-model="uploadForm.sessionName" class="form-select">
+                  <option v-for="sName in displayedAvailableSessions" :key="`up-s-${sName}`" :value="sName">
+                    {{ sName }}
+                  </option>
+                </select>
+              </div>
+              <div v-if="uploadForm.category !== 'session'" class="form-group">
+                <label class="form-label">경기 선택 {{ uploadForm.category === 'yakuman' ? '*' : '(선택)' }}</label>
+                <select v-model="uploadForm.gameIndex" class="form-select">
+                  <option :value="undefined">{{ uploadForm.category === 'yakuman' ? '경기를 선택하세요 (필수)' : '선택 안 함' }}</option>
+                  <option
+                    v-for="g in uploadModalGames"
+                    :key="`up-g-${g.gameIndex}`"
+                    :value="g.gameIndex"
+                  >
+                    {{ g.gameIndex }}경기 ({{ g.players.map(p => p.name).join(', ') }})
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <!-- 선택한 경기의 결과 표 및 점수 변동 그래프 미리보기 -->
+            <div v-if="uploadForm.category !== 'session' && uploadModalGameDetail" class="upload-game-preview-box">
+              <div class="upload-game-preview-header">
+                <div class="upload-game-preview-title">
+                  <strong>{{ uploadModalGameDetail.gameIndex }}경기 결과</strong>
+                  <span v-if="uploadModalGameDetail.time" class="upload-game-preview-time">({{ uploadModalGameDetail.time }})</span>
+                  <span v-if="isLoadingUploadGameDetail" class="upload-game-loading-txt">세부 국별 데이터 조회 중...</span>
+                </div>
+                <div v-if="uploadModalGameDetail.hasRoundDetails" class="gdm-tabs">
+                  <button
+                    type="button"
+                    class="gdm-tab-btn"
+                    :class="{ active: uploadModalGameViewMode === 'sheet' }"
+                    @click="uploadModalGameViewMode = 'sheet'"
+                  >
+                    결과 표
+                  </button>
+                  <button
+                    type="button"
+                    class="gdm-tab-btn"
+                    :class="{ active: uploadModalGameViewMode === 'chart' }"
+                    @click="uploadModalGameViewMode = 'chart'"
+                  >
+                    점수 변동 그래프
+                  </button>
+                </div>
+              </div>
+
+              <!-- 1) 결과 표 뷰 -->
+              <div v-show="uploadModalGameViewMode === 'sheet'">
+                <div
+                  class="gdm-resultsheet"
+                  :class="{ 'clickable-view': uploadModalGameDetail.hasRoundDetails }"
+                  @click="uploadModalGameDetail.hasRoundDetails ? (uploadModalGameViewMode = 'chart') : null"
+                  :title="uploadModalGameDetail.hasRoundDetails ? '클릭 시 점수 변동 그래프로 전환' : undefined"
+                >
+                  <div class="gdm-header-cell wind">바람</div>
+                  <div class="gdm-header-cell name">이름</div>
+                  <div class="gdm-header-cell rating">레이팅 (변동)</div>
+                  <div class="gdm-header-cell score">점수 (우마)</div>
+                  <div class="gdm-header-cell riichi">리치</div>
+                  <div class="gdm-header-cell ron">론</div>
+                  <div class="gdm-header-cell tsumo">쯔모</div>
+                  <div class="gdm-header-cell lose">방총</div>
+
+                  <div class="gdm-content-col wind_contents">
+                    <div
+                      v-for="p in uploadModalGameDetail.playerStats"
+                      :key="'up-wind-' + p.seat + p.name"
+                      :class="{ 'is-east': p.seat === '東' }"
+                    >
+                      {{ p.seat }}
+                    </div>
+                  </div>
+                  <div class="gdm-content-col name_contents">
+                    <div
+                      v-for="p in uploadModalGameDetail.playerStats"
+                      :key="'up-name-' + p.seat + p.name"
+                      class="gdm-name-cell-inner"
+                    >
+                      <span class="gdm-player-name-txt">{{ p.name }}</span>
+                      <span
+                        v-if="isPlayerYakumanInGame(uploadModalGameDetail, p.name, uploadForm.sessionName)"
+                        class="gdm-inline-yakuman-badge"
+                      >역만</span>
+                    </div>
+                  </div>
+                  <div class="gdm-content-col rating_contents">
+                    <div v-for="p in uploadModalGameDetail.playerStats" :key="'up-rating-' + p.seat + p.name">
+                      <template v-if="p.ratingBefore !== undefined">
+                        <span class="gdm-rating-val" :style="{ color: getRatingColor(p.ratingBefore) }">R{{ p.ratingBefore }}</span>
+                        <span class="gdm-rating-delta" :class="(p.ratingDelta || 0) >= 0 ? 'text_pos' : 'text_neg'">
+                          ({{ (p.ratingDelta || 0) >= 0 ? '+' : '' }}{{ p.ratingDelta }})
+                        </span>
+                      </template>
+                      <template v-else>-</template>
+                    </div>
+                  </div>
+                  <div class="gdm-content-col score_contents">
+                    <div v-for="p in uploadModalGameDetail.playerStats" :key="'up-score-' + p.seat + p.name">
+                      <span class="gdm-score-val">{{ p.score.toLocaleString() }}</span>
+                      <span class="gdm-score-uma">(<span :class="p.uma >= 0 ? 'text_pos' : 'text_neg'"><span v-if="p.uma > 0">+</span>{{ p.uma }}</span>)</span>
+                    </div>
+                  </div>
+                  <div class="gdm-content-col riichi_contents">
+                    <div v-for="p in uploadModalGameDetail.playerStats" :key="'up-riichi-' + p.seat + p.name">
+                      {{ uploadModalGameDetail.hasRoundDetails ? p.cntRiichi : '-' }}
+                    </div>
+                  </div>
+                  <div class="gdm-content-col ron_contents">
+                    <div v-for="p in uploadModalGameDetail.playerStats" :key="'up-ron-' + p.seat + p.name">
+                      {{ uploadModalGameDetail.hasRoundDetails ? p.cntRon : '-' }}
+                    </div>
+                  </div>
+                  <div class="gdm-content-col tsumo_contents">
+                    <div v-for="p in uploadModalGameDetail.playerStats" :key="'up-tsumo-' + p.seat + p.name">
+                      {{ uploadModalGameDetail.hasRoundDetails ? p.cntTsumo : '-' }}
+                    </div>
+                  </div>
+                  <div class="gdm-content-col lose_contents">
+                    <div v-for="p in uploadModalGameDetail.playerStats" :key="'up-lose-' + p.seat + p.name">
+                      {{ uploadModalGameDetail.hasRoundDetails ? p.cntLose : '-' }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 2) 점수 변동 그래프 뷰 -->
+              <div v-show="uploadModalGameViewMode === 'chart'">
+                <div
+                  class="gdm-chart-box clickable-view upload-modal-chart-box"
+                  @click="uploadModalGameViewMode = 'sheet'"
+                  title="클릭 시 결과 표로 전환"
+                >
+                  <LineChart
+                    v-if="uploadModalGameDetail.chartData && uploadModalGameDetail.chartData.datasets.length > 0"
+                    :key="`up-line-chart-${uploadModalGameDetail.gameId}-${uploadModalGameDetail.gameIndex}-${isDark ? 'dark' : 'light'}`"
+                    :data="uploadModalGameDetail.chartData"
+                    :options="uploadModalChartOptions"
+                  />
+                  <div v-else class="gdm-empty-chart">
+                    점수 변동 그래프 데이터가 없습니다.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 국 선택 (점수 변동 그래프 기반 실제 진행 국/본장 선택) -->
+            <div v-if="uploadForm.category !== 'session'" class="form-group">
+              <label class="form-label">국 선택 (선택)</label>
+              <select v-model="uploadForm.roundName" class="form-select">
+                <option value="">선택 안 함</option>
+                <option v-for="rl in uploadCandidateRounds" :key="`up-r-${rl}`" :value="rl">
+                  {{ getUploadRoundOptionLabel(rl) }}
+                </option>
+              </select>
+
+              <!-- 선택한 국의 4인 점수 이동 내역 표시 -->
+              <div v-if="uploadForm.roundName && selectedUploadRoundMovements.length > 0" class="upload-round-movements-box">
+                <div
+                  v-for="(rm, rmIdx) in selectedUploadRoundMovements"
+                  :key="`urm-${rm.roundIndex}-${rmIdx}`"
+                  class="upload-round-movement-card"
+                >
+                  <div class="urm-header">
+                    <div class="urm-title-group">
+                      <span class="urm-title">{{ rm.roundName }} 점수 이동 내역</span>
+                      <span
+                        v-if="isRoundYakuman(rm, uploadModalGameDetail, uploadForm.sessionName)"
+                        class="urm-yakuman-badge"
+                      >역만</span>
+                    </div>
+                    <span v-if="formatRoundStatusLabel(rm.roundStatus)" class="urm-status-badge">
+                      {{ formatRoundStatusLabel(rm.roundStatus) }}
+                    </span>
+                  </div>
+                  <div class="urm-players-grid">
+                    <div
+                      v-for="pm in rm.players"
+                      :key="`urm-p-${rm.roundIndex}-${pm.name}`"
+                      class="urm-player-row"
+                      :class="{ 'is-win': pm.isWin, 'is-lose': pm.isLose }"
+                    >
+                      <div class="urm-player-left">
+                        <span class="urm-seat" :class="{ 'is-east': pm.seat === '東' }">{{ pm.seat }}</span>
+                        <span class="urm-name">{{ pm.name }}</span>
+                        <span
+                          v-if="isRoundPlayerYakuman(rm, pm, uploadModalGameDetail, uploadForm.sessionName)"
+                          class="urm-tag yakuman"
+                        >역만</span>
+                        <span v-if="pm.isRiichi" class="urm-tag riichi">리치</span>
+                        <span v-if="pm.isWin" class="urm-tag win">
+                          {{ formatRoundStatusLabel(rm.roundStatus) === '쯔모' ? '쯔모' : '화료' }}
+                        </span>
+                        <span v-if="pm.isLose" class="urm-tag lose">방총</span>
+                      </div>
+                      <div class="urm-player-right">
+                        <span class="urm-score-flow">{{ pm.scoreBefore.toLocaleString() }} → {{ pm.scoreAfter.toLocaleString() }}</span>
+                        <span
+                          class="urm-score-delta"
+                          :class="pm.deltaScore > 0 ? 'pos' : pm.deltaScore < 0 ? 'neg' : 'zero'"
+                        >
+                          ({{ pm.deltaScore > 0 ? '+' : '' }}{{ pm.deltaScore.toLocaleString() }})
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 해당 회차 참여 인원 중에서 선택 (인원 미선택 업로드도 가능) -->
+            <div v-if="uploadForm.category !== 'session'" class="form-row-2">
+              <div class="form-group">
+                <label class="form-label">화료자 / 인원 (선택)</label>
+                <select v-model="uploadForm.winnerName" class="form-select">
+                  <option value="">선택 안 함</option>
+                  <option v-for="pName in uploadCandidatePlayers" :key="`up-w-${pName}`" :value="pName">
+                    {{ pName }}
+                  </option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">화료 방식</label>
+                <select v-model="uploadForm.winType" class="form-select">
+                  <option value="tsumo">쯔모 화료</option>
+                  <option value="ron">론 화료 (방총자 지정)</option>
+                </select>
+              </div>
+            </div>
+            <div v-else class="form-group">
+              <label class="form-label">인원 선택 (선택)</label>
+              <select v-model="uploadForm.winnerName" class="form-select">
+                <option value="">선택 안 함</option>
+                <option v-for="pName in uploadCandidatePlayers" :key="`up-ws-${pName}`" :value="pName">
+                  {{ pName }}
+                </option>
+              </select>
+            </div>
+
+            <div v-if="uploadForm.category !== 'session' && uploadForm.winType === 'ron'" class="form-group">
+              <label class="form-label">방총자 (선택)</label>
+              <select v-model="uploadForm.loserName" class="form-select">
+                <option value="">선택 안 함</option>
+                <option v-for="pName in uploadCandidatePlayers" :key="`up-l-${pName}`" :value="pName">
+                  {{ pName }}
+                </option>
+              </select>
+            </div>
+
+            <!-- 역만 종류 17종 다중 선택 -->
+            <div v-if="uploadForm.category === 'yakuman'" class="form-group">
+              <label class="form-label">달성 역만 선택 (복수 선택 가능)</label>
+              <div class="yakuman-chips-selector">
+                <button
+                  v-for="yDef in YAKUMAN_DEFINITIONS"
+                  :key="`sel-yk-${yDef.key}`"
+                  type="button"
+                  class="yakuman-select-chip"
+                  :class="{ selected: uploadForm.yakumanTypes.includes(yDef.key) }"
+                  @click="toggleYakumanTypeInForm(yDef.key)"
+                >
+                  {{ yDef.label }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 사진 업로드 -->
+            <div class="form-group">
+              <label class="form-label">
+                사진 첨부 {{ uploadForm.category === 'session' ? '*' : '(선택)' }}
+              </label>
+              <input 
+                ref="highlightFileInputRef"
+                type="file" 
+                accept="image/*" 
+                class="form-file-input"
+                @change="handleHighlightFileSelect"
+              />
+              <div v-if="selectedUploadPreviewUrl" class="upload-preview-box">
+                <img :src="selectedUploadPreviewUrl" alt="미리보기" class="upload-preview-img" />
+                <button 
+                  type="button" 
+                  class="btn-remove-preview" 
+                  @click="selectedUploadFile = null; selectedUploadPreviewUrl = ''; selectedUploadDimensions = ''"
+                >
+                  사진 제거
+                </button>
+              </div>
+            </div>
+
+            <!-- 멀티라인 메모 -->
+            <div class="form-group">
+              <label class="form-label">메모 / 설명 (선택, 최대 500자)</label>
+              <textarea 
+                v-model="uploadForm.caption" 
+                rows="3"
+                class="form-textarea" 
+                placeholder="역만 달성 상황, 대기패/도라 설명, 대국 비하인드 메모를 자유롭게 남겨보세요"
+                maxlength="500"
+              ></textarea>
+            </div>
+
+            <!-- 공통 PIN 입력 (관리자가 아니고 저장된 PIN도 없을 때만 노출) -->
+            <div v-if="needsPinInput" class="form-group">
+              <label class="form-label">공통 업로드 PIN * <span class="sub-hint">(한 번 입력하면 이 기기에 자동 저장됩니다)</span></label>
+              <input 
+                v-model="uploadForm.uploadPin" 
+                type="password" 
+                class="form-input" 
+                placeholder="공통 PIN 번호를 입력하세요"
+                autocomplete="off"
+              />
+            </div>
+            <div v-else class="pin-auto-status-bar">
+              <span v-if="isGalleryAdmin" class="pin-auto-badge">관리자 권한으로 PIN 입력 없이 즉시 등록됩니다</span>
+              <template v-else>
+                <span class="pin-auto-badge">이전에 입력한 공통 PIN이 자동 적용됩니다</span>
+                <button type="button" class="btn-reset-saved-pin" @click="clearHighlightPin(); hasSavedValidPin = false; uploadForm.uploadPin = ''">PIN 다시 입력</button>
+              </template>
+            </div>
+
+            <div v-if="highlightUploadError" class="upload-error-msg">{{ highlightUploadError }}</div>
+          </div>
+          <div class="highlight-modal-footer">
+            <button type="button" class="btn-cancel-modal" @click="closeHighlightUploadModal">취소</button>
+            <button 
+              type="button" 
+              class="btn-submit-modal" 
+              :disabled="isSubmittingHighlight"
+              @click="submitHighlightUpload"
+            >
+              {{ isSubmittingHighlight ? '업로드 중...' : '등록하기' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ============================================== -->
+    <!-- 사진 원본 라이트박스, 메모 수정 및 삭제 모달 -->
+    <!-- ============================================== -->
+    <Transition name="modal-fade">
+      <div 
+        v-if="lightboxHighlight" 
+        class="modal-overlay lightbox-overlay" 
+        @click.self="lightboxHighlight = null"
+      >
+        <div class="lightbox-modal-card">
+          <div class="lightbox-header">
+            <div class="lightbox-title-meta">
+              <span class="badge-session">{{ lightboxHighlight.sessionName }}</span>
+              <span v-if="lightboxHighlight.gameIndex" class="badge-game">{{ lightboxHighlight.gameIndex }}경기</span>
+              <span v-if="lightboxHighlight.roundName" class="badge-round">{{ lightboxHighlight.roundName }}</span>
+              <template v-if="lightboxHighlight.category === 'yakuman'">
+                <span v-for="yk in lightboxHighlight.yakumanTypes" :key="yk" class="badge-yakuman">
+                  {{ yk }}
+                </span>
+              </template>
+              <span v-else-if="lightboxHighlight.category === 'fun'" class="badge-fun">그 외 화료</span>
+              <span v-else class="badge-session-photo">회차 사진</span>
+            </div>
+            <button class="btn-close" @click="lightboxHighlight = null" title="닫기">✕</button>
+          </div>
+
+          <div v-if="lightboxHighlight.hasImage && lightboxHighlight.imageId" class="lightbox-img-container">
+            <img :src="getHighlightImageUrl(lightboxHighlight.imageId)" class="lightbox-full-img" alt="사진" />
+          </div>
+
+          <div class="lightbox-info-footer">
+            <div class="lightbox-details">
+              <div v-if="lightboxHighlight.winnerName" class="lightbox-players">
+                {{ lightboxHighlight.category === 'session' ? '인원:' : '화료:' }} <strong>{{ lightboxHighlight.winnerName }}</strong>
+                <span v-if="lightboxHighlight.winType">
+                  ({{ lightboxHighlight.winType === 'tsumo' ? '쯔모' : `론${lightboxHighlight.loserName ? ' ← ' + lightboxHighlight.loserName : ''}` }})
+                </span>
+              </div>
+
+              <!-- 메모 표시 및 수정 영역 -->
+              <div class="lightbox-memo-section">
+                <template v-if="!isEditingLightboxMemo">
+                  <div class="lightbox-memo-header">
+                    <span class="lightbox-memo-label">메모</span>
+                    <button type="button" class="btn-edit-memo" @click="startEditLightboxMemo">
+                      {{ lightboxHighlight.caption ? '메모 수정' : '+ 메모 추가' }}
+                    </button>
+                  </div>
+                  <div v-if="lightboxHighlight.caption" class="lightbox-note">{{ lightboxHighlight.caption }}</div>
+                  <div v-else class="lightbox-note-empty">등록된 메모가 없습니다. [+ 메모 추가] 버튼으로 상황 설명을 남길 수 있습니다.</div>
+                </template>
+
+                <div v-else class="lightbox-memo-editor">
+                  <textarea
+                    v-model="editingMemoText"
+                    rows="3"
+                    maxlength="500"
+                    class="form-textarea"
+                    placeholder="역만/사진에 대한 메모를 입력하세요 (최대 500자)"
+                  ></textarea>
+                  <div class="lightbox-memo-editor-actions">
+                    <input
+                      v-if="needsPinInput"
+                      v-model="editingMemoPin"
+                      type="password"
+                      class="delete-pin-input"
+                      placeholder="공통 PIN 입력"
+                    />
+                    <button
+                      type="button"
+                      class="btn-cancel-modal"
+                      @click="isEditingLightboxMemo = false"
+                    >
+                      취소
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-submit-modal"
+                      :disabled="isSavingLightboxMemo"
+                      @click="saveLightboxMemo"
+                    >
+                      {{ isSavingLightboxMemo ? '저장 중...' : '메모 저장' }}
+                    </button>
+                  </div>
+                  <div v-if="memoEditError" class="upload-error-msg">{{ memoEditError }}</div>
+                </div>
+              </div>
+
+              <div class="lightbox-date">
+                등록일: {{ formatHighlightDate(lightboxHighlight.createdAt) }}
+              </div>
+            </div>
+
+            <div class="lightbox-delete-zone">
+              <input 
+                v-if="needsPinInput"
+                v-model="deletePinPromptInput" 
+                type="password" 
+                class="delete-pin-input" 
+                placeholder="삭제 시 공통 PIN 입력"
+              />
+              <button 
+                class="btn-delete-highlight" 
+                :disabled="isDeletingHighlight"
+                @click="confirmDeleteHighlight(lightboxHighlight)"
+              >
+                {{ isDeletingHighlight ? '삭제 중...' : '기록 삭제' }}
+              </button>
+            </div>
+            <div v-if="deleteHighlightError" class="upload-error-msg">{{ deleteHighlightError }}</div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ============================================== -->
+    <!-- 관리자 전용: 공통 업로드 PIN 관리 모달 -->
+    <!-- ============================================== -->
+    <Transition name="modal-fade">
+      <div 
+        v-if="isPinAdminModalOpen" 
+        class="modal-overlay" 
+        @click.self="isPinAdminModalOpen = false"
+      >
+        <div class="pin-admin-modal-card">
+          <div class="highlight-modal-header">
+            <h3>공통 업로드 PIN 관리 (관리자)</h3>
+            <button class="btn-close" @click="isPinAdminModalOpen = false" title="닫기">✕</button>
+          </div>
+          <div class="highlight-modal-body">
+            <p class="pin-admin-desc">
+              이 PIN 번호를 알고 있는 모든 부원은 역만 기록, 그 외 화료 사진, 회차별 사진을 등록하거나 삭제할 수 있습니다.
+              (보안을 위해 PIN 번호는 코드에 포함되지 않고 서버 보안 스토리지에서만 관리됩니다.)
+            </p>
+
+            <template v-if="!isPinAdminVerified">
+              <div class="form-group">
+                <label class="form-label">관리자 인증 코드 입력</label>
+                <input 
+                  v-model="adminPasscodeInputForPin" 
+                  type="password" 
+                  class="form-input" 
+                  placeholder="관리자 패스코드를 입력하세요"
+                  @keyup.enter="verifyAdminForPinModal"
+                />
+              </div>
+              <button 
+                type="button" 
+                class="btn-submit-modal" 
+                :disabled="isPinAdminLoading"
+                @click="verifyAdminForPinModal"
+              >
+                {{ isPinAdminLoading ? '인증 중...' : '관리자 인증하기' }}
+              </button>
+            </template>
+
+            <template v-else>
+              <div class="form-group">
+                <label class="form-label">현재 설정된 공통 PIN</label>
+                <div class="current-pin-box">{{ currentServerUploadPin || '조회 중...' }}</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">새 공통 PIN 번호 설정</label>
+                <input 
+                  v-model="newServerUploadPin" 
+                  type="text" 
+                  class="form-input" 
+                  placeholder="새로운 공통 PIN 입력 (4자리 이상)"
+                />
+              </div>
+            </template>
+
+            <div v-if="pinAdminError" class="upload-error-msg">{{ pinAdminError }}</div>
+            <div v-if="pinAdminMessage" class="pin-admin-status">{{ pinAdminMessage }}</div>
+          </div>
+          <div class="highlight-modal-footer">
+            <button type="button" class="btn-cancel-modal" @click="isPinAdminModalOpen = false">닫기</button>
+            <button 
+              v-if="isPinAdminVerified"
+              type="button" 
+              class="btn-submit-modal" 
+              :disabled="isPinAdminLoading"
+              @click="saveNewServerUploadPin"
+            >
+              {{ isPinAdminLoading ? '저장 중...' : 'PIN 변경 저장' }}
+            </button>
           </div>
         </div>
       </div>
@@ -4419,6 +7729,21 @@ const getRankClass = (rank: number) => {
                 줌 리셋
               </button>
             </div>
+          </div>
+
+          <!-- 선수 범례 -->
+          <div v-if="ratingChartData.datasets.length > 0" class="rating-player-legend modal-legend">
+            <button
+              v-for="ds in ratingChartData.datasets"
+              :key="`modal-leg-${ds.label}`"
+              type="button"
+              class="rating-legend-item"
+              :class="{ 'is-hidden': hiddenRatingPlayerNames.has(ds.label) }"
+              @click="toggleRatingPlayerLegend(ds.label)"
+            >
+              <span class="rating-legend-dot" :style="{ backgroundColor: String(ds.borderColor) }"></span>
+              <span class="rating-legend-label">{{ ds.label }}</span>
+            </button>
           </div>
 
           <!-- 차트 캔버스 영역 -->
@@ -4734,17 +8059,61 @@ html.dark .dist-avg-val {
   border-color: #ef4444;
 }
 
-/* 탭 네비게이션 */
+/* 탭 네비게이션 (PC/모바일 드래그/관성 스크롤 및 하단 위치 표시 바) */
+.tabs-nav-wrap {
+  margin: 18px 0 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
 .tabs-nav {
   display: flex;
   gap: 8px;
-  margin: 18px 0 22px;
+  margin: 0;
   border-bottom: 1px solid var(--border-color, #eaeaea);
   padding-bottom: 6px;
   overflow-x: auto;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+.tabs-nav::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.tabs-nav.is-dragging {
+  cursor: grabbing;
+  scroll-behavior: auto;
+}
+.tabs-nav.is-dragging .tab-btn {
+  cursor: grabbing;
+}
+.tabs-nav-scroll-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+  cursor: pointer;
+}
+html.dark .tabs-nav-scroll-track {
+  background: rgba(148, 163, 184, 0.16);
+}
+.tabs-nav-scroll-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: var(--color-toggle-on, #3b82f6);
+  opacity: 0.82;
+  transition: width 0.08s ease-out;
+  will-change: left, width;
 }
 .tab-btn {
   padding: 8px 16px;
@@ -4757,6 +8126,7 @@ html.dark .dist-avg-val {
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .tab-btn.active {
   color: var(--color-toggle-on, #3b82f6);
@@ -6370,9 +9740,17 @@ html.dark .gdm-session-badge {
 }
 .gdm-tabs {
   display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
   background: rgba(0, 0, 0, 0.05);
   border-radius: 6px;
   padding: 2px;
+}
+.gdm-tabs::-webkit-scrollbar {
+  display: none;
 }
 html.dark .gdm-tabs {
   background: rgba(255, 255, 255, 0.08);
@@ -6387,6 +9765,9 @@ html.dark .gdm-tabs {
   background: transparent;
   color: var(--text-dimmed, #64748b);
   transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.25;
 }
 html.dark .gdm-tab-btn {
   color: #94a3b8;
@@ -6634,6 +10015,21 @@ html.dark .gdm-legacy-notice {
   .gdm-actions {
     width: 100%;
     justify-content: space-between;
+    gap: 6px;
+  }
+  .gdm-tabs {
+    flex: 1;
+    min-width: 0;
+  }
+  .gdm-tab-btn {
+    flex: 1;
+    padding: 5px 6px;
+    font-size: 11px;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .gdm-close-btn {
+    flex-shrink: 0;
   }
   .gdm-resultsheet {
     grid-template-columns: 24px minmax(42px, 0.8fr) minmax(68px, 1.25fr) minmax(78px, 1.4fr) repeat(4, 22px);
@@ -6841,14 +10237,16 @@ html.dark .rating-badge-pill {
 /* 수식 안내 카드 */
 .formula-cards-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 20px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-@media (max-width: 800px) {
+@media (max-width: 1024px) {
   .formula-cards-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -6857,6 +10255,10 @@ html.dark .rating-badge-pill {
   border: 1px solid var(--border-color, #e2e8f0);
   border-radius: 8px;
   padding: 14px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .formula-tag {
@@ -6868,7 +10270,7 @@ html.dark .rating-badge-pill {
 
 .formula-latex {
   font-family: 'Cambria Math', 'KaTeX_Math', 'Times New Roman', serif;
-  font-size: 14.5px;
+  font-size: clamp(12px, 1.3vw, 14.5px);
   font-weight: bold;
   background: rgba(0, 0, 0, 0.03);
   padding: 8px 10px;
@@ -6876,6 +10278,16 @@ html.dark .rating-badge-pill {
   text-align: center;
   margin-bottom: 8px;
   color: var(--text-color, #0f172a);
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
+}
+
+.formula-latex :deep(.katex-display) {
+  margin: 0.25em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
 }
 
 html.dark .formula-latex {
@@ -7359,5 +10771,1955 @@ html.dark .btn-zoom-reset:hover {
 #rating-inline-chart-canvas,
 #rating-modal-chart-canvas {
   touch-action: pan-y !important;
+}
+
+/* ===================================================== */
+/* 역만 / 화료 / 회차 사진 갤러리 & 개인 역만 탭 스타일 */
+/* ===================================================== */
+.session-gallery-card {
+  margin-bottom: 1.5rem;
+}
+.session-gallery-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.session-gallery-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.session-gallery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.btn-upload-highlight,
+.btn-upload-yakuman {
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+.btn-upload-highlight {
+  background: var(--accent, #2563eb);
+  color: #fff;
+}
+.btn-upload-highlight:hover {
+  opacity: 0.92;
+}
+.btn-upload-yakuman {
+  background: linear-gradient(135deg, #d97706, #b45309);
+  color: #fff;
+}
+.btn-upload-yakuman:hover {
+  opacity: 0.92;
+}
+.btn-pin-admin {
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--bg-soft, #f1f5f9);
+  color: var(--text-primary, #1e293b);
+  border: 1px solid var(--border-color, #cbd5e1);
+}
+html.dark .btn-pin-admin {
+  background: #27272a;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+.session-gallery-empty {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  color: var(--text-muted, #64748b);
+  font-size: 0.88rem;
+  background: var(--bg-soft, rgba(148, 163, 184, 0.08));
+  border-radius: 10px;
+}
+
+.highlight-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 1rem;
+}
+.session-gallery-grid {
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+.highlight-card {
+  background: var(--card-bg, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  display: flex;
+  flex-direction: column;
+}
+html.dark .highlight-card {
+  background: #18181b;
+  border-color: #27272a;
+}
+.highlight-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+.highlight-thumb-wrap {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: #0f172a;
+  overflow: hidden;
+  position: relative;
+}
+.highlight-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.highlight-no-img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(217, 119, 6, 0.15), rgba(180, 83, 9, 0.25));
+  gap: 0.35rem;
+}
+.no-img-icon {
+  font-size: 2rem;
+}
+.no-img-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #d97706;
+}
+.highlight-card-body {
+  padding: 0.75rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.highlight-badges-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+.badge-session,
+.badge-game,
+.badge-round,
+.badge-yakuman,
+.badge-fun,
+.badge-session-photo,
+.badge-round-sm,
+.badge-yakuman-sm,
+.badge-fun-sm,
+.badge-session-sm {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.48rem;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.badge-session {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+html.dark .badge-session {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+.badge-game,
+.badge-round,
+.badge-round-sm {
+  background: rgba(100, 116, 139, 0.14);
+  color: var(--text-secondary, #475569);
+}
+html.dark .badge-game,
+html.dark .badge-round,
+html.dark .badge-round-sm {
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+.badge-yakuman,
+.badge-yakuman-sm {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+}
+.badge-fun,
+.badge-fun-sm {
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+}
+html.dark .badge-fun,
+html.dark .badge-fun-sm {
+  background: rgba(16, 185, 129, 0.22);
+  color: #34d399;
+}
+.badge-session-photo,
+.badge-session-sm {
+  background: rgba(139, 92, 246, 0.15);
+  color: #7c3aed;
+}
+html.dark .badge-session-photo,
+html.dark .badge-session-sm {
+  background: rgba(139, 92, 246, 0.22);
+  color: #a78bfa;
+}
+.highlight-players-line {
+  font-size: 0.82rem;
+  color: var(--text-primary, #1e293b);
+}
+html.dark .highlight-players-line {
+  color: #e4e4e7;
+}
+.highlight-loser {
+  color: var(--text-muted, #64748b);
+  margin-left: 0.25rem;
+}
+.highlight-note-text {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted, #64748b);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 갤러리 탭 상단 & 역만 보드 */
+.gallery-top-card {
+  margin-bottom: 1.5rem;
+}
+.gallery-top-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.gallery-top-header h2 {
+  margin: 0 0 0.3rem 0;
+  font-size: 1.25rem;
+}
+.gallery-sub-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted, #64748b);
+}
+.gallery-top-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.gallery-filters-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+.gallery-cat-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.gallery-cat-btn {
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: transparent;
+  color: var(--text-secondary, #475569);
+  cursor: pointer;
+}
+.gallery-cat-btn.active {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-color: var(--accent, #2563eb);
+}
+.gallery-selects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.gallery-filter-select {
+  padding: 0.4rem 0.65rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg, #fff);
+  color: var(--text-primary, #1e293b);
+}
+html.dark .gallery-filter-select {
+  background: #18181b;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+
+.yakuman-summary-board-card {
+  margin-bottom: 1.5rem;
+}
+.yakuman-board-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.yakuman-board-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.yakuman-board-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+.yakuman-grid-17 {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.55rem;
+}
+.yakuman-type-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-soft, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  font-size: 0.83rem;
+}
+html.dark .yakuman-type-box {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.yakuman-type-box.has-achieved {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+.yakuman-type-name {
+  font-weight: 600;
+}
+.yakuman-type-count {
+  font-weight: 800;
+  color: var(--text-muted, #64748b);
+}
+.yakuman-type-box.has-achieved .yakuman-type-count {
+  color: #d97706;
+}
+
+/* 개인 상세 모달 내 역만 탭 */
+.yakuman_tab_wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.yakuman_summary_bar {
+  padding: 0.65rem 0.9rem;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  font-size: 0.88rem;
+  color: var(--text-primary, #1e293b);
+}
+html.dark .yakuman_summary_bar {
+  color: #fde68a;
+}
+.yakuman-achieved-row {
+  background: rgba(245, 158, 11, 0.08);
+}
+.yakuman_records_section {
+  margin-top: 0.5rem;
+}
+.yakuman_records_title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+.yakuman_records_list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.yakuman_record_item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  cursor: pointer;
+}
+html.dark .yakuman_record_item {
+  border-color: #3f3f46;
+}
+.yakuman_record_thumb {
+  width: 56px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.yakuman_record_info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.yakuman_record_badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.yakuman_record_meta {
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+}
+.yakuman_record_note {
+  font-size: 0.78rem;
+}
+
+/* 경기 상세 모달 내 하이라이트 박스 */
+.gdm-highlights-box {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .gdm-highlights-box {
+  border-top-color: #27272a;
+}
+.gdm-highlights-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+.gdm-highlights-title {
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+.btn-add-highlight-sm {
+  padding: 0.32rem 0.68rem;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #d97706, #b45309);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+.gdm-highlights-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.gdm-highlight-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 8px;
+  background: var(--bg-soft, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  cursor: pointer;
+}
+html.dark .gdm-highlight-item {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.gdm-highlight-thumb {
+  width: 52px;
+  height: 38px;
+  object-fit: cover;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+.gdm-highlight-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  font-size: 0.78rem;
+}
+.gdm-highlight-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+/* 업로드 모달 / 라이트박스 모달 / PIN 관리 모달 */
+.highlight-upload-modal-card,
+.pin-admin-modal-card {
+  width: min(580px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--card-bg, #ffffff);
+  color: var(--text-primary, #1e293b);
+  border-radius: 16px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+}
+html.dark .highlight-upload-modal-card,
+html.dark .pin-admin-modal-card {
+  background: #18181b;
+  color: #f4f4f5;
+  border-color: #27272a;
+}
+.highlight-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .highlight-modal-header {
+  border-bottom-color: #27272a;
+}
+.highlight-modal-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.highlight-modal-body {
+  padding: 1.15rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+@media (max-width: 540px) {
+  .form-row-2 {
+    grid-template-columns: 1fr;
+  }
+}
+.form-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.sub-hint {
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+}
+.form-select,
+.form-input {
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg, #fff);
+  color: var(--text-primary, #1e293b);
+  font-size: 0.85rem;
+}
+html.dark .form-select,
+html.dark .form-input {
+  background: #27272a;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+.round-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.category-radio-group {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.45rem;
+}
+@media (max-width: 520px) {
+  .category-radio-group {
+    grid-template-columns: 1fr;
+  }
+}
+.cat-radio-btn {
+  padding: 0.55rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: transparent;
+  color: var(--text-primary, #1e293b);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+html.dark .cat-radio-btn {
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+.cat-radio-btn.active {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-color: var(--accent, #2563eb);
+}
+.yakuman-chips-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.yakuman-select-chip {
+  padding: 0.38rem 0.68rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: transparent;
+  color: var(--text-primary, #1e293b);
+  cursor: pointer;
+}
+html.dark .yakuman-select-chip {
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+.yakuman-select-chip.selected {
+  background: #d97706;
+  color: #fff;
+  border-color: #d97706;
+}
+.upload-preview-box {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+.upload-preview-img {
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #cbd5e1);
+}
+.btn-remove-preview {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.76rem;
+  border-radius: 6px;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  background: transparent;
+  cursor: pointer;
+}
+.upload-error-msg {
+  color: #ef4444;
+  font-size: 0.83rem;
+  font-weight: 600;
+}
+.highlight-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .highlight-modal-footer {
+  border-top-color: #27272a;
+}
+.btn-cancel-modal {
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: transparent;
+  color: var(--text-primary, #1e293b);
+  font-weight: 600;
+  cursor: pointer;
+}
+html.dark .btn-cancel-modal {
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+.btn-submit-modal {
+  padding: 0.5rem 1.15rem;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent, #2563eb);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-submit-modal:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 라이트박스 모달 */
+.lightbox-modal-card {
+  width: min(960px, 96vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  background: var(--card-bg, #ffffff);
+  color: var(--text-primary, #1e293b);
+  border-radius: 16px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+}
+html.dark .lightbox-modal-card {
+  background: #18181b;
+  color: #f4f4f5;
+  border-color: #27272a;
+}
+.lightbox-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.9rem 1.2rem;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .lightbox-header {
+  border-bottom-color: #27272a;
+}
+.lightbox-title-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.lightbox-img-container {
+  background: #09090b;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  max-height: 70vh;
+  overflow: auto;
+}
+.lightbox-full-img {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  display: block;
+}
+.lightbox-info-footer {
+  padding: 1rem 1.2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.lightbox-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.lightbox-players {
+  font-size: 0.92rem;
+}
+.lightbox-note {
+  font-size: 0.88rem;
+}
+.lightbox-date {
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+}
+.lightbox-delete-zone {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.delete-pin-input {
+  padding: 0.4rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  font-size: 0.8rem;
+  width: 150px;
+}
+html.dark .delete-pin-input {
+  background: #27272a;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+.btn-delete-highlight {
+  padding: 0.42rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.current-pin-box {
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  background: var(--bg-soft, #f1f5f9);
+  font-family: monospace;
+  font-size: 1rem;
+  font-weight: 700;
+}
+html.dark .current-pin-box {
+  background: #27272a;
+}
+.pin-admin-desc {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted, #64748b);
+  line-height: 1.45;
+}
+.pin-admin-status {
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: #10b981;
+}
+
+/* 회차 갤러리 카드 & 메인 갤러리 탭 카드 (sg-*, gh-*, hl-*, ym_*) */
+.sg-header-row,
+.gh-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+.sg-sub-desc,
+.gh-desc {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.84rem;
+  color: var(--text-muted, #64748b);
+}
+.gh-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+.sg-btn-group,
+.gh-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.btn-hl-upload {
+  padding: 0.45rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.18s ease;
+}
+.btn-hl-upload.primary {
+  background: linear-gradient(135deg, #d97706, #b45309);
+  color: #fff;
+}
+.btn-hl-upload.secondary {
+  background: var(--accent, #2563eb);
+  color: #fff;
+}
+.btn-hl-upload.admin-pin-btn {
+  background: var(--bg-soft, #f1f5f9);
+  color: var(--text-primary, #1e293b);
+  border-color: var(--border-color, #cbd5e1);
+}
+html.dark .btn-hl-upload.admin-pin-btn {
+  background: #27272a;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+.sg-empty-box {
+  text-align: center;
+  padding: 1.75rem 1rem;
+  color: var(--text-muted, #64748b);
+  font-size: 0.88rem;
+  background: var(--bg-soft, rgba(148, 163, 184, 0.08));
+  border-radius: 10px;
+}
+.gh-stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+.gh-stat-pill {
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  background: var(--bg-soft, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+html.dark .gh-stat-pill {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.gh-stat-label {
+  font-size: 0.8rem;
+  color: var(--text-muted, #64748b);
+}
+.gh-stat-val {
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+.gh-filter-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .gh-filter-bar {
+  border-top-color: #27272a;
+}
+.gh-cat-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.gh-cat-btn {
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: transparent;
+  color: var(--text-secondary, #475569);
+  cursor: pointer;
+}
+html.dark .gh-cat-btn {
+  color: #cbd5e1;
+  border-color: #3f3f46;
+}
+.gh-cat-btn.active {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-color: var(--accent, #2563eb);
+}
+.gh-select-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.gh-filter-select {
+  padding: 0.4rem 0.65rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg, #fff);
+  color: var(--text-primary, #1e293b);
+}
+html.dark .gh-filter-select {
+  background: #18181b;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+.hl-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 1rem;
+}
+.hl-card {
+  background: var(--card-bg, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  display: flex;
+  flex-direction: column;
+}
+html.dark .hl-card {
+  background: #18181b;
+  border-color: #27272a;
+}
+.hl-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+}
+.hl-img-wrap {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: #09090b;
+  position: relative;
+  overflow: hidden;
+}
+.hl-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.hl-quality-badge {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  padding: 0.15rem 0.45rem;
+  border-radius: 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+}
+.hl-no-img-banner {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(217, 119, 6, 0.16), rgba(180, 83, 9, 0.28));
+  gap: 0.35rem;
+  padding: 0.75rem;
+  text-align: center;
+}
+.hl-no-img-banner.is-fun-banner {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.14), rgba(5, 150, 105, 0.25));
+}
+.hl-yakuman-kanji {
+  font-size: 1.7rem;
+  font-weight: 900;
+  color: #d97706;
+  letter-spacing: 0.12em;
+}
+.hl-no-img-banner.is-fun-banner .hl-yakuman-kanji {
+  color: #059669;
+}
+html.dark .hl-no-img-banner.is-fun-banner .hl-yakuman-kanji {
+  color: #34d399;
+}
+.hl-yakuman-main-txt {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.hl-card-body {
+  padding: 0.75rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+}
+.hl-meta-top,
+.hl-yakuman-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+.hl-type-tag,
+.hl-session-tag,
+.hl-round-tag,
+.hl-y-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.16rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.hl-type-tag.yakuman,
+.hl-y-badge {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+}
+.hl-type-tag.fun {
+  background: rgba(16, 185, 129, 0.16);
+  color: #059669;
+}
+.hl-type-tag.session {
+  background: rgba(139, 92, 246, 0.16);
+  color: #7c3aed;
+}
+.hl-session-tag,
+.hl-round-tag {
+  background: rgba(100, 116, 139, 0.14);
+  color: var(--text-secondary, #475569);
+}
+html.dark .hl-session-tag,
+html.dark .hl-round-tag {
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+.hl-winner-line {
+  font-size: 0.83rem;
+}
+.hl-wintype {
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+  margin-left: 0.25rem;
+}
+.hl-caption {
+  font-size: 0.78rem;
+  color: var(--text-muted, #64748b);
+}
+
+/* 개인 상세 모달 내 17종 역만 카운트 그리드 */
+.yakuman_tab_wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.yakuman_summary_bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0.25rem;
+}
+.ym_summary_title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary, #1e293b);
+}
+html.dark .ym_summary_title {
+  color: #f1f5f9;
+}
+.yakuman_counts_grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.45rem;
+}
+@media (max-width: 520px) {
+  .yakuman_counts_grid {
+    grid-template-columns: 1fr;
+  }
+}
+.yakuman_count_row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-soft, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  font-size: 0.83rem;
+}
+html.dark .yakuman_count_row {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.yakuman_count_row.achieved {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+}
+.ym_name {
+  font-weight: 600;
+}
+.ym_val {
+  font-weight: 800;
+  color: var(--text-muted, #64748b);
+}
+.yakuman_count_row.achieved .ym_val {
+  color: #d97706;
+}
+.ym_summary_badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  background: rgba(100, 116, 139, 0.15);
+}
+.ym_summary_badge.achieved {
+  background: #d97706;
+  color: #fff;
+}
+.yakuman_achieved_list {
+  margin-top: 0.5rem;
+}
+.ym_achieved_header {
+  font-size: 0.84rem;
+  font-weight: 700;
+  margin-bottom: 0.45rem;
+}
+.ym_achieved_cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.ym_achieved_card {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  cursor: pointer;
+}
+html.dark .ym_achieved_card {
+  border-color: #3f3f46;
+}
+.ym_thumb {
+  width: 56px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.ym_achieved_info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.ym_achieved_tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.ym_achieved_meta {
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+}
+.ym_achieved_caption {
+  font-size: 0.78rem;
+  white-space: pre-line;
+}
+
+/* 멀티라인 메모 입력창 & 라이트박스 메모 편집 스타일 */
+.form-textarea {
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg, #fff);
+  color: var(--text-primary, #1e293b);
+  font-size: 0.85rem;
+  font-family: inherit;
+  line-height: 1.45;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+html.dark .form-textarea {
+  background: #27272a;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+.lightbox-memo-section {
+  margin-top: 0.35rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 8px;
+  background: var(--bg-soft, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+html.dark .lightbox-memo-section {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.lightbox-memo-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.lightbox-memo-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary, #475569);
+}
+html.dark .lightbox-memo-label {
+  color: #cbd5e1;
+}
+.btn-edit-memo {
+  padding: 0.22rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg, #fff);
+  color: var(--text-primary, #1e293b);
+  cursor: pointer;
+}
+html.dark .btn-edit-memo {
+  background: #18181b;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+.lightbox-note {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.lightbox-note-empty {
+  font-size: 0.8rem;
+  color: var(--text-muted, #64748b);
+  font-style: italic;
+}
+.lightbox-memo-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.lightbox-memo-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.hl-caption,
+.gdm-highlight-note {
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+/* 갤러리 탭 상단 툴바 & 대형 등록 팝업 모달 & Pinterest Masonry 그리드 */
+.gallery-toolbar-card {
+  padding: 1.15rem 1.35rem;
+}
+.gh-toolbar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  margin-bottom: 0.9rem;
+}
+.gh-toolbar-title-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.gh-filter-bar-compact {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .gh-filter-bar-compact {
+  border-top-color: #27272a;
+}
+
+.highlight-upload-modal-card.large-upload-modal {
+  width: min(860px, 95vw);
+  max-height: 92vh;
+}
+.upload-modal-subdesc {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.82rem;
+  color: var(--text-muted, #64748b);
+}
+.upload-modal-stats-row {
+  margin-bottom: 0.25rem;
+}
+
+/* Pinterest 스타일 다단 Masonry 레이아웃 */
+.pinterest-masonry-grid {
+  column-count: 4;
+  column-gap: 1rem;
+  width: 100%;
+}
+@media (max-width: 1200px) {
+  .pinterest-masonry-grid {
+    column-count: 3;
+  }
+}
+@media (max-width: 820px) {
+  .pinterest-masonry-grid {
+    column-count: 2;
+    column-gap: 0.8rem;
+  }
+}
+@media (max-width: 480px) {
+  .pinterest-masonry-grid {
+    column-count: 1;
+  }
+}
+.pinterest-pin-card {
+  break-inside: avoid;
+  page-break-inside: avoid;
+  margin-bottom: 1rem;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--card-bg, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  display: inline-block;
+  width: 100%;
+}
+html.dark .pinterest-pin-card {
+  background: #18181b;
+  border-color: #27272a;
+}
+.pinterest-pin-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.16);
+}
+.pinterest-img-wrap {
+  width: 100%;
+  background: #09090b;
+  position: relative;
+  overflow: hidden;
+  line-height: 0;
+}
+.pinterest-img {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: contain;
+}
+.pinterest-no-img {
+  aspect-ratio: auto;
+  min-height: 150px;
+  padding: 1.5rem 1rem;
+}
+
+/* PIN 자동 인증 / 관리자 PIN 면제 안내 바 */
+.pin-auto-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.pin-auto-badge {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #059669;
+}
+html.dark .pin-auto-badge {
+  color: #34d399;
+}
+.btn-reset-saved-pin {
+  padding: 0.24rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--card-bg, #fff);
+  color: var(--text-secondary, #475569);
+  cursor: pointer;
+}
+html.dark .btn-reset-saved-pin {
+  background: #27272a;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+/* 대국 상세 모달 하단 기록이 0건일 때 버튼 우측 정렬 */
+.gdm-highlights-header.only-btn {
+  justify-content: flex-end;
+  margin-bottom: 0;
+}
+
+/* 사진/역만 등록 모달 내 선택 경기 결과 표 & 점수 변동 그래프 박스 */
+.upload-game-preview-box {
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  background: var(--bg-soft, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+html.dark .upload-game-preview-box {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.upload-game-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.upload-game-preview-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-size: 0.88rem;
+}
+.upload-game-preview-time {
+  font-size: 0.76rem;
+  color: var(--text-muted, #64748b);
+}
+.upload-game-loading-txt {
+  font-size: 0.75rem;
+  color: var(--accent, #2563eb);
+  font-weight: 600;
+}
+.upload-modal-chart-box {
+  height: 220px;
+}
+
+/* 선택한 국의 4인 점수 이동 내역 카드 */
+.upload-round-movements-box {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.upload-round-movement-card {
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  background: var(--bg-soft, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+html.dark .upload-round-movement-card {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+.urm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .urm-header {
+  border-bottom-color: #3f3f46;
+}
+.urm-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+.urm-status-badge {
+  padding: 0.14rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: rgba(37, 99, 235, 0.14);
+  color: #2563eb;
+}
+html.dark .urm-status-badge {
+  background: rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+}
+.urm-players-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.urm-player-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.38rem 0.55rem;
+  border-radius: 7px;
+  font-size: 0.82rem;
+  background: var(--card-bg, #ffffff);
+  border: 1px solid transparent;
+}
+html.dark .urm-player-row {
+  background: #18181b;
+}
+.urm-player-row.is-win {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.08);
+}
+.urm-player-row.is-lose {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.07);
+}
+.urm-player-left {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.urm-seat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  background: rgba(100, 116, 139, 0.15);
+  color: var(--text-primary, #1e293b);
+}
+html.dark .urm-seat {
+  color: #f4f4f5;
+}
+.urm-seat.is-east {
+  background: rgba(239, 68, 68, 0.18);
+  color: #ef4444;
+}
+.urm-name {
+  font-weight: 700;
+}
+.urm-tag {
+  padding: 0.1rem 0.4rem;
+  border-radius: 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.urm-tag.riichi {
+  background: rgba(245, 158, 11, 0.18);
+  color: #d97706;
+}
+.urm-tag.win {
+  background: rgba(16, 185, 129, 0.2);
+  color: #059669;
+}
+html.dark .urm-tag.win {
+  color: #34d399;
+}
+.urm-tag.lose {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+.urm-player-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: inherit;
+}
+.urm-score-flow {
+  font-size: 0.8rem;
+  font-family: inherit;
+  color: var(--text-secondary, #475569);
+}
+html.dark .urm-score-flow {
+  color: #cbd5e1;
+}
+.urm-score-delta {
+  font-weight: 800;
+  font-size: 0.82rem;
+}
+.urm-score-delta.pos {
+  color: #10b981;
+}
+.urm-score-delta.neg {
+  color: #ef4444;
+}
+.urm-score-delta.zero {
+  color: var(--text-muted, #64748b);
+}
+
+/* 업로드 / 라이트박스 / PIN 관리 모달 오버레이 (회차 상세 및 경기 상세 모달 위에서도 최상위로 표시) */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2600;
+  padding: 16px;
+  backdrop-filter: blur(4px);
+}
+.modal-overlay.lightbox-overlay {
+  z-index: 2700;
+}
+
+/* 레이팅 차트 캔버스 외부 반응형 HTML 선수 범례 */
+.rating-player-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 2px 4px 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.rating-player-legend.modal-legend {
+  max-height: 110px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.rating-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-color, #334155);
+  font-family: 'Noto Serif KR', serif;
+  font-size: 12px;
+  line-height: 1.3;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+html.dark .rating-legend-item {
+  color: #cbd5e1;
+}
+.rating-legend-item:hover {
+  background: rgba(100, 116, 139, 0.12);
+}
+.rating-legend-item.is-hidden {
+  opacity: 0.42;
+}
+.rating-legend-item.is-hidden .rating-legend-label {
+  text-decoration: line-through;
+}
+.rating-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+/* 회차 대국 상세 모달 - 국별 점수 이동 뷰 및 하단 빠른 국 조회 */
+.gdm-rounds-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+.gdm-rounds-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+.gdm-rounds-filter-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-secondary, #475569);
+  white-space: nowrap;
+}
+html.dark .gdm-rounds-filter-label {
+  color: #cbd5e1;
+}
+.gdm-rounds-select {
+  flex: 1;
+  min-width: 180px;
+}
+.gdm-rounds-scroll-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+/* 회차 상세 대국 카드 내 제목 그룹 및 역만 뱃지 */
+.game-card-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.game-yakuman-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(217, 119, 6, 0.35);
+  letter-spacing: -0.2px;
+}
+
+/* 갤러리 및 업로드 모달 서버 저장 용량 상태 바 */
+.gh-storage-status-bar {
+  margin-top: 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px dashed var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+html.dark .gh-storage-status-bar {
+  border-top-color: #334155;
+}
+.gh-storage-status-bar.in-upload-modal {
+  margin-top: 0.1rem;
+  margin-bottom: 0.85rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 10px;
+  background: var(--bg-secondary, #f8fafc);
+}
+html.dark .gh-storage-status-bar.in-upload-modal {
+  background: #1e293b;
+  border-color: #334155;
+}
+.gh-storage-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+  font-size: 0.8rem;
+}
+.gh-storage-title {
+  font-weight: 700;
+  color: var(--text-secondary, #475569);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+html.dark .gh-storage-title {
+  color: #cbd5e1;
+}
+.gh-storage-metrics {
+  color: var(--text-primary, #1e293b);
+  flex: 1;
+  min-width: 180px;
+}
+html.dark .gh-storage-metrics {
+  color: #f1f5f9;
+}
+.gh-storage-remain {
+  font-weight: 800;
+  color: #10b981;
+}
+html.dark .gh-storage-remain {
+  color: #34d399;
+}
+.gh-storage-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+  margin-left: 0.25rem;
+}
+html.dark .gh-storage-sub {
+  color: #94a3b8;
+}
+.gh-storage-pct-badge {
+  font-size: 0.73rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  white-space: nowrap;
+}
+html.dark .gh-storage-pct-badge {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+.gh-storage-pct-badge.warn {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+html.dark .gh-storage-pct-badge.warn {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fbbf24;
+}
+.gh-storage-pct-badge.danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+html.dark .gh-storage-pct-badge.danger {
+  background: rgba(239, 68, 68, 0.22);
+  color: #f87171;
+}
+.gh-storage-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+html.dark .gh-storage-track {
+  background: rgba(148, 163, 184, 0.18);
+}
+.gh-storage-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #10b981, #3b82f6);
+  transition: width 0.3s ease;
+}
+.gh-storage-fill.warn {
+  background: linear-gradient(90deg, #f59e0b, #ea580c);
+}
+.gh-storage-fill.danger {
+  background: linear-gradient(90deg, #ef4444, #b91c1c);
+}
+
+/* 이번 회차 레이팅 추이 탭 증감 인라인 표시 */
+.session_rating_delta_inline {
+  font-size: 0.78em;
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+/* 결과 표 화료자 이름 옆 및 국별 점수 이동 내역 역만 뱃지 */
+.gdm-name-cell-inner {
+  gap: 5px;
+}
+.gdm-player-name-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gdm-inline-yakuman-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1.25;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(217, 119, 6, 0.35);
+  flex-shrink: 0;
+  letter-spacing: -0.2px;
+}
+.urm-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.urm-yakuman-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.3;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(217, 119, 6, 0.35);
+  letter-spacing: -0.2px;
+}
+.urm-tag.yakuman {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #ffffff;
+  font-weight: 800;
+  box-shadow: 0 1px 2px rgba(217, 119, 6, 0.3);
+}
+@media (max-width: 600px) {
+  .gdm-name-cell-inner {
+    gap: 3px;
+  }
+  .gdm-inline-yakuman-badge {
+    padding: 1px 4px;
+    font-size: 9px;
+  }
 }
 </style>

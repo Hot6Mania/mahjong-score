@@ -2636,6 +2636,24 @@ export interface GameScoreChartData {
   }[];
 }
 
+export interface GameRoundPlayerMovement {
+  seat: string;
+  name: string;
+  scoreBefore: number;
+  deltaScore: number;
+  scoreAfter: number;
+  isRiichi: boolean;
+  isWin: boolean;
+  isLose: boolean;
+}
+
+export interface GameRoundMovement {
+  roundIndex: number;
+  roundName: string;
+  roundStatus: string;
+  players: GameRoundPlayerMovement[];
+}
+
 export interface GameDetailRecord {
   gameId: string;
   gameIndex: number;
@@ -2643,6 +2661,7 @@ export interface GameDetailRecord {
   hasRoundDetails: boolean;
   playerStats: GamePlayerResultStat[];
   chartData: GameScoreChartData;
+  roundDetailsList?: GameRoundMovement[];
 }
 
 function buildGameDetailFromLocalRecords(game: SessionGame, records: any, playerNames?: string[]): GameDetailRecord {
@@ -2707,13 +2726,55 @@ function buildGameDetailFromLocalRecords(game: SessionGame, records: any, player
     };
   });
 
+  const computeRoundWindForSeat = (initialSeat: string, fallbackIdx: number, roundLabel: string): string => {
+    const winds = ['東', '南', '西', '北'];
+    const baseIdx = winds.indexOf(initialSeat) !== -1 ? winds.indexOf(initialSeat) : (fallbackIdx % 4);
+    const kyokuMatch =
+      (roundLabel || '').match(/(?:[동남서북東南西北]\s*)?(\d+)\s*(?:국|局)/) ||
+      (roundLabel || '').match(/[동남서북東南西北]\s*(\d+)/);
+    if (!kyokuMatch) return winds[baseIdx];
+    const kyokuNum = Number(kyokuMatch[1]);
+    const shift = (((kyokuNum - 1) % 4) + 4) % 4;
+    return winds[(baseIdx - shift + 4) % 4];
+  };
+
+  const roundDetailsList: GameRoundMovement[] = [];
+  for (let k = 1; k < labels.length; k++) {
+    const rIdx = k - 1;
+    const rStatus = String(records.status?.[rIdx] || '').toLowerCase();
+    const labelStr = labels[k];
+    roundDetailsList.push({
+      roundIndex: k,
+      roundName: labelStr,
+      roundStatus: rStatus,
+      players: sortedGamePlayers.map((p, idx) => {
+        const pIdx = pNames.indexOf(p.name) !== -1 ? pNames.indexOf(p.name) : idx;
+        const ds = datasets[idx];
+        const scoreBefore = ds?.data[k - 1] ?? 25000;
+        const scoreAfter = ds?.data[k] ?? scoreBefore;
+        const startSeat = p.seat || seatOrder[idx];
+        return {
+          seat: computeRoundWindForSeat(startSeat, idx, labelStr),
+          name: p.name,
+          scoreBefore,
+          deltaScore: scoreAfter - scoreBefore,
+          scoreAfter,
+          isRiichi: !!records.riichi?.[rIdx]?.[pIdx],
+          isWin: !!records.win?.[rIdx]?.[pIdx],
+          isLose: !!records.lose?.[rIdx]?.[pIdx],
+        };
+      }),
+    });
+  }
+
   return {
     gameId: game.gameId,
     gameIndex: game.gameIndex,
     time: game.time,
     hasRoundDetails: true,
     playerStats,
-    chartData: { labels, datasets }
+    chartData: { labels, datasets },
+    roundDetailsList,
   };
 }
 
@@ -2872,10 +2933,10 @@ export async function fetchSessionGameDetail(
 
         const roundNums = Object.keys(roundsMap).map(Number).sort((a, b) => a - b);
 
-        // 임시(Optimistic) 대국 객체에서 호출된 경우 1국 행 순서(東, 南, 西, 北)로 실제 좌석 복원
+        // 1국 행 순서(東, 南, 西, 北)로 시작 좌석 순서를 항상 정확히 보장
         const firstRoundOrder = roundNums.length > 0 ? roundsMap[roundNums[0]].playerOrder : [];
         let effectivePlayers = sortedGamePlayers;
-        if (firstRoundOrder.length === 4 && (!cleanGId || cleanGId.includes("_"))) {
+        if (firstRoundOrder.length === 4) {
           effectivePlayers = [...game.players]
             .sort((a, b) => {
               const ia = firstRoundOrder.indexOf(a.name.trim());
@@ -2918,10 +2979,40 @@ export async function fetchSessionGameDetail(
           };
         });
 
-        const labels: string[] = ["시작"];
-        roundNums.forEach(r => {
-          labels.push(roundsMap[r].roundName || `${r}국`);
+        // 촌보 등으로 인해 동일한 국/본장 이름이 한 경기 내 여러 번 등장하는 경우 구분용 카운트 집계
+        const rawRoundNames = roundNums.map(r => (roundsMap[r].roundName || `${r}국`).trim());
+        const roundNameTotals: Record<string, number> = {};
+        rawRoundNames.forEach(rn => {
+          roundNameTotals[rn] = (roundNameTotals[rn] || 0) + 1;
         });
+        const roundNameOccurrences: Record<string, number> = {};
+        const disambiguatedRoundNames = roundNums.map((r, rIdx) => {
+          const rawName = rawRoundNames[rIdx];
+          if ((roundNameTotals[rawName] || 0) <= 1) {
+            return rawName;
+          }
+          roundNameOccurrences[rawName] = (roundNameOccurrences[rawName] || 0) + 1;
+          const occ = roundNameOccurrences[rawName];
+          const st = (roundsMap[r].roundStatus || '').toLowerCase();
+          const isChonbo = st.includes('chonbo') || st.includes('cheat') || st.includes('촌보');
+          return isChonbo ? `${rawName} (${occ}차·촌보)` : `${rawName} (${occ}차)`;
+        });
+
+        // 시작 좌석(1국 기준 東/南/西/北)으로부터 각 국의 자풍(東/南/西/北) 계산
+        // 1국은 그대로, 2국은 東→北, 南→東, 西→南, 北→西 (본장은 자풍 이동에 영향 없음, 한자 局 및 한글 국 모두 지원)
+        const getRoundWindForSeat = (initialSeat: string, fallbackIdx: number, roundLabel: string): string => {
+          const winds = ["東", "南", "西", "北"];
+          const baseIdx = winds.indexOf(initialSeat) !== -1 ? winds.indexOf(initialSeat) : (fallbackIdx % 4);
+          const kyokuMatch =
+            (roundLabel || "").match(/(?:[동남서북東南西北]\s*)?(\d+)\s*(?:국|局)/) ||
+            (roundLabel || "").match(/[동남서북東南西北]\s*(\d+)/);
+          if (!kyokuMatch) return winds[baseIdx];
+          const kyokuNum = Number(kyokuMatch[1]);
+          const shift = (((kyokuNum - 1) % 4) + 4) % 4;
+          return winds[(baseIdx - shift + 4) % 4];
+        };
+
+        const labels: string[] = ["시작", ...disambiguatedRoundNames];
 
         const colors = ["#ff6384", "#4bc0c0", "#36a2eb", "#ffce56"];
         const datasets = effectivePlayers.map((p, idx) => {
@@ -2945,13 +3036,42 @@ export async function fetchSessionGameDetail(
         const resolvedGameId = getCellStr(gameRows[0]?.c?.[1]).trim() || game.gameId;
         const resolvedTime = game.time || getCellStr(gameRows[0]?.c?.[0]).trim();
 
+        const roundDetailsList: GameRoundMovement[] = roundNums.map((r, rIdx) => {
+          const rd = roundsMap[r];
+          const k = rIdx + 1;
+          const displayRoundName = disambiguatedRoundNames[rIdx] || rd.roundName || `${r}국`;
+          return {
+            roundIndex: k,
+            roundName: displayRoundName,
+            roundStatus: rd.roundStatus || '',
+            players: effectivePlayers.map((p, idx) => {
+              const pData = rd.players[p.name];
+              const ds = datasets[idx];
+              const scoreBefore = ds?.data[k - 1] ?? 25000;
+              const scoreAfter = ds?.data[k] ?? scoreBefore;
+              const startSeat = p.seat || seatOrder[idx];
+              return {
+                seat: getRoundWindForSeat(startSeat, idx, displayRoundName),
+                name: p.name,
+                scoreBefore,
+                deltaScore: pData ? pData.deltaScore : scoreAfter - scoreBefore,
+                scoreAfter,
+                isRiichi: !!pData?.isRiichi,
+                isWin: !!pData?.isWin,
+                isLose: !!pData?.isLose,
+              };
+            }),
+          };
+        });
+
         return {
           gameId: resolvedGameId,
           gameIndex: game.gameIndex,
           time: resolvedTime,
           hasRoundDetails: true,
           playerStats,
-          chartData: { labels, datasets }
+          chartData: { labels, datasets },
+          roundDetailsList,
         };
       }
     }
