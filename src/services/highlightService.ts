@@ -8,7 +8,7 @@ export interface YakumanDef {
 }
 
 /**
- * 클럽 공식 집계 대상 역만 17종
+ * 클럽 공식 집계 대상 역만 18종
  */
 export const YAKUMAN_DEFINITIONS: YakumanDef[] = [
   { key: '천화', label: '천화', hanja: '天和' },
@@ -27,6 +27,7 @@ export const YAKUMAN_DEFINITIONS: YakumanDef[] = [
   { key: '스안커 단기', label: '스안커 단기', hanja: '四暗刻単騎', isDouble: true },
   { key: '국사무쌍 13면 대기', label: '국사무쌍 13면 대기', hanja: '国士無双十三面', isDouble: true },
   { key: '대사희', label: '대사희', hanja: '大四喜', isDouble: true },
+  { key: '헤아림 역만', label: '헤아림 역만', hanja: '数え役満' },
   { key: '오픈리치(리치 이외의 방총)', label: '오픈리치(리치 이외의 방총)', hanja: 'オープン立直' },
 ];
 
