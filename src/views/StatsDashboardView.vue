@@ -9947,7 +9947,6 @@ const openGamePopupFromLightbox = async (
                 @load="handleLightboxImageLoad"
                 @error="handleLightboxImageLoad"
               />
-              <span class="lightbox-zoom-hint-badge">클릭하여 고화질 크게 보기</span>
             </div>
 
             <div class="lightbox-info-footer">
@@ -14400,12 +14399,14 @@ html.dark .badge-round-sm {
 .badge-fun,
 .badge-fun-sm {
   background: rgba(16, 185, 129, 0.15);
-  color: #059669;
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.35);
 }
 html.dark .badge-fun,
 html.dark .badge-fun-sm {
   background: rgba(16, 185, 129, 0.22);
   color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
 }
 .badge-session-photo,
 .badge-session-sm {
@@ -15405,26 +15406,30 @@ html.dark .current-pin-box {
   color: #fff;
 }
 .btn-hl-upload.nanikiru {
-  background: #0d9488;
-  border-color: #0f766e;
+  background: #2563eb;
+  border-color: #1d4ed8;
   color: #ffffff;
 }
 .btn-hl-upload.nanikiru:hover {
-  background: #0f766e;
-  border-color: #115e59;
+  background: #1d4ed8;
+  border-color: #1e40af;
 }
 html.dark .btn-hl-upload.nanikiru {
-  background: #0d9488;
-  border-color: #2dd4bf;
+  background: #2563eb;
+  border-color: #60a5fa;
   color: #ffffff;
 }
 html.dark .btn-hl-upload.nanikiru:hover {
-  background: #0f766e;
-  border-color: #5eead4;
+  background: #1d4ed8;
+  border-color: #93c5fd;
 }
 .btn-hl-upload.secondary {
-  background: var(--accent, #2563eb);
+  background: #7c3aed;
+  border-color: #6d28d9;
   color: #fff;
+}
+.btn-hl-upload.secondary:hover {
+  background: #6d28d9;
 }
 .btn-hl-upload.admin-pin-btn {
   background: var(--bg-soft, #f1f5f9);
@@ -15587,6 +15592,9 @@ html.dark .hl-card {
 .hl-no-img-banner.is-fun-banner {
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.14), rgba(5, 150, 105, 0.25));
 }
+.hl-no-img-banner.is-nanikiru-banner {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(29, 78, 216, 0.26));
+}
 .hl-yakuman-kanji {
   font-size: 1.7rem;
   font-weight: 900;
@@ -15598,6 +15606,12 @@ html.dark .hl-card {
 }
 html.dark .hl-no-img-banner.is-fun-banner .hl-yakuman-kanji {
   color: #34d399;
+}
+.hl-no-img-banner.is-nanikiru-banner .hl-yakuman-kanji {
+  color: #2563eb;
+}
+html.dark .hl-no-img-banner.is-nanikiru-banner .hl-yakuman-kanji {
+  color: #60a5fa;
 }
 .hl-yakuman-main-txt {
   font-size: 0.85rem;
@@ -15639,11 +15653,23 @@ html.dark .hl-no-img-banner.is-fun-banner .hl-yakuman-kanji {
 }
 .hl-type-tag.fun {
   background: rgba(16, 185, 129, 0.16);
-  color: #059669;
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+html.dark .hl-type-tag.fun {
+  background: rgba(16, 185, 129, 0.22);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
 }
 .hl-type-tag.session {
   background: rgba(139, 92, 246, 0.16);
   color: #7c3aed;
+  border: 1px solid rgba(139, 92, 246, 0.32);
+}
+html.dark .hl-type-tag.session {
+  background: rgba(139, 92, 246, 0.22);
+  color: #a78bfa;
+  border-color: rgba(167, 139, 250, 0.38);
 }
 .hl-session-tag,
 .hl-round-tag {
@@ -17117,37 +17143,37 @@ html.dark .spm-game-player-row.is-winner .spm-gp-name {
 }
 
 /* =====================================================================
-   나니키루 (무엇을 버릴까) 카테고리 뱃지 / 칩 / 버튼 스타일
+   나니키루 (무엇을 버릴까) 카테고리 뱃지 / 칩 / 버튼 스타일 (Blue 계열)
    ===================================================================== */
 .gh-stat-pill.nanikiru {
-  border-color: rgba(13, 148, 136, 0.35);
-  background: rgba(13, 148, 136, 0.06);
+  border-color: rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.06);
 }
 .gh-stat-pill.nanikiru .gh-stat-val {
-  color: #0d9488;
+  color: #2563eb;
 }
 html.dark .gh-stat-pill.nanikiru {
-  border-color: rgba(45, 212, 191, 0.35);
-  background: rgba(20, 184, 166, 0.12);
+  border-color: rgba(96, 165, 250, 0.35);
+  background: rgba(59, 130, 246, 0.12);
 }
 html.dark .gh-stat-pill.nanikiru .gh-stat-val {
-  color: #2dd4bf;
+  color: #60a5fa;
 }
 
 .gf-tab.nanikiru.active,
 .gh-cat-btn.nanikiru-tab.active,
 .sg-filter-btn.nanikiru.active,
 .cat-radio-btn.nanikiru.active {
-  background: #0d9488 !important;
-  border-color: #0f766e !important;
+  background: #2563eb !important;
+  border-color: #1d4ed8 !important;
   color: #ffffff !important;
 }
 html.dark .gf-tab.nanikiru.active,
 html.dark .gh-cat-btn.nanikiru-tab.active,
 html.dark .sg-filter-btn.nanikiru.active,
 html.dark .cat-radio-btn.nanikiru.active {
-  background: #0d9488 !important;
-  border-color: #2dd4bf !important;
+  background: #2563eb !important;
+  border-color: #60a5fa !important;
   color: #ffffff !important;
 }
 
@@ -17155,9 +17181,9 @@ html.dark .cat-radio-btn.nanikiru.active {
 .chip-nanikiru,
 .badge-nanikiru,
 .badge-nanikiru-sm {
-  background: rgba(13, 148, 136, 0.14);
-  color: #0f766e;
-  border: 1px solid rgba(13, 148, 136, 0.32);
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+  border: 1px solid rgba(37, 99, 235, 0.35);
   font-weight: 700;
 }
 .badge-nanikiru {
@@ -17174,16 +17200,16 @@ html.dark .hl-type-tag.nanikiru,
 html.dark .chip-nanikiru,
 html.dark .badge-nanikiru,
 html.dark .badge-nanikiru-sm {
-  background: rgba(20, 184, 166, 0.22);
-  color: #5eead4;
-  border-color: rgba(45, 212, 191, 0.38);
+  background: rgba(59, 130, 246, 0.22);
+  color: #60a5fa;
+  border-color: rgba(96, 165, 250, 0.42);
 }
 
-/* 나니키루 판단 뱃지 태그 (리치 판단 / 공수 판단 / 안전패 선택 / 패효율 / 후로 판단) */
+/* 나니키루 판단 뱃지 태그 (리치 판단 / 공수 판단 / 안전패 선택 / 패효율 / 후로 판단 등) */
 .yakuman-select-chip.nanikiru-chip.selected {
-  background: #0d9488;
+  background: #2563eb;
   color: #ffffff;
-  border-color: #0d9488;
+  border-color: #2563eb;
 }
 .hl-y-badge.is-nanikiru-tag,
 .sg-yk-chip.is-nanikiru-tag,
@@ -17191,9 +17217,9 @@ html.dark .badge-nanikiru-sm {
 .badge-nanikiru-tag-sm {
   display: inline-flex;
   align-items: center;
-  background: rgba(13, 148, 136, 0.12);
-  color: #0f766e;
-  border: 1px solid rgba(13, 148, 136, 0.3);
+  background: rgba(37, 99, 235, 0.11);
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.3);
   font-weight: 700;
   border-radius: 6px;
 }
@@ -17210,9 +17236,9 @@ html.dark .hl-y-badge.is-nanikiru-tag,
 html.dark .sg-yk-chip.is-nanikiru-tag,
 html.dark .badge-nanikiru-tag,
 html.dark .badge-nanikiru-tag-sm {
-  background: rgba(20, 184, 166, 0.18);
-  color: #5eead4;
-  border-color: rgba(45, 212, 191, 0.35);
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.36);
 }
 
 /* 카드 내 댓글 개수 SVG 뱃지 (다크/라이트모드 대응) */
@@ -18076,29 +18102,6 @@ html.dark .lb-reply-form-target {
 /* =====================================================================
    2단계 사진 로딩 (썸네일 우선 → 클릭 시 고화질 원본) & 갤러리 관리 모달
    ===================================================================== */
-.lightbox-img-container {
-  position: relative;
-}
-.lightbox-zoom-hint-badge {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  background: rgba(15, 23, 42, 0.72);
-  color: #f8fafc;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(4px);
-  pointer-events: none;
-  opacity: 0.85;
-  transition: opacity 0.18s ease;
-}
-.lightbox-img-container:hover .lightbox-zoom-hint-badge {
-  opacity: 1;
-}
-
 .zoom-highres-loading-pill {
   position: fixed;
   top: 64px;
