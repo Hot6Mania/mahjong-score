@@ -843,6 +843,9 @@ const copySessionShareText = async () => {
   if (!props.dayItem) return;
 
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+  const rawDate = props.dayItem.date.replace(/-/g, '');
+  const yymmdd = rawDate.length === 8 ? rawDate.slice(2) : rawDate;
+  const shareUrl = `${window.location.origin}${base}/dashboard?date=${encodeURIComponent(yymmdd)}`;
   const text = `[장소]
 
 학동역 1번출구 김케이 하우스
@@ -863,7 +866,7 @@ ${getAttendeesShareText()}
 
 
 
-대시보드에서 확인 및 등록: ${window.location.origin}${base}/dashboard#schedule`;
+대시보드에서 확인 및 등록: ${shareUrl}`;
 
   try {
     if (navigator.clipboard) {
@@ -1027,17 +1030,13 @@ const onFooterAttendClick = () => {
                 class="btn-share-session"
                 @click="copySessionShareText"
                 title="이 일정 공유 텍스트 복사"
+                style="display: inline-flex; align-items: center; gap: 4px;"
               >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
                 <span class="txt-long">공유</span>
-                <span class="txt-short icon-share">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="18" cy="5" r="3"></circle>
-                    <circle cx="6" cy="12" r="3"></circle>
-                    <circle cx="18" cy="19" r="3"></circle>
-                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
-                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
-                  </svg>
-                </span>
               </button>
               <!-- 일정 정보 초기화 휴지통 아이콘 버튼 (날짜는 가능한 일정으로 유지) -->
               <button

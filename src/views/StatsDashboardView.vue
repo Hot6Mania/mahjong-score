@@ -118,13 +118,17 @@ const parsePhotoIdFromLocation = (): string => {
   return String(routePhoto).trim();
 };
 
-// URL 쿼리(?tab=), 경로(/dashboard/:tab) 및 해시(#tab)에서 현재 탭 추출 (사진 ID가 있으면 기본 'gallery')
+// URL 쿼리(?tab=), 경로(/dashboard/:tab) 및 해시(#tab)에서 현재 탭 추출 (사진 ID가 있으면 'gallery', date가 있으면 'schedule')
 const parseTabFromLocation = (): DashboardTab => {
   if (typeof window !== 'undefined') {
     const searchParams = new URLSearchParams(window.location.search);
     const qTab = (searchParams.get('tab') || '').trim();
     if (qTab && VALID_TABS.includes(qTab as DashboardTab)) {
       return qTab as DashboardTab;
+    }
+    const qDate = (searchParams.get('date') || '').trim();
+    if (qDate) {
+      return 'schedule';
     }
 
     const pathMatch = window.location.pathname.match(/\/dashboard\/([^/?#]+)/);
@@ -144,6 +148,9 @@ const parseTabFromLocation = (): DashboardTab => {
   const queryTab = (route.query.tab as string) || (route.params.tab as string);
   if (queryTab && VALID_TABS.includes(queryTab as DashboardTab)) {
     return queryTab as DashboardTab;
+  }
+  if (route.query.date) {
+    return 'schedule';
   }
   if (parsePhotoIdFromLocation()) {
     return 'gallery';
@@ -5790,13 +5797,16 @@ const openGamePopupFromLightbox = async (
     </div>
 
     <!-- 로딩 상태 -->
-    <div v-if="isLoading && activeTab !== 'rules'" class="loading-state">
+    <div
+      v-if="isLoading && activeTab !== 'rules' && activeTab !== 'schedule' && !(activeTab === 'gallery' && highlightsList.length > 0)"
+      class="loading-state"
+    >
       <div class="spinner"></div>
       <p>데이터를 불러오는 중입니다...</p>
     </div>
 
     <!-- 에러 상태 -->
-    <div v-else-if="errorMessage && activeTab !== 'rules'" class="error-state">
+    <div v-else-if="errorMessage && activeTab !== 'rules' && activeTab !== 'schedule'" class="error-state">
       <p class="error-title">데이터를 불러오지 못했습니다</p>
       <p class="error-detail">{{ errorMessage }}</p>
       <button class="btn-retry" @click="loadAllData(true)">다시 시도</button>

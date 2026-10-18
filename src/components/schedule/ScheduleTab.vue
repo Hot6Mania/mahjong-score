@@ -35,21 +35,55 @@ const props = defineProps<{
   availableSessions: string[];
 }>();
 
+// URL 쿼리의 ?date=YYMMDD 또는 ?date=YYYY-MM-DD를 YYYY-MM-DD 형식으로 정규화
+const parseDateParamFromLocation = (): string => {
+  if (typeof window === 'undefined') return '';
+  const urlParams = new URLSearchParams(window.location.search);
+  const raw = (urlParams.get('date') || '').trim();
+  if (/^\d{6}$/.test(raw)) {
+    return `20${raw.slice(0, 2)}-${raw.slice(2, 4)}-${raw.slice(4, 6)}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return raw;
+  }
+  return '';
+};
+
+const toShortYymmdd = (dateStr: string): string => {
+  const clean = (dateStr || '').replace(/-/g, '');
+  return clean.length === 8 ? clean.slice(2) : clean;
+};
+
+const updateScheduleDateUrl = (dateStr: string | null) => {
+  if (typeof window === 'undefined') return;
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+  const nextUrl = dateStr
+    ? `${base}/dashboard?date=${encodeURIComponent(toShortYymmdd(dateStr))}`
+    : `${base}/dashboard?tab=schedule`;
+  window.history.replaceState(null, '', nextUrl);
+};
+
 // 현재 연월 ("YYYY-MM") - 세션 목록 및 URL 파라미터를 우선 분석하여 텅 빈 월이 열리지 않도록 보정
 const getInitialMonth = (): string => {
-  // 1. URL 쿼리 파라미터 우선 확인 (?month=YYYY-MM)
   if (typeof window !== 'undefined') {
+    // 1. URL 쿼리 파라미터 ?date=YYMMDD (또는 YYYY-MM-DD) 우선 확인
+    const dParam = parseDateParamFromLocation();
+    if (dParam && /^\d{4}-\d{2}-\d{2}$/.test(dParam)) {
+      return dParam.slice(0, 7);
+    }
+    // 2. URL 쿼리 파라미터 ?month=YYYY-MM 확인
     const urlParams = new URLSearchParams(window.location.search);
     const mParam = urlParams.get('month');
     if (mParam && /^\d{4}-\d{2}$/.test(mParam)) {
       return mParam;
     }
   }
-  // 2. 현재 KST 오늘 날짜 기준 (항상 한국 표준시 기준 오늘이 속한 달로 기본 포커싱, 예: 2026-10)
+  // 3. 현재 KST 오늘 날짜 기준 (항상 한국 표준시 기준 오늘이 속한 달로 기본 포커싱, 예: 2026-10)
   return getKSTCurrentMonth();
 };
 
 const currentMonth = ref<string>(getInitialMonth());
+const pendingUrlDate = ref<string>(parseDateParamFromLocation());
 const viewMode = ref<'calendar' | 'list'>('calendar');
 const isLoading = ref<boolean>(false);
 const isRefreshing = ref<boolean>(false);
@@ -69,12 +103,12 @@ const formattedCurrentMonth = computed(() => {
 
 // 현재 보고 있는 달이 이번 달인지 여부
 const isCurrentMonthToday = computed(() => {
-  return currentMonth.value === getInitialMonth();
+  return currentMonth.value === getKSTCurrentMonth();
 });
 
 // 이번 달(오늘) 바로가기
 const goToTodayMonth = () => {
-  currentMonth.value = getInitialMonth();
+  currentMonth.value = getKSTCurrentMonth();
 };
 
 // 관리자 상태
@@ -95,6 +129,20 @@ const isAdminModalOpen = ref<boolean>(false);
 const isAdminAuthModalOpen = ref<boolean>(false);
 const adminPasscodeInput = ref<string>('');
 const isUserLoginModalOpen = ref<boolean>(false);
+
+const tryOpenPendingUrlDate = (dates?: ScheduleDayItem[]) => {
+  if (!pendingUrlDate.value) return;
+  const list = dates || monthSchedule.value.dates || [];
+  const matched = list.find(d => d.date === pendingUrlDate.value);
+  if (matched) {
+    pendingUrlDate.value = '';
+    selectedDayItem.value = matched;
+    isDetailModalOpen.value = true;
+  }
+};
+
+// 로컬 캐시에 해당 날짜가 이미 있으면 마운트 즉시 팝업 오픈
+tryOpenPendingUrlDate(monthSchedule.value.dates);
 
 const onUserLoginSuccess = (name: string, pin: string) => {
   myAttendeeName.value = name;
@@ -498,6 +546,7 @@ const handleCreateScheduleSubmit = async () => {
 
     isCreateScheduleModalOpen.value = false;
     isDetailModalOpen.value = true;
+    updateScheduleDateUrl(createDate.value);
     showToast(`${createDate.value} 일정이 생성되었습니다. (개설자 및 김케이 등록 완료)`);
   } else {
     createErrorMessage.value = res.error || '일정 생성에 실패했습니다.';
@@ -722,6 +771,7 @@ const loadSchedule = async (silent = true) => {
       if (!isScheduleDataEqual(monthSchedule.value, data)) {
         monthSchedule.value = data;
       }
+      tryOpenPendingUrlDate(data.dates);
     } catch (e) {
       console.warn('백그라운드 일정 동기화 실패:', e);
     } finally {
@@ -748,6 +798,7 @@ const loadSchedule = async (silent = true) => {
     } else {
       showToast('이미 최신 일정입니다.');
     }
+    tryOpenPendingUrlDate(data.dates);
   } catch (e) {
     console.error('일정 로드 실패:', e);
     showToast('일정 동기화에 실패했습니다.', 'error');
@@ -766,6 +817,9 @@ const loadSchedule = async (silent = true) => {
 watch(
   () => monthSchedule.value,
   (newData) => {
+    if (newData?.dates) {
+      tryOpenPendingUrlDate(newData.dates);
+    }
     if (selectedDayItem.value && newData?.dates) {
       const matched = newData.dates.find(d => d.date === selectedDayItem.value?.date);
       if (matched) {
@@ -775,6 +829,13 @@ watch(
   },
   { deep: true }
 );
+
+watch([isDetailModalOpen, isAttendModalOpen], ([detailOpen, attendOpen], [oldDetailOpen, oldAttendOpen]) => {
+  if (!detailOpen && !attendOpen && (oldDetailOpen || oldAttendOpen)) {
+    pendingUrlDate.value = '';
+    updateScheduleDateUrl(null);
+  }
+});
 
 // 월 이동
 const prevMonth = () => {
@@ -821,6 +882,7 @@ const onSelectDay = (dayItem: ScheduleDayItem) => {
   }
   selectedDayItem.value = dayItem;
   isDetailModalOpen.value = true;
+  updateScheduleDateUrl(dayItem.date);
 };
 
 const attendTargetName = ref<string>('');
