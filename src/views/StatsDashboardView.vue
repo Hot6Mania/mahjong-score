@@ -61,6 +61,7 @@ import {
   updateHighlightMemo,
   updateHighlightRecord,
   getHighlightImageUrl,
+  getHighlightThumbnailUrl,
   getHighlightStorageInfo,
   getSavedHighlightPin,
   saveHighlightPin,
@@ -68,11 +69,18 @@ import {
   verifyHighlightUploadPin,
   fetchHighlightUploadPinAsAdmin,
   updateHighlightUploadPinAsAdmin,
+  getMemberAliases,
+  resolveMemberCanonicalName,
+  isSameOrAliasedMember,
+  fetchMemberAliasesFromServer,
+  addMemberAliasAsAdmin,
+  removeMemberAliasAsAdmin,
   matchHighlightSession,
   computePlayerYakumanStats,
   type HighlightRecord,
   type HighlightCategory,
-  type HighlightComment
+  type HighlightComment,
+  type MemberAliasesMap
 } from '@/services/highlightService';
 import {
   checkAdminStatus,
@@ -793,16 +801,30 @@ const openPlayerModal = (
   }
 };
 
+const memberAliasesMap = ref<MemberAliasesMap>(getMemberAliases());
+
 const findMemberStatByName = (name?: string): MemberStatItem | undefined => {
   const clean = (name || '').trim();
   if (!clean) return undefined;
   const exact = allStats.value.find(m => m.name.trim() === clean);
   if (exact) return exact;
   const norm = clean.replace(/★/g, '').trim();
-  return allStats.value.find(m => m.name.replace(/★/g, '').trim() === norm);
+  const normMatch = allStats.value.find(m => m.name.replace(/★/g, '').trim() === norm);
+  if (normMatch) return normMatch;
+
+  // 등록된 멤버 동의어(별칭) 기반 공식 멤버 매칭 (예: '따마모크로스' -> '따마모')
+  const canonical = resolveMemberCanonicalName(clean, memberAliasesMap.value);
+  if (canonical && canonical !== clean) {
+    const canonExact = allStats.value.find(m => m.name.trim() === canonical);
+    if (canonExact) return canonExact;
+    const canonNorm = canonical.replace(/★/g, '').trim();
+    return allStats.value.find(m => m.name.replace(/★/g, '').trim() === canonNorm);
+  }
+  return undefined;
 };
 
 const isKnownPlayerName = (name?: string): boolean => {
+  void memberAliasesMap.value;
   return Boolean(findMemberStatByName(name));
 };
 
@@ -2846,6 +2868,7 @@ const refreshGalleryData = async () => {
 
 // 갤러리 탭 필터링된 목록
 const filteredGalleryHighlights = computed(() => {
+  const aliases = memberAliasesMap.value;
   return highlightsList.value.filter(rec => {
     if (galleryCategoryFilter.value !== 'all' && rec.category !== galleryCategoryFilter.value) {
       return false;
@@ -2855,7 +2878,11 @@ const filteredGalleryHighlights = computed(() => {
     }
     if (galleryPlayerFilter.value) {
       const target = galleryPlayerFilter.value.trim();
-      if (rec.winnerName?.trim() !== target && rec.loserName?.trim() !== target && rec.uploaderName?.trim() !== target) {
+      const matched =
+        isSameOrAliasedMember(rec.winnerName, target, aliases) ||
+        isSameOrAliasedMember(rec.loserName, target, aliases) ||
+        isSameOrAliasedMember(rec.uploaderName, target, aliases);
+      if (!matched) {
         return false;
       }
     }
@@ -2893,14 +2920,20 @@ const highlightStorageTick = ref(0);
 const handleHighlightStorageUpdated = () => {
   highlightStorageTick.value++;
 };
+const handleMemberAliasesUpdated = () => {
+  memberAliasesMap.value = { ...getMemberAliases() };
+  highlightStorageTick.value++;
+};
 onMounted(() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('mahjong_highlight_storage_updated', handleHighlightStorageUpdated);
+    window.addEventListener('mahjong_member_aliases_updated', handleMemberAliasesUpdated);
   }
 });
 onUnmounted(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('mahjong_highlight_storage_updated', handleHighlightStorageUpdated);
+    window.removeEventListener('mahjong_member_aliases_updated', handleMemberAliasesUpdated);
   }
 });
 
@@ -4707,6 +4740,24 @@ const scrollToLightboxComments = () => {
   scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
 };
 
+const loadedHighResImageIds = ref<Set<string>>(new Set());
+const isZoomHighResLoaded = ref<boolean>(false);
+
+const getDisplayHighlightImageSrc = (imageId?: string): string => {
+  if (!imageId) return '';
+  if (loadedHighResImageIds.value.has(imageId)) {
+    return getHighlightImageUrl(imageId);
+  }
+  return getHighlightThumbnailUrl(imageId);
+};
+
+const handleZoomHighResLoad = (imageId?: string) => {
+  isZoomHighResLoaded.value = true;
+  if (imageId) {
+    loadedHighResImageIds.value.add(imageId);
+  }
+};
+
 const handleLightboxImageLoad = () => {
   clearInitialLightboxImagePending();
   if (lightboxScrollAreaRef.value && lightboxScrollAreaRef.value.scrollTop < 10) {
@@ -4721,8 +4772,10 @@ const handleLightboxImageLoad = () => {
 };
 
 const openFullImageZoom = () => {
-  if (!lightboxHighlight.value?.hasImage || !lightboxHighlight.value?.imageId) return;
+  const imgId = lightboxHighlight.value?.imageId;
+  if (!lightboxHighlight.value?.hasImage || !imgId) return;
   fullImageFitMode.value = 'contain';
+  isZoomHighResLoaded.value = loadedHighResImageIds.value.has(imgId);
   isFullImageZoomOpen.value = true;
 };
 
@@ -4741,6 +4794,7 @@ watch(lightboxHighlight, (val, oldVal) => {
   } else {
     clearInitialLightboxImagePending();
     isFullImageZoomOpen.value = false;
+    isZoomHighResLoaded.value = false;
     fullImageFitMode.value = 'contain';
     showLightboxCommentFab.value = false;
     pendingUrlPhotoId.value = '';
@@ -5017,6 +5071,39 @@ const confirmDeleteComment = async (cmt: HighlightComment, explicitPin?: string)
   }
 };
 
+let latestLightboxSyncSeq = 0;
+
+const syncLatestHighlightOnOpen = async (targetHighlightId: string) => {
+  if (!targetHighlightId) return;
+  const syncSeq = ++latestLightboxSyncSeq;
+  try {
+    const freshRecords = await fetchHighlights(true);
+    memberAliasesMap.value = getMemberAliases();
+    if (syncSeq !== latestLightboxSyncSeq) return;
+    if (Array.isArray(freshRecords) && freshRecords.length > 0) {
+      highlightsList.value = freshRecords;
+      if (lightboxHighlight.value && lightboxHighlight.value.id === targetHighlightId) {
+        const latestRec = freshRecords.find(item => item.id === targetHighlightId);
+        if (latestRec) {
+          const prevCommentCount = lightboxHighlight.value.comments?.length || 0;
+          const nextCommentCount = latestRec.comments?.length || 0;
+          lightboxHighlight.value = {
+            ...latestRec,
+            caption: isEditingLightboxMemo.value ? lightboxHighlight.value.caption : latestRec.caption,
+          };
+          if (nextCommentCount !== prevCommentCount) {
+            nextTick(() => {
+              updateLightboxFloatingBtnState();
+            });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Gallery] Failed to background-sync highlight on open:', err);
+  }
+};
+
 const openHighlightLightbox = (rec: HighlightRecord, updateUrl = true) => {
   preloadMahjongTileImages();
   refreshGalleryAuthState();
@@ -5028,6 +5115,9 @@ const openHighlightLightbox = (rec: HighlightRecord, updateUrl = true) => {
   fullImageFitMode.value = 'contain';
   showLightboxCommentFab.value = true;
   lightboxHighlight.value = rec;
+  if (rec.id) {
+    void syncLatestHighlightOnOpen(rec.id);
+  }
   if (rec.sessionName) {
     const matchedSess = resolveMatchedSessionName(rec.sessionName);
     if (matchedSess) {
@@ -5152,8 +5242,9 @@ const confirmDeleteHighlight = async (rec: HighlightRecord) => {
   }
 };
 
-// 관리자 전용 공통 업로드 PIN 관리 모달
+// 관리자 전용 갤러리 관리 모달 (멤버 동의어 관리 + 공통 PIN 관리)
 const isPinAdminModalOpen = ref(false);
+const galleryAdminTab = ref<'aliases' | 'pin'>('aliases');
 const isPinAdminVerified = ref(false);
 const adminPasscodeInputForPin = ref('');
 const currentServerUploadPin = ref('');
@@ -5162,12 +5253,164 @@ const pinAdminMessage = ref('');
 const pinAdminError = ref('');
 const isPinAdminLoading = ref(false);
 
-const openPinAdminModal = async () => {
+// 멤버 동의어 관리 상태
+const aliasCanonicalSearch = ref('');
+const isAliasCanonicalDropdownOpen = ref(false);
+const selectedAliasCanonicalName = ref('');
+const newAliasNameInput = ref('');
+const aliasAdminMessage = ref('');
+const aliasAdminError = ref('');
+const isAliasSubmitting = ref(false);
+
+const officialSheetMemberNames = computed<string[]>(() => {
+  const names = new Set<string>();
+  for (const m of allStats.value) {
+    const clean = (m.name || '').trim();
+    if (clean) names.add(clean);
+  }
+  for (const canonical of Object.keys(memberAliasesMap.value || {})) {
+    const clean = canonical.trim();
+    if (clean) names.add(clean);
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b, 'ko'));
+});
+
+const filteredCanonicalNamesForAlias = computed<string[]>(() => {
+  const q = aliasCanonicalSearch.value.trim().toLowerCase();
+  if (!q) return officialSheetMemberNames.value;
+  return officialSheetMemberNames.value.filter(name => name.toLowerCase().includes(q));
+});
+
+const memberAliasEntries = computed(() => {
+  const map = memberAliasesMap.value || {};
+  return Object.entries(map)
+    .filter(([, aliases]) => Array.isArray(aliases) && aliases.length > 0)
+    .sort(([a], [b]) => a.localeCompare(b, 'ko'));
+});
+
+// 갤러리/댓글에 등장했지만 아직 시트 본캐에 연결되지 않은 미연동 닉네임 추천 목록
+const unlinkedGalleryNames = computed<string[]>(() => {
+  const sheetSet = new Set(allStats.value.map(m => (m.name || '').trim()).filter(Boolean));
+  const candidates = new Set<string>();
+  for (const rec of highlightsList.value) {
+    const pName = (rec.winnerName || '').trim();
+    if (pName && pName !== '미상') candidates.add(pName);
+    const lName = (rec.loserName || '').trim();
+    if (lName) candidates.add(lName);
+    if (Array.isArray(rec.comments)) {
+      for (const c of rec.comments) {
+        const aName = (c.authorName || '').trim();
+        if (aName) candidates.add(aName);
+      }
+    }
+  }
+  return Array.from(candidates)
+    .filter(name => {
+      if (sheetSet.has(name)) return false;
+      const resolved = resolveMemberCanonicalName(name, memberAliasesMap.value);
+      return !sheetSet.has(resolved);
+    })
+    .sort((a, b) => a.localeCompare(b, 'ko'));
+});
+
+const selectCanonicalMemberForAlias = (name: string) => {
+  selectedAliasCanonicalName.value = name;
+  aliasCanonicalSearch.value = name;
+  isAliasCanonicalDropdownOpen.value = false;
+  aliasAdminError.value = '';
+};
+
+const handleAliasCanonicalFocus = () => {
+  isAliasCanonicalDropdownOpen.value = true;
+};
+
+const handleAliasCanonicalBlur = () => {
+  setTimeout(() => {
+    isAliasCanonicalDropdownOpen.value = false;
+  }, 160);
+};
+
+const prefillUnlinkedNameAsAlias = (aliasName: string) => {
+  newAliasNameInput.value = aliasName;
+  aliasAdminError.value = '';
+  aliasAdminMessage.value = '';
+};
+
+const handleAddMemberAlias = async () => {
+  aliasAdminError.value = '';
+  aliasAdminMessage.value = '';
+  const canonical = (selectedAliasCanonicalName.value || aliasCanonicalSearch.value).trim();
+  const alias = newAliasNameInput.value.trim();
+  if (!canonical) {
+    aliasAdminError.value = '연결할 시트 멤버(본캐 이름)를 선택하거나 입력해 주세요.';
+    return;
+  }
+  if (!alias) {
+    aliasAdminError.value = '추가할 동의어(갤러리/일정 닉네임)를 입력해 주세요.';
+    return;
+  }
+  if (canonical === alias) {
+    aliasAdminError.value = '본캐 이름과 동의어가 동일합니다.';
+    return;
+  }
+  isAliasSubmitting.value = true;
+  try {
+    const res = await addMemberAliasAsAdmin(canonical, alias);
+    if (res.success) {
+      if (res.memberAliases) {
+        memberAliasesMap.value = res.memberAliases;
+      } else {
+        memberAliasesMap.value = getMemberAliases();
+      }
+      selectedAliasCanonicalName.value = canonical;
+      aliasCanonicalSearch.value = canonical;
+      newAliasNameInput.value = '';
+      aliasAdminMessage.value = `'${alias}' 닉네임이 '${canonical}' 멤버로 연결되었습니다.`;
+      showToast(`'${alias}' → '${canonical}' 연결 완료`);
+    } else {
+      aliasAdminError.value = res.error || '동의어 추가에 실패했습니다.';
+    }
+  } finally {
+    isAliasSubmitting.value = false;
+  }
+};
+
+const handleRemoveMemberAlias = async (canonical: string, alias: string) => {
+  aliasAdminError.value = '';
+  aliasAdminMessage.value = '';
+  isAliasSubmitting.value = true;
+  try {
+    const res = await removeMemberAliasAsAdmin(canonical, alias);
+    if (res.success) {
+      if (res.memberAliases) {
+        memberAliasesMap.value = res.memberAliases;
+      } else {
+        memberAliasesMap.value = getMemberAliases();
+      }
+      aliasAdminMessage.value = `'${alias}' 동의어 연결이 해제되었습니다.`;
+      showToast(`'${alias}' 연결 해제됨`);
+    } else {
+      aliasAdminError.value = res.error || '동의어 삭제에 실패했습니다.';
+    }
+  } finally {
+    isAliasSubmitting.value = false;
+  }
+};
+
+const openPinAdminModal = async (initialTab: 'aliases' | 'pin' = 'aliases') => {
   isPinAdminModalOpen.value = true;
+  galleryAdminTab.value = initialTab;
   pinAdminMessage.value = '';
   pinAdminError.value = '';
+  aliasAdminMessage.value = '';
+  aliasAdminError.value = '';
   isPinAdminLoading.value = true;
   try {
+    void fetchMemberAliasesFromServer().then(res => {
+      if (res.memberAliases) {
+        memberAliasesMap.value = res.memberAliases;
+      }
+    });
     const status = await checkAdminStatus();
     if (status.isAdmin) {
       isGalleryAdmin.value = true;
@@ -5188,6 +5431,7 @@ const openPinAdminModal = async () => {
 
 const verifyAdminForPinModal = async () => {
   pinAdminError.value = '';
+  aliasAdminError.value = '';
   if (!adminPasscodeInputForPin.value.trim()) {
     pinAdminError.value = '관리자 인증 코드를 입력해 주세요.';
     return;
@@ -5199,7 +5443,13 @@ const verifyAdminForPinModal = async () => {
     if (status.isAdmin) {
       isGalleryAdmin.value = true;
       isPinAdminVerified.value = true;
-      const pinRes = await fetchHighlightUploadPinAsAdmin();
+      const [pinRes, aliasRes] = await Promise.all([
+        fetchHighlightUploadPinAsAdmin(),
+        fetchMemberAliasesFromServer(),
+      ]);
+      if (aliasRes.memberAliases) {
+        memberAliasesMap.value = aliasRes.memberAliases;
+      }
       if (pinRes.success) {
         currentServerUploadPin.value = pinRes.uploadPin || '';
         newServerUploadPin.value = pinRes.uploadPin || '';
@@ -6750,7 +7000,7 @@ const openGamePopupFromLightbox = async (
                   @click="openHighlightLightbox(rec)"
                 >
                   <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
-                    <img :src="getHighlightImageUrl(rec.imageId)" :alt="rec.caption || rec.winnerName" loading="lazy" class="pinterest-img" />
+                    <img :src="getHighlightThumbnailUrl(rec.imageId)" :alt="rec.caption || rec.winnerName" loading="lazy" decoding="async" class="pinterest-img" />
                   </div>
                   <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun', 'is-nanikiru-banner': rec.category === 'nanikiru' }">
                     <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : rec.category === 'nanikiru' ? '何切る' : '和了' }}</span>
@@ -6952,11 +7202,16 @@ const openGamePopupFromLightbox = async (
               </button>
               <button
                 v-if="isGalleryAdmin"
+                type="button"
                 class="btn-hl-upload admin-pin-btn"
-                @click="openPinAdminModal"
-                title="관리자 전용 공통 업로드 PIN 조회 및 변경"
+                @click="openPinAdminModal('aliases')"
+                title="관리자 전용 갤러리 관리 (멤버 동의어 · 공통 PIN)"
               >
-                공통 PIN 관리
+                <svg xmlns="http://www.w3.org/2000/svg" width="13.5" height="13.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+                <span>갤러리 관리</span>
               </button>
               <button class="btn-hl-upload primary" @click="openHighlightUploadModal({ category: 'yakuman' })">
                 역만 / 화료 등록
@@ -7018,7 +7273,7 @@ const openGamePopupFromLightbox = async (
             <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
               <img
                 v-if="!isInitialLightboxImagePending"
-                :src="getHighlightImageUrl(rec.imageId)"
+                :src="getHighlightThumbnailUrl(rec.imageId)"
                 :alt="rec.caption || rec.winnerName"
                 loading="lazy"
                 decoding="async"
@@ -7606,7 +7861,7 @@ const openGamePopupFromLightbox = async (
                               class="ym_achieved_card"
                               @click="openHighlightLightbox(rec)"
                             >
-                              <img v-if="rec.hasImage && rec.imageId" :src="getHighlightImageUrl(rec.imageId)" class="ym_thumb" loading="lazy" />
+                              <img v-if="rec.hasImage && rec.imageId" :src="getHighlightThumbnailUrl(rec.imageId)" class="ym_thumb" loading="lazy" decoding="async" />
                               <div class="ym_achieved_info">
                                 <div class="ym_achieved_tags">
                                   <span v-for="t in rec.yakumanTypes" :key="t" class="hl-y-badge">{{ t }}</span>
@@ -8502,7 +8757,7 @@ const openGamePopupFromLightbox = async (
                     class="ym_achieved_card"
                     @click="openHighlightLightbox(rec)"
                   >
-                    <img v-if="rec.hasImage && rec.imageId" :src="getHighlightImageUrl(rec.imageId)" class="ym_thumb" loading="lazy" alt="역만" />
+                    <img v-if="rec.hasImage && rec.imageId" :src="getHighlightThumbnailUrl(rec.imageId)" class="ym_thumb" loading="lazy" decoding="async" alt="역만" />
                     <div class="ym_achieved_info">
                       <div class="ym_achieved_tags">
                         <span v-for="t in rec.yakumanTypes" :key="t" class="hl-y-badge">{{ t }}</span>
@@ -9076,7 +9331,7 @@ const openGamePopupFromLightbox = async (
                 class="gdm-highlight-item"
                 @click="openHighlightLightbox(item)"
               >
-                <img v-if="item.hasImage && item.imageId" :src="getHighlightImageUrl(item.imageId)" class="gdm-highlight-thumb" loading="lazy" alt="사진" />
+                <img v-if="item.hasImage && item.imageId" :src="getHighlightThumbnailUrl(item.imageId)" class="gdm-highlight-thumb" loading="lazy" decoding="async" alt="사진" />
                 <div class="gdm-highlight-info">
                   <div class="gdm-highlight-badges">
                     <span v-if="item.roundName" class="badge-round-sm">{{ formatCardRoundKorean(item.roundName) }}</span>
@@ -9680,11 +9935,11 @@ const openGamePopupFromLightbox = async (
             <div
               v-if="lightboxHighlight.hasImage && lightboxHighlight.imageId"
               class="lightbox-img-container"
-              title="클릭하여 사진 크게 보기"
+              title="클릭하여 고화질 원본 크게 보기"
               @click.stop="openFullImageZoom"
             >
               <img
-                :src="getHighlightImageUrl(lightboxHighlight.imageId)"
+                :src="getDisplayHighlightImageSrc(lightboxHighlight.imageId)"
                 class="lightbox-full-img"
                 alt="사진"
                 fetchpriority="high"
@@ -9692,6 +9947,7 @@ const openGamePopupFromLightbox = async (
                 @load="handleLightboxImageLoad"
                 @error="handleLightboxImageLoad"
               />
+              <span class="lightbox-zoom-hint-badge">클릭하여 고화질 크게 보기</span>
             </div>
 
             <div class="lightbox-info-footer">
@@ -10400,11 +10656,25 @@ const openGamePopupFromLightbox = async (
           class="full-image-zoom-stage"
           :class="`fit-${fullImageFitMode}`"
         >
+          <div v-if="!isZoomHighResLoaded" class="zoom-highres-loading-pill" @click.stop>
+            <span class="gdm-spinner"></span>
+            <span>고화질 원본 불러오는 중...</span>
+          </div>
+          <img
+            v-if="!isZoomHighResLoaded"
+            :src="getHighlightThumbnailUrl(lightboxHighlight.imageId)"
+            alt="미리보기"
+            class="full-image-zoom-img is-thumb-preview"
+            :class="`fit-${fullImageFitMode}`"
+            @click.stop="cycleFullImageFitMode"
+          />
           <img
             :src="getHighlightImageUrl(lightboxHighlight.imageId)"
             alt="원본 크게 보기"
             class="full-image-zoom-img"
-            :class="`fit-${fullImageFitMode}`"
+            :class="[`fit-${fullImageFitMode}`, { 'is-highres-pending': !isZoomHighResLoaded }]"
+            @load="handleZoomHighResLoad(lightboxHighlight.imageId)"
+            @error="isZoomHighResLoaded = true"
             @click.stop="cycleFullImageFitMode"
           />
         </div>
@@ -10531,7 +10801,7 @@ const openGamePopupFromLightbox = async (
     </Transition>
 
     <!-- ============================================== -->
-    <!-- 관리자 전용: 공통 업로드 PIN 관리 모달 -->
+    <!-- 관리자 전용: 갤러리 관리 모달 (멤버 동의어 관리 · 공통 PIN 관리) -->
     <!-- ============================================== -->
     <Transition name="modal-fade">
       <div 
@@ -10539,18 +10809,20 @@ const openGamePopupFromLightbox = async (
         class="modal-overlay" 
         v-backdrop-dismiss="() => { isPinAdminModalOpen = false }"
       >
-        <div class="pin-admin-modal-card">
+        <div class="pin-admin-modal-card gallery-admin-modal-card">
           <div class="highlight-modal-header">
-            <h3>공통 업로드 PIN 관리 (관리자)</h3>
+            <div class="gallery-admin-header-left">
+              <h3>갤러리 관리 (관리자)</h3>
+              <span class="gallery-admin-sub">멤버 동의어(스탯 연동) 및 공통 업로드 PIN을 설정합니다.</span>
+            </div>
             <button class="btn-close" @click="isPinAdminModalOpen = false" title="닫기">✕</button>
           </div>
-          <div class="highlight-modal-body">
-            <p class="pin-admin-desc">
-              이 PIN 번호를 알고 있는 모든 부원은 화료 기록 및 사진을 등록하거나, 기존 기록의 사진 외 정보(회차·대국·승자·설명 등)를 수정할 수 있습니다.
-              (사진 교체/삭제 및 기록 전체 삭제는 관리자만 가능합니다.)
-            </p>
 
+          <div class="highlight-modal-body">
             <template v-if="!isPinAdminVerified">
+              <p class="pin-admin-desc">
+                관리자 인증 후 멤버 동의어 관리 및 공통 업로드 PIN 설정을 변경할 수 있습니다.
+              </p>
               <div class="form-group">
                 <label class="form-label">관리자 인증 코드 입력</label>
                 <input 
@@ -10569,31 +10841,201 @@ const openGamePopupFromLightbox = async (
               >
                 {{ isPinAdminLoading ? '인증 중...' : '관리자 인증하기' }}
               </button>
+              <div v-if="pinAdminError" class="upload-error-msg">{{ pinAdminError }}</div>
             </template>
 
             <template v-else>
-              <div class="form-group">
-                <label class="form-label">현재 설정된 공통 PIN</label>
-                <div class="current-pin-box">{{ currentServerUploadPin || '조회 중...' }}</div>
+              <!-- 상단 세그먼트 탭 -->
+              <div class="gallery-admin-tabs">
+                <button
+                  type="button"
+                  class="gallery-admin-tab-btn"
+                  :class="{ active: galleryAdminTab === 'aliases' }"
+                  @click="galleryAdminTab = 'aliases'"
+                >
+                  <span>멤버 동의어 관리</span>
+                  <span class="ga-tab-badge">{{ memberAliasEntries.length }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="gallery-admin-tab-btn"
+                  :class="{ active: galleryAdminTab === 'pin' }"
+                  @click="galleryAdminTab = 'pin'"
+                >
+                  <span>공통 PIN 관리</span>
+                </button>
               </div>
-              <div class="form-group">
-                <label class="form-label">새 공통 PIN 번호 설정</label>
-                <input 
-                  v-model="newServerUploadPin" 
-                  type="text" 
-                  class="form-input" 
-                  placeholder="새로운 공통 PIN 입력 (4자리 이상)"
-                />
+
+              <!-- 탭 1: 멤버 동의어 관리 -->
+              <div v-if="galleryAdminTab === 'aliases'" class="gallery-admin-section">
+                <p class="pin-admin-desc">
+                  시트에 등록된 본캐 이름(예: <strong>따마모</strong>)과 갤러리·댓글·일정에서 사용하는 다른 닉네임(예: <strong>따마모크로스</strong>)을 연결합니다. 연결된 닉네임을 클릭하면 해당 멤버의 스탯 창이 바로 열리고 역만/갤러리 필터도 함께 연동됩니다.
+                </p>
+
+                <!-- 미연동 갤러리/댓글 닉네임 빠른 선택 추천 -->
+                <div v-if="unlinkedGalleryNames.length > 0" class="ga-unlinked-box">
+                  <div class="ga-unlinked-title">갤러리/댓글 미연동 닉네임 (클릭 시 동의어 입력란에 자동 입력)</div>
+                  <div class="ga-unlinked-chips">
+                    <button
+                      v-for="uName in unlinkedGalleryNames"
+                      :key="`unlinked-${uName}`"
+                      type="button"
+                      class="ga-unlinked-chip"
+                      :class="{ selected: newAliasNameInput.trim() === uName }"
+                      @click="prefillUnlinkedNameAsAlias(uName)"
+                    >
+                      + {{ uName }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 동의어 추가 폼 -->
+                <div class="ga-alias-add-card">
+                  <div class="ga-alias-form-grid">
+                    <div class="ga-alias-field">
+                      <label class="form-label">시트 본캐 멤버 (스탯 기준)</label>
+                      <div class="ga-canonical-combo">
+                        <input
+                          v-model="aliasCanonicalSearch"
+                          type="text"
+                          class="form-input"
+                          placeholder="멤버 검색 또는 선택 (예: 따마모)"
+                          autocomplete="off"
+                          @focus="handleAliasCanonicalFocus"
+                          @blur="handleAliasCanonicalBlur"
+                          @input="selectedAliasCanonicalName = aliasCanonicalSearch.trim(); isAliasCanonicalDropdownOpen = true"
+                        />
+                        <div
+                          v-if="isAliasCanonicalDropdownOpen && filteredCanonicalNamesForAlias.length > 0"
+                          class="ga-canonical-dropdown"
+                        >
+                          <button
+                            v-for="cName in filteredCanonicalNamesForAlias"
+                            :key="`canon-opt-${cName}`"
+                            type="button"
+                            class="ga-canonical-opt"
+                            :class="{ active: selectedAliasCanonicalName === cName }"
+                            @mousedown.prevent="selectCanonicalMemberForAlias(cName)"
+                          >
+                            <span>{{ cName }}</span>
+                            <span v-if="memberAliasesMap[cName]?.length" class="ga-opt-sub">
+                              ({{ memberAliasesMap[cName].join(', ') }})
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="ga-alias-arrow">←</div>
+
+                    <div class="ga-alias-field">
+                      <label class="form-label">연결할 동의어 / 부캐 닉네임</label>
+                      <input
+                        v-model="newAliasNameInput"
+                        type="text"
+                        class="form-input"
+                        placeholder="예: 따마모크로스"
+                        autocomplete="off"
+                        @keyup.enter="handleAddMemberAlias"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="ga-alias-add-actions">
+                    <button
+                      type="button"
+                      class="btn-submit-modal sm"
+                      :disabled="isAliasSubmitting"
+                      @click="handleAddMemberAlias"
+                    >
+                      {{ isAliasSubmitting ? '저장 중...' : '+ 동의어 연결 추가' }}
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="aliasAdminError" class="upload-error-msg">{{ aliasAdminError }}</div>
+                <div v-if="aliasAdminMessage" class="pin-admin-status">{{ aliasAdminMessage }}</div>
+
+                <!-- 현재 등록된 동의어 목록 -->
+                <div class="ga-alias-list-wrap">
+                  <div class="ga-alias-list-header">
+                    <span>등록된 멤버 동의어 목록 ({{ memberAliasEntries.length }}명)</span>
+                    <span class="ga-alias-list-hint">닉네임 클릭 시 스탯 창 연동 테스트 가능</span>
+                  </div>
+                  <div v-if="memberAliasEntries.length === 0" class="ga-alias-empty">
+                    등록된 멤버 동의어가 없습니다.
+                  </div>
+                  <div v-else class="ga-alias-rows">
+                    <div
+                      v-for="[canonical, aliases] in memberAliasEntries"
+                      :key="`alias-row-${canonical}`"
+                      class="ga-alias-row"
+                    >
+                      <div class="ga-alias-canonical">
+                        <button
+                          type="button"
+                          class="hl-player-link strong"
+                          title="클릭하여 스탯 창 열기"
+                          @click="openPlayerByName(canonical, false, false, true)"
+                        >{{ canonical }}</button>
+                        <span class="ga-canonical-tag">본캐</span>
+                      </div>
+                      <div class="ga-alias-chips">
+                        <span
+                          v-for="al in aliases"
+                          :key="`alias-chip-${canonical}-${al}`"
+                          class="ga-alias-chip"
+                        >
+                          <button
+                            type="button"
+                            class="ga-alias-chip-name"
+                            title="클릭하여 동의어로 스탯 창 열기 테스트"
+                            @click="openPlayerByName(al, false, false, true)"
+                          >{{ al }}</button>
+                          <button
+                            type="button"
+                            class="ga-alias-chip-del"
+                            title="연결 해제"
+                            :disabled="isAliasSubmitting"
+                            @click="handleRemoveMemberAlias(canonical, al)"
+                          >×</button>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 탭 2: 공통 PIN 관리 -->
+              <div v-else class="gallery-admin-section">
+                <p class="pin-admin-desc">
+                  이 PIN 번호를 알고 있는 모든 부원은 화료 기록 및 사진을 등록하거나, 기존 기록의 사진 외 정보(회차·대국·승자·설명 등)를 수정할 수 있습니다.
+                  (사진 교체/삭제 및 기록 전체 삭제는 관리자만 가능합니다.)
+                </p>
+                <div class="form-group">
+                  <label class="form-label">현재 설정된 공통 PIN</label>
+                  <div class="current-pin-box">{{ currentServerUploadPin || '조회 중...' }}</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">새 공통 PIN 번호 설정</label>
+                  <input 
+                    v-model="newServerUploadPin" 
+                    type="text" 
+                    class="form-input" 
+                    placeholder="새로운 공통 PIN 입력 (4자리 이상)"
+                    @keyup.enter="saveNewServerUploadPin"
+                  />
+                </div>
+                <div v-if="pinAdminError" class="upload-error-msg">{{ pinAdminError }}</div>
+                <div v-if="pinAdminMessage" class="pin-admin-status">{{ pinAdminMessage }}</div>
               </div>
             </template>
-
-            <div v-if="pinAdminError" class="upload-error-msg">{{ pinAdminError }}</div>
-            <div v-if="pinAdminMessage" class="pin-admin-status">{{ pinAdminMessage }}</div>
           </div>
+
           <div class="highlight-modal-footer">
             <button type="button" class="btn-cancel-modal" @click="isPinAdminModalOpen = false">닫기</button>
             <button 
-              v-if="isPinAdminVerified"
+              v-if="isPinAdminVerified && galleryAdminTab === 'pin'"
               type="button" 
               class="btn-submit-modal" 
               :disabled="isPinAdminLoading"
@@ -17630,7 +18072,422 @@ html.dark .lb-reply-form-target {
 .lb-cf-author-row.compact {
   gap: 6px;
 }
+
+/* =====================================================================
+   2단계 사진 로딩 (썸네일 우선 → 클릭 시 고화질 원본) & 갤러리 관리 모달
+   ===================================================================== */
+.lightbox-img-container {
+  position: relative;
+}
+.lightbox-zoom-hint-badge {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.72);
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+  opacity: 0.85;
+  transition: opacity 0.18s ease;
+}
+.lightbox-img-container:hover .lightbox-zoom-hint-badge {
+  opacity: 1;
+}
+
+.zoom-highres-loading-pill {
+  position: fixed;
+  top: 64px;
+  right: 20px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.82);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.full-image-zoom-img.is-highres-pending {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.full-image-zoom-img.is-thumb-preview {
+  filter: contrast(1.01);
+}
+
+.btn-hl-upload.admin-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.gallery-admin-modal-card {
+  width: min(580px, 95vw);
+  max-width: 580px;
+}
+.gallery-admin-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.gallery-admin-sub {
+  font-size: 12px;
+  color: var(--text-dimmed, #64748b);
+}
+html.dark .gallery-admin-sub {
+  color: #a1a1aa;
+}
+
+.gallery-admin-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg-card, #f1f5f9);
+  border: 1px solid var(--border-color, #e2e8f0);
+  margin-bottom: 14px;
+}
+html.dark .gallery-admin-tabs {
+  background: #18181b;
+  border-color: #27272a;
+}
+.gallery-admin-tab-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-dimmed, #64748b);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.gallery-admin-tab-btn:hover {
+  color: var(--text-color, #0f172a);
+}
+html.dark .gallery-admin-tab-btn:hover {
+  color: #f4f4f5;
+}
+.gallery-admin-tab-btn.active {
+  background: var(--bg-modal, #ffffff);
+  color: var(--color-toggle-on, #2563eb);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+html.dark .gallery-admin-tab-btn.active {
+  background: #27272a;
+  color: #60a5fa;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.ga-tab-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+html.dark .ga-tab-badge {
+  background: rgba(96, 165, 250, 0.2);
+  color: #93c5fd;
+}
+
+.gallery-admin-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ga-unlinked-box {
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+html.dark .ga-unlinked-box {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+.ga-unlinked-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #b45309;
+}
+html.dark .ga-unlinked-title {
+  color: #fbbf24;
+}
+.ga-unlinked-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.ga-unlinked-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: var(--bg-modal, #ffffff);
+  color: var(--text-color, #1e293b);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ga-unlinked-chip:hover,
+.ga-unlinked-chip.selected {
+  background: #f59e0b;
+  border-color: #d97706;
+  color: #ffffff;
+}
+html.dark .ga-unlinked-chip {
+  background: #1f1f23;
+  color: #f4f4f5;
+}
+
+.ga-alias-add-card {
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+html.dark .ga-alias-add-card {
+  background: #18181c;
+  border-color: #2e2e36;
+}
+.ga-alias-form-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end;
+  gap: 8px;
+}
+@media (max-width: 520px) {
+  .ga-alias-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .ga-alias-arrow {
+    display: none;
+  }
+}
+.ga-alias-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ga-alias-arrow {
+  padding-bottom: 8px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text-dimmed, #64748b);
+  user-select: none;
+}
+.ga-canonical-combo {
+  position: relative;
+}
+.ga-canonical-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  max-height: 190px;
+  overflow-y: auto;
+  border-radius: 8px;
+  background: var(--bg-modal, #ffffff);
+  border: 1px solid var(--border-color, #cbd5e1);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+html.dark .ga-canonical-dropdown {
+  background: #202026;
+  border-color: #3f3f46;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+.ga-canonical-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-color, #0f172a);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.ga-canonical-opt:hover,
+.ga-canonical-opt.active {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--color-toggle-on, #2563eb);
+}
+html.dark .ga-canonical-opt {
+  color: #f4f4f5;
+}
+html.dark .ga-canonical-opt:hover,
+html.dark .ga-canonical-opt.active {
+  background: rgba(96, 165, 250, 0.18);
+  color: #60a5fa;
+}
+.ga-opt-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dimmed, #64748b);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ga-alias-add-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ga-alias-list-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ga-alias-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--text-color, #0f172a);
+}
+html.dark .ga-alias-list-header {
+  color: #f4f4f5;
+}
+.ga-alias-list-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dimmed, #64748b);
+}
+.ga-alias-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-dimmed, #64748b);
+  border-radius: 8px;
+  border: 1px dashed var(--border-color, #cbd5e1);
+}
+.ga-alias-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 230px;
+  overflow-y: auto;
+}
+.ga-alias-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .ga-alias-row {
+  background: #1c1c21;
+  border-color: #2e2e36;
+}
+.ga-alias-canonical {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.ga-canonical-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(16, 185, 129, 0.14);
+  color: #059669;
+}
+html.dark .ga-canonical-tag {
+  background: rgba(16, 185, 129, 0.22);
+  color: #34d399;
+}
+.ga-alias-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ga-alias-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  font-size: 12px;
+}
+html.dark .ga-alias-chip {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(96, 165, 250, 0.35);
+}
+.ga-alias-chip-name {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: #2563eb;
+  cursor: pointer;
+}
+.ga-alias-chip-name:hover {
+  text-decoration: underline;
+}
+html.dark .ga-alias-chip-name {
+  color: #93c5fd;
+}
+.ga-alias-chip-del {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--text-dimmed, #64748b);
+  cursor: pointer;
+  border-radius: 50%;
+}
+.ga-alias-chip-del:hover:not(:disabled) {
+  color: #ef4444;
+}
 </style>
+
 
 
 

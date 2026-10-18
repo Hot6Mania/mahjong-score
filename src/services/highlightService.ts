@@ -61,8 +61,104 @@ export interface HighlightRecord {
   hasImage: boolean;
   imageId?: string;
   imageSize?: number;
+  hasThumb?: boolean;
+  thumbSize?: number;
   comments?: HighlightComment[];
   createdAt: number;
+}
+
+export type MemberAliasesMap = Record<string, string[]>;
+
+const MEMBER_ALIASES_STORAGE_KEY = 'mahjong_member_aliases_v1';
+const DEFAULT_MEMBER_ALIASES: MemberAliasesMap = {
+  따마모: ['따마모크로스'],
+};
+
+let cachedMemberAliases: MemberAliasesMap | null = null;
+
+function sanitizeMemberAliasesMap(raw: unknown): MemberAliasesMap {
+  const result: MemberAliasesMap = {};
+  if (!raw || typeof raw !== 'object') return result;
+  for (const [k, arr] of Object.entries(raw as Record<string, unknown>)) {
+    const canonical = String(k || '').trim();
+    if (!canonical || !Array.isArray(arr)) continue;
+    const cleanList: string[] = [];
+    for (const item of arr) {
+      const alias = String(item || '').trim();
+      if (alias && alias !== canonical && !cleanList.includes(alias)) {
+        cleanList.push(alias);
+      }
+    }
+    if (cleanList.length > 0) {
+      result[canonical] = cleanList;
+    }
+  }
+  return result;
+}
+
+function loadLocalMemberAliases(): MemberAliasesMap {
+  if (cachedMemberAliases) return cachedMemberAliases;
+  try {
+    const raw = localStorage.getItem(MEMBER_ALIASES_STORAGE_KEY);
+    if (raw) {
+      const parsed = sanitizeMemberAliasesMap(JSON.parse(raw));
+      if (Object.keys(parsed).length > 0) {
+        cachedMemberAliases = parsed;
+        return parsed;
+      }
+    }
+  } catch {}
+  cachedMemberAliases = { ...DEFAULT_MEMBER_ALIASES };
+  return cachedMemberAliases;
+}
+
+function saveLocalMemberAliases(map: MemberAliasesMap): MemberAliasesMap {
+  const sanitized = sanitizeMemberAliasesMap(map);
+  cachedMemberAliases = sanitized;
+  try {
+    localStorage.setItem(MEMBER_ALIASES_STORAGE_KEY, JSON.stringify(sanitized));
+  } catch {}
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mahjong_member_aliases_updated'));
+  }
+  return sanitized;
+}
+
+export function getMemberAliases(): MemberAliasesMap {
+  return loadLocalMemberAliases();
+}
+
+export function resolveMemberCanonicalName(rawName?: string, customMap?: MemberAliasesMap): string {
+  const clean = (rawName || '').trim();
+  if (!clean) return '';
+  const cleanNorm = clean.replace(/★/g, '').trim();
+  const map = customMap || loadLocalMemberAliases();
+  for (const [canonical, aliases] of Object.entries(map)) {
+    const canonNorm = canonical.replace(/★/g, '').trim();
+    if (clean === canonical || cleanNorm === canonNorm) {
+      return canonical;
+    }
+    if (Array.isArray(aliases)) {
+      for (const al of aliases) {
+        const alTrim = (al || '').trim();
+        const alNorm = alTrim.replace(/★/g, '').trim();
+        if (clean === alTrim || (alNorm && cleanNorm === alNorm)) {
+          return canonical;
+        }
+      }
+    }
+  }
+  return clean;
+}
+
+export function isSameOrAliasedMember(nameA?: string, nameB?: string, customMap?: MemberAliasesMap): boolean {
+  const a = (nameA || '').replace(/★/g, '').trim();
+  const b = (nameB || '').replace(/★/g, '').trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const canonA = resolveMemberCanonicalName(a, customMap).replace(/★/g, '').trim();
+  const canonB = resolveMemberCanonicalName(b, customMap).replace(/★/g, '').trim();
+  return Boolean(canonA && canonA === canonB);
 }
 
 export interface HighlightStorageInfo {
@@ -87,6 +183,7 @@ const SESSION_PIN_STORAGE_KEY = 'mahjong_highlight_upload_pin';
 let cachedHighlights: HighlightRecord[] | null = null;
 let cachedStorageInfo: HighlightStorageInfo | null = null;
 const probingImageIds = new Set<string>();
+const backfillingThumbIds = new Set<string>();
 
 function loadLocalImageSizeCache(): Record<string, number> {
   try {
@@ -304,64 +401,192 @@ export function getHighlightImageUrl(imageId?: string): string {
 }
 
 /**
- * 원본 해상도를 1px도 축소하지 않고 WebP(quality = 1.0, 열화 없음)로 변환
- * - 이미 WebP 파일인 경우 재인코딩 없이 원본 파일 그대로 반환
+ * 갤러리 그리드·미니 썸네일·라이트박스 프리뷰용 경량 WebP 썸네일 URL (?thumb=1)
  */
-export async function convertToOriginalQualityWebP(file: File): Promise<File> {
-  if (!file || !file.type.startsWith('image/')) {
-    return file;
-  }
-  if (file.type === 'image/webp') {
-    return file;
-  }
+export function getHighlightThumbnailUrl(imageId?: string): string {
+  if (!imageId) return '';
+  return `${getWorkerUrl()}/api/public/highlights/image/${encodeURIComponent(imageId)}?thumb=1`;
+}
 
-  return new Promise<File>((resolve) => {
+/**
+ * 이미지 리사이즈 & WebP 변환 공통 헬퍼
+ */
+async function resizeAndEncodeWebP(
+  file: File,
+  maxDimension: number,
+  quality: number,
+  suffix = ''
+): Promise<File | null> {
+  if (!file || !file.type.startsWith('image/')) return null;
+
+  return new Promise<File | null>((resolve) => {
     const objectUrl = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(objectUrl);
       try {
-        const width = img.naturalWidth || img.width;
-        const height = img.naturalHeight || img.height;
-        if (!width || !height) {
-          resolve(file);
+        const origW = img.naturalWidth || img.width;
+        const origH = img.naturalHeight || img.height;
+        if (!origW || !origH) {
+          resolve(null);
           return;
         }
+        let targetW = origW;
+        let targetH = origH;
+        const maxSide = Math.max(origW, origH);
+        if (maxDimension > 0 && maxSide > maxDimension) {
+          const ratio = maxDimension / maxSide;
+          targetW = Math.max(1, Math.round(origW * ratio));
+          targetH = Math.max(1, Math.round(origH * ratio));
+        }
+
         const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = targetW;
+        canvas.height = targetH;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          resolve(file);
+          resolve(null);
           return;
         }
-        ctx.drawImage(img, 0, 0, width, height);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, targetW, targetH);
         canvas.toBlob(
           (blob) => {
-            if (!blob) {
-              resolve(file);
+            if (!blob || blob.size <= 0) {
+              resolve(null);
               return;
             }
             const baseName = file.name.replace(/\.[^/.]+$/, '');
-            const webpFile = new File([blob], `${baseName}.webp`, {
+            const webpFile = new File([blob], `${baseName}${suffix}.webp`, {
               type: 'image/webp',
               lastModified: Date.now(),
             });
             resolve(webpFile);
           },
           'image/webp',
-          1.0
+          quality
         );
       } catch {
-        resolve(file);
+        resolve(null);
       }
     };
     img.onerror = () => {
       URL.revokeObjectURL(objectUrl);
-      resolve(file);
+      resolve(null);
     };
     img.src = objectUrl;
   });
+}
+
+/**
+ * 고화질 본본 이미지 스마트 최적화 (최대 변 2560px, WebP quality 0.88)
+ * - 스마트폰 4000x3000 카메라 원본이나 16MB+ 대용량 파일이 수십 MB로 팽창하는 현상 방지
+ * - 이미 작은 파일인데 변환본이 더 커진 경우 원본 유지
+ */
+export async function convertToOriginalQualityWebP(file: File): Promise<File> {
+  if (!file || !file.type.startsWith('image/')) {
+    return file;
+  }
+  const optimized = await resizeAndEncodeWebP(file, 2560, 0.88);
+  if (!optimized) {
+    return file;
+  }
+  // 원본이 이미 1.2MB 이하이고 변환본이 원본보다 크다면 원본 유지
+  if (file.size <= 1.2 * 1024 * 1024 && optimized.size >= file.size) {
+    return file;
+  }
+  return optimized;
+}
+
+/**
+ * 갤러리 카드 및 라이트박스 즉시 표시용 경량 WebP 썸네일 생성 (최대 변 800px, quality 0.80, ~40-80KB)
+ */
+export async function generateHighlightThumbnailWebP(file: File): Promise<File | null> {
+  return resizeAndEncodeWebP(file, 800, 0.80, '_thumb');
+}
+
+/**
+ * 기존 업로드된 사진 중 서버에 썸네일(hasThumb)이 없는 레코드에 대해
+ * 브라우저 유휴 시간에 800px WebP 썸네일을 생성하여 서버 R2에 1회 자동 백필
+ */
+export async function backfillMissingHighlightThumbnails(records: HighlightRecord[]): Promise<void> {
+  if (typeof window === 'undefined' || !Array.isArray(records)) return;
+  const targets = records.filter(
+    (r) => r && r.hasImage && r.imageId && !r.hasThumb && !backfillingThumbIds.has(r.imageId)
+  );
+  if (targets.length === 0) return;
+
+  for (const r of targets) {
+    if (r.imageId) backfillingThumbIds.add(r.imageId);
+  }
+
+  // 초기 화면 렌더링에 영향을 주지 않도록 잠시 대기 후 순차 처리
+  await new Promise((resolve) => setTimeout(resolve, 1800));
+
+  for (const rec of targets) {
+    const imageId = rec.imageId;
+    if (!imageId) continue;
+    try {
+      const imgUrl = getHighlightImageUrl(imageId);
+      const thumbBlob = await new Promise<Blob | null>((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          try {
+            const origW = img.naturalWidth || img.width;
+            const origH = img.naturalHeight || img.height;
+            if (!origW || !origH) {
+              resolve(null);
+              return;
+            }
+            const maxDim = 800;
+            const maxSide = Math.max(origW, origH);
+            const ratio = maxSide > maxDim ? maxDim / maxSide : 1;
+            const targetW = Math.max(1, Math.round(origW * ratio));
+            const targetH = Math.max(1, Math.round(origH * ratio));
+            const canvas = document.createElement('canvas');
+            canvas.width = targetW;
+            canvas.height = targetH;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(null);
+              return;
+            }
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, targetW, targetH);
+            canvas.toBlob((b) => resolve(b), 'image/webp', 0.80);
+          } catch {
+            resolve(null);
+          }
+        };
+        img.onerror = () => resolve(null);
+        img.src = imgUrl;
+      });
+
+      if (thumbBlob && thumbBlob.size > 0) {
+        const formData = new FormData();
+        formData.append('imageId', imageId);
+        formData.append(
+          'thumbnail',
+          new File([thumbBlob], `${imageId}_thumb.webp`, { type: 'image/webp' })
+        );
+        const res = await fetch(`${getWorkerUrl()}/api/public/highlights/backfill-thumb`, {
+          method: 'POST',
+          body: formData,
+        });
+        if (res.ok) {
+          rec.hasThumb = true;
+          rec.thumbSize = thumbBlob.size;
+        }
+      }
+    } catch {
+      // ignore background backfill error
+    } finally {
+      backfillingThumbIds.delete(imageId);
+    }
+  }
 }
 
 function getClientAuthPayload(explicitPin?: string) {
@@ -465,20 +690,124 @@ export async function updateHighlightUploadPinAsAdmin(newPin: string): Promise<{
   }
 }
 
+export async function fetchMemberAliasesFromServer(): Promise<{
+  success: boolean;
+  memberAliases: MemberAliasesMap;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`${getWorkerUrl()}/api/public/highlights/member-aliases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get' }),
+    });
+    const data = await res.json().catch(() => null);
+    if (res.ok && data?.success && data.memberAliases) {
+      const saved = saveLocalMemberAliases(data.memberAliases);
+      return { success: true, memberAliases: saved };
+    }
+    return { success: false, memberAliases: loadLocalMemberAliases(), error: data?.error };
+  } catch (e: any) {
+    return {
+      success: false,
+      memberAliases: loadLocalMemberAliases(),
+      error: e.message || '네트워크 오류가 발생했습니다.',
+    };
+  }
+}
+
+export async function addMemberAliasAsAdmin(
+  canonicalName: string,
+  alias: string
+): Promise<{
+  success: boolean;
+  memberAliases?: MemberAliasesMap;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const payload = {
+      ...getClientAuthPayload(),
+      action: 'add',
+      canonicalName: canonicalName.trim(),
+      alias: alias.trim(),
+    };
+    const res = await fetch(`${getWorkerUrl()}/api/public/highlights/member-aliases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => null);
+    if (res.ok && data?.success && data.memberAliases) {
+      const saved = saveLocalMemberAliases(data.memberAliases);
+      return {
+        success: true,
+        memberAliases: saved,
+        message: data.message || `'${alias.trim()}' 동의어가 등록되었습니다.`,
+      };
+    }
+    return { success: false, error: data?.error || '동의어 등록에 실패했습니다.' };
+  } catch (e: any) {
+    return { success: false, error: e.message || '네트워크 오류가 발생했습니다.' };
+  }
+}
+
+export async function removeMemberAliasAsAdmin(
+  canonicalName: string,
+  alias: string
+): Promise<{
+  success: boolean;
+  memberAliases?: MemberAliasesMap;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const payload = {
+      ...getClientAuthPayload(),
+      action: 'remove',
+      canonicalName: canonicalName.trim(),
+      alias: alias.trim(),
+    };
+    const res = await fetch(`${getWorkerUrl()}/api/public/highlights/member-aliases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => null);
+    if (res.ok && data?.success && data.memberAliases) {
+      const saved = saveLocalMemberAliases(data.memberAliases);
+      return {
+        success: true,
+        memberAliases: saved,
+        message: data.message || `'${alias.trim()}' 동의어가 삭제되었습니다.`,
+      };
+    }
+    return { success: false, error: data?.error || '동의어 삭제에 실패했습니다.' };
+  } catch (e: any) {
+    return { success: false, error: e.message || '네트워크 오류가 발생했습니다.' };
+  }
+}
+
 export async function fetchHighlights(forceRefresh: boolean = false): Promise<HighlightRecord[]> {
   if (!forceRefresh && cachedHighlights !== null) {
     return cachedHighlights;
   }
   try {
     const refreshQuery = forceRefresh ? '?refresh=1' : '';
-    const res = await fetch(`${getWorkerUrl()}/api/public/highlights${refreshQuery}`);
+    const res = await fetch(`${getWorkerUrl()}/api/public/highlights${refreshQuery}`, {
+      cache: 'no-store',
+    });
     if (res.ok) {
       const data = await res.json();
       if (data?.storage && typeof data.storage.usedBytes === 'number') {
         cachedStorageInfo = data.storage;
       }
+      if (data?.memberAliases && typeof data.memberAliases === 'object') {
+        saveLocalMemberAliases(data.memberAliases);
+      }
       if (Array.isArray(data.records)) {
         cachedHighlights = data.records;
+        backfillMissingHighlightThumbnails(data.records).catch(() => {});
         return data.records;
       }
     }
@@ -535,8 +864,15 @@ export async function createHighlight(params: {
 
     let uploadedSize = 0;
     if (params.imageFile) {
-      uploadedSize = params.imageFile.size;
-      formData.append('image', params.imageFile, params.imageFile.name);
+      const [optimizedMain, thumbFile] = await Promise.all([
+        convertToOriginalQualityWebP(params.imageFile),
+        generateHighlightThumbnailWebP(params.imageFile),
+      ]);
+      uploadedSize = optimizedMain.size;
+      formData.append('image', optimizedMain, optimizedMain.name);
+      if (thumbFile) {
+        formData.append('thumbnail', thumbFile, thumbFile.name);
+      }
     }
 
     const res = await fetch(`${getWorkerUrl()}/api/public/highlights`, {
@@ -750,7 +1086,14 @@ export async function updateHighlightRecord(params: {
     formData.append('admin_passcode', auth.admin_passcode);
 
     if (params.imageFile) {
-      formData.append('image', params.imageFile, params.imageFile.name);
+      const [optimizedMain, thumbFile] = await Promise.all([
+        convertToOriginalQualityWebP(params.imageFile),
+        generateHighlightThumbnailWebP(params.imageFile),
+      ]);
+      formData.append('image', optimizedMain, optimizedMain.name);
+      if (thumbFile) {
+        formData.append('thumbnail', thumbFile, thumbFile.name);
+      }
     }
 
     const res = await fetch(`${getWorkerUrl()}/api/public/highlights`, {
@@ -827,7 +1170,7 @@ export function computePlayerYakumanStats(
 
   for (const rec of records) {
     if (rec.category !== 'yakuman') continue;
-    if (rec.winnerName.trim() !== cleanPlayer) continue;
+    if (!isSameOrAliasedMember(rec.winnerName, cleanPlayer)) continue;
     if (sessionFilter && !matchHighlightSession(rec.sessionName, sessionFilter)) continue;
 
     achievedRecords.push(rec);
