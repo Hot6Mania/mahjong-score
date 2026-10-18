@@ -3045,7 +3045,7 @@ const getUploadRoundOptionLabel = (roundLabel: string): string => {
     uploadForm.value.category === 'yakuman' && matched && isEstimatedYakumanRound(matched)
       ? ' [역만 추정]'
       : '';
-  return `${roundLabel}${summary}${yakumanTag}`;
+  return `${formatCardRoundKorean(roundLabel)}${summary}${yakumanTag}`;
 };
 
 const selectedUploadRoundMovements = computed<GameRoundMovement[]>(() => {
@@ -4985,7 +4985,7 @@ const openGamePopupFromLightbox = async (
 <template>
   <div class="stats-dashboard-container">
     <!-- 토스트 알림 -->
-    <Transition name="toast-fade">
+    <Transition name="dashboard-toast-fade">
       <div v-if="toastMessage" class="dashboard-toast">
         {{ toastMessage }}
       </div>
@@ -6930,7 +6930,7 @@ const openGamePopupFromLightbox = async (
                                 <div class="ym_achieved_meta">
                                   {{ rec.sessionName }}
                                   <template v-if="rec.gameIndex"> · {{ rec.gameIndex }}경기</template>
-                                  <template v-if="rec.roundName"> · {{ rec.roundName }}</template>
+                                  <template v-if="rec.roundName"> · {{ formatCardRoundKorean(rec.roundName) }}</template>
                                 </div>
                                 <div v-if="rec.caption" class="ym_achieved_caption">{{ rec.caption }}</div>
                               </div>
@@ -7826,7 +7826,7 @@ const openGamePopupFromLightbox = async (
                       <div class="ym_achieved_meta">
                         {{ rec.sessionName }}
                         <template v-if="rec.gameIndex"> · {{ rec.gameIndex }}경기</template>
-                        <template v-if="rec.roundName"> · {{ rec.roundName }}</template>
+                        <template v-if="rec.roundName"> · {{ formatCardRoundKorean(rec.roundName) }}</template>
                       </div>
                       <div v-if="rec.caption" class="ym_achieved_caption">{{ rec.caption }}</div>
                     </div>
@@ -8312,7 +8312,7 @@ const openGamePopupFromLightbox = async (
                   :key="`gdm-r-opt-${rm.roundIndex}-${idx}`"
                   :value="rm.roundName"
                 >
-                  {{ rm.roundName }}{{ formatRoundOptionSummary(rm) }}{{ isRoundYakuman(rm, selectedGameDetail, gameModalSessionName || currentSessionDetail?.sessionName || selectedSession) ? ' [역만]' : '' }}
+                  {{ formatCardRoundKorean(rm.roundName) }}{{ formatRoundOptionSummary(rm) }}{{ isRoundYakuman(rm, selectedGameDetail, gameModalSessionName || currentSessionDetail?.sessionName || selectedSession) ? ' [역만]' : '' }}
                 </option>
               </select>
             </div>
@@ -8324,7 +8324,7 @@ const openGamePopupFromLightbox = async (
               >
                 <div class="urm-header">
                   <div class="urm-title-group">
-                    <span class="urm-title">{{ rm.roundName }} 점수 이동 내역</span>
+                    <span class="urm-title">{{ formatCardRoundKorean(rm.roundName) }} 점수 이동 내역</span>
                     <span
                       v-if="isRoundYakuman(rm, selectedGameDetail, gameModalSessionName || currentSessionDetail?.sessionName || selectedSession)"
                       class="urm-yakuman-badge"
@@ -8395,7 +8395,7 @@ const openGamePopupFromLightbox = async (
                 <img v-if="item.hasImage && item.imageId" :src="getHighlightImageUrl(item.imageId)" class="gdm-highlight-thumb" loading="lazy" alt="사진" />
                 <div class="gdm-highlight-info">
                   <div class="gdm-highlight-badges">
-                    <span v-if="item.roundName" class="badge-round-sm">{{ item.roundName }}</span>
+                    <span v-if="item.roundName" class="badge-round-sm">{{ formatCardRoundKorean(item.roundName) }}</span>
                     <template v-if="item.category === 'yakuman'">
                       <span v-for="yk in item.yakumanTypes" :key="yk" class="badge-yakuman-sm">{{ yk }}</span>
                     </template>
@@ -8723,7 +8723,7 @@ const openGamePopupFromLightbox = async (
                 >
                   <div class="urm-header">
                     <div class="urm-title-group">
-                      <span class="urm-title">{{ rm.roundName }} 점수 이동 내역</span>
+                      <span class="urm-title">{{ formatCardRoundKorean(rm.roundName) }} 점수 이동 내역</span>
                       <span
                         v-if="isRoundYakuman(rm, uploadModalGameDetail, uploadForm.sessionName)"
                         class="urm-yakuman-badge"
@@ -8921,7 +8921,7 @@ const openGamePopupFromLightbox = async (
       <div 
         v-if="lightboxHighlight" 
         class="modal-overlay lightbox-overlay" 
-        @click.self="lightboxHighlight = null"
+        v-backdrop-dismiss="() => { lightboxHighlight = null }"
       >
         <div class="lightbox-modal-card" @click="closeEmotePickers">
           <div class="lightbox-header">
@@ -8942,7 +8942,7 @@ const openGamePopupFromLightbox = async (
                 class="badge-round clickable-lb-badge"
                 title="클릭하여 해당 국 점수 이동 내역 보기"
                 @click="openGamePopupFromLightbox(lightboxHighlight, 'rounds')"
-              >{{ lightboxHighlight.roundName }}</span>
+              >{{ formatCardRoundKorean(lightboxHighlight.roundName) }}</span>
               <template v-if="lightboxHighlight.category === 'yakuman'">
                 <span v-for="yk in lightboxHighlight.yakumanTypes" :key="yk" class="badge-yakuman">
                   {{ yk }}
@@ -9150,7 +9150,8 @@ const openGamePopupFromLightbox = async (
                             :class="{ active: isEditingCommentPickerOpen }"
                             @click.stop="isEditingCommentPickerOpen = !isEditingCommentPickerOpen; isCommentEmotePickerOpen = false"
                           >
-                            나니키루콘
+                            <img :src="getMahjongTileImageUrl('7z.png')" alt="중" class="btn-emote-chun-icon" />
+                            <span>나니키루콘</span>
                           </button>
 
                           <!-- 댓글 수정용 플로팅 팝업 팔레트 -->
@@ -9326,7 +9327,8 @@ const openGamePopupFromLightbox = async (
                         :class="{ active: isCommentEmotePickerOpen }"
                         @click.stop="isCommentEmotePickerOpen = !isCommentEmotePickerOpen; isEditingCommentPickerOpen = false"
                       >
-                        나니키루콘
+                        <img :src="getMahjongTileImageUrl('7z.png')" alt="중" class="btn-emote-chun-icon" />
+                        <span>나니키루콘</span>
                       </button>
 
                       <!-- 마작패(34종) & 액션 버튼(8종) 플로팅 팝업 팔레트 -->
@@ -9555,7 +9557,7 @@ const openGamePopupFromLightbox = async (
       <div 
         v-if="isPinAdminModalOpen" 
         class="modal-overlay" 
-        @click.self="isPinAdminModalOpen = false"
+        v-backdrop-dismiss="() => { isPinAdminModalOpen = false }"
       >
         <div class="pin-admin-modal-card">
           <div class="highlight-modal-header">
@@ -9777,8 +9779,10 @@ const openGamePopupFromLightbox = async (
 /* 토스트 */
 .dashboard-toast {
   position: fixed;
+  top: auto !important;
   bottom: 24px;
   left: 50%;
+  height: auto;
   transform: translateX(-50%);
   background-color: rgba(16, 185, 129, 0.95);
   color: #ffffff;
@@ -9789,10 +9793,10 @@ const openGamePopupFromLightbox = async (
   z-index: 3000;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
-.toast-fade-enter-active, .toast-fade-leave-active {
+.dashboard-toast-fade-enter-active, .dashboard-toast-fade-leave-active {
   transition: opacity 0.3s ease, transform 0.3s ease;
 }
-.toast-fade-enter-from, .toast-fade-leave-to {
+.dashboard-toast-fade-enter-from, .dashboard-toast-fade-leave-to {
   opacity: 0;
   transform: translate(-50%, 10px);
 }
@@ -13689,6 +13693,24 @@ html.dark .current-pin-box {
   background: linear-gradient(135deg, #d97706, #b45309);
   color: #fff;
 }
+.btn-hl-upload.nanikiru {
+  background: #0d9488;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+.btn-hl-upload.nanikiru:hover {
+  background: #0f766e;
+  border-color: #115e59;
+}
+html.dark .btn-hl-upload.nanikiru {
+  background: #0d9488;
+  border-color: #2dd4bf;
+  color: #ffffff;
+}
+html.dark .btn-hl-upload.nanikiru:hover {
+  background: #0f766e;
+  border-color: #5eead4;
+}
 .btn-hl-upload.secondary {
   background: var(--accent, #2563eb);
   color: #fff;
@@ -15384,6 +15406,7 @@ html.dark .gh-stat-pill.nanikiru .gh-stat-val {
 }
 
 .gf-tab.nanikiru.active,
+.gh-cat-btn.nanikiru-tab.active,
 .sg-filter-btn.nanikiru.active,
 .cat-radio-btn.nanikiru.active {
   background: #0d9488 !important;
@@ -15391,6 +15414,7 @@ html.dark .gh-stat-pill.nanikiru .gh-stat-val {
   color: #ffffff !important;
 }
 html.dark .gf-tab.nanikiru.active,
+html.dark .gh-cat-btn.nanikiru-tab.active,
 html.dark .sg-filter-btn.nanikiru.active,
 html.dark .cat-radio-btn.nanikiru.active {
   background: #0d9488 !important;
@@ -15527,10 +15551,10 @@ html.dark .hl-player-link:hover {
 }
 
 /* =====================================================================
-   인라인 마작패 이미지 & 마작 액션 버튼 (투명 배경 적용)
+   인라인 마작패 이미지 & 마작 액션 버튼 (투명 배경 & 확대 적용)
    ===================================================================== */
 .rich-mahjong-content {
-  line-height: 1.65;
+  line-height: 1.75;
   word-break: break-word;
 }
 .inline-mahjong-tile {
@@ -15538,9 +15562,9 @@ html.dark .hl-player-link:hover {
   align-items: center;
   justify-content: center;
   vertical-align: middle;
-  width: 24px;
-  height: 33px;
-  margin: 1px 1.5px;
+  width: 34px;
+  height: 47px;
+  margin: 2px 2px;
   padding: 0;
   background: transparent;
   border: none;
@@ -15553,7 +15577,7 @@ html.dark .hl-player-link:hover {
   object-fit: contain;
   display: block;
   background: transparent;
-  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.22));
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.24));
 }
 html.dark .inline-mahjong-tile {
   background: transparent;
@@ -15561,7 +15585,7 @@ html.dark .inline-mahjong-tile {
   box-shadow: none;
 }
 html.dark .inline-mahjong-tile img {
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.58));
 }
 
 /* 마작 선언/액션 버튼 (리치/다마/치/퐁/깡/론/쯔모/스킵 - 세련된 톤다운 컬러) */
@@ -15571,10 +15595,10 @@ html.dark .inline-mahjong-tile img {
   align-items: center;
   justify-content: center;
   vertical-align: middle;
-  padding: 2px 9px;
-  margin: 1px 2px;
-  border-radius: 5px;
-  font-size: 12px;
+  padding: 3.5px 11px;
+  margin: 2px 2.5px;
+  border-radius: 6px;
+  font-size: 13.5px;
   font-weight: 800;
   letter-spacing: 0.02em;
   color: #ffffff;
@@ -15997,7 +16021,7 @@ html.dark .lb-cf-preview-label {
 .btn-toggle-emote-picker {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   padding: 5px 10px;
   border-radius: 6px;
   font-size: 12px;
@@ -16008,9 +16032,22 @@ html.dark .lb-cf-preview-label {
   cursor: pointer;
   transition: all 0.15s;
 }
+.btn-emote-chun-icon {
+  width: 16px;
+  height: 22px;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
+  background: transparent;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
+}
 .btn-toggle-emote-picker.sm {
   padding: 3px 8px;
   font-size: 11px;
+}
+.btn-toggle-emote-picker.sm .btn-emote-chun-icon {
+  width: 14px;
+  height: 19px;
 }
 .btn-toggle-emote-picker:hover,
 .btn-toggle-emote-picker.active {
@@ -16062,10 +16099,10 @@ html.dark .btn-toggle-emote-picker.active {
   bottom: calc(100% + 8px);
   left: 0;
   z-index: 250;
-  width: min(440px, 86vw);
+  width: min(500px, 90vw);
   border: 1px solid var(--border-color, #cbd5e1);
   border-radius: 10px;
-  padding: 10px;
+  padding: 12px;
   background: var(--bg-modal, #ffffff);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
   display: flex;
@@ -16074,7 +16111,7 @@ html.dark .btn-toggle-emote-picker.active {
   box-sizing: border-box;
 }
 .mahjong-emote-picker.compact {
-  width: min(410px, 84vw);
+  width: min(470px, 88vw);
 }
 html.dark .mahjong-emote-picker {
   background: #18181c;
@@ -16121,8 +16158,8 @@ html.dark .mep-tabs {
 }
 .mep-action-btn {
   cursor: pointer;
-  padding: 5px 12px;
-  font-size: 12.5px;
+  padding: 6px 14px;
+  font-size: 13.5px;
   transition: transform 0.12s ease, filter 0.12s ease;
 }
 .mep-action-btn:hover {
@@ -16156,8 +16193,8 @@ html.dark .mep-tabs {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  padding: 4px 2px;
+  gap: 3px;
+  padding: 5px 2px;
   border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
@@ -16178,8 +16215,8 @@ html.dark .mep-tile-btn:hover {
   background: rgba(96, 165, 250, 0.12);
 }
 .mep-tile-btn img {
-  width: 28px;
-  height: 38px;
+  width: 36px;
+  height: 50px;
   object-fit: contain;
   display: block;
   background: transparent;
@@ -16192,7 +16229,7 @@ html.dark .mep-tile-btn img {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
 }
 .mep-tile-sub {
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 700;
   color: var(--text-dimmed, #64748b);
   white-space: nowrap;

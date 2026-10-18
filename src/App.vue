@@ -17,7 +17,12 @@ import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 const router = useRouter()
 const route = useRoute()
 const isStatsRoute = computed(() => {
-  return route.path === '/dashboard' || route.path.startsWith('/dashboard') || route.path === '/stats' || route.path.startsWith('/stats');
+  const path = route.path;
+  const locPath = typeof window !== 'undefined' ? window.location.pathname : '';
+  return (
+    path === '/dashboard' || path.startsWith('/dashboard') || path === '/stats' || path.startsWith('/stats') ||
+    locPath === '/dashboard' || locPath.startsWith('/dashboard') || locPath === '/stats' || locPath.startsWith('/stats')
+  );
 });
 
 watch(isStatsRoute, (val) => {
@@ -4084,8 +4089,8 @@ const addBackupGameToCurrent = (game: any) => {
   color: #ffffff;
   border-color: #3b82f6;
 }
-.toast-fade-enter-from,
-.toast-fade-leave-to {
+.custom-toast.toast-fade-enter-from,
+.custom-toast.toast-fade-leave-to {
   opacity: 0;
   top: 0px;
 }
