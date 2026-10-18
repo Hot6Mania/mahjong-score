@@ -881,6 +881,7 @@ export const NANIKIRU_TAG_DEFINITIONS: string[] = [
   '서반',
   '오라스',
   '조건전',
+  '유국 텐파이',
 ];
 
 export const MAHJONG_ACTION_EMOTES: MahjongActionEmoteDef[] = [
