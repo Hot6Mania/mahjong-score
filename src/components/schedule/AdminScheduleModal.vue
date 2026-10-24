@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue';
-import type { ScheduleDayItem, ScheduleMonthData, SessionType, ScheduleHistoryItem, ScheduleActionType, ScheduleCommitItem } from '@/types/schedule';
+import type { ScheduleDayItem, ScheduleMonthData, SessionType, ScheduleHistoryItem, ScheduleActionType, ScheduleCommitItem, ScheduleDeltaData } from '@/types/schedule';
 import { parseScheduleNoticeText } from '@/utils/scheduleParser';
 import {
   fetchAdminPasscodes,
@@ -539,6 +539,215 @@ const hasDiff = (item: ScheduleHistoryItem): boolean => {
   );
 };
 
+const formatSessionTypeKo = (type?: string): string => {
+  if (type === 'overnight') return '밤샘';
+  if (type === 'custom') return '커스텀';
+  if (type === 'day') return '당일';
+  return type || '당일';
+};
+
+const formatAttendeeTimeLabel = (att: { startTime?: string; endTime?: string; isOvernight?: boolean }): string => {
+  const s = att.startTime || '10:00';
+  const e = att.endTime || (att.isOvernight ? '익일' : '22:00');
+  const suffix = att.isOvernight && e !== '익일' ? '(익일)' : '';
+  return `${s}~${e}${suffix}`;
+};
+
+const formatAddedAttendees = (attDiff: NonNullable<ScheduleDeltaData['modifiedDates'][number]['fieldDiff']['attendees']>): string => {
+  if (attDiff.addedDetails && attDiff.addedDetails.length > 0) {
+    return attDiff.addedDetails.map(d => {
+      const parts: string[] = [];
+      if (d.time && d.time !== '10:00~22:00' && d.time !== '10:00~익일') {
+        parts.push(d.time);
+      } else if (d.isOvernight) {
+        parts.push('밤샘');
+      }
+      if (d.memo) {
+        parts.push(`"${d.memo}"`);
+      }
+      return parts.length > 0 ? `${d.name}(${parts.join(', ')})` : d.name;
+    }).join(', ');
+  }
+  return (attDiff.added || []).join(', ');
+};
+
+// 스냅샷 대조 기반 정밀 델타(시간 조정, 메모 변경, 밤샘 여부 등) 계산기
+const computeDetailedScheduleDelta = (oldDates: ScheduleDayItem[] = [], newDates: ScheduleDayItem[] = []): ScheduleDeltaData => {
+  const patches: ScheduleDeltaData = {
+    addedDates: [],
+    removedDates: [],
+    modifiedDates: []
+  };
+
+  const oldMap = new Map((oldDates || []).map(d => [d.date, d]));
+  const newMap = new Map((newDates || []).map(d => [d.date, d]));
+
+  for (const [date, newD] of newMap.entries()) {
+    const oldD = oldMap.get(date);
+    if (!oldD) {
+      patches.addedDates.push({
+        date,
+        sessionType: newD.sessionType,
+        customStartTime: newD.customStartTime,
+        customEndTime: newD.customEndTime
+      });
+    } else {
+      const fieldDiff: ScheduleDeltaData['modifiedDates'][number]['fieldDiff'] = {};
+      if (oldD.sessionType !== newD.sessionType) {
+        fieldDiff.sessionType = { before: oldD.sessionType, after: newD.sessionType };
+      }
+      if (Boolean(oldD.isConfirmed) !== Boolean(newD.isConfirmed)) {
+        fieldDiff.isConfirmed = { before: Boolean(oldD.isConfirmed), after: Boolean(newD.isConfirmed) };
+      }
+      if ((oldD.sessionNumber || undefined) !== (newD.sessionNumber || undefined)) {
+        fieldDiff.sessionNumber = { before: oldD.sessionNumber, after: newD.sessionNumber };
+      }
+      const oldTime = `${oldD.customStartTime || '10:00'}~${oldD.customEndTime || (oldD.sessionType === 'overnight' ? '익일' : '22:00')}`;
+      const newTime = `${newD.customStartTime || '10:00'}~${newD.customEndTime || (newD.sessionType === 'overnight' ? '익일' : '22:00')}`;
+      if (oldTime !== newTime) {
+        fieldDiff.time = { before: oldTime, after: newTime };
+      }
+      if ((oldD.note || '').trim() !== (newD.note || '').trim()) {
+        fieldDiff.note = { before: (oldD.note || '').trim(), after: (newD.note || '').trim() };
+      }
+      if ((oldD.sheetTitle || '') !== (newD.sheetTitle || '')) {
+        fieldDiff.sheetTitle = { before: oldD.sheetTitle, after: newD.sheetTitle };
+      }
+
+      const oldAtt = oldD.attendees || [];
+      const newAtt = newD.attendees || [];
+      const addedObjs = newAtt.filter(na => !oldAtt.some(oa => oa.name === na.name));
+      const added = addedObjs.map(a => a.name);
+      const addedDetails = addedObjs.map(a => ({
+        name: a.name,
+        time: formatAttendeeTimeLabel(a),
+        isOvernight: Boolean(a.isOvernight),
+        memo: (a.memo || '').trim() || undefined
+      }));
+      const removed = oldAtt.filter(oa => !newAtt.some(na => na.name === oa.name)).map(a => a.name);
+
+      const updated: NonNullable<ScheduleDeltaData['modifiedDates'][number]['fieldDiff']['attendees']>['updated'] = [];
+      for (const na of newAtt) {
+        const oa = oldAtt.find(x => x.name === na.name);
+        if (!oa) continue;
+        const oldAttTime = formatAttendeeTimeLabel(oa);
+        const newAttTime = formatAttendeeTimeLabel(na);
+        const oldMemo = (oa.memo || '').trim();
+        const newMemo = (na.memo || '').trim();
+        const oldOvernight = Boolean(oa.isOvernight);
+        const newOvernight = Boolean(na.isOvernight);
+
+        if (oldAttTime !== newAttTime || oldMemo !== newMemo || oldOvernight !== newOvernight) {
+          updated.push({
+            name: na.name,
+            ...(oldAttTime !== newAttTime ? { time: { before: oldAttTime, after: newAttTime } } : {}),
+            ...(oldOvernight !== newOvernight ? { isOvernight: { before: oldOvernight, after: newOvernight } } : {}),
+            ...(oldMemo !== newMemo ? { memo: { before: oldMemo, after: newMemo } } : {})
+          });
+        }
+      }
+
+      if (added.length > 0 || removed.length > 0 || updated.length > 0) {
+        fieldDiff.attendees = {
+          countBefore: oldAtt.length,
+          countAfter: newAtt.length,
+          added,
+          removed,
+          ...(addedDetails.length > 0 ? { addedDetails } : {}),
+          ...(updated.length > 0 ? { updated } : {})
+        };
+      }
+
+      if (Object.keys(fieldDiff).length > 0) {
+        patches.modifiedDates.push({ date, fieldDiff });
+      }
+    }
+  }
+
+  for (const [date, oldD] of oldMap.entries()) {
+    if (!newMap.has(date)) {
+      patches.removedDates.push({
+        date,
+        sessionType: oldD.sessionType,
+        attendeesCount: (oldD.attendees || []).length
+      });
+    }
+  }
+
+  return patches;
+};
+
+const buildCommitSummaryFromDelta = (action: string, delta: ScheduleDeltaData, fallbackSummary?: string): string => {
+  const parts: string[] = [];
+  if (delta.addedDates.length > 0) parts.push(`날짜 ${delta.addedDates.length}개 추가`);
+  if (delta.removedDates.length > 0) parts.push(`날짜 ${delta.removedDates.length}개 삭제`);
+  for (const m of delta.modifiedDates) {
+    if (m.fieldDiff.isConfirmed) {
+      parts.push(`${m.date} 확정 ${m.fieldDiff.isConfirmed.after ? '처리' : '해제'}`);
+    }
+    if (m.fieldDiff.attendees) {
+      if (m.fieldDiff.attendees.added?.length) {
+        parts.push(`${m.date} 참석(+${m.fieldDiff.attendees.added.join(',')})`);
+      }
+      if (m.fieldDiff.attendees.removed?.length) {
+        parts.push(`${m.date} 취소(-${m.fieldDiff.attendees.removed.join(',')})`);
+      }
+      if (m.fieldDiff.attendees.updated?.length) {
+        const updDesc = m.fieldDiff.attendees.updated.map(u => {
+          const tags: string[] = [];
+          if (u.time) tags.push(`시간 ${u.time.before}→${u.time.after}`);
+          if (u.memo) tags.push(u.memo.after ? `메모 "${u.memo.after}"` : '메모 삭제');
+          return tags.length > 0 ? `${u.name}(${tags.join(', ')})` : u.name;
+        }).join(', ');
+        parts.push(`${m.date} 정보 수정: ${updDesc}`);
+      }
+    }
+    if (m.fieldDiff.sessionType) {
+      parts.push(`${m.date} ${formatSessionTypeKo(m.fieldDiff.sessionType.after)} 변경`);
+    } else if (m.fieldDiff.time && !m.fieldDiff.attendees) {
+      parts.push(`${m.date} 시간 변경(${m.fieldDiff.time.before}→${m.fieldDiff.time.after})`);
+    }
+  }
+  if (parts.length > 0) return parts.join(', ');
+  if (fallbackSummary && fallbackSummary !== 'ATTEND' && fallbackSummary !== 'UPDATE_ATTEND') {
+    return fallbackSummary;
+  }
+  return getActionLabel(action);
+};
+
+// 커밋 배열의 연속 스냅샷(snapshotBefore)을 대조하여 과거 커밋까지 세부 변화량(시간/메모 등)을 완벽 복원
+const enrichCommitsWithSnapshots = (rawCommits: ScheduleCommitItem[]): ScheduleCommitItem[] => {
+  if (!Array.isArray(rawCommits) || rawCommits.length === 0) return [];
+  return rawCommits.map((commit, idx) => {
+    const beforeDates = commit.snapshotBefore;
+    const afterDates = idx === 0
+      ? props.existingDates
+      : rawCommits[idx - 1]?.snapshotBefore;
+
+    if (Array.isArray(beforeDates) && Array.isArray(afterDates)) {
+      const computedDelta = computeDetailedScheduleDelta(beforeDates, afterDates);
+      const hasComputedChanges =
+        computedDelta.addedDates.length > 0 ||
+        computedDelta.removedDates.length > 0 ||
+        computedDelta.modifiedDates.length > 0;
+
+      if (hasComputedChanges) {
+        return {
+          ...commit,
+          delta: computedDelta,
+          summary: buildCommitSummaryFromDelta(commit.action, computedDelta, commit.summary)
+        };
+      }
+    }
+    return {
+      ...commit,
+      summary: commit.delta
+        ? buildCommitSummaryFromDelta(commit.action, commit.delta, commit.summary)
+        : commit.summary
+    };
+  });
+};
+
 const loadHistory = async () => {
   isLoadingHistory.value = true;
   errorMessage.value = '';
@@ -548,15 +757,13 @@ const loadHistory = async () => {
       fetchScheduleCommits(props.currentMonth).catch(() => ({ success: false, commits: [] }))
     ]);
 
-    const commits = (commitsRes && commitsRes.success && Array.isArray(commitsRes.commits))
+    const rawCommits = (commitsRes && commitsRes.success && Array.isArray(commitsRes.commits))
       ? commitsRes.commits
       : [];
+    const commits = enrichCommitsWithSnapshots(rawCommits);
 
     // 과거 커밋 및 최신 커밋의 델타(Diff)를 변동 기록 아이템에 정밀 매핑
     const enrichedList = historyData.map((item) => {
-      if (item.delta && hasDiff(item)) {
-        return item;
-      }
       // 커밋 목록에서 매칭 탐색 (ID 일치 또는 타임스탬프 근접 <= 3.5초 및 액션 일치)
       const matchedCommit = commits.find((c) => {
         if (c.id === item.id) return true;
@@ -575,9 +782,18 @@ const loadHistory = async () => {
       });
 
       if (matchedCommit && matchedCommit.delta) {
+        const hasDetailedAttendeeUpdate = matchedCommit.delta.modifiedDates?.some(
+          m => (m.fieldDiff.attendees?.updated?.length || 0) > 0
+        );
         return {
           ...item,
+          action: (item.action === 'ATTEND' && hasDetailedAttendeeUpdate && !matchedCommit.delta.modifiedDates?.some(m => (m.fieldDiff.attendees?.added?.length || 0) > 0))
+            ? 'UPDATE_ATTEND'
+            : item.action,
           delta: matchedCommit.delta,
+          details: (hasDetailedAttendeeUpdate && item.details?.endsWith('참석 등록/수정'))
+            ? matchedCommit.summary
+            : item.details,
           summary: matchedCommit.summary || item.summary
         };
       }
@@ -707,7 +923,7 @@ const loadCommits = async () => {
   try {
     const res = await fetchScheduleCommits(props.currentMonth);
     if (res.success) {
-      commitsList.value = res.commits;
+      commitsList.value = enrichCommitsWithSnapshots(res.commits || []);
       checkpointInfo.value = res.checkpoint || null;
     }
   } catch (err: any) {
@@ -1322,17 +1538,45 @@ const handleRollback = async (targetId: string, label: string) => {
                       <span class="diff-tag mod">~ 세부 변경</span>
                       <div class="diff-mod-list">
                         <div v-for="m in item.delta.modifiedDates" :key="m.date" class="diff-mod-item">
-                          <span class="mod-date">{{ m.date }}</span>
-                          <span v-if="m.fieldDiff.sessionType" class="mod-field">
-                            유형: {{ m.fieldDiff.sessionType.before }} → <strong>{{ m.fieldDiff.sessionType.after }}</strong>
-                          </span>
-                          <span v-if="m.fieldDiff.isConfirmed" class="mod-field">
-                            확정: <strong>{{ m.fieldDiff.isConfirmed.after ? '출발 확정' : '대기중' }}</strong>
-                          </span>
-                          <span v-if="m.fieldDiff.attendees" class="mod-field">
-                            <span v-if="m.fieldDiff.attendees.added?.length" class="text-green">+{{ m.fieldDiff.attendees.added.join(', ') }}</span>
-                            <span v-if="m.fieldDiff.attendees.removed?.length" class="text-red"> -{{ m.fieldDiff.attendees.removed.join(', ') }}</span>
-                          </span>
+                          <div class="diff-mod-header-line">
+                            <span class="mod-date">{{ m.date }}</span>
+                            <span v-if="m.fieldDiff.sessionType" class="mod-field">
+                              유형: {{ formatSessionTypeKo(m.fieldDiff.sessionType.before) }} → <strong>{{ formatSessionTypeKo(m.fieldDiff.sessionType.after) }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.time" class="mod-field">
+                              모임시간: {{ m.fieldDiff.time.before }} → <strong>{{ m.fieldDiff.time.after }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.isConfirmed" class="mod-field">
+                              확정: <strong>{{ m.fieldDiff.isConfirmed.after ? '출발 확정' : '대기중' }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.sessionNumber" class="mod-field">
+                              회차: {{ m.fieldDiff.sessionNumber.before ? `제${m.fieldDiff.sessionNumber.before}회` : '미배정' }} → <strong>{{ m.fieldDiff.sessionNumber.after ? `제${m.fieldDiff.sessionNumber.after}회` : '해제' }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.sheetTitle" class="mod-field">
+                              시트: <strong>{{ m.fieldDiff.sheetTitle.after || '연동 해제' }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.note" class="mod-field">
+                              공지메모: {{ m.fieldDiff.note.before || '없음' }} → <strong>{{ m.fieldDiff.note.after || '없음' }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.attendees && (m.fieldDiff.attendees.added?.length || m.fieldDiff.attendees.removed?.length)" class="mod-field">
+                              <span v-if="m.fieldDiff.attendees.added?.length" class="text-green">+{{ formatAddedAttendees(m.fieldDiff.attendees) }}</span>
+                              <span v-if="m.fieldDiff.attendees.removed?.length" class="text-red"> -{{ m.fieldDiff.attendees.removed.join(', ') }}</span>
+                            </span>
+                          </div>
+                          <div v-if="m.fieldDiff.attendees?.updated?.length" class="diff-att-updated-list">
+                            <div v-for="u in m.fieldDiff.attendees.updated" :key="u.name" class="diff-att-updated-row">
+                              <span class="att-upd-badge">~ {{ u.name }}</span>
+                              <span v-if="u.time" class="att-upd-detail">
+                                시간: <span class="diff-old-val">{{ u.time.before }}</span> → <strong class="diff-new-val">{{ u.time.after }}</strong>
+                              </span>
+                              <span v-else-if="u.isOvernight" class="att-upd-detail">
+                                구분: <span class="diff-old-val">{{ u.isOvernight.before ? '밤샘' : '당일' }}</span> → <strong class="diff-new-val">{{ u.isOvernight.after ? '밤샘' : '당일' }}</strong>
+                              </span>
+                              <span v-if="u.memo" class="att-upd-detail">
+                                메모: <span class="diff-old-val">{{ u.memo.before ? `"${u.memo.before}"` : '없음' }}</span> → <strong class="diff-new-val">{{ u.memo.after ? `"${u.memo.after}"` : '삭제됨' }}</strong>
+                              </span>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1469,17 +1713,45 @@ const handleRollback = async (targetId: string, label: string) => {
                       <span class="diff-tag mod">~ 세부 변경</span>
                       <div class="diff-mod-list">
                         <div v-for="m in commit.delta.modifiedDates" :key="m.date" class="diff-mod-item">
-                          <span class="mod-date">{{ m.date }}</span>
-                          <span v-if="m.fieldDiff.sessionType" class="mod-field">
-                            유형: {{ m.fieldDiff.sessionType.before }} → <strong>{{ m.fieldDiff.sessionType.after }}</strong>
-                          </span>
-                          <span v-if="m.fieldDiff.isConfirmed" class="mod-field">
-                            확정: <strong>{{ m.fieldDiff.isConfirmed.after ? '출발 확정' : '대기중' }}</strong>
-                          </span>
-                          <span v-if="m.fieldDiff.attendees" class="mod-field">
-                            <span v-if="m.fieldDiff.attendees.added?.length" class="text-green">+{{ m.fieldDiff.attendees.added.join(', ') }}</span>
-                            <span v-if="m.fieldDiff.attendees.removed?.length" class="text-red"> -{{ m.fieldDiff.attendees.removed.join(', ') }}</span>
-                          </span>
+                          <div class="diff-mod-header-line">
+                            <span class="mod-date">{{ m.date }}</span>
+                            <span v-if="m.fieldDiff.sessionType" class="mod-field">
+                              유형: {{ formatSessionTypeKo(m.fieldDiff.sessionType.before) }} → <strong>{{ formatSessionTypeKo(m.fieldDiff.sessionType.after) }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.time" class="mod-field">
+                              모임시간: {{ m.fieldDiff.time.before }} → <strong>{{ m.fieldDiff.time.after }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.isConfirmed" class="mod-field">
+                              확정: <strong>{{ m.fieldDiff.isConfirmed.after ? '출발 확정' : '대기중' }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.sessionNumber" class="mod-field">
+                              회차: {{ m.fieldDiff.sessionNumber.before ? `제${m.fieldDiff.sessionNumber.before}회` : '미배정' }} → <strong>{{ m.fieldDiff.sessionNumber.after ? `제${m.fieldDiff.sessionNumber.after}회` : '해제' }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.sheetTitle" class="mod-field">
+                              시트: <strong>{{ m.fieldDiff.sheetTitle.after || '연동 해제' }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.note" class="mod-field">
+                              공지메모: {{ m.fieldDiff.note.before || '없음' }} → <strong>{{ m.fieldDiff.note.after || '없음' }}</strong>
+                            </span>
+                            <span v-if="m.fieldDiff.attendees && (m.fieldDiff.attendees.added?.length || m.fieldDiff.attendees.removed?.length)" class="mod-field">
+                              <span v-if="m.fieldDiff.attendees.added?.length" class="text-green">+{{ formatAddedAttendees(m.fieldDiff.attendees) }}</span>
+                              <span v-if="m.fieldDiff.attendees.removed?.length" class="text-red"> -{{ m.fieldDiff.attendees.removed.join(', ') }}</span>
+                            </span>
+                          </div>
+                          <div v-if="m.fieldDiff.attendees?.updated?.length" class="diff-att-updated-list">
+                            <div v-for="u in m.fieldDiff.attendees.updated" :key="u.name" class="diff-att-updated-row">
+                              <span class="att-upd-badge">~ {{ u.name }}</span>
+                              <span v-if="u.time" class="att-upd-detail">
+                                시간: <span class="diff-old-val">{{ u.time.before }}</span> → <strong class="diff-new-val">{{ u.time.after }}</strong>
+                              </span>
+                              <span v-else-if="u.isOvernight" class="att-upd-detail">
+                                구분: <span class="diff-old-val">{{ u.isOvernight.before ? '밤샘' : '당일' }}</span> → <strong class="diff-new-val">{{ u.isOvernight.after ? '밤샘' : '당일' }}</strong>
+                              </span>
+                              <span v-if="u.memo" class="att-upd-detail">
+                                메모: <span class="diff-old-val">{{ u.memo.before ? `"${u.memo.before}"` : '없음' }}</span> → <strong class="diff-new-val">{{ u.memo.after ? `"${u.memo.after}"` : '삭제됨' }}</strong>
+                              </span>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3125,16 +3397,72 @@ html.dark .diff-details-panel {
 .diff-mod-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
   flex: 1;
 }
 
 .diff-mod-item {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 11.5px;
+}
+
+.diff-mod-header-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.diff-att-updated-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 8px;
+  border-left: 2px solid rgba(59, 130, 246, 0.35);
+  margin-top: 1px;
+}
+
+.diff-att-updated-row {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.att-upd-badge {
+  font-weight: 700;
+  color: #2563eb;
+  background: rgba(59, 130, 246, 0.1);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+html.dark .att-upd-badge {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.18);
+}
+
+.att-upd-detail {
+  color: var(--text-dimmed, #64748b);
+}
+
+.diff-old-val {
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
+.diff-new-val {
+  color: var(--text-color, #0f172a);
+  font-weight: 700;
+}
+
+html.dark .diff-new-val {
+  color: #f8fafc;
 }
 
 .mod-date {

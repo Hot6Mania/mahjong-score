@@ -866,7 +866,7 @@ ${getAttendeesShareText()}
 
 
 
-대시보드에서 확인 및 등록: ${shareUrl}`;
+대시보드에서 확인: ${shareUrl}`;
 
   try {
     if (navigator.clipboard) {

@@ -23,15 +23,16 @@ export function getMaxCompletedSessionNumber(sessions: string[] = []): number {
 }
 
 /**
- * 역대 완료 회차와 일정 데이터를 대조하여,
- * 4인 이상 모인 날짜에 날짜 오름차순으로 순차적인 '제N회' 회차 번호를 매깁니다.
- * - 1순위: DB에 영구 기록된 item.sessionNumber 사용 (기기 간 불일치 원천 차단)
- * - 2순위: 연동된 시트 타이틀(sheetTitle) 또는 이번 달 날짜와 일치하는 시트 탭의 회차 번호 사용
- * - 3순위: 미할당 확정 일정에 과거 완료 회차 이후의 고유 번호 순차 부여
+ * 역대 완료 회차와 직전 월 확정 회차, 현재 일정 데이터를 대조하여,
+ * 4인 이상 모인 확정 날짜에 날짜 오름차순으로 순차적인 '제N회' 회차 번호를 매깁니다.
+ * - 1순위: 연동된 시트 타이틀(sheetTitle) 또는 이번 달 날짜와 일치하는 시트 탭의 회차 번호 영구 고정
+ * - 2순위: 직전 월 확정 회차 및 과거 완료 회차 최대값(effectiveBase) 이후의 고유 번호 순차 부여
+ * - 폴백: 초기 로딩 전(effectiveBase === 0)일 때만 DB의 item.sessionNumber 임시 표시
  */
 export function computeScheduleSessionNumbers(
   availableSessions: string[] = [],
-  scheduleDates: ScheduleDayItem[] = []
+  scheduleDates: ScheduleDayItem[] = [],
+  baseSessionNumberOverride?: number
 ): Map<string, number> {
   const sessionMap = new Map<string, number>();
   const sorted = [...scheduleDates].sort((a, b) => a.date.localeCompare(b.date));
@@ -42,26 +43,32 @@ export function computeScheduleSessionNumbers(
     return raw.length === 8 ? raw.slice(2) : raw;
   });
 
-  // 이번 달 일정과 연동된 시트 탭(예: "제16회 260423")은 과거 완료 회차 목록에서 제외
+  // 현재 일정이 속한 월의 YYMM 접두사 추출 (예: "2026-11-15" -> "2611")
+  const targetYymm = sorted.length > 0
+    ? sorted[0].date.replace(/-/g, '').slice(2, 6)
+    : '';
+
+  // 이번 달 일정과 연동된 시트 탭 및 현재 조회 월보다 미래 월의 시트 탭은 과거 완료 회차 목록에서 제외
   const pastSessions = availableSessions.filter(s => {
     if (!s) return false;
-    return !currentScheduleYymmddList.some(yymmdd => s.includes(yymmdd));
+    if (currentScheduleYymmddList.some(yymmdd => s.includes(yymmdd))) return false;
+    if (targetYymm.length === 4) {
+      const m = s.match(/(\d{6})/);
+      if (m && m[1].slice(0, 4) > targetYymm) {
+        return false;
+      }
+    }
+    return true;
   });
 
   const maxCompleted = getMaxCompletedSessionNumber(pastSessions);
+  const effectiveBase = Math.max(maxCompleted, baseSessionNumberOverride || 0);
   const usedNumbers = new Set<number>();
 
-  // 1차 패스: 이미 고정된 회차 번호(DB의 sessionNumber 또는 sheetTitle) 우선 등록
+  // 1차 패스: 실제 시트 탭이 연동된 회차(sheetTitle 또는 availableSessions 매칭) 우선 고정
   for (const item of sorted) {
     const count = item.attendees ? item.attendees.length : 0;
     if (count >= 4 && item.isConfirmed) {
-      if (typeof item.sessionNumber === 'number' && item.sessionNumber > 0) {
-        sessionMap.set(item.date, item.sessionNumber);
-        usedNumbers.add(item.sessionNumber);
-        continue;
-      }
-
-      // 시트 타이틀에서 회차 번호 추출 시도
       let matchedNum: number | null = null;
       if (item.sheetTitle) {
         const m = item.sheetTitle.match(/제\s*(\d+)\s*회/i);
@@ -77,6 +84,11 @@ export function computeScheduleSessionNumbers(
         }
       }
 
+      // 초기 마운트 시 아직 완료 회차나 이전 달 기준점(effectiveBase)이 로드되지 않은 경우에만 DB sessionNumber 폴백
+      if (!matchedNum && effectiveBase === 0 && typeof item.sessionNumber === 'number' && item.sessionNumber > 0) {
+        matchedNum = item.sessionNumber;
+      }
+
       if (matchedNum && !isNaN(matchedNum)) {
         sessionMap.set(item.date, matchedNum);
         usedNumbers.add(matchedNum);
@@ -84,8 +96,8 @@ export function computeScheduleSessionNumbers(
     }
   }
 
-  // 2차 패스: 아직 회차 번호가 없는 확정 일정에 순차 번호 부여
-  let candidateNum = maxCompleted + 1;
+  // 2차 패스: 시트 미생성 확정 일정에 effectiveBase + 1부터 순차 번호 부여
+  let candidateNum = effectiveBase + 1;
   for (const item of sorted) {
     const count = item.attendees ? item.attendees.length : 0;
     if (count >= 4 && item.isConfirmed && !sessionMap.has(item.date)) {

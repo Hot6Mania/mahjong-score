@@ -780,6 +780,8 @@ const sessionScopeTab = ref<'session' | 'all'>('session');
 
 // 모달 진입 맥락 (회차 상세에서 열렸는지 여부)
 const isModalFromSession = ref(false);
+// 스탯 모달 내부(역만 탭 등)에서 화료 사진 라이트박스를 열었을 때 라이트박스가 스탯 모달 앞에 오도록 제어
+const isPlayerModalBehindLightbox = ref(false);
 
 // 모달 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
 const modalScopeTab = ref<'session' | 'all'>('all');
@@ -790,6 +792,7 @@ const openPlayerModal = (
   keepScopeTab: boolean = false,
   keepActiveTab: boolean = false
 ) => {
+  isPlayerModalBehindLightbox.value = false;
   selectedPlayer.value = player;
   isModalFromSession.value = fromSession;
   if (!keepScopeTab) {
@@ -4598,6 +4601,7 @@ const getRecordCommentCount = (rec: HighlightRecord): number => {
 
 const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' | 'reply' = 'new') => {
   const token = `[${tokenLabel}]`;
+  closeEmotePickers();
   if (target === 'edit') {
     editingCommentContent.value = `${editingCommentContent.value}${token}`;
     return;
@@ -5105,6 +5109,7 @@ const syncLatestHighlightOnOpen = async (targetHighlightId: string) => {
 };
 
 const openHighlightLightbox = (rec: HighlightRecord, updateUrl = true) => {
+  isPlayerModalBehindLightbox.value = true;
   preloadMahjongTileImages();
   refreshGalleryAuthState();
   useGuestCommentMode.value = false;
@@ -7377,7 +7382,12 @@ const openGamePopupFromLightbox = async (
     <!-- 플레이어 상세 정보 모달 (ModalStats.vue UI 완벽 일치) -->
     <!-- ============================================== -->
     <Transition name="modal-fade">
-      <div v-if="selectedPlayer" class="player-modal-overlay" v-backdrop-dismiss="() => selectedPlayer = null">
+      <div
+        v-if="selectedPlayer"
+        class="player-modal-overlay"
+        :class="{ 'is-behind-lightbox': isPlayerModalBehindLightbox && Boolean(lightboxHighlight) }"
+        v-backdrop-dismiss="() => selectedPlayer = null"
+      >
         <div class="player-modal-card modal_content">
           <div class="container_stats_modal">
             <!-- 모달 헤더: 플레이어 셀렉터 및 닫기 버튼 -->
@@ -12400,6 +12410,9 @@ html.dark .gp-rating-delta.neg {
   justify-content: center;
   z-index: 2850;
   padding: 16px;
+}
+.player-modal-overlay.is-behind-lightbox {
+  z-index: 2650;
 }
 .player-modal-card {
   background: var(--bg-modal, #ffffff);

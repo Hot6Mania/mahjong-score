@@ -115,8 +115,23 @@ const goToTodayMonth = () => {
 const isAdmin = ref<boolean>(false);
 const adminToken = ref<string | undefined>(undefined);
 
+// 지정한 YYYY-MM에서 offset개월 이동한 YYYY-MM 반환
+const getOffsetMonth = (ym: string, offset: number): string => {
+  const parts = (ym || '').split('-').map(Number);
+  const y = parts[0] || 2026;
+  const m = parts[1] || 10;
+  const d = new Date(Date.UTC(y, m - 1 + offset, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+};
+
 // 일정 데이터: 초기 마운트 시 즉시 로컬 캐시를 바인딩하여 0초 만에 정상 화면 노출 (스피너 제거)
 const monthSchedule = ref<ScheduleMonthData>(getLocalMonthSchedule(currentMonth.value));
+
+// 직전 월들의 일정 데이터 캐시 (10월 22회 확정 -> 11월 23회 연쇄 계산용)
+const priorMonthsSchedules = ref<Record<string, ScheduleDayItem[]>>({
+  [getOffsetMonth(currentMonth.value, -2)]: getLocalMonthSchedule(getOffsetMonth(currentMonth.value, -2)).dates || [],
+  [getOffsetMonth(currentMonth.value, -1)]: getLocalMonthSchedule(getOffsetMonth(currentMonth.value, -1)).dates || []
+});
 
 // 내 참가자 이름
 const myAttendeeName = ref<string>(getLastAttendeeName());
@@ -264,17 +279,61 @@ const onCreateKeyDown = (e: KeyboardEvent) => {
   }
 };
 
-// 이번 달 스케줄 날짜와 일치하지 않는 순수 과거 완료 회차의 최대 번호
+// 특정 월(ym) 이하의 완료된 시트 중 excludeDates를 제외한 최대 회차 번호 반환
+const getCompletedMaxBeforeOrInMonth = (ym: string, excludeDates: ScheduleDayItem[] = []): number => {
+  const excludeYymmdd = excludeDates.map(d => d.date.replace(/-/g, '').slice(2));
+  const targetYymm = ym.replace('-', '').slice(2, 6);
+  const filtered = (props.availableSessions || []).filter(s => {
+    if (!s) return false;
+    if (excludeYymmdd.some(y => s.includes(y))) return false;
+    if (targetYymm.length === 4) {
+      const m = s.match(/(\d{6})/);
+      if (m && m[1].slice(0, 4) > targetYymm) return false;
+    }
+    return true;
+  });
+  return getMaxCompletedSessionNumber(filtered);
+};
+
+// 이번 달 스케줄 날짜와 일치하지 않는 과거 완료 회차 + 직전 월들의 확정 일정 회차 최대 번호
 const currentBaseSessionNumber = computed(() => {
-  const sorted = monthSchedule.value.dates || [];
-  const currentYymmdd = sorted.map(d => d.date.replace(/-/g, '').slice(2));
-  const pastSessions = (props.availableSessions || []).filter(s => !currentYymmdd.some(y => s && s.includes(y)));
-  return getMaxCompletedSessionNumber(pastSessions);
+  let runningBase = getCompletedMaxBeforeOrInMonth(
+    getOffsetMonth(currentMonth.value, -3),
+    []
+  );
+
+  for (const offset of [-2, -1]) {
+    const mKey = getOffsetMonth(currentMonth.value, offset);
+    const mDates = priorMonthsSchedules.value[mKey] || getLocalMonthSchedule(mKey).dates || [];
+    const completedBeforeM = getCompletedMaxBeforeOrInMonth(mKey, mDates);
+    runningBase = Math.max(runningBase, completedBeforeM);
+    if (mDates.length > 0) {
+      const mSessionMap = computeScheduleSessionNumbers(props.availableSessions, mDates, runningBase);
+      for (const num of mSessionMap.values()) {
+        if (num > runningBase) runningBase = num;
+      }
+      for (const d of mDates) {
+        if (d.isConfirmed && (d.attendees?.length || 0) >= 4 && typeof d.sessionNumber === 'number' && d.sessionNumber > runningBase) {
+          runningBase = d.sessionNumber;
+        }
+      }
+    }
+  }
+
+  const maxCompletedBeforeCurrent = getCompletedMaxBeforeOrInMonth(
+    currentMonth.value,
+    monthSchedule.value.dates || []
+  );
+  return Math.max(runningBase, maxCompletedBeforeCurrent);
 });
 
-// 역대 회차 기반 이번 달 확정 일정의 자동 회차(제N회) 맵
+// 역대 회차 및 직전 월 확정 회차 기반 이번 달 확정 일정의 자동 회차(제N회) 맵
 const sessionMap = computed<Map<string, number>>(() => {
-  return computeScheduleSessionNumbers(props.availableSessions, monthSchedule.value.dates);
+  return computeScheduleSessionNumbers(
+    props.availableSessions,
+    monthSchedule.value.dates,
+    currentBaseSessionNumber.value
+  );
 });
 
 // 통계 요약 칩 (확정 m개, 내 참석 k개)
@@ -756,8 +815,32 @@ const verifyAdminPasscode = async () => {
   }
 };
 
+// 직전 월 스케줄 백그라운드 동기화 (현재 달의 정확한 시작 회차 계산 보장)
+const syncPriorMonthsSchedule = async (targetMonth: string) => {
+  const prev1 = getOffsetMonth(targetMonth, -1);
+  const prev2 = getOffsetMonth(targetMonth, -2);
+  priorMonthsSchedules.value = {
+    ...priorMonthsSchedules.value,
+    [prev2]: priorMonthsSchedules.value[prev2]?.length ? priorMonthsSchedules.value[prev2] : (getLocalMonthSchedule(prev2).dates || []),
+    [prev1]: priorMonthsSchedules.value[prev1]?.length ? priorMonthsSchedules.value[prev1] : (getLocalMonthSchedule(prev1).dates || [])
+  };
+  try {
+    const prevData = await fetchMonthSchedule(prev1);
+    if (prevData && Array.isArray(prevData.dates)) {
+      priorMonthsSchedules.value = {
+        ...priorMonthsSchedules.value,
+        [prev1]: prevData.dates
+      };
+    }
+  } catch {
+    // 직전 월 조회 실패 시 로컬 캐시 유지
+  }
+};
+
 // 일정 데이터 로드 (silent: true일 경우 토스트 팝업 및 불필요한 스피너 없이 조용히 동기화)
 const loadSchedule = async (silent = true) => {
+  void syncPriorMonthsSchedule(currentMonth.value);
+
   if (silent) {
     if (isScheduleMutating()) return;
     const hasData = monthSchedule.value.dates && monthSchedule.value.dates.length > 0;
@@ -813,10 +896,16 @@ const loadSchedule = async (silent = true) => {
   }
 };
 
-// monthSchedule 갱신 시 열려있는 상세 모달(selectedDayItem) 데이터도 실시간 동기화
+// monthSchedule 갱신 시 열려있는 상세 모달(selectedDayItem) 및 직전 월 캐시 실시간 동기화
 watch(
   () => monthSchedule.value,
   (newData) => {
+    if (newData?.month && Array.isArray(newData.dates)) {
+      priorMonthsSchedules.value = {
+        ...priorMonthsSchedules.value,
+        [newData.month]: newData.dates
+      };
+    }
     if (newData?.dates) {
       tryOpenPendingUrlDate(newData.dates);
     }
@@ -1020,11 +1109,7 @@ const onToggleConfirmSession = async (dateStr: string) => {
 
   let allocatedSessionNum: number | undefined = undefined;
   if (willConfirm) {
-    if (item.sessionNumber && item.sessionNumber > 0) {
-      allocatedSessionNum = item.sessionNumber;
-    } else {
-      allocatedSessionNum = sessionMap.value.get(dateStr) || undefined;
-    }
+    allocatedSessionNum = sessionMap.value.get(dateStr) || item.sessionNumber || undefined;
   }
 
   currentDates[targetIdx] = {

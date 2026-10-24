@@ -78,11 +78,27 @@ export interface OverlapInterval {
   attendees: string[];
 }
 
+export interface ScheduleDeltaAttendeeAddedDetail {
+  name: string;
+  time?: string;
+  isOvernight?: boolean;
+  memo?: string;
+}
+
+export interface ScheduleDeltaAttendeeUpdatedDetail {
+  name: string;
+  time?: { before: string; after: string };
+  isOvernight?: { before: boolean; after: boolean };
+  memo?: { before: string; after: string };
+}
+
 export interface ScheduleDeltaAttendeeDiff {
   countBefore: number;
   countAfter: number;
   added: string[];
   removed: string[];
+  addedDetails?: ScheduleDeltaAttendeeAddedDetail[];
+  updated?: ScheduleDeltaAttendeeUpdatedDetail[];
 }
 
 export interface ScheduleDeltaModifiedDate {
@@ -92,6 +108,8 @@ export interface ScheduleDeltaModifiedDate {
     isConfirmed?: { before: boolean; after: boolean };
     sessionNumber?: { before?: number; after?: number };
     time?: { before: string; after: string };
+    note?: { before?: string; after?: string };
+    sheetTitle?: { before?: string; after?: string };
     attendees?: ScheduleDeltaAttendeeDiff;
     [key: string]: any;
   };
