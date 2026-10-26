@@ -165,6 +165,9 @@ export interface HighlightStorageInfo {
   usedBytes: number;
   imageBytes?: number;
   otherKvBytes?: number;
+  externalR2Bytes?: number;
+  externalR2Count?: number;
+  externalUsedPercent?: number;
   maxBytes: number;
   remainingBytes: number;
   usedPercent: number;
@@ -343,14 +346,20 @@ export function getHighlightStorageInfo(records?: HighlightRecord[]): HighlightS
   const maxBytes = cachedStorageInfo?.maxBytes || DEFAULT_KV_MAX_BYTES;
   const fallbackOtherBytes = estimateFallbackOtherKvBytes(indexBytes);
   const otherKvBytes = Math.max(cachedStorageInfo?.otherKvBytes || 0, fallbackOtherBytes);
+  const externalR2Bytes = cachedStorageInfo?.externalR2Bytes || 0;
+  const externalR2Count = cachedStorageInfo?.externalR2Count || 0;
+  const externalUsedPercent = Number(((externalR2Bytes / maxBytes) * 100).toFixed(2));
   const usedBytes = localImageBytes + otherKvBytes;
-  const remainingBytes = Math.max(0, maxBytes - usedBytes);
+  const remainingBytes = Math.max(0, maxBytes - usedBytes - externalR2Bytes);
   const usedPercent = Number(((usedBytes / maxBytes) * 100).toFixed(2));
 
   return {
     usedBytes,
     imageBytes: localImageBytes,
     otherKvBytes,
+    externalR2Bytes,
+    externalR2Count,
+    externalUsedPercent,
     maxBytes,
     remainingBytes,
     usedPercent,

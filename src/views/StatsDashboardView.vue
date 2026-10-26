@@ -2947,13 +2947,25 @@ onUnmounted(() => {
 const galleryStorageStats = computed(() => {
   void highlightStorageTick.value;
   const info = getHighlightStorageInfo(highlightsList.value);
+  const externalBytes = info.externalR2Bytes ?? 0;
+  const externalUsedPercent =
+    info.externalUsedPercent ?? Number(((externalBytes / info.maxBytes) * 100).toFixed(2));
+  const totalAccountUsedPercent = Number((info.usedPercent + externalUsedPercent).toFixed(2));
   const maxMB = (info.maxBytes / (1024 * 1024)).toFixed(0);
   const maxGB = (info.maxBytes / (1024 * 1024 * 1024)).toFixed(1);
   const remainingMB = (info.remainingBytes / (1024 * 1024)).toFixed(1);
-  const remainingPercent = Number(Math.max(0, 100 - info.usedPercent).toFixed(2));
+  const remainingPercent = Number(Math.max(0, 100 - totalAccountUsedPercent).toFixed(2));
   const barWidthPct = info.usedBytes > 0 ? Math.min(100, Math.max(0.8, info.usedPercent)) : 0;
+  const externalBarWidthPct =
+    externalBytes > 0
+      ? Math.min(Math.max(0, 100 - barWidthPct), Math.max(0.8, externalUsedPercent))
+      : 0;
   return {
     ...info,
+    externalR2Bytes: externalBytes,
+    externalUsedText: formatStorageBytes(externalBytes),
+    externalUsedPercent,
+    totalAccountUsedPercent,
     usedText: formatStorageBytes(info.usedBytes),
     imageBytesText: formatStorageBytes(info.imageBytes ?? 0),
     otherKvBytesText: formatStorageBytes(info.otherKvBytes ?? 0),
@@ -2961,6 +2973,7 @@ const galleryStorageStats = computed(() => {
     remainingText: `${Number(remainingMB).toLocaleString()} MB`,
     remainingPercent,
     barWidthPct,
+    externalBarWidthPct,
   };
 });
 
@@ -7655,34 +7668,43 @@ const openGamePopupFromLightbox = async (
             </div>
           </div>
 
-          <!-- 서버 저장 용량 및 남은 용량 표시 바 -->
+          <!-- 서버 저장 용량 및 남은 용량 표시 바 (R2 10GB 무료 한도 합산 · M-Lab 외부 버킷 비활성 차감 반영) -->
           <div class="gh-storage-status-bar">
             <div class="gh-storage-info">
               <span class="gh-storage-title">서버 저장소 용량</span>
               <span class="gh-storage-metrics">
                 남은 용량 <strong class="gh-storage-remain">{{ galleryStorageStats.remainingText }}</strong>
                 <span class="gh-storage-sub">
-                  (사용 {{ galleryStorageStats.usedText }} / 전체 {{ galleryStorageStats.maxText }} · 사진 {{ galleryStorageStats.imageCount }}장)
+                  (사용 {{ galleryStorageStats.usedText }}<template v-if="galleryStorageStats.externalR2Bytes > 0"> · <span class="gh-storage-ext-badge" title="동일 Cloudflare R2 계정(10GB 무료 한도)에서 m-lab-media 버킷이 점유하여 비활성 처리된 용량">M-Lab 비활성 {{ galleryStorageStats.externalUsedText }}</span></template> / 전체 {{ galleryStorageStats.maxText }} · 사진 {{ galleryStorageStats.imageCount }}장)
                 </span>
               </span>
               <span
                 class="gh-storage-pct-badge"
                 :class="{
-                  warn: galleryStorageStats.usedPercent >= 75 && galleryStorageStats.usedPercent < 90,
-                  danger: galleryStorageStats.usedPercent >= 90
+                  warn: galleryStorageStats.totalAccountUsedPercent >= 75 && galleryStorageStats.totalAccountUsedPercent < 90,
+                  danger: galleryStorageStats.totalAccountUsedPercent >= 90
                 }"
               >
                 {{ galleryStorageStats.remainingPercent.toFixed(1) }}% 여유
               </span>
             </div>
-            <div class="gh-storage-track" :title="`사용 중: ${galleryStorageStats.usedText} (${galleryStorageStats.usedPercent.toFixed(2)}%) / 남은 용량: ${galleryStorageStats.remainingText}`">
+            <div
+              class="gh-storage-track"
+              :title="`하이라이트 사용: ${galleryStorageStats.usedText} (${galleryStorageStats.usedPercent.toFixed(2)}%)${galleryStorageStats.externalR2Bytes > 0 ? ` / M-Lab 점유(비활성): ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)` : ''} / 남은 무료 용량: ${galleryStorageStats.remainingText}`"
+            >
               <div
                 class="gh-storage-fill"
                 :class="{
-                  warn: galleryStorageStats.usedPercent >= 75 && galleryStorageStats.usedPercent < 90,
-                  danger: galleryStorageStats.usedPercent >= 90
+                  warn: galleryStorageStats.totalAccountUsedPercent >= 75 && galleryStorageStats.totalAccountUsedPercent < 90,
+                  danger: galleryStorageStats.totalAccountUsedPercent >= 90
                 }"
                 :style="{ width: Math.max(galleryStorageStats.usedPercent > 0 ? 1.5 : 0, galleryStorageStats.usedPercent) + '%' }"
+              ></div>
+              <div
+                v-if="galleryStorageStats.externalR2Bytes > 0"
+                class="gh-storage-fill-external"
+                :style="{ width: Math.max(1.5, galleryStorageStats.externalBarWidthPct) + '%' }"
+                :title="`M-Lab 버킷 사용 용량 (비활성/차감): ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)`"
               ></div>
             </div>
           </div>
@@ -9887,14 +9909,14 @@ const openGamePopupFromLightbox = async (
                 <span class="gh-storage-metrics">
                   <strong class="gh-storage-remain">{{ galleryStorageStats.remainingText }}</strong> 사용 가능
                   <span class="gh-storage-sub">
-                    (현재 {{ galleryStorageStats.usedText }} / {{ galleryStorageStats.maxText }} 사용 중)
+                    (현재 {{ galleryStorageStats.usedText }}<template v-if="galleryStorageStats.externalR2Bytes > 0"> · <span class="gh-storage-ext-badge" title="동일 Cloudflare R2 계정(10GB 무료 한도)에서 m-lab-media 버킷이 점유하여 비활성 처리된 용량">M-Lab 비활성 {{ galleryStorageStats.externalUsedText }}</span></template> / {{ galleryStorageStats.maxText }} 사용 중)
                   </span>
                 </span>
                 <span
                   class="gh-storage-pct-badge"
                   :class="{
-                    warn: galleryStorageStats.usedPercent >= 75 && galleryStorageStats.usedPercent < 90,
-                    danger: galleryStorageStats.usedPercent >= 90
+                    warn: galleryStorageStats.totalAccountUsedPercent >= 75 && galleryStorageStats.totalAccountUsedPercent < 90,
+                    danger: galleryStorageStats.totalAccountUsedPercent >= 90
                   }"
                 >
                   {{ galleryStorageStats.remainingPercent.toFixed(1) }}% 여유
@@ -9904,10 +9926,16 @@ const openGamePopupFromLightbox = async (
                 <div
                   class="gh-storage-fill"
                   :class="{
-                    warn: galleryStorageStats.usedPercent >= 75 && galleryStorageStats.usedPercent < 90,
-                    danger: galleryStorageStats.usedPercent >= 90
+                    warn: galleryStorageStats.totalAccountUsedPercent >= 75 && galleryStorageStats.totalAccountUsedPercent < 90,
+                    danger: galleryStorageStats.totalAccountUsedPercent >= 90
                   }"
                   :style="{ width: Math.max(galleryStorageStats.usedPercent > 0 ? 1.5 : 0, galleryStorageStats.usedPercent) + '%' }"
+                ></div>
+                <div
+                  v-if="galleryStorageStats.externalR2Bytes > 0"
+                  class="gh-storage-fill-external"
+                  :style="{ width: Math.max(1.5, galleryStorageStats.externalBarWidthPct) + '%' }"
+                  :title="`M-Lab 버킷 사용 용량 (비활성/차감): ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)`"
                 ></div>
               </div>
             </div>
@@ -17526,7 +17554,23 @@ html.dark .gh-storage-pct-badge.danger {
   background: rgba(239, 68, 68, 0.22);
   color: #f87171;
 }
+.gh-storage-ext-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 0.71rem;
+  font-weight: 700;
+  background: rgba(100, 116, 139, 0.14);
+  color: var(--text-dimmed, #64748b);
+}
+html.dark .gh-storage-ext-badge {
+  background: rgba(148, 163, 184, 0.16);
+  color: #94a3b8;
+}
 .gh-storage-track {
+  display: flex;
+  align-items: center;
   width: 100%;
   height: 6px;
   border-radius: 999px;
@@ -17538,15 +17582,38 @@ html.dark .gh-storage-track {
 }
 .gh-storage-fill {
   height: 100%;
-  border-radius: 999px;
   background: linear-gradient(90deg, #10b981, #3b82f6);
   transition: width 0.3s ease;
+  flex-shrink: 0;
 }
 .gh-storage-fill.warn {
   background: linear-gradient(90deg, #f59e0b, #ea580c);
 }
 .gh-storage-fill.danger {
   background: linear-gradient(90deg, #ef4444, #b91c1c);
+}
+.gh-storage-fill-external {
+  height: 100%;
+  flex-shrink: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(100, 116, 139, 0.55),
+    rgba(100, 116, 139, 0.55) 4px,
+    rgba(148, 163, 184, 0.32) 4px,
+    rgba(148, 163, 184, 0.32) 8px
+  );
+  border-left: 1px solid rgba(255, 255, 255, 0.45);
+  transition: width 0.3s ease;
+}
+html.dark .gh-storage-fill-external {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(148, 163, 184, 0.52),
+    rgba(148, 163, 184, 0.52) 4px,
+    rgba(71, 85, 105, 0.45) 4px,
+    rgba(71, 85, 105, 0.45) 8px
+  );
+  border-left-color: rgba(15, 23, 42, 0.65);
 }
 
 /* 이번 회차 레이팅 추이 탭 증감 인라인 표시 */
