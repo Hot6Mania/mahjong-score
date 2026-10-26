@@ -4491,6 +4491,8 @@ const commentFormError = ref<string>('');
 // 마작패 / 액션 버튼 디시콘 팔레트 상태
 const isCommentEmotePickerOpen = ref<boolean>(false);
 const activeEmoteTab = ref<'man' | 'pin' | 'sou' | 'honor' | 'action'>('man');
+const isContinuousEmoteMode = ref<boolean>(false);
+const isFuroEmoteMode = ref<boolean>(false);
 const selectedPaletteTileCode = ref<string>('5m');
 const isBaseTilePopping = ref<boolean>(false);
 const showEmoteNotationHelp = ref<boolean>(false);
@@ -4772,6 +4774,17 @@ const triggerBaseTilePop = (tileCode: string) => {
 
 const insertTileFromPalette = (tl: MahjongTileEmoteDef, target: 'new' | 'edit' | 'reply' = 'new') => {
   triggerBaseTilePop(tl.code);
+  // 1) 연속 입력 OFF & 후로 입력 OFF (기본 상태): 기존처럼 단일 패 즉시 삽입 후 팝업 닫기
+  if (!isContinuousEmoteMode.value && !isFuroEmoteMode.value) {
+    insertEmoteTokenToComment(tl.label, target);
+    return;
+  }
+  // 2) 후로 입력 ON & 연속 입력 OFF: 패 클릭 시 하단 기준 패만 선택하고 댓글 본문에는 아직 입력하지 않음
+  if (isFuroEmoteMode.value && !isContinuousEmoteMode.value) {
+    lastInsertedSingleTileState.value = null;
+    return;
+  }
+  // 3) 연속 입력 ON: 대괄호 안에 패를 연속 병합하고 팝업 유지
   const prevText = getCommentTargetValue(target);
   const nextText = appendTileCodeSmart(prevText, tl.code, false);
   setCommentTargetValue(target, nextText);
@@ -4806,15 +4819,24 @@ const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' | 
   const token = `[${tokenLabel}]`;
   if (target === 'edit') {
     editingCommentContent.value = `${editingCommentContent.value}${token}`;
+    if (!isContinuousEmoteMode.value) {
+      closeEmotePickers();
+    }
     return;
   }
   if (target === 'reply') {
     replyContentInput.value = `${replyContentInput.value}${token}`;
+    if (!isContinuousEmoteMode.value) {
+      closeEmotePickers();
+    }
     return;
   }
   const el = commentTextareaRef.value;
   if (!el) {
     commentContentInput.value = `${commentContentInput.value}${token}`;
+    if (!isContinuousEmoteMode.value) {
+      closeEmotePickers();
+    }
     return;
   }
   const start = el.selectionStart ?? commentContentInput.value.length;
@@ -4822,6 +4844,9 @@ const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' | 
   const before = commentContentInput.value.slice(0, start);
   const after = commentContentInput.value.slice(end);
   commentContentInput.value = `${before}${token}${after}`;
+  if (!isContinuousEmoteMode.value) {
+    closeEmotePickers();
+  }
   nextTick(() => {
     el.focus();
     const nextPos = start + token.length;
@@ -4931,6 +4956,9 @@ const startFuroLeverDrag = (
         lastInsertedSingleTileState.value = null;
         const nextText = appendTileCodeSmart(baseText, meldNotation, true);
         setCommentTargetValue(tgt, nextText);
+        if (!isContinuousEmoteMode.value) {
+          closeEmotePickers();
+        }
       }
     }
 
@@ -10645,7 +10673,9 @@ const openGamePopupFromLightbox = async (
                                 <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
                               </div>
                               <div class="mep-util-btns">
-                                <button type="button" class="mep-util-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('edit')">␣ 간격</button>
+                                <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('edit')">␣ 간격</button>
+                                <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속 입력</button>
+                                <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로 입력</button>
                                 <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
                                 <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
                               </div>
@@ -10682,7 +10712,7 @@ const openGamePopupFromLightbox = async (
                                 :key="`ed-tl-${tl.code}`"
                                 type="button"
                                 class="mep-tile-btn"
-                                :class="{ 'is-selected-base': selectedPaletteTileCode === tl.code }"
+                                :class="{ 'is-selected-base': isFuroEmoteMode && selectedPaletteTileCode === tl.code }"
                                 :title="`${tl.label} (${tl.code})`"
                                 @click="insertTileFromPalette(tl, 'edit')"
                               >
@@ -10692,7 +10722,7 @@ const openGamePopupFromLightbox = async (
                             </div>
 
                             <!-- 모던 후로 레버 독 (Furo Lever Dock) -->
-                            <div v-show="activeEmoteTab !== 'action'" class="mep-furo-dock">
+                            <div v-show="isFuroEmoteMode && activeEmoteTab !== 'action'" class="mep-furo-dock">
                               <div class="mep-base-tile-chip" :class="{ 'is-popping': isBaseTilePopping }" title="아래 패를 클릭하면 기준 패가 변경됩니다">
                                 <img :src="getMahjongTileImageUrl(selectedPaletteTileDef.fileName)" :alt="selectedPaletteTileDef.label" class="mep-base-tile-img" />
                                 <div class="mep-base-tile-meta">
@@ -10902,7 +10932,9 @@ const openGamePopupFromLightbox = async (
                                 <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
                               </div>
                               <div class="mep-util-btns">
-                                <button type="button" class="mep-util-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('reply')">␣ 간격</button>
+                                <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('reply')">␣ 간격</button>
+                                <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속 입력</button>
+                                <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로 입력</button>
                                 <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
                                 <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
                               </div>
@@ -10939,7 +10971,7 @@ const openGamePopupFromLightbox = async (
                                 :key="`rep-tl-${tl.code}`"
                                 type="button"
                                 class="mep-tile-btn"
-                                :class="{ 'is-selected-base': selectedPaletteTileCode === tl.code }"
+                                :class="{ 'is-selected-base': isFuroEmoteMode && selectedPaletteTileCode === tl.code }"
                                 :title="`${tl.label} (${tl.code})`"
                                 @click="insertTileFromPalette(tl, 'reply')"
                               >
@@ -10949,7 +10981,7 @@ const openGamePopupFromLightbox = async (
                             </div>
 
                             <!-- 모던 후로 레버 독 (Furo Lever Dock) -->
-                            <div v-show="activeEmoteTab !== 'action'" class="mep-furo-dock">
+                            <div v-show="isFuroEmoteMode && activeEmoteTab !== 'action'" class="mep-furo-dock">
                               <div class="mep-base-tile-chip" :class="{ 'is-popping': isBaseTilePopping }" title="아래 패를 클릭하면 기준 패가 변경됩니다">
                                 <img :src="getMahjongTileImageUrl(selectedPaletteTileDef.fileName)" :alt="selectedPaletteTileDef.label" class="mep-base-tile-img" />
                                 <div class="mep-base-tile-meta">
@@ -11167,7 +11199,9 @@ const openGamePopupFromLightbox = async (
                             </button>
                           </div>
                           <div class="mep-util-btns">
-                            <button type="button" class="mep-util-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('new')">␣ 간격</button>
+                            <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('new')">␣ 간격</button>
+                            <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속 입력</button>
+                            <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로 입력</button>
                             <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
                             <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
                           </div>
@@ -11207,7 +11241,7 @@ const openGamePopupFromLightbox = async (
                             :key="`new-tl-${tl.code}`"
                             type="button"
                             class="mep-tile-btn"
-                            :class="{ 'is-selected-base': selectedPaletteTileCode === tl.code }"
+                            :class="{ 'is-selected-base': isFuroEmoteMode && selectedPaletteTileCode === tl.code }"
                             :title="`${tl.label} (${tl.code})`"
                             @click="insertTileFromPalette(tl, 'new')"
                           >
@@ -11217,7 +11251,7 @@ const openGamePopupFromLightbox = async (
                         </div>
 
                         <!-- 모던 후로 레버 독 (Furo Lever Dock) -->
-                        <div v-show="activeEmoteTab !== 'action'" class="mep-furo-dock">
+                        <div v-show="isFuroEmoteMode && activeEmoteTab !== 'action'" class="mep-furo-dock">
                           <div class="mep-base-tile-chip" :class="{ 'is-popping': isBaseTilePopping }" title="패를 클릭하면 기준 패가 변경됩니다">
                             <img :src="getMahjongTileImageUrl(selectedPaletteTileDef.fileName)" :alt="selectedPaletteTileDef.label" class="mep-base-tile-img" />
                             <div class="mep-base-tile-meta">
@@ -18151,20 +18185,23 @@ html.dark .inline-mahjong-tile img {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.58));
 }
 
-/* 연속 마작패 & 후로(치/퐁/가깡/안깡) 블록 (빈틈없이 쭉 붙여서 나열) */
+/* 연속 마작패 & 후로(치/퐁/가깡/안깡) 블록 (빈틈없이 쭉 붙여서 나열 + 컨테이너 우측 초과 시 자동 개행) */
 .mj-hand {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: flex-end;
   vertical-align: middle;
-  gap: 7px;
+  gap: 3px 7px;
   margin: 2px 3px;
+  max-width: 100%;
 }
 .mj-meld-block {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: flex-end;
-  gap: 0;
+  gap: 2px 0;
   vertical-align: bottom;
+  max-width: 100%;
 }
 .mj-meld-block.is-draw-block {
   margin-left: 3px;
@@ -18218,6 +18255,65 @@ html.dark .mj-tile {
 }
 .mj-kakan-wrap .mj-side-wrap + .mj-side-wrap {
   margin-top: -0.5px;
+}
+
+/* 핀터레스트 카드(.pinterest-pin-card) 내 캡션에서는 글씨 크기(0.78rem)와 조화되도록 나니키루콘 소형화 */
+.pinterest-pin-card .rich-mahjong-content {
+  line-height: 1.55;
+}
+.pinterest-pin-card .inline-mahjong-tile {
+  width: 15.5px;
+  height: 22.8px;
+  margin: 1px 0;
+}
+.pinterest-pin-card .inline-mahjong-tile img {
+  width: 18px;
+  height: 25.8px;
+  filter: drop-shadow(0 0.5px 1px rgba(0, 0, 0, 0.22));
+}
+.pinterest-pin-card .mj-hand {
+  gap: 2px 4px;
+  margin: 1px 1.5px;
+  max-width: 100%;
+}
+.pinterest-pin-card .mj-meld-block {
+  gap: 1.5px 0;
+  max-width: 100%;
+}
+.pinterest-pin-card .mj-meld-block.is-draw-block {
+  margin-left: 1.5px;
+}
+.pinterest-pin-card .mj-upright-wrap {
+  width: 15.5px;
+  height: 22.8px;
+}
+.pinterest-pin-card .mj-tile {
+  width: 18px;
+  height: 25.8px;
+  filter: drop-shadow(0 0.5px 1px rgba(0, 0, 0, 0.22));
+}
+.pinterest-pin-card .mj-side-wrap {
+  width: 22.4px;
+  height: 15.5px;
+}
+.pinterest-pin-card .mj-side-wrap .mj-tile {
+  width: 18px;
+  height: 25.8px;
+  transform: rotate(-90deg) translateX(0.3px);
+}
+.pinterest-pin-card .mj-kakan-wrap {
+  width: 22.4px;
+  height: 31px;
+}
+.pinterest-pin-card .mj-kakan-wrap .mj-side-wrap + .mj-side-wrap {
+  margin-top: -0.3px;
+}
+.pinterest-pin-card .inline-mahjong-action {
+  padding: 1.5px 6px;
+  margin: 1px 1.5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  line-height: 1.25;
 }
 
 /* 마작 선언/액션 버튼 (리치/다마/치/퐁/깡/론/쯔모/스킵 - 세련된 톤다운 컬러) */
@@ -18811,6 +18907,84 @@ html.dark .mep-tab:hover:not(.active) {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.mep-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 25px;
+  padding: 0 8.5px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-card, #f8fafc);
+  color: var(--text-dimmed, #475569);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: all 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.mep-mode-toggle::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.55);
+  transition: all 0.16s ease;
+}
+.mep-mode-toggle:hover:not(.active) {
+  border-color: rgba(59, 130, 246, 0.45);
+  color: var(--text-color, #0f172a);
+}
+.mep-mode-toggle.continuous.active {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  font-weight: 800;
+}
+.mep-mode-toggle.continuous.active::before {
+  background: #2563eb;
+  box-shadow: 0 0 6px rgba(37, 99, 235, 0.65);
+}
+.mep-mode-toggle.furo.active {
+  border-color: #0d9488;
+  background: rgba(13, 148, 136, 0.11);
+  color: #0f766e;
+  font-weight: 800;
+}
+.mep-mode-toggle.furo.active::before {
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.7);
+}
+html.dark .mep-mode-toggle {
+  background: #22222a;
+  border-color: #353542;
+  color: #a1a1aa;
+}
+html.dark .mep-mode-toggle:hover:not(.active) {
+  border-color: rgba(96, 165, 250, 0.45);
+  color: #f4f4f5;
+}
+html.dark .mep-mode-toggle.continuous.active {
+  border-color: #60a5fa;
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+}
+html.dark .mep-mode-toggle.continuous.active::before {
+  background: #60a5fa;
+  box-shadow: 0 0 6px rgba(96, 165, 250, 0.8);
+}
+html.dark .mep-mode-toggle.furo.active {
+  border-color: #34d399;
+  background: rgba(16, 185, 129, 0.18);
+  color: #6ee7b7;
+}
+html.dark .mep-mode-toggle.furo.active::before {
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.8);
 }
 .mep-util-btn {
   display: inline-flex;
@@ -18827,6 +19001,17 @@ html.dark .mep-tab:hover:not(.active) {
   cursor: pointer;
   transition: all 0.15s ease;
   user-select: none;
+  white-space: nowrap;
+}
+.mep-util-btn.space-btn {
+  border-color: rgba(37, 99, 235, 0.38);
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+}
+html.dark .mep-util-btn.space-btn {
+  border-color: rgba(96, 165, 250, 0.42);
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.14);
 }
 .mep-util-btn.help,
 .mep-util-btn.close {
@@ -18959,9 +19144,25 @@ html.dark .mep-notation-guide code {
     padding: 10px;
     gap: 7px;
   }
+  .mep-header-bar {
+    flex-wrap: wrap;
+    row-gap: 5px;
+  }
+  .mep-tabs {
+    flex: 1 1 auto;
+  }
+  .mep-util-btns {
+    margin-left: auto;
+  }
   .mep-tab {
     padding: 4px 7.5px;
     font-size: 11px;
+  }
+  .mep-mode-toggle {
+    height: 23px;
+    padding: 0 6.5px;
+    font-size: 10.5px;
+    gap: 3.5px;
   }
   .mep-util-btn {
     height: 23px;
