@@ -1239,37 +1239,40 @@ export const MAHJONG_ACTION_EMOTES: MahjongActionEmoteDef[] = [
 ];
 
 export const MAHJONG_TILE_EMOTES: MahjongTileEmoteDef[] = [
-  // 1~9만
+  // 1~9만 (적5만 포함)
   { code: '1m', label: '1만', group: 'man', fileName: '1m.png' },
   { code: '2m', label: '2만', group: 'man', fileName: '2m.png' },
   { code: '3m', label: '3만', group: 'man', fileName: '3m.png' },
   { code: '4m', label: '4만', group: 'man', fileName: '4m.png' },
   { code: '5m', label: '5만', group: 'man', fileName: '5m.png' },
+  { code: '0m', label: '적5만', group: 'man', fileName: '0m.png' },
   { code: '6m', label: '6만', group: 'man', fileName: '6m.png' },
   { code: '7m', label: '7만', group: 'man', fileName: '7m.png' },
   { code: '8m', label: '8만', group: 'man', fileName: '8m.png' },
   { code: '9m', label: '9만', group: 'man', fileName: '9m.png' },
-  // 1~9통
+  // 1~9통 (적5통 포함)
   { code: '1p', label: '1통', group: 'pin', fileName: '1p.png' },
   { code: '2p', label: '2통', group: 'pin', fileName: '2p.png' },
   { code: '3p', label: '3통', group: 'pin', fileName: '3p.png' },
   { code: '4p', label: '4통', group: 'pin', fileName: '4p.png' },
   { code: '5p', label: '5통', group: 'pin', fileName: '5p.png' },
+  { code: '0p', label: '적5통', group: 'pin', fileName: '0p.png' },
   { code: '6p', label: '6통', group: 'pin', fileName: '6p.png' },
   { code: '7p', label: '7통', group: 'pin', fileName: '7p.png' },
   { code: '8p', label: '8통', group: 'pin', fileName: '8p.png' },
   { code: '9p', label: '9통', group: 'pin', fileName: '9p.png' },
-  // 1~9삭
+  // 1~9삭 (적5삭 포함)
   { code: '1s', label: '1삭', group: 'sou', fileName: '1s.png' },
   { code: '2s', label: '2삭', group: 'sou', fileName: '2s.png' },
   { code: '3s', label: '3삭', group: 'sou', fileName: '3s.png' },
   { code: '4s', label: '4삭', group: 'sou', fileName: '4s.png' },
   { code: '5s', label: '5삭', group: 'sou', fileName: '5s.png' },
+  { code: '0s', label: '적5삭', group: 'sou', fileName: '0s.png' },
   { code: '6s', label: '6삭', group: 'sou', fileName: '6s.png' },
   { code: '7s', label: '7삭', group: 'sou', fileName: '7s.png' },
   { code: '8s', label: '8삭', group: 'sou', fileName: '8s.png' },
   { code: '9s', label: '9삭', group: 'sou', fileName: '9s.png' },
-  // 동남서북백발중 (1z~7z)
+  // 동남서북백발중 (1z~7z) + 뒷면 (0z)
   { code: '1z', label: '동', group: 'honor', fileName: '1z.png' },
   { code: '2z', label: '남', group: 'honor', fileName: '2z.png' },
   { code: '3z', label: '서', group: 'honor', fileName: '3z.png' },
@@ -1277,6 +1280,7 @@ export const MAHJONG_TILE_EMOTES: MahjongTileEmoteDef[] = [
   { code: '5z', label: '백', group: 'honor', fileName: '5z.png' },
   { code: '6z', label: '발', group: 'honor', fileName: '6z.png' },
   { code: '7z', label: '중', group: 'honor', fileName: '7z.png' },
+  { code: '0z', label: '뒷면', group: 'honor', fileName: '0z.png' },
 ];
 
 const TILE_BY_TOKEN_MAP: Record<string, MahjongTileEmoteDef> = {};
@@ -1284,6 +1288,12 @@ MAHJONG_TILE_EMOTES.forEach((t) => {
   TILE_BY_TOKEN_MAP[t.code] = t;
   TILE_BY_TOKEN_MAP[t.label] = t;
 });
+if (TILE_BY_TOKEN_MAP['0m']) TILE_BY_TOKEN_MAP['0만'] = TILE_BY_TOKEN_MAP['0m'];
+if (TILE_BY_TOKEN_MAP['0p']) TILE_BY_TOKEN_MAP['0통'] = TILE_BY_TOKEN_MAP['0p'];
+if (TILE_BY_TOKEN_MAP['0s']) TILE_BY_TOKEN_MAP['0삭'] = TILE_BY_TOKEN_MAP['0s'];
+if (TILE_BY_TOKEN_MAP['0z']) {
+  TILE_BY_TOKEN_MAP['back'] = TILE_BY_TOKEN_MAP['0z'];
+}
 
 const ACTION_BY_TOKEN_MAP: Record<string, MahjongActionEmoteDef> = {};
 MAHJONG_ACTION_EMOTES.forEach((a) => {
@@ -1314,39 +1324,299 @@ export function preloadMahjongTileImages(): void {
   }
 }
 
+export type MahjongTileMode = 'upright' | 'side' | 'kakan';
+
+export interface MahjongTileRenderItem {
+  tile: MahjongTileEmoteDef;
+  mode: MahjongTileMode;
+}
+
+export interface MahjongMeldBlock {
+  isDraw: boolean;
+  items: MahjongTileRenderItem[];
+}
+
 export type CommentSegment =
   | { type: 'text'; text: string }
   | { type: 'tile'; tile: MahjongTileEmoteDef }
+  | { type: 'meld-group'; blocks: MahjongMeldBlock[]; rawNotation: string }
   | { type: 'action'; action: MahjongActionEmoteDef };
 
+const KOREAN_HONOR_TO_DIGIT: Record<string, string> = {
+  동: '1',
+  남: '2',
+  서: '3',
+  북: '4',
+  백: '5',
+  발: '6',
+  중: '7',
+};
+
 /**
- * 댓글/메모 내 `[1만]`, `[1m]`, `[동]`, `[리치]` 등의 토큰을 파싱하여
- * 텍스트/마작패/액션버튼 세그먼트로 분리합니다.
+ * 한글 마작패 표기(`234만5만`, `-동동동`, `적5통`, `뒷면` 등)를
+ * 표준 영문 m/p/s/z 표기로 정규화합니다.
+ */
+export function normalizeMahjongBracketNotation(raw: string): string {
+  let str = String(raw || '').trim();
+  if (!str) return '';
+  str = str
+    .replace(/적5만/g, '0m')
+    .replace(/적5통/g, '0p')
+    .replace(/적5삭/g, '0s')
+    .replace(/뒷면/g, '0z')
+    .replace(/back/gi, '0z');
+
+  // 한글 자패 그룹 (예: 동, 동동동, -동동동, 동-동동, #중중중중, 동남서북) -> 1z, -111z 등
+  str = str.replace(/#?(?:[-=]?[동남서북백발중]'?)+/g, (match) => {
+    let converted = '';
+    for (const ch of match) {
+      if (KOREAN_HONOR_TO_DIGIT[ch]) {
+        converted += KOREAN_HONOR_TO_DIGIT[ch];
+      } else {
+        converted += ch;
+      }
+    }
+    return `${converted}z`;
+  });
+
+  // 한글 수패 단위 변환 (만 -> m, 통 -> p, 삭 -> s)
+  str = str
+    .replace(/만/g, 'm')
+    .replace(/통/g, 'p')
+    .replace(/삭/g, 's');
+
+  return str;
+}
+
+/**
+ * `[234m5m7m9m]`, `[123m -456p 7=77s #1111z]`, `[234만5만]` 등의 마작패/후로 표기를
+ * 블록 단위로 파싱합니다. 유효하지 않은 토큰이 섞여 있으면 빈 배열을 반환합니다.
+ */
+export function parseMahjongMeldBlocks(notation = ''): MahjongMeldBlock[] {
+  const normalized = normalizeMahjongBracketNotation(notation);
+  if (!normalized) return [];
+
+  const tokens = normalized
+    .replace(/\+/g, ' +')
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) return [];
+
+  const validTokenRegex = /^(?:(?:#?)(?:(?:[-=]?[0-9xbXB]'?)+)(?:[mpszMPSZ]))+$/;
+  const groupRegex = /(#?)((?:[-=]?[0-9xbXB]'?)+)([mpszMPSZ])/g;
+
+  const parseSingleBlock = (token: string): MahjongMeldBlock | null => {
+    const isDraw = token.startsWith('+');
+    const cleanToken = isDraw ? token.slice(1) : token;
+    if (!cleanToken || !validTokenRegex.test(cleanToken)) return null;
+
+    const items: MahjongTileRenderItem[] = [];
+    groupRegex.lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = groupRegex.exec(cleanToken)) !== null) {
+      const isAnkanHash = match[1] === '#';
+      const body = match[2];
+      const suit = match[3].toLowerCase();
+
+      if (isAnkanHash) {
+        const digitMatch = body.match(/[0-9]/);
+        if (!digitMatch) return null;
+        const d = digitMatch[0];
+        if (suit === 'z' && (d === '8' || d === '9')) return null;
+        const faceTile = TILE_BY_TOKEN_MAP[`${d}${suit}`];
+        const backTile = TILE_BY_TOKEN_MAP['0z'];
+        if (!faceTile || !backTile) return null;
+        items.push(
+          { tile: backTile, mode: 'upright' },
+          { tile: faceTile, mode: 'upright' },
+          { tile: faceTile, mode: 'upright' },
+          { tile: backTile, mode: 'upright' }
+        );
+        continue;
+      }
+
+      const groupItems: MahjongTileRenderItem[] = [];
+      const itemRegex = /([-=]?)([0-9xbXB])('?)/g;
+      let im: RegExpExecArray | null;
+      while ((im = itemRegex.exec(body)) !== null) {
+        const prefix = im[1];
+        const ch = im[2].toLowerCase();
+        const suffix = im[3];
+
+        if (ch === 'x' || ch === 'b' || (suit === 'z' && ch === '0')) {
+          const backTile = TILE_BY_TOKEN_MAP['0z'];
+          if (backTile) groupItems.push({ tile: backTile, mode: 'upright' });
+          continue;
+        }
+        if (suit === 'z' && (ch === '8' || ch === '9')) {
+          return null;
+        }
+
+        const tileDef = TILE_BY_TOKEN_MAP[`${ch}${suit}`];
+        if (!tileDef) return null;
+
+        let mode: MahjongTileMode = 'upright';
+        if (prefix === '=') {
+          mode = 'kakan';
+        } else if (prefix === '-' || suffix === "'") {
+          mode = 'side';
+        }
+        groupItems.push({ tile: tileDef, mode });
+      }
+
+      const kakanCount = groupItems.filter((x) => x.mode === 'kakan').length;
+      if (kakanCount === 1 && groupItems.length === 4) {
+        const kakanItem = groupItems.find((x) => x.mode === 'kakan');
+        if (kakanItem && groupItems.every((x) => x.tile.code === kakanItem.tile.code)) {
+          const uprightIdx = groupItems.findIndex((x) => x.mode === 'upright');
+          if (uprightIdx >= 0) groupItems.splice(uprightIdx, 1);
+        }
+      }
+
+      items.push(...groupItems);
+    }
+
+    return items.length > 0 ? { isDraw, items } : null;
+  };
+
+  const blocks: MahjongMeldBlock[] = [];
+  for (const tk of tokens) {
+    const parsed = parseSingleBlock(tk);
+    if (!parsed) return [];
+    blocks.push(parsed);
+  }
+  return blocks;
+}
+
+/**
+ * 기준 패(예: "5m", "0p", "7z")와 액션("pon" | "chi" | "kan") 및 드래그 방향("left" | "up" | "down" | "right" | "center")으로
+ * 후로(치/퐁/가깡/안깡) 표기 문자열을 생성합니다.
+ */
+export function buildDraggedMeldNotation(
+  tile = '5m',
+  action: 'pon' | 'chi' | 'kan' = 'pon',
+  dir: 'left' | 'up' | 'down' | 'right' | 'center' = 'left'
+): string {
+  if (!tile || tile === '0z' || tile === 'back' || !dir || dir === 'center') return '';
+  const dRaw = tile[0];
+  const suit = (tile[1] || 'm').toLowerCase();
+  const n = dRaw === '0' ? 5 : Number(dRaw) || 5;
+  const fmt = (val: number) => (val === 5 && dRaw === '0' ? '0' : String(val));
+  const normalDigit = dRaw === '0' ? '5' : dRaw;
+
+  if (action === 'pon' || (action === 'chi' && suit === 'z')) {
+    if (dRaw === '0') {
+      if (dir === 'left') return `-055${suit}`;
+      if (dir === 'right') return `55-0${suit}`;
+      return `5-05${suit}`;
+    }
+    if (dir === 'left') return `-${dRaw}${dRaw}${dRaw}${suit}`;
+    if (dir === 'right') return `${dRaw}${dRaw}-${dRaw}${suit}`;
+    return `${dRaw}-${dRaw}${dRaw}${suit}`;
+  }
+
+  if (action === 'chi') {
+    if (dir === 'left') {
+      const start = Math.min(7, Math.max(1, n));
+      return `-${fmt(start)}${fmt(start + 1)}${fmt(start + 2)}${suit}`;
+    }
+    if (dir === 'right') {
+      const end = Math.max(3, Math.min(9, n));
+      return `${fmt(end - 2)}${fmt(end - 1)}-${fmt(end)}${suit}`;
+    }
+    const mid = Math.min(8, Math.max(2, n));
+    return `${fmt(mid - 1)}-${fmt(mid)}${fmt(mid + 1)}${suit}`;
+  }
+
+  if (action === 'kan') {
+    if (dir === 'down') {
+      return dRaw === '0'
+        ? `#0555${suit}`
+        : `#${normalDigit}${normalDigit}${normalDigit}${normalDigit}${suit}`;
+    }
+    if (dRaw === '0') {
+      if (dir === 'left') return `=055${suit}`;
+      if (dir === 'right') return `55=0${suit}`;
+      return `5=05${suit}`;
+    }
+    if (dir === 'left') return `=${dRaw}${dRaw}${dRaw}${suit}`;
+    if (dir === 'right') return `${dRaw}${dRaw}=${dRaw}${suit}`;
+    return `${dRaw}=${dRaw}${dRaw}${suit}`;
+  }
+
+  return `${dRaw}${suit}`;
+}
+
+/**
+ * 댓글/메모 내 `[234m5m7m9m]`, `[-234m]`, `[5-55p]`, `[#8888m]`, `[1만]`, `[동]`, `[리치]` 등의 토큰을 파싱하여
+ * 텍스트/마작패 블록(meld-group)/액션버튼 세그먼트로 분리합니다.
  */
 export function parseRichMahjongText(raw?: string): CommentSegment[] {
   if (!raw) return [];
   const segments: CommentSegment[] = [];
-  const regex = /\[([1-9][mps]|[1-7]z|[1-9][만통삭]|동|남|서|북|백|발|중|리치|다마|퐁|치|깡|론|쯔모|스킵)\]/g;
+  const regex = /\[([^\[\]\n]+)\]/g;
   let lastIdx = 0;
   let match: RegExpExecArray | null;
 
+  const pushText = (txt: string) => {
+    if (!txt) return;
+    const prev = segments[segments.length - 1];
+    if (prev && prev.type === 'text') {
+      prev.text += txt;
+    } else {
+      segments.push({ type: 'text', text: txt });
+    }
+  };
+
   while ((match = regex.exec(raw)) !== null) {
     if (match.index > lastIdx) {
-      segments.push({ type: 'text', text: raw.slice(lastIdx, match.index) });
+      pushText(raw.slice(lastIdx, match.index));
     }
-    const tokenKey = match[1];
-    if (TILE_BY_TOKEN_MAP[tokenKey]) {
-      segments.push({ type: 'tile', tile: TILE_BY_TOKEN_MAP[tokenKey] });
-    } else if (ACTION_BY_TOKEN_MAP[tokenKey]) {
-      segments.push({ type: 'action', action: ACTION_BY_TOKEN_MAP[tokenKey] });
+    const inner = match[1].trim();
+    if (ACTION_BY_TOKEN_MAP[inner]) {
+      segments.push({ type: 'action', action: ACTION_BY_TOKEN_MAP[inner] });
     } else {
-      segments.push({ type: 'text', text: match[0] });
+      const blocks = parseMahjongMeldBlocks(inner);
+      if (blocks.length > 0) {
+        const prev = segments[segments.length - 1];
+        // 연속된 대괄호(예: [2m][3m][4m] 또는 [2만][3만][4만])가 공백 없이 붙어 있으면 직전 블록에 이어 붙여 렌더링
+        if (prev && prev.type === 'meld-group' && prev.blocks.length > 0) {
+          const firstNewBlock = blocks[0];
+          const prevLastBlock = prev.blocks[prev.blocks.length - 1];
+          if (!firstNewBlock.isDraw) {
+            prevLastBlock.items.push(...firstNewBlock.items);
+            if (blocks.length > 1) {
+              prev.blocks.push(...blocks.slice(1));
+            }
+          } else {
+            prev.blocks.push(...blocks);
+          }
+          prev.rawNotation = `${prev.rawNotation} ${inner}`;
+        } else {
+          segments.push({
+            type: 'meld-group',
+            blocks,
+            rawNotation: inner,
+          });
+        }
+      } else if (TILE_BY_TOKEN_MAP[inner]) {
+        segments.push({
+          type: 'meld-group',
+          blocks: [{ isDraw: false, items: [{ tile: TILE_BY_TOKEN_MAP[inner], mode: 'upright' }] }],
+          rawNotation: inner,
+        });
+      } else {
+        pushText(match[0]);
+      }
     }
     lastIdx = regex.lastIndex;
   }
 
   if (lastIdx < raw.length) {
-    segments.push({ type: 'text', text: raw.slice(lastIdx) });
+    pushText(raw.slice(lastIdx));
   }
   return segments;
 }

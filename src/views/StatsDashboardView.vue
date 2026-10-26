@@ -51,6 +51,8 @@ import {
   getMahjongTileImageUrl,
   preloadMahjongTileImages,
   parseRichMahjongText,
+  parseMahjongMeldBlocks,
+  buildDraggedMeldNotation,
   getEffectiveHighlightComments,
   addHighlightComment,
   updateHighlightComment,
@@ -80,6 +82,8 @@ import {
   type HighlightRecord,
   type HighlightCategory,
   type HighlightComment,
+  type MahjongTileEmoteDef,
+  type MahjongMeldBlock,
   type MemberAliasesMap
 } from '@/services/highlightService';
 import {
@@ -4487,6 +4491,108 @@ const commentFormError = ref<string>('');
 // 마작패 / 액션 버튼 디시콘 팔레트 상태
 const isCommentEmotePickerOpen = ref<boolean>(false);
 const activeEmoteTab = ref<'man' | 'pin' | 'sou' | 'honor' | 'action'>('man');
+const selectedPaletteTileCode = ref<string>('5m');
+const isBaseTilePopping = ref<boolean>(false);
+const showEmoteNotationHelp = ref<boolean>(false);
+let baseTilePopTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 직전에 팔레트에서 단일 패를 클릭한 기록 (바로 이어서 치/퐁/깡 레버를 당기면 해당 단일 패를 후로 블록으로 교체)
+const lastInsertedSingleTileState = ref<{
+  target: 'new' | 'edit' | 'reply';
+  previousText: string;
+  tileCode: string;
+} | null>(null);
+
+const selectedPaletteTileDef = computed<MahjongTileEmoteDef>(() => {
+  return (
+    MAHJONG_TILE_EMOTES.find((t) => t.code === selectedPaletteTileCode.value) ||
+    MAHJONG_TILE_EMOTES.find((t) => t.code === '5m') ||
+    MAHJONG_TILE_EMOTES[0]
+  );
+});
+
+// 모던 후로 레버(조이스틱) 드래그 상태
+const furoDragState = ref<{
+  active: boolean;
+  closing: boolean;
+  action: 'chi' | 'pon' | 'kan';
+  target: 'new' | 'edit' | 'reply';
+  tileCode: string;
+  originX: number;
+  originY: number;
+  hudX: number;
+  hudY: number;
+  knobX: number;
+  knobY: number;
+  pullRatio: number;
+  angleDeg: number;
+  activeDir: 'center' | 'left' | 'right' | 'up' | 'down';
+  confirmedDir: 'center' | 'left' | 'right' | 'up' | 'down' | null;
+}>({
+  active: false,
+  closing: false,
+  action: 'pon',
+  target: 'new',
+  tileCode: '5m',
+  originX: 0,
+  originY: 0,
+  hudX: 0,
+  hudY: 0,
+  knobX: 0,
+  knobY: 0,
+  pullRatio: 0,
+  angleDeg: 0,
+  activeDir: 'center',
+  confirmedDir: null,
+});
+
+interface FuroHudSlotInfo {
+  dir: 'up' | 'left' | 'right' | 'down';
+  label: string;
+  subCode: string;
+  blocks: MahjongMeldBlock[];
+}
+
+const furoHudSlots = computed<Record<'up' | 'left' | 'right' | 'down', FuroHudSlotInfo>>(() => {
+  const tile = furoDragState.value.tileCode || '5m';
+  const action = furoDragState.value.action;
+  const isHonor = tile.endsWith('z');
+  const effectiveAction = action === 'chi' && isHonor ? 'pon' : action;
+
+  const labelsByAction: Record<'pon' | 'chi' | 'kan', Record<'up' | 'left' | 'right' | 'down', string>> = {
+    pon: {
+      left: '상가 퐁 (좌측)',
+      up: '대면 퐁 (중앙)',
+      down: '대면 퐁 (중앙)',
+      right: '하가 퐁 (우측)',
+    },
+    chi: {
+      left: '좌측 눕힘 치',
+      up: '중앙 눕힘 치',
+      down: '중앙 눕힘 치',
+      right: '우측 눕힘 치',
+    },
+    kan: {
+      left: '좌측 가깡',
+      up: '중앙 가깡',
+      right: '우측 가깡',
+      down: '안깡 (암깡)',
+    },
+  };
+
+  const dirs: Array<'up' | 'left' | 'right' | 'down'> = ['up', 'left', 'right', 'down'];
+  const out = {} as Record<'up' | 'left' | 'right' | 'down', FuroHudSlotInfo>;
+  for (const d of dirs) {
+    const notation = buildDraggedMeldNotation(tile, action, d);
+    out[d] = {
+      dir: d,
+      label: labelsByAction[effectiveAction][d],
+      subCode: `[${notation}]`,
+      blocks: parseMahjongMeldBlocks(notation),
+    };
+  }
+  return out;
+});
 
 const TILE_EMOTE_GROUPS = [
   { key: 'man' as const, label: '만수', tiles: MAHJONG_TILE_EMOTES.filter(t => t.group === 'man') },
@@ -4515,6 +4621,7 @@ const closeEmotePickers = () => {
   isCommentEmotePickerOpen.value = false;
   isEditingCommentPickerOpen.value = false;
   isReplyEmotePickerOpen.value = false;
+  showEmoteNotationHelp.value = false;
 };
 
 const syncScheduleLoginForComment = () => {
@@ -4599,9 +4706,104 @@ const getRecordCommentCount = (rec: HighlightRecord): number => {
   return getEffectiveHighlightComments(rec).length;
 };
 
+const getCommentTargetValue = (target: 'new' | 'edit' | 'reply'): string => {
+  if (target === 'edit') return editingCommentContent.value;
+  if (target === 'reply') return replyContentInput.value;
+  return commentContentInput.value;
+};
+
+const setCommentTargetValue = (target: 'new' | 'edit' | 'reply', nextVal: string) => {
+  if (target === 'edit') {
+    editingCommentContent.value = nextVal;
+  } else if (target === 'reply') {
+    replyContentInput.value = nextVal;
+  } else {
+    commentContentInput.value = nextVal;
+  }
+};
+
+/**
+ * 기존 텍스트 끝에 `[...]` 마작패 블록이 열려 있으면 그 안에 연속 병합(예: `[234m]` + `5m` -> `[2345m]`)합니다.
+ */
+const appendTileCodeSmart = (baseText: string, tileCode: string, isMeldBlock = false): string => {
+  const trailingBracketMatch = baseText.match(/^(.*)\[([^\[\]\n]+)\]$/s);
+  if (trailingBracketMatch) {
+    const prefix = trailingBracketMatch[1];
+    const inner = trailingBracketMatch[2];
+    const trimmedInner = inner.trim();
+    if (parseMahjongMeldBlocks(trimmedInner).length > 0) {
+      if (isMeldBlock) {
+        const sep = inner.endsWith(' ') ? '' : ' ';
+        return `${prefix}[${inner}${sep}${tileCode}]`;
+      }
+      const d = tileCode[0];
+      const suit = tileCode[1]?.toLowerCase() || 'm';
+      // 직전 토큰이 같은 수트(m/p/s/z)로 끝나고 공백이나 뒷면(0z), 안깡(#)이 아니면 숫자를 이어 붙임 (예: [23m] + 4m -> [234m])
+      const lastToken = inner.split(/\s+/).pop() || '';
+      if (
+        !inner.endsWith(' ') &&
+        lastToken &&
+        !lastToken.startsWith('#') &&
+        !lastToken.endsWith('0z') &&
+        tileCode !== '0z' &&
+        lastToken.slice(-1).toLowerCase() === suit
+      ) {
+        return `${prefix}[${inner.slice(0, -1)}${d}${suit}]`;
+      }
+      return `${prefix}[${inner}${tileCode}]`;
+    }
+  }
+  return `${baseText}[${tileCode}]`;
+};
+
+const triggerBaseTilePop = (tileCode: string) => {
+  if (tileCode !== '0z') {
+    selectedPaletteTileCode.value = tileCode;
+  }
+  isBaseTilePopping.value = false;
+  if (baseTilePopTimer) clearTimeout(baseTilePopTimer);
+  nextTick(() => {
+    isBaseTilePopping.value = true;
+    baseTilePopTimer = setTimeout(() => {
+      isBaseTilePopping.value = false;
+    }, 260);
+  });
+};
+
+const insertTileFromPalette = (tl: MahjongTileEmoteDef, target: 'new' | 'edit' | 'reply' = 'new') => {
+  triggerBaseTilePop(tl.code);
+  const prevText = getCommentTargetValue(target);
+  const nextText = appendTileCodeSmart(prevText, tl.code, false);
+  setCommentTargetValue(target, nextText);
+  lastInsertedSingleTileState.value = {
+    target,
+    previousText: prevText,
+    tileCode: tl.code,
+  };
+};
+
+const insertBlockSpaceFromPalette = (target: 'new' | 'edit' | 'reply' = 'new') => {
+  lastInsertedSingleTileState.value = null;
+  const cur = getCommentTargetValue(target);
+  const trailingBracketMatch = cur.match(/^(.*)\[([^\[\]\n]+)\]$/s);
+  if (trailingBracketMatch) {
+    const prefix = trailingBracketMatch[1];
+    const inner = trailingBracketMatch[2];
+    if (parseMahjongMeldBlocks(inner.trim()).length > 0) {
+      if (!inner.endsWith(' ')) {
+        setCommentTargetValue(target, `${prefix}[${inner} ]`);
+      }
+      return;
+    }
+  }
+  if (!cur.endsWith(' ')) {
+    setCommentTargetValue(target, `${cur} `);
+  }
+};
+
 const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' | 'reply' = 'new') => {
+  lastInsertedSingleTileState.value = null;
   const token = `[${tokenLabel}]`;
-  closeEmotePickers();
   if (target === 'edit') {
     editingCommentContent.value = `${editingCommentContent.value}${token}`;
     return;
@@ -4625,6 +4827,123 @@ const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' | 
     const nextPos = start + token.length;
     el.setSelectionRange(nextPos, nextPos);
   });
+};
+
+// 후로(치/퐁/깡) 조이스틱 레버 드래그 핸들러 (60~120fps 연속 물리 추적)
+const startFuroLeverDrag = (
+  downEv: PointerEvent,
+  action: 'chi' | 'pon' | 'kan',
+  target: 'new' | 'edit' | 'reply' = 'new'
+) => {
+  downEv.preventDefault();
+  downEv.stopPropagation();
+
+  const originX = downEv.clientX;
+  const originY = downEv.clientY;
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 800;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 600;
+  const hudHalfW = Math.min(194, Math.floor(vw / 2) - 8);
+  const hudHalfH = Math.min(156, Math.floor(vh / 2) - 8);
+  const hudX = vw <= 420 ? Math.round(vw / 2) : Math.max(hudHalfW, Math.min(vw - hudHalfW, originX));
+  const hudY = Math.max(hudHalfH, Math.min(vh - hudHalfH, originY));
+
+  furoDragState.value = {
+    active: true,
+    closing: false,
+    action,
+    target,
+    tileCode: selectedPaletteTileCode.value || '5m',
+    originX,
+    originY,
+    hudX,
+    hudY,
+    knobX: 0,
+    knobY: 0,
+    pullRatio: 0,
+    angleDeg: 0,
+    activeDir: 'center',
+    confirmedDir: null,
+  };
+
+  const maxRadius = 46;
+  const deadzone = 15;
+
+  const onPointerMove = (moveEv: PointerEvent) => {
+    const rawDx = moveEv.clientX - originX;
+    const rawDy = moveEv.clientY - originY;
+    const dist = Math.hypot(rawDx, rawDy);
+    const dampedDist = maxRadius * Math.tanh(dist / 50);
+
+    const knobX = dist > 0.1 ? (rawDx / dist) * dampedDist : 0;
+    const knobY = dist > 0.1 ? (rawDy / dist) * dampedDist : 0;
+    const pullRatio = Math.min(1, dist / 24);
+    const angleDeg = Math.atan2(rawDy, rawDx) * (180 / Math.PI);
+
+    let nextDir: 'center' | 'left' | 'right' | 'up' | 'down' = 'center';
+    if (dist > deadzone) {
+      const prevDir = furoDragState.value.activeDir;
+      const absX = Math.abs(rawDx);
+      const absY = Math.abs(rawDy);
+      // 대각선 경계 떨림 방지 히스테리시스
+      if ((prevDir === 'left' || prevDir === 'right') && absX + 4 >= absY) {
+        nextDir = rawDx >= 0 ? 'right' : 'left';
+      } else if ((prevDir === 'up' || prevDir === 'down') && absY + 4 >= absX) {
+        nextDir = rawDy >= 0 ? 'down' : 'up';
+      } else if (absX >= absY) {
+        nextDir = rawDx >= 0 ? 'right' : 'left';
+      } else {
+        nextDir = rawDy >= 0 ? 'down' : 'up';
+      }
+    }
+
+    furoDragState.value.knobX = knobX;
+    furoDragState.value.knobY = knobY;
+    furoDragState.value.pullRatio = pullRatio;
+    furoDragState.value.angleDeg = angleDeg;
+    furoDragState.value.activeDir = nextDir;
+  };
+
+  const onPointerUp = () => {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+
+    const finalDir = furoDragState.value.activeDir;
+    const tileCode = furoDragState.value.tileCode;
+    const act = furoDragState.value.action;
+    const tgt = furoDragState.value.target;
+
+    // 레버 핸들을 중앙으로 스프링 복귀시키며 선택 슬롯 펄스 연출
+    furoDragState.value.knobX = 0;
+    furoDragState.value.knobY = 0;
+    furoDragState.value.pullRatio = 0;
+    furoDragState.value.confirmedDir = finalDir !== 'center' ? finalDir : null;
+    furoDragState.value.closing = true;
+
+    if (finalDir && finalDir !== 'center') {
+      const meldNotation = buildDraggedMeldNotation(tileCode, act, finalDir);
+      if (meldNotation) {
+        const lastSingle = lastInsertedSingleTileState.value;
+        const baseText =
+          lastSingle && lastSingle.target === tgt && lastSingle.tileCode === tileCode
+            ? lastSingle.previousText
+            : getCommentTargetValue(tgt);
+        lastInsertedSingleTileState.value = null;
+        const nextText = appendTileCodeSmart(baseText, meldNotation, true);
+        setCommentTargetValue(tgt, nextText);
+      }
+    }
+
+    setTimeout(() => {
+      furoDragState.value.active = false;
+      furoDragState.value.closing = false;
+      furoDragState.value.confirmedDir = null;
+    }, 170);
+  };
+
+  window.addEventListener('pointermove', onPointerMove, { passive: true });
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
 };
 
 const formatCommentTime = (ts?: number): string => {
@@ -7065,9 +7384,34 @@ const openGamePopupFromLightbox = async (
                         <span>{{ getRecordCommentCount(rec) }}</span>
                       </span>
                     </div>
-                    <div v-if="rec.caption" class="hl-caption">
+                    <div v-if="rec.caption" class="hl-caption rich-mahjong-content">
                       <template v-for="(seg, sIdx) in parseRichMahjongText(rec.caption)" :key="`s-cap-${rec.id}-${sIdx}`">
                         <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                          <span
+                            v-for="(blk, bIdx) in seg.blocks"
+                            :key="`s-cap-blk-${rec.id}-${sIdx}-${bIdx}`"
+                            class="mj-meld-block"
+                            :class="{ 'is-draw-block': blk.isDraw }"
+                          >
+                            <template v-for="(item, iIdx) in blk.items" :key="`s-cap-it-${rec.id}-${sIdx}-${bIdx}-${iIdx}`">
+                              <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="lazy" />
+                              </span>
+                              <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="lazy" />
+                                </span>
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="lazy" />
+                                </span>
+                              </span>
+                              <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="lazy" />
+                              </span>
+                            </template>
+                          </span>
+                        </span>
                         <span
                           v-else-if="seg.type === 'tile'"
                           class="inline-mahjong-tile"
@@ -7344,9 +7688,34 @@ const openGamePopupFromLightbox = async (
                   <span>{{ getRecordCommentCount(rec) }}</span>
                 </span>
               </div>
-              <div v-if="rec.caption" class="hl-caption">
+              <div v-if="rec.caption" class="hl-caption rich-mahjong-content">
                 <template v-for="(seg, sIdx) in parseRichMahjongText(rec.caption)" :key="`g-cap-${rec.id}-${sIdx}`">
                   <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                  <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                    <span
+                      v-for="(blk, bIdx) in seg.blocks"
+                      :key="`g-cap-blk-${rec.id}-${sIdx}-${bIdx}`"
+                      class="mj-meld-block"
+                      :class="{ 'is-draw-block': blk.isDraw }"
+                    >
+                      <template v-for="(item, iIdx) in blk.items" :key="`g-cap-it-${rec.id}-${sIdx}-${bIdx}-${iIdx}`">
+                        <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                          <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="lazy" />
+                        </span>
+                        <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                          <span class="mj-side-wrap">
+                            <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="lazy" />
+                          </span>
+                          <span class="mj-side-wrap">
+                            <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="lazy" />
+                          </span>
+                        </span>
+                        <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                          <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="lazy" />
+                        </span>
+                      </template>
+                    </span>
+                  </span>
                   <span
                     v-else-if="seg.type === 'tile'"
                     class="inline-mahjong-tile"
@@ -10026,6 +10395,31 @@ const openGamePopupFromLightbox = async (
                     <div v-if="lightboxHighlight.caption" class="lightbox-note rich-mahjong-content">
                       <template v-for="(seg, sIdx) in parseRichMahjongText(lightboxHighlight.caption)" :key="`lb-memo-seg-${sIdx}`">
                         <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                          <span
+                            v-for="(blk, bIdx) in seg.blocks"
+                            :key="`lb-memo-blk-${sIdx}-${bIdx}`"
+                            class="mj-meld-block"
+                            :class="{ 'is-draw-block': blk.isDraw }"
+                          >
+                            <template v-for="(item, iIdx) in blk.items" :key="`lb-memo-it-${sIdx}-${bIdx}-${iIdx}`">
+                              <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                              </span>
+                              <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                </span>
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                </span>
+                              </span>
+                              <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                              </span>
+                            </template>
+                          </span>
+                        </span>
                         <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
                           <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
                         </span>
@@ -10143,6 +10537,31 @@ const openGamePopupFromLightbox = async (
                     <div v-if="editingCommentId !== cmt.id" class="lb-comment-body rich-mahjong-content">
                       <template v-for="(seg, sIdx) in parseRichMahjongText(cmt.content)" :key="`cmt-${cmt.id}-seg-${sIdx}`">
                         <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                          <span
+                            v-for="(blk, bIdx) in seg.blocks"
+                            :key="`cmt-${cmt.id}-blk-${sIdx}-${bIdx}`"
+                            class="mj-meld-block"
+                            :class="{ 'is-draw-block': blk.isDraw }"
+                          >
+                            <template v-for="(item, iIdx) in blk.items" :key="`cmt-${cmt.id}-it-${sIdx}-${bIdx}-${iIdx}`">
+                              <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                              </span>
+                              <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                </span>
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                </span>
+                              </span>
+                              <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                              </span>
+                            </template>
+                          </span>
+                        </span>
                         <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
                           <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
                         </span>
@@ -10161,6 +10580,48 @@ const openGamePopupFromLightbox = async (
                         class="form-textarea lb-cmt-edit-textarea"
                         placeholder=""
                       ></textarea>
+                      <div
+                        v-if="editingCommentContent.includes('[') && editingCommentContent.includes(']')"
+                        class="lb-cf-live-preview"
+                      >
+                        <span class="lb-cf-preview-label">미리보기</span>
+                        <div class="lb-cf-preview-body rich-mahjong-content">
+                          <template v-for="(seg, sIdx) in parseRichMahjongText(editingCommentContent)" :key="`ed-prev-seg-${sIdx}`">
+                            <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                            <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                              <span
+                                v-for="(blk, bIdx) in seg.blocks"
+                                :key="`ed-prev-blk-${sIdx}-${bIdx}`"
+                                class="mj-meld-block"
+                                :class="{ 'is-draw-block': blk.isDraw }"
+                              >
+                                <template v-for="(item, iIdx) in blk.items" :key="`ed-prev-it-${sIdx}-${bIdx}-${iIdx}`">
+                                  <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                  </span>
+                                  <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                    <span class="mj-side-wrap">
+                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                    </span>
+                                    <span class="mj-side-wrap">
+                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                    </span>
+                                  </span>
+                                  <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                  </span>
+                                </template>
+                              </span>
+                            </span>
+                            <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                              <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
+                            </span>
+                            <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                              {{ seg.action.label }}
+                            </span>
+                          </template>
+                        </div>
+                      </div>
                       <div class="lb-cmt-edit-toolbar">
                         <div class="emote-picker-anchor">
                           <button
@@ -10175,13 +10636,29 @@ const openGamePopupFromLightbox = async (
 
                           <!-- 댓글 수정용 플로팅 팝업 팔레트 -->
                           <div v-show="isEditingCommentPickerOpen" class="mahjong-emote-picker compact" @click.stop>
-                            <div class="mep-tabs">
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'man' }" @click="activeEmoteTab = 'man'">만수</button>
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'pin' }" @click="activeEmoteTab = 'pin'">통수</button>
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'sou' }" @click="activeEmoteTab = 'sou'">삭수</button>
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'honor' }" @click="activeEmoteTab = 'honor'">자패</button>
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
+                            <div class="mep-header-bar">
+                              <div class="mep-tabs">
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'man' }" @click="activeEmoteTab = 'man'">만수</button>
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'pin' }" @click="activeEmoteTab = 'pin'">통수</button>
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'sou' }" @click="activeEmoteTab = 'sou'">삭수</button>
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'honor' }" @click="activeEmoteTab = 'honor'">자패</button>
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
+                              </div>
+                              <div class="mep-util-btns">
+                                <button type="button" class="mep-util-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('edit')">␣ 간격</button>
+                                <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
+                                <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
+                              </div>
                             </div>
+
+                            <Transition name="mep-guide-slide">
+                              <div v-if="showEmoteNotationHelp" class="mep-notation-guide">
+                                <div class="mng-row"><span class="mng-badge">연속/복합</span> <code>[234m5m7m9m]</code> <code>[123m 456p]</code> <span class="mng-sub">(공백=블록 분리, 0=적5)</span></div>
+                                <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-234m]</code> <code>[2-34m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
+                                <div class="mng-row"><span class="mng-badge">가깡 / 안깡</span> <code>[7=77p]</code> <span class="mng-sub">(가깡 =)</span> · <code>[#8888m]</code> <span class="mng-sub">(안깡 #)</span></div>
+                              </div>
+                            </Transition>
+
                             <div v-show="activeEmoteTab === 'action'" class="mep-actions-grid">
                               <button
                                 v-for="act in MAHJONG_ACTION_EMOTES"
@@ -10205,12 +10682,56 @@ const openGamePopupFromLightbox = async (
                                 :key="`ed-tl-${tl.code}`"
                                 type="button"
                                 class="mep-tile-btn"
-                                :title="tl.label"
-                                @click="insertEmoteTokenToComment(tl.label, 'edit')"
+                                :class="{ 'is-selected-base': selectedPaletteTileCode === tl.code }"
+                                :title="`${tl.label} (${tl.code})`"
+                                @click="insertTileFromPalette(tl, 'edit')"
                               >
                                 <img :src="getMahjongTileImageUrl(tl.fileName)" :alt="tl.label" loading="eager" decoding="sync" />
                                 <span class="mep-tile-sub">{{ tl.label }}</span>
                               </button>
+                            </div>
+
+                            <!-- 모던 후로 레버 독 (Furo Lever Dock) -->
+                            <div v-show="activeEmoteTab !== 'action'" class="mep-furo-dock">
+                              <div class="mep-base-tile-chip" :class="{ 'is-popping': isBaseTilePopping }" title="아래 패를 클릭하면 기준 패가 변경됩니다">
+                                <img :src="getMahjongTileImageUrl(selectedPaletteTileDef.fileName)" :alt="selectedPaletteTileDef.label" class="mep-base-tile-img" />
+                                <div class="mep-base-tile-meta">
+                                  <span class="mep-base-sub">기준 패</span>
+                                  <strong class="mep-base-name">{{ selectedPaletteTileDef.label }}</strong>
+                                </div>
+                              </div>
+                              <div class="mep-lever-group">
+                                <span class="mep-lever-hint">레버를 누른 채 4방향 드래그</span>
+                                <div class="mep-lever-pills">
+                                  <button
+                                    type="button"
+                                    class="mep-lever-btn lever-chi"
+                                    title="누른 채 좌/상/우로 드래그하여 치 입력"
+                                    @pointerdown="startFuroLeverDrag($event, 'chi', 'edit')"
+                                  >
+                                    <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                    <span>치</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="mep-lever-btn lever-pon"
+                                    title="누른 채 좌/상/우로 드래그하여 퐁 입력"
+                                    @pointerdown="startFuroLeverDrag($event, 'pon', 'edit')"
+                                  >
+                                    <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                    <span>퐁</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="mep-lever-btn lever-kan"
+                                    title="누른 채 좌/상/우(가깡) 또는 아래(안깡)로 드래그"
+                                    @pointerdown="startFuroLeverDrag($event, 'kan', 'edit')"
+                                  >
+                                    <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                    <span>깡</span>
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -10324,6 +10845,31 @@ const openGamePopupFromLightbox = async (
                         <div class="lb-cf-preview-body rich-mahjong-content">
                           <template v-for="(seg, sIdx) in parseRichMahjongText(replyContentInput)" :key="`rep-prev-seg-${sIdx}`">
                             <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                            <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                              <span
+                                v-for="(blk, bIdx) in seg.blocks"
+                                :key="`rep-prev-blk-${sIdx}-${bIdx}`"
+                                class="mj-meld-block"
+                                :class="{ 'is-draw-block': blk.isDraw }"
+                              >
+                                <template v-for="(item, iIdx) in blk.items" :key="`rep-prev-it-${sIdx}-${bIdx}-${iIdx}`">
+                                  <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                  </span>
+                                  <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                    <span class="mj-side-wrap">
+                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                    </span>
+                                    <span class="mj-side-wrap">
+                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                    </span>
+                                  </span>
+                                  <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                  </span>
+                                </template>
+                              </span>
+                            </span>
                             <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
                               <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
                             </span>
@@ -10347,13 +10893,29 @@ const openGamePopupFromLightbox = async (
                           </button>
 
                           <div v-show="isReplyEmotePickerOpen" class="mahjong-emote-picker compact" @click.stop>
-                            <div class="mep-tabs">
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'man' }" @click="activeEmoteTab = 'man'">만수</button>
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'pin' }" @click="activeEmoteTab = 'pin'">통수</button>
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'sou' }" @click="activeEmoteTab = 'sou'">삭수</button>
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'honor' }" @click="activeEmoteTab = 'honor'">자패</button>
-                              <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
+                            <div class="mep-header-bar">
+                              <div class="mep-tabs">
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'man' }" @click="activeEmoteTab = 'man'">만수</button>
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'pin' }" @click="activeEmoteTab = 'pin'">통수</button>
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'sou' }" @click="activeEmoteTab = 'sou'">삭수</button>
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'honor' }" @click="activeEmoteTab = 'honor'">자패</button>
+                                <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
+                              </div>
+                              <div class="mep-util-btns">
+                                <button type="button" class="mep-util-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('reply')">␣ 간격</button>
+                                <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
+                                <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
+                              </div>
                             </div>
+
+                            <Transition name="mep-guide-slide">
+                              <div v-if="showEmoteNotationHelp" class="mep-notation-guide">
+                                <div class="mng-row"><span class="mng-badge">연속/복합</span> <code>[234m5m7m9m]</code> <code>[123m 456p]</code> <span class="mng-sub">(공백=블록 분리, 0=적5)</span></div>
+                                <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-234m]</code> <code>[2-34m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
+                                <div class="mng-row"><span class="mng-badge">가깡 / 안깡</span> <code>[7=77p]</code> <span class="mng-sub">(가깡 =)</span> · <code>[#8888m]</code> <span class="mng-sub">(안깡 #)</span></div>
+                              </div>
+                            </Transition>
+
                             <div v-show="activeEmoteTab === 'action'" class="mep-actions-grid">
                               <button
                                 v-for="act in MAHJONG_ACTION_EMOTES"
@@ -10377,12 +10939,56 @@ const openGamePopupFromLightbox = async (
                                 :key="`rep-tl-${tl.code}`"
                                 type="button"
                                 class="mep-tile-btn"
-                                :title="tl.label"
-                                @click="insertEmoteTokenToComment(tl.label, 'reply')"
+                                :class="{ 'is-selected-base': selectedPaletteTileCode === tl.code }"
+                                :title="`${tl.label} (${tl.code})`"
+                                @click="insertTileFromPalette(tl, 'reply')"
                               >
                                 <img :src="getMahjongTileImageUrl(tl.fileName)" :alt="tl.label" loading="eager" decoding="sync" />
                                 <span class="mep-tile-sub">{{ tl.label }}</span>
                               </button>
+                            </div>
+
+                            <!-- 모던 후로 레버 독 (Furo Lever Dock) -->
+                            <div v-show="activeEmoteTab !== 'action'" class="mep-furo-dock">
+                              <div class="mep-base-tile-chip" :class="{ 'is-popping': isBaseTilePopping }" title="아래 패를 클릭하면 기준 패가 변경됩니다">
+                                <img :src="getMahjongTileImageUrl(selectedPaletteTileDef.fileName)" :alt="selectedPaletteTileDef.label" class="mep-base-tile-img" />
+                                <div class="mep-base-tile-meta">
+                                  <span class="mep-base-sub">기준 패</span>
+                                  <strong class="mep-base-name">{{ selectedPaletteTileDef.label }}</strong>
+                                </div>
+                              </div>
+                              <div class="mep-lever-group">
+                                <span class="mep-lever-hint">레버를 누른 채 4방향 드래그</span>
+                                <div class="mep-lever-pills">
+                                  <button
+                                    type="button"
+                                    class="mep-lever-btn lever-chi"
+                                    title="누른 채 좌/상/우로 드래그하여 치 입력"
+                                    @pointerdown="startFuroLeverDrag($event, 'chi', 'reply')"
+                                  >
+                                    <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                    <span>치</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="mep-lever-btn lever-pon"
+                                    title="누른 채 좌/상/우로 드래그하여 퐁 입력"
+                                    @pointerdown="startFuroLeverDrag($event, 'pon', 'reply')"
+                                  >
+                                    <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                    <span>퐁</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="mep-lever-btn lever-kan"
+                                    title="누른 채 좌/상/우(가깡) 또는 아래(안깡)로 드래그"
+                                    @pointerdown="startFuroLeverDrag($event, 'kan', 'reply')"
+                                  >
+                                    <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                    <span>깡</span>
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -10467,6 +11073,31 @@ const openGamePopupFromLightbox = async (
                     <div class="lb-cf-preview-body rich-mahjong-content">
                       <template v-for="(seg, sIdx) in parseRichMahjongText(commentContentInput)" :key="`prev-seg-${sIdx}`">
                         <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                          <span
+                            v-for="(blk, bIdx) in seg.blocks"
+                            :key="`prev-blk-${sIdx}-${bIdx}`"
+                            class="mj-meld-block"
+                            :class="{ 'is-draw-block': blk.isDraw }"
+                          >
+                            <template v-for="(item, iIdx) in blk.items" :key="`prev-it-${sIdx}-${bIdx}-${iIdx}`">
+                              <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                              </span>
+                              <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                </span>
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                </span>
+                              </span>
+                              <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                              </span>
+                            </template>
+                          </span>
+                        </span>
                         <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
                           <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
                         </span>
@@ -10490,50 +11121,65 @@ const openGamePopupFromLightbox = async (
                         <span>나니키루콘</span>
                       </button>
 
-                      <!-- 마작패(34종) & 액션 버튼(8종) 플로팅 팝업 팔레트 -->
+                      <!-- 마작패(38종) & 후로 조이스틱 레버 & 액션 버튼(8종) 플로팅 팝업 팔레트 -->
                       <div v-show="isCommentEmotePickerOpen" class="mahjong-emote-picker" @click.stop>
-                        <div class="mep-tabs">
-                          <button
-                            type="button"
-                            class="mep-tab"
-                            :class="{ active: activeEmoteTab === 'man' }"
-                            @click="activeEmoteTab = 'man'"
-                          >
-                            만수
-                          </button>
-                          <button
-                            type="button"
-                            class="mep-tab"
-                            :class="{ active: activeEmoteTab === 'pin' }"
-                            @click="activeEmoteTab = 'pin'"
-                          >
-                            통수
-                          </button>
-                          <button
-                            type="button"
-                            class="mep-tab"
-                            :class="{ active: activeEmoteTab === 'sou' }"
-                            @click="activeEmoteTab = 'sou'"
-                          >
-                            삭수
-                          </button>
-                          <button
-                            type="button"
-                            class="mep-tab"
-                            :class="{ active: activeEmoteTab === 'honor' }"
-                            @click="activeEmoteTab = 'honor'"
-                          >
-                            자패
-                          </button>
-                          <button
-                            type="button"
-                            class="mep-tab"
-                            :class="{ active: activeEmoteTab === 'action' }"
-                            @click="activeEmoteTab = 'action'"
-                          >
-                            액션 버튼
-                          </button>
+                        <div class="mep-header-bar">
+                          <div class="mep-tabs">
+                            <button
+                              type="button"
+                              class="mep-tab"
+                              :class="{ active: activeEmoteTab === 'man' }"
+                              @click="activeEmoteTab = 'man'"
+                            >
+                              만수
+                            </button>
+                            <button
+                              type="button"
+                              class="mep-tab"
+                              :class="{ active: activeEmoteTab === 'pin' }"
+                              @click="activeEmoteTab = 'pin'"
+                            >
+                              통수
+                            </button>
+                            <button
+                              type="button"
+                              class="mep-tab"
+                              :class="{ active: activeEmoteTab === 'sou' }"
+                              @click="activeEmoteTab = 'sou'"
+                            >
+                              삭수
+                            </button>
+                            <button
+                              type="button"
+                              class="mep-tab"
+                              :class="{ active: activeEmoteTab === 'honor' }"
+                              @click="activeEmoteTab = 'honor'"
+                            >
+                              자패
+                            </button>
+                            <button
+                              type="button"
+                              class="mep-tab"
+                              :class="{ active: activeEmoteTab === 'action' }"
+                              @click="activeEmoteTab = 'action'"
+                            >
+                              액션 버튼
+                            </button>
+                          </div>
+                          <div class="mep-util-btns">
+                            <button type="button" class="mep-util-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('new')">␣ 간격</button>
+                            <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
+                            <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
+                          </div>
                         </div>
+
+                        <Transition name="mep-guide-slide">
+                          <div v-if="showEmoteNotationHelp" class="mep-notation-guide">
+                            <div class="mng-row"><span class="mng-badge">연속/복합</span> <code>[234m5m7m9m]</code> <code>[123m 456p]</code> <span class="mng-sub">(공백=블록 분리, 0=적5)</span></div>
+                            <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-234m]</code> <code>[2-34m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
+                            <div class="mng-row"><span class="mng-badge">가깡 / 안깡</span> <code>[7=77p]</code> <span class="mng-sub">(가깡 =)</span> · <code>[#8888m]</code> <span class="mng-sub">(안깡 #)</span></div>
+                          </div>
+                        </Transition>
 
                         <!-- 액션 버튼 8종 (리치/다마/치/퐁/깡/론/쯔모/스킵) -->
                         <div v-show="activeEmoteTab === 'action'" class="mep-actions-grid">
@@ -10561,12 +11207,56 @@ const openGamePopupFromLightbox = async (
                             :key="`new-tl-${tl.code}`"
                             type="button"
                             class="mep-tile-btn"
-                            :title="`${tl.label} 넣기`"
-                            @click="insertEmoteTokenToComment(tl.label, 'new')"
+                            :class="{ 'is-selected-base': selectedPaletteTileCode === tl.code }"
+                            :title="`${tl.label} (${tl.code})`"
+                            @click="insertTileFromPalette(tl, 'new')"
                           >
                             <img :src="getMahjongTileImageUrl(tl.fileName)" :alt="tl.label" loading="eager" decoding="sync" />
                             <span class="mep-tile-sub">{{ tl.label }}</span>
                           </button>
+                        </div>
+
+                        <!-- 모던 후로 레버 독 (Furo Lever Dock) -->
+                        <div v-show="activeEmoteTab !== 'action'" class="mep-furo-dock">
+                          <div class="mep-base-tile-chip" :class="{ 'is-popping': isBaseTilePopping }" title="패를 클릭하면 기준 패가 변경됩니다">
+                            <img :src="getMahjongTileImageUrl(selectedPaletteTileDef.fileName)" :alt="selectedPaletteTileDef.label" class="mep-base-tile-img" />
+                            <div class="mep-base-tile-meta">
+                              <span class="mep-base-sub">기준 패</span>
+                              <strong class="mep-base-name">{{ selectedPaletteTileDef.label }}</strong>
+                            </div>
+                          </div>
+                          <div class="mep-lever-group">
+                            <span class="mep-lever-hint">레버를 누른 채 4방향 드래그</span>
+                            <div class="mep-lever-pills">
+                              <button
+                                type="button"
+                                class="mep-lever-btn lever-chi"
+                                title="누른 채 좌/상/우로 드래그하여 치 입력"
+                                @pointerdown="startFuroLeverDrag($event, 'chi', 'new')"
+                              >
+                                <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                <span>치</span>
+                              </button>
+                              <button
+                                type="button"
+                                class="mep-lever-btn lever-pon"
+                                title="누른 채 좌/상/우로 드래그하여 퐁 입력"
+                                @pointerdown="startFuroLeverDrag($event, 'pon', 'new')"
+                              >
+                                <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                <span>퐁</span>
+                              </button>
+                              <button
+                                type="button"
+                                class="mep-lever-btn lever-kan"
+                                title="누른 채 좌/상/우(가깡) 또는 아래(안깡)로 드래그"
+                                @pointerdown="startFuroLeverDrag($event, 'kan', 'new')"
+                              >
+                                <span class="lever-joy-icon"><span class="lever-joy-dot"></span></span>
+                                <span>깡</span>
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -10609,6 +11299,110 @@ const openGamePopupFromLightbox = async (
         </div>
       </div>
     </Transition>
+
+    <!-- ============================================== -->
+    <!-- 모던 글래스모피즘 후로 조이스틱 4방향 HUD 오버레이 -->
+    <!-- ============================================== -->
+    <Teleport to="body">
+      <Transition name="furo-hud-pop">
+        <div
+          v-if="furoDragState.active"
+          class="furo-joystick-hud"
+          :class="[`action-${furoDragState.action}`, { 'is-closing': furoDragState.closing }]"
+          :style="{ left: `${furoDragState.hudX}px`, top: `${furoDragState.hudY}px` }"
+        >
+          <!-- 4방향 프리뷰 슬롯 (상/좌/우/하) -->
+          <div
+            v-for="dirKey in (['up', 'left', 'right', 'down'] as const)"
+            :key="`furo-slot-${dirKey}`"
+            class="furo-hud-card"
+            :class="[
+              `dir-${dirKey}`,
+              {
+                'is-active': furoDragState.activeDir === dirKey,
+                'is-confirmed': furoDragState.confirmedDir === dirKey,
+              }
+            ]"
+          >
+            <div class="furo-hud-card-head">
+              <span class="furo-hud-dir-arrow">
+                {{ dirKey === 'up' ? '↑' : dirKey === 'down' ? '↓' : dirKey === 'left' ? '←' : '→' }}
+              </span>
+              <span class="furo-hud-dir-label">{{ furoHudSlots[dirKey].label }}</span>
+            </div>
+            <div class="furo-hud-tiles-stage">
+              <span
+                v-for="(blk, bIdx) in furoHudSlots[dirKey].blocks"
+                :key="`hud-blk-${dirKey}-${bIdx}`"
+                class="mj-meld-block"
+              >
+                <template v-for="(item, iIdx) in blk.items" :key="`hud-it-${dirKey}-${bIdx}-${iIdx}`">
+                  <span v-if="item.mode === 'side'" class="mj-side-wrap">
+                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                  </span>
+                  <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap">
+                    <span class="mj-side-wrap">
+                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                    </span>
+                    <span class="mj-side-wrap">
+                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                    </span>
+                  </span>
+                  <span v-else class="mj-upright-wrap">
+                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                  </span>
+                </template>
+              </span>
+            </div>
+            <span class="furo-hud-code-chip">{{ furoHudSlots[dirKey].subCode }}</span>
+          </div>
+
+          <!-- 중앙 아날로그 조이스틱 소켓 & 연속 물리 노브 -->
+          <div class="furo-joystick-socket" :class="{ 'is-engaged': furoDragState.activeDir !== 'center' }">
+            <div class="furo-socket-ring">
+              <span class="furo-socket-tick tick-up" :class="{ active: furoDragState.activeDir === 'up' }">▲</span>
+              <span class="furo-socket-tick tick-down" :class="{ active: furoDragState.activeDir === 'down' }">▼</span>
+              <span class="furo-socket-tick tick-left" :class="{ active: furoDragState.activeDir === 'left' }">◀</span>
+              <span class="furo-socket-tick tick-right" :class="{ active: furoDragState.activeDir === 'right' }">▶</span>
+            </div>
+
+            <!-- 레버 당김 광선 스템 -->
+            <div
+              class="furo-joystick-stem"
+              :style="{
+                width: `${Math.hypot(furoDragState.knobX, furoDragState.knobY).toFixed(1)}px`,
+                transform: `rotate(${furoDragState.angleDeg.toFixed(1)}deg)`,
+                opacity: furoDragState.pullRatio.toFixed(2),
+              }"
+            ></div>
+
+            <!-- 손끝을 따라 움직이는 3D 조이스틱 노브 -->
+            <div
+              class="furo-joystick-knob"
+              :class="{
+                'is-spring-back': furoDragState.closing,
+                'is-engaged': furoDragState.activeDir !== 'center',
+              }"
+              :style="{
+                transform: `translate3d(${furoDragState.knobX.toFixed(1)}px, ${furoDragState.knobY.toFixed(1)}px, 0)`,
+              }"
+            >
+              <span class="furo-knob-label">
+                {{
+                  furoDragState.activeDir === 'center'
+                    ? '취소'
+                    : furoDragState.action === 'chi'
+                    ? '치'
+                    : furoDragState.action === 'pon'
+                    ? '퐁'
+                    : '깡'
+                }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- ============================================== -->
     <!-- 라이트박스 내 사진 클릭 시 전체화면 크게 보기 모달 -->
@@ -17330,9 +18124,9 @@ html.dark .hl-player-link:hover {
   align-items: center;
   justify-content: center;
   vertical-align: middle;
-  width: 34px;
-  height: 47px;
-  margin: 2px 2px;
+  width: 30px;
+  height: 44px;
+  margin: 2px 0;
   padding: 0;
   background: transparent;
   border: none;
@@ -17340,10 +18134,11 @@ html.dark .hl-player-link:hover {
   box-sizing: border-box;
 }
 .inline-mahjong-tile img {
-  width: 100%;
-  height: 100%;
+  width: 34px;
+  height: 49px;
   object-fit: contain;
   display: block;
+  flex-shrink: 0;
   background: transparent;
   filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.24));
 }
@@ -17354,6 +18149,75 @@ html.dark .inline-mahjong-tile {
 }
 html.dark .inline-mahjong-tile img {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.58));
+}
+
+/* 연속 마작패 & 후로(치/퐁/가깡/안깡) 블록 (빈틈없이 쭉 붙여서 나열) */
+.mj-hand {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  vertical-align: middle;
+  gap: 7px;
+  margin: 2px 3px;
+}
+.mj-meld-block {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0;
+  vertical-align: bottom;
+}
+.mj-meld-block.is-draw-block {
+  margin-left: 3px;
+}
+.mj-upright-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 29.5px;
+  height: 43.5px;
+  vertical-align: bottom;
+  flex-shrink: 0;
+}
+.mj-tile {
+  width: 34px;
+  height: 49px;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
+  background: transparent;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.24));
+}
+html.dark .mj-tile {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.58));
+}
+.mj-side-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42.5px;
+  height: 29.5px;
+  vertical-align: bottom;
+  flex-shrink: 0;
+}
+.mj-side-wrap .mj-tile {
+  width: 34px;
+  height: 49px;
+  transform: rotate(-90deg) translateX(0.5px);
+}
+.mj-kakan-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  width: 42.5px;
+  height: 59px;
+  vertical-align: bottom;
+  flex-shrink: 0;
+}
+.mj-kakan-wrap .mj-side-wrap + .mj-side-wrap {
+  margin-top: -0.5px;
 }
 
 /* 마작 선언/액션 버튼 (리치/다마/치/퐁/깡/론/쯔모/스킵 - 세련된 톤다운 컬러) */
@@ -17598,6 +18462,7 @@ html.dark .lb-comment-body {
   padding: 6px 8px;
 }
 .lb-cmt-edit-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -17778,6 +18643,7 @@ html.dark .lb-cf-preview-label {
 }
 
 .lb-cf-bottom-bar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -17785,7 +18651,7 @@ html.dark .lb-cf-preview-label {
   flex-wrap: wrap;
 }
 .emote-picker-anchor {
-  position: relative;
+  position: static;
   display: inline-flex;
   align-items: center;
 }
@@ -17864,49 +18730,59 @@ html.dark .btn-toggle-emote-picker.active {
   border-radius: 5px;
 }
 
-/* 나니키루콘 플로팅 팝업(Popover) 팔레트 - 댓글 박스 레이아웃 변형 방지 */
+/* 나니키루콘 플로팅 팝업(Popover) 팔레트 - 모던 & 깔끔한 UI */
 .mahjong-emote-picker {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
   z-index: 250;
-  width: min(500px, 90vw);
+  width: min(530px, 100%);
+  max-width: 100%;
   border: 1px solid var(--border-color, #cbd5e1);
-  border-radius: 10px;
+  border-radius: 14px;
   padding: 12px;
   background: var(--bg-modal, #ffffff);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22), 0 2px 8px rgba(15, 23, 42, 0.08);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 9px;
   box-sizing: border-box;
 }
 .mahjong-emote-picker.compact {
-  width: min(470px, 88vw);
+  width: min(500px, 100%);
+  max-width: 100%;
 }
 html.dark .mahjong-emote-picker {
-  background: #18181c;
-  border-color: #383842;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
+  background: #18181d;
+  border-color: #32323d;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.mep-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .mep-header-bar {
+  border-bottom-color: #272730;
 }
 .mep-tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-  padding-bottom: 5px;
-  border-bottom: 1px solid var(--border-color, #e2e8f0);
 }
 .mep-tabs::-webkit-scrollbar {
   display: none;
 }
-html.dark .mep-tabs {
-  border-bottom-color: #27272a;
-}
 .mep-tab {
-  padding: 4px 9px;
-  border-radius: 5px;
+  padding: 4.5px 9.5px;
+  border-radius: 7px;
   font-size: 11.5px;
   font-weight: 700;
   border: none;
@@ -17915,12 +18791,140 @@ html.dark .mep-tabs {
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
-  transition: all 0.15s;
+  transition: all 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.mep-tab:hover:not(.active) {
+  color: var(--text-color, #0f172a);
+  background: rgba(148, 163, 184, 0.12);
+}
+html.dark .mep-tab:hover:not(.active) {
+  color: #f4f4f5;
+  background: rgba(255, 255, 255, 0.06);
 }
 .mep-tab.active {
   background: var(--color-toggle-on, #2563eb);
   color: #ffffff;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.32);
 }
+.mep-util-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.mep-util-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 25px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-card, #f8fafc);
+  color: var(--text-dimmed, #475569);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.mep-util-btn.help,
+.mep-util-btn.close {
+  width: 25px;
+  padding: 0;
+  font-weight: 800;
+}
+.mep-util-btn:hover,
+.mep-util-btn.active {
+  border-color: var(--color-toggle-on, #3b82f6);
+  color: var(--color-toggle-on, #2563eb);
+  background: rgba(59, 130, 246, 0.08);
+}
+.mep-util-btn.close:hover {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+html.dark .mep-util-btn {
+  background: #22222a;
+  border-color: #353542;
+  color: #a1a1aa;
+}
+html.dark .mep-util-btn:hover,
+html.dark .mep-util-btn.active {
+  border-color: #60a5fa;
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.14);
+}
+html.dark .mep-util-btn.close:hover {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+
+/* 직접 입력 표기법 미니 가이드 배너 */
+.mep-notation-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(37, 99, 235, 0.05);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  font-size: 11px;
+  line-height: 1.45;
+}
+html.dark .mep-notation-guide {
+  background: rgba(59, 130, 246, 0.09);
+  border-color: rgba(96, 165, 250, 0.24);
+}
+.mng-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.mng-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.14);
+  color: #2563eb;
+  min-width: 54px;
+  text-align: center;
+}
+html.dark .mng-badge {
+  background: rgba(96, 165, 250, 0.2);
+  color: #93c5fd;
+}
+.mep-notation-guide code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.07);
+  color: var(--text-color, #0f172a);
+}
+html.dark .mep-notation-guide code {
+  background: rgba(255, 255, 255, 0.1);
+  color: #5eead4;
+}
+.mng-sub {
+  color: var(--text-dimmed, #64748b);
+  font-size: 10.5px;
+}
+.mep-guide-slide-enter-active,
+.mep-guide-slide-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.mep-guide-slide-enter-from,
+.mep-guide-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
 .mep-actions-grid {
   display: flex;
   flex-wrap: wrap;
@@ -17942,12 +18946,46 @@ html.dark .mep-tabs {
 }
 .mep-tiles-grid {
   display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 3px;
 }
-@media (max-width: 520px) {
+@media (max-width: 580px) {
+  .mahjong-emote-picker,
+  .mahjong-emote-picker.compact {
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-width: 100%;
+    padding: 10px;
+    gap: 7px;
+  }
+  .mep-tab {
+    padding: 4px 7.5px;
+    font-size: 11px;
+  }
+  .mep-util-btn {
+    height: 23px;
+    padding: 0 6px;
+    font-size: 10.5px;
+  }
+  .mep-util-btn.help,
+  .mep-util-btn.close {
+    width: 23px;
+  }
   .mep-tiles-grid {
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .mep-furo-dock {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .mep-lever-pills {
+    gap: 4px;
+  }
+  .mep-lever-btn {
+    padding: 4.5px 9px 4.5px 7px;
+    font-size: 11.5px;
+    gap: 4px;
   }
   .lb-cf-guest-inputs {
     width: 100%;
@@ -17964,18 +19002,26 @@ html.dark .mep-tabs {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 5px 2px;
-  border-radius: 6px;
+  gap: 2.5px;
+  padding: 4px 1px;
+  border-radius: 8px;
   border: 1px solid transparent;
   background: transparent;
   cursor: pointer;
-  transition: transform 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
+  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.14s ease, background-color 0.14s ease, box-shadow 0.14s ease;
 }
 .mep-tile-btn:hover {
-  transform: translateY(-1.5px);
+  transform: translateY(-2px) scale(1.04);
   border-color: rgba(59, 130, 246, 0.35);
   background: rgba(59, 130, 246, 0.08);
+}
+.mep-tile-btn:active {
+  transform: translateY(0) scale(0.96);
+}
+.mep-tile-btn.is-selected-base {
+  border-color: rgba(37, 99, 235, 0.65);
+  background: rgba(37, 99, 235, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.25);
 }
 html.dark .mep-tile-btn {
   background: transparent;
@@ -17985,9 +19031,14 @@ html.dark .mep-tile-btn:hover {
   border-color: rgba(96, 165, 250, 0.4);
   background: rgba(96, 165, 250, 0.12);
 }
+html.dark .mep-tile-btn.is-selected-base {
+  border-color: rgba(96, 165, 250, 0.72);
+  background: rgba(59, 130, 246, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.3);
+}
 .mep-tile-btn img {
-  width: 36px;
-  height: 50px;
+  width: 34px;
+  height: 48px;
   object-fit: contain;
   display: block;
   background: transparent;
@@ -18000,13 +19051,456 @@ html.dark .mep-tile-btn img {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
 }
 .mep-tile-sub {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
   color: var(--text-dimmed, #64748b);
   white-space: nowrap;
 }
+.mep-tile-btn.is-selected-base .mep-tile-sub {
+  color: var(--color-toggle-on, #2563eb);
+  font-weight: 800;
+}
 html.dark .mep-tile-sub {
   color: #a1a1aa;
+}
+html.dark .mep-tile-btn.is-selected-base .mep-tile-sub {
+  color: #93c5fd;
+}
+
+/* =====================================================================
+   모던 후로 레버 독 (Furo Lever Dock) & 4방향 조이스틱 HUD
+   ===================================================================== */
+.mep-furo-dock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(241, 245, 249, 0.85) 0%, rgba(226, 232, 240, 0.55) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  flex-wrap: wrap;
+}
+html.dark .mep-furo-dock {
+  background: linear-gradient(180deg, rgba(34, 34, 43, 0.92) 0%, rgba(24, 24, 31, 0.92) 100%);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+.mep-base-tile-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 9px 3px 6px;
+  border-radius: 8px;
+  background: var(--bg-modal, #ffffff);
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.2s ease;
+}
+html.dark .mep-base-tile-chip {
+  background: #141419;
+  border-color: rgba(96, 165, 250, 0.36);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.mep-base-tile-chip.is-popping {
+  transform: scale(1.09);
+  border-color: #3b82f6;
+}
+.mep-base-tile-img {
+  width: 24px;
+  height: 34px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.25));
+}
+.mep-base-tile-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.mep-base-sub {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-dimmed, #64748b);
+}
+.mep-base-name {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--color-toggle-on, #2563eb);
+}
+html.dark .mep-base-name {
+  color: #60a5fa;
+}
+.mep-lever-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.mep-lever-hint {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-dimmed, #64748b);
+  white-space: nowrap;
+}
+@media (max-width: 480px) {
+  .mep-lever-hint {
+    display: none;
+  }
+}
+.mep-lever-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mep-lever-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5.5px 12px 5.5px 9px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 2px 5px rgba(15, 23, 42, 0.22);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28);
+  transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.15s ease, box-shadow 0.15s ease;
+}
+.mep-lever-btn:hover {
+  transform: translateY(-1.5px) scale(1.03);
+  filter: brightness(1.07);
+}
+.mep-lever-btn:active {
+  cursor: grabbing;
+  transform: scale(0.95);
+}
+.mep-lever-btn.lever-chi {
+  background: linear-gradient(180deg, #20a478 0%, #13825c 100%);
+  border-color: #0e6b4b;
+}
+.mep-lever-btn.lever-pon {
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  border-color: #1d4ed8;
+}
+.mep-lever-btn.lever-kan {
+  background: linear-gradient(180deg, #845ef7 0%, #6741d9 100%);
+  border-color: #5530c2;
+}
+.lever-joy-icon {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.lever-joy-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.9);
+  transition: transform 0.15s ease;
+}
+.mep-lever-btn:hover .lever-joy-dot {
+  transform: scale(1.2);
+}
+
+/* =====================================================================
+   글래스모피즘 후로 조이스틱 4방향 HUD 오버레이 (60~120fps 물리 레버 연출)
+   ===================================================================== */
+.furo-joystick-hud {
+  --hud-accent: #3b82f6;
+  --hud-accent-glow: rgba(59, 130, 246, 0.48);
+  --hud-accent-soft: rgba(59, 130, 246, 0.16);
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  user-select: none;
+  transform: translate(-50%, -50%);
+  display: grid;
+  grid-template-areas:
+    ". up ."
+    "left center right"
+    ". down .";
+  grid-template-columns: 122px 98px 122px;
+  grid-template-rows: auto 98px auto;
+  gap: 8px;
+  align-items: center;
+  justify-items: center;
+  padding: 14px;
+  border-radius: 24px;
+  max-width: calc(100vw - 12px);
+  box-sizing: border-box;
+  background: rgba(15, 23, 42, 0.78);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+@media (max-width: 420px) {
+  .furo-joystick-hud {
+    grid-template-columns: 102px 82px 102px;
+    grid-template-rows: auto 82px auto;
+    gap: 6px;
+    padding: 10px;
+    border-radius: 20px;
+  }
+  .furo-hud-tiles-stage {
+    transform: scale(0.72);
+  }
+  .furo-joystick-socket {
+    width: 76px;
+    height: 76px;
+  }
+}
+.furo-joystick-hud.action-chi {
+  --hud-accent: #10b981;
+  --hud-accent-glow: rgba(16, 185, 129, 0.52);
+  --hud-accent-soft: rgba(16, 185, 129, 0.18);
+}
+.furo-joystick-hud.action-pon {
+  --hud-accent: #3b82f6;
+  --hud-accent-glow: rgba(59, 130, 246, 0.52);
+  --hud-accent-soft: rgba(59, 130, 246, 0.18);
+}
+.furo-joystick-hud.action-kan {
+  --hud-accent: #8b5cf6;
+  --hud-accent-glow: rgba(139, 92, 246, 0.52);
+  --hud-accent-soft: rgba(139, 92, 246, 0.18);
+}
+
+.furo-hud-pop-enter-active {
+  transition: opacity 0.18s ease-out, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.furo-hud-pop-leave-active {
+  transition: opacity 0.15s ease-in, transform 0.16s ease-in;
+}
+.furo-hud-pop-enter-from,
+.furo-hud-pop-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.86);
+}
+
+.furo-hud-card {
+  width: 100%;
+  min-height: 76px;
+  padding: 7px 8px 6px;
+  border-radius: 14px;
+  background: rgba(30, 41, 59, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  transition:
+    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.18s ease;
+}
+.furo-hud-card.dir-up {
+  grid-area: up;
+}
+.furo-hud-card.dir-down {
+  grid-area: down;
+}
+.furo-hud-card.dir-left {
+  grid-area: left;
+}
+.furo-hud-card.dir-right {
+  grid-area: right;
+}
+.furo-hud-card.is-active {
+  background: var(--hud-accent-soft);
+  border-color: var(--hud-accent);
+  box-shadow: 0 0 22px var(--hud-accent-glow), inset 0 0 12px rgba(255, 255, 255, 0.1);
+}
+.furo-hud-card.dir-up.is-active {
+  transform: translateY(-4px) scale(1.08);
+}
+.furo-hud-card.dir-down.is-active {
+  transform: translateY(4px) scale(1.08);
+}
+.furo-hud-card.dir-left.is-active {
+  transform: translateX(-4px) scale(1.08);
+}
+.furo-hud-card.dir-right.is-active {
+  transform: translateX(4px) scale(1.08);
+}
+.furo-hud-card.is-confirmed {
+  animation: furoSlotConfirmPulse 0.17s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes furoSlotConfirmPulse {
+  0% {
+    transform: scale(1.08);
+  }
+  50% {
+    transform: scale(1.15);
+    filter: brightness(1.2);
+  }
+  100% {
+    transform: scale(1.04);
+  }
+}
+
+.furo-hud-card-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: rgba(226, 232, 240, 0.85);
+  white-space: nowrap;
+}
+.furo-hud-card.is-active .furo-hud-card-head {
+  color: #ffffff;
+}
+.furo-hud-dir-arrow {
+  color: var(--hud-accent);
+  font-weight: 900;
+}
+.furo-hud-card.is-active .furo-hud-dir-arrow {
+  color: #ffffff;
+  text-shadow: 0 0 8px var(--hud-accent);
+}
+.furo-hud-tiles-stage {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 44px;
+  transform: scale(0.82);
+  transform-origin: center bottom;
+}
+.furo-hud-code-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(148, 163, 184, 0.9);
+}
+.furo-hud-card.is-active .furo-hud-code-chip {
+  background: var(--hud-accent);
+  color: #ffffff;
+}
+
+/* 중앙 아날로그 조이스틱 소켓 & 물리 레버 노브 */
+.furo-joystick-socket {
+  grid-area: center;
+  position: relative;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.78) 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.65), 0 0 0 4px rgba(255, 255, 255, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.furo-joystick-socket.is-engaged {
+  border-color: var(--hud-accent);
+  box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.65), 0 0 18px var(--hud-accent-glow);
+}
+.furo-socket-ring {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  pointer-events: none;
+}
+.furo-socket-tick {
+  position: absolute;
+  font-size: 8px;
+  color: rgba(148, 163, 184, 0.45);
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+.furo-socket-tick.active {
+  color: var(--hud-accent);
+  text-shadow: 0 0 6px var(--hud-accent);
+}
+.furo-socket-tick.tick-up {
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.furo-socket-tick.tick-down {
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.furo-socket-tick.tick-left {
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.furo-socket-tick.tick-right {
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.furo-joystick-stem {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 6px;
+  margin-top: -3px;
+  transform-origin: 0 50%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.15) 0%, var(--hud-accent) 100%);
+  box-shadow: 0 0 10px var(--hud-accent-glow);
+  pointer-events: none;
+}
+
+.furo-joystick-knob {
+  position: relative;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #475569 0%, #1e293b 75%, #0f172a 100%);
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.55), inset 0 2px 3px rgba(255, 255, 255, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.furo-joystick-knob.is-engaged {
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, var(--hud-accent) 45%, #0f172a 100%);
+  border-color: #ffffff;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6), 0 0 18px var(--hud-accent-glow), inset 0 2px 4px rgba(255, 255, 255, 0.65);
+}
+.furo-joystick-knob.is-spring-back {
+  transition:
+    transform 0.26s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.furo-knob-label {
+  font-size: 11px;
+  font-weight: 900;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  letter-spacing: -0.02em;
 }
 
 /* =====================================================================
