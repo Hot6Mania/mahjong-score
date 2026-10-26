@@ -1350,10 +1350,20 @@ const KOREAN_HONOR_TO_DIGIT: Record<string, string> = {
   백: '5',
   발: '6',
   중: '7',
+  東: '1',
+  东: '1',
+  南: '2',
+  西: '3',
+  北: '4',
+  白: '5',
+  發: '6',
+  発: '6',
+  发: '6',
+  中: '7',
 };
 
 /**
- * 한글 마작패 표기(`234만5만`, `-동동동`, `적5통`, `뒷면` 등)를
+ * 한글/한자 마작패 표기(`234만5만`, `東南西北白發中`, `-동동동`, `적5통`, `뒷면` 등)를
  * 표준 영문 m/p/s/z 표기로 정규화합니다.
  */
 export function normalizeMahjongBracketNotation(raw: string): string {
@@ -1366,8 +1376,8 @@ export function normalizeMahjongBracketNotation(raw: string): string {
     .replace(/뒷면/g, '0z')
     .replace(/back/gi, '0z');
 
-  // 한글 자패 그룹 (예: 동, 동동동, -동동동, 동-동동, #중중중중, 동남서북) -> 1z, -111z 등
-  str = str.replace(/#?(?:[-=]?[동남서북백발중]'?)+/g, (match) => {
+  // 한글/한자 자패 그룹 (예: 동, 동동동, 東南西北白發中, -동동동, #중중중중) -> 1z, 1234567z, -111z 등
+  str = str.replace(/#?(?:[-=]?[동남서북백발중東南西北白發発中东发]'?)+/g, (match) => {
     let converted = '';
     for (const ch of match) {
       if (KOREAN_HONOR_TO_DIGIT[ch]) {
@@ -1379,11 +1389,11 @@ export function normalizeMahjongBracketNotation(raw: string): string {
     return `${converted}z`;
   });
 
-  // 한글 수패 단위 변환 (만 -> m, 통 -> p, 삭 -> s)
+  // 한글/한자 수패 단위 변환 (만/萬/万 -> m, 통/筒 -> p, 삭/索 -> s)
   str = str
-    .replace(/만/g, 'm')
-    .replace(/통/g, 'p')
-    .replace(/삭/g, 's');
+    .replace(/[만萬万]/g, 'm')
+    .replace(/[통筒]/g, 'p')
+    .replace(/[삭索]/g, 's');
 
   return str;
 }
@@ -1525,10 +1535,10 @@ export function buildDraggedMeldNotation(
     }
     if (dir === 'right') {
       const end = Math.max(3, Math.min(9, n));
-      return `${fmt(end - 2)}${fmt(end - 1)}-${fmt(end)}${suit}`;
+      return `-${fmt(end)}${fmt(end - 2)}${fmt(end - 1)}${suit}`;
     }
     const mid = Math.min(8, Math.max(2, n));
-    return `${fmt(mid - 1)}-${fmt(mid)}${fmt(mid + 1)}${suit}`;
+    return `-${fmt(mid)}${fmt(mid - 1)}${fmt(mid + 1)}${suit}`;
   }
 
   if (action === 'kan') {

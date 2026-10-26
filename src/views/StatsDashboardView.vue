@@ -4814,6 +4814,59 @@ const insertBlockSpaceFromPalette = (target: 'new' | 'edit' | 'reply' = 'new') =
   }
 };
 
+const deleteLastCommentToken = (target: 'new' | 'edit' | 'reply' = 'new') => {
+  lastInsertedSingleTileState.value = null;
+  const cur = getCommentTargetValue(target);
+  if (!cur) return;
+
+  const trailingBracketMatch = cur.match(/^(.*)\[([^\[\]\n]*)\]$/s);
+  if (trailingBracketMatch) {
+    const prefix = trailingBracketMatch[1];
+    const inner = trailingBracketMatch[2];
+    if (!inner.trim()) {
+      setCommentTargetValue(target, prefix);
+      return;
+    }
+    if (inner.endsWith(' ')) {
+      const trimmedEnd = inner.replace(/\s+$/, '');
+      setCommentTargetValue(target, trimmedEnd ? `${prefix}[${trimmedEnd}]` : prefix);
+      return;
+    }
+    if (parseMahjongMeldBlocks(inner.trim()).length > 0) {
+      const lastSpaceIdx = inner.search(/\s+\S+$/);
+      const beforeLastToken = lastSpaceIdx >= 0 ? inner.slice(0, lastSpaceIdx) : '';
+      const lastToken = lastSpaceIdx >= 0 ? inner.slice(lastSpaceIdx).trim() : inner.trim();
+
+      // 후로(치/퐁/가깡/안깡) 블록이면 블록 통째로 제거
+      if (lastToken.startsWith('#') || lastToken.includes('-') || lastToken.includes('=')) {
+        setCommentTargetValue(target, beforeLastToken ? `${prefix}[${beforeLastToken}]` : prefix);
+        return;
+      }
+
+      // 일반 패 연쇄(예: 234m5p 또는 234m)면 마지막 패 1매만 제거
+      const suitGroupMatch = lastToken.match(/^(.*?)([0-9xbXB]+)([mpszMPSZ])$/);
+      if (suitGroupMatch) {
+        const tokenHead = suitGroupMatch[1];
+        const digits = suitGroupMatch[2];
+        const suit = suitGroupMatch[3];
+        const nextToken = digits.length > 1 ? `${tokenHead}${digits.slice(0, -1)}${suit}` : tokenHead;
+        const nextInner = beforeLastToken
+          ? nextToken
+            ? `${beforeLastToken} ${nextToken}`
+            : beforeLastToken
+          : nextToken;
+        setCommentTargetValue(target, nextInner ? `${prefix}[${nextInner}]` : prefix);
+        return;
+      }
+    }
+    // 액션 버튼([리치] 등)은 대괄호 토큰 통째로 삭제
+    setCommentTargetValue(target, prefix);
+    return;
+  }
+
+  setCommentTargetValue(target, cur.slice(0, -1));
+};
+
 const insertEmoteTokenToComment = (tokenLabel: string, target: 'new' | 'edit' | 'reply' = 'new') => {
   lastInsertedSingleTileState.value = null;
   const token = `[${tokenLabel}]`;
@@ -4867,9 +4920,9 @@ const startFuroLeverDrag = (
   const originY = downEv.clientY;
   const vw = typeof window !== 'undefined' ? window.innerWidth : 800;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 600;
-  const hudHalfW = Math.min(194, Math.floor(vw / 2) - 8);
-  const hudHalfH = Math.min(156, Math.floor(vh / 2) - 8);
-  const hudX = vw <= 420 ? Math.round(vw / 2) : Math.max(hudHalfW, Math.min(vw - hudHalfW, originX));
+  const hudHalfW = Math.min(108, Math.floor(vw / 2) - 6);
+  const hudHalfH = Math.min(66, Math.floor(vh / 2) - 6);
+  const hudX = Math.max(hudHalfW, Math.min(vw - hudHalfW, originX));
   const hudY = Math.max(hudHalfH, Math.min(vh - hudHalfH, originY));
 
   furoDragState.value = {
@@ -4890,18 +4943,18 @@ const startFuroLeverDrag = (
     confirmedDir: null,
   };
 
-  const maxRadius = 46;
-  const deadzone = 15;
+  const maxRadius = 20;
+  const deadzone = 10;
 
   const onPointerMove = (moveEv: PointerEvent) => {
     const rawDx = moveEv.clientX - originX;
     const rawDy = moveEv.clientY - originY;
     const dist = Math.hypot(rawDx, rawDy);
-    const dampedDist = maxRadius * Math.tanh(dist / 50);
+    const dampedDist = maxRadius * Math.tanh(dist / 32);
 
     const knobX = dist > 0.1 ? (rawDx / dist) * dampedDist : 0;
     const knobY = dist > 0.1 ? (rawDy / dist) * dampedDist : 0;
-    const pullRatio = Math.min(1, dist / 24);
+    const pullRatio = Math.min(1, dist / 18);
     const angleDeg = Math.atan2(rawDy, rawDx) * (180 / Math.PI);
 
     let nextDir: 'center' | 'left' | 'right' | 'up' | 'down' = 'center';
@@ -10673,18 +10726,68 @@ const openGamePopupFromLightbox = async (
                                 <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
                               </div>
                               <div class="mep-util-btns">
-                                <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('edit')">␣ 간격</button>
-                                <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속 입력</button>
-                                <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로 입력</button>
+                                <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('edit')">␣</button>
+                                <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속</button>
+                                <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로</button>
                                 <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
                                 <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
                               </div>
                             </div>
 
+                            <!-- 연속/후로 모드 시 현재 입력 상황 실시간 미니 프리뷰 바 -->
+                            <div v-if="isContinuousEmoteMode || isFuroEmoteMode" class="mep-mini-preview">
+                              <div class="mep-mini-preview-body rich-mahjong-content">
+                                <template v-if="editingCommentContent.trim()">
+                                  <template v-for="(seg, sIdx) in parseRichMahjongText(editingCommentContent)" :key="`ed-mp-seg-${sIdx}`">
+                                    <span v-if="seg.type === 'text'" class="mep-mp-text">{{ seg.text }}</span>
+                                    <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                                      <span
+                                        v-for="(blk, bIdx) in seg.blocks"
+                                        :key="`ed-mp-blk-${sIdx}-${bIdx}`"
+                                        class="mj-meld-block"
+                                        :class="{ 'is-draw-block': blk.isDraw }"
+                                      >
+                                        <template v-for="(item, iIdx) in blk.items" :key="`ed-mp-it-${sIdx}-${bIdx}-${iIdx}`">
+                                          <span v-if="item.mode === 'side'" class="mj-side-wrap">
+                                            <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                          </span>
+                                          <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap">
+                                            <span class="mj-side-wrap">
+                                              <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                            </span>
+                                            <span class="mj-side-wrap">
+                                              <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                            </span>
+                                          </span>
+                                          <span v-else class="mj-upright-wrap">
+                                            <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                          </span>
+                                        </template>
+                                      </span>
+                                    </span>
+                                    <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile">
+                                      <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" />
+                                    </span>
+                                    <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                                      {{ seg.action.label }}
+                                    </span>
+                                  </template>
+                                </template>
+                                <span v-else class="mep-mp-placeholder">패를 선택하면 현재 입력 상황이 표시됩니다</span>
+                              </div>
+                              <button
+                                v-if="editingCommentContent.length > 0"
+                                type="button"
+                                class="mep-mini-backspace-btn"
+                                title="마지막 입력 패/글자 지우기"
+                                @click="deleteLastCommentToken('edit')"
+                              >⌫</button>
+                            </div>
+
                             <Transition name="mep-guide-slide">
                               <div v-if="showEmoteNotationHelp" class="mep-notation-guide">
                                 <div class="mng-row"><span class="mng-badge">연속/복합</span> <code>[234m5m7m9m]</code> <code>[123m 456p]</code> <span class="mng-sub">(공백=블록 분리, 0=적5)</span></div>
-                                <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-234m]</code> <code>[2-34m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
+                                <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-456m]</code> <code>[-435m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
                                 <div class="mng-row"><span class="mng-badge">가깡 / 안깡</span> <code>[7=77p]</code> <span class="mng-sub">(가깡 =)</span> · <code>[#8888m]</code> <span class="mng-sub">(안깡 #)</span></div>
                               </div>
                             </Transition>
@@ -10932,18 +11035,68 @@ const openGamePopupFromLightbox = async (
                                 <button type="button" class="mep-tab" :class="{ active: activeEmoteTab === 'action' }" @click="activeEmoteTab = 'action'">액션 버튼</button>
                               </div>
                               <div class="mep-util-btns">
-                                <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('reply')">␣ 간격</button>
-                                <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속 입력</button>
-                                <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로 입력</button>
+                                <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('reply')">␣</button>
+                                <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속</button>
+                                <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로</button>
                                 <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
                                 <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
                               </div>
                             </div>
 
+                            <!-- 연속/후로 모드 시 현재 입력 상황 실시간 미니 프리뷰 바 -->
+                            <div v-if="isContinuousEmoteMode || isFuroEmoteMode" class="mep-mini-preview">
+                              <div class="mep-mini-preview-body rich-mahjong-content">
+                                <template v-if="replyContentInput.trim()">
+                                  <template v-for="(seg, sIdx) in parseRichMahjongText(replyContentInput)" :key="`rep-mp-seg-${sIdx}`">
+                                    <span v-if="seg.type === 'text'" class="mep-mp-text">{{ seg.text }}</span>
+                                    <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                                      <span
+                                        v-for="(blk, bIdx) in seg.blocks"
+                                        :key="`rep-mp-blk-${sIdx}-${bIdx}`"
+                                        class="mj-meld-block"
+                                        :class="{ 'is-draw-block': blk.isDraw }"
+                                      >
+                                        <template v-for="(item, iIdx) in blk.items" :key="`rep-mp-it-${sIdx}-${bIdx}-${iIdx}`">
+                                          <span v-if="item.mode === 'side'" class="mj-side-wrap">
+                                            <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                          </span>
+                                          <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap">
+                                            <span class="mj-side-wrap">
+                                              <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                            </span>
+                                            <span class="mj-side-wrap">
+                                              <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                            </span>
+                                          </span>
+                                          <span v-else class="mj-upright-wrap">
+                                            <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                          </span>
+                                        </template>
+                                      </span>
+                                    </span>
+                                    <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile">
+                                      <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" />
+                                    </span>
+                                    <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                                      {{ seg.action.label }}
+                                    </span>
+                                  </template>
+                                </template>
+                                <span v-else class="mep-mp-placeholder">패를 선택하면 현재 입력 상황이 표시됩니다</span>
+                              </div>
+                              <button
+                                v-if="replyContentInput.length > 0"
+                                type="button"
+                                class="mep-mini-backspace-btn"
+                                title="마지막 입력 패/글자 지우기"
+                                @click="deleteLastCommentToken('reply')"
+                              >⌫</button>
+                            </div>
+
                             <Transition name="mep-guide-slide">
                               <div v-if="showEmoteNotationHelp" class="mep-notation-guide">
                                 <div class="mng-row"><span class="mng-badge">연속/복합</span> <code>[234m5m7m9m]</code> <code>[123m 456p]</code> <span class="mng-sub">(공백=블록 분리, 0=적5)</span></div>
-                                <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-234m]</code> <code>[2-34m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
+                                <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-456m]</code> <code>[-435m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
                                 <div class="mng-row"><span class="mng-badge">가깡 / 안깡</span> <code>[7=77p]</code> <span class="mng-sub">(가깡 =)</span> · <code>[#8888m]</code> <span class="mng-sub">(안깡 #)</span></div>
                               </div>
                             </Transition>
@@ -11199,18 +11352,68 @@ const openGamePopupFromLightbox = async (
                             </button>
                           </div>
                           <div class="mep-util-btns">
-                            <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('new')">␣ 간격</button>
-                            <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속 입력</button>
-                            <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로 입력</button>
+                            <button v-if="isContinuousEmoteMode" type="button" class="mep-util-btn space-btn" title="블록 띄우기 (공백)" @click="insertBlockSpaceFromPalette('new')">␣</button>
+                            <button type="button" class="mep-mode-toggle continuous" :class="{ active: isContinuousEmoteMode }" title="연속 입력 모드 (클릭해도 팝업이 닫히지 않고 패가 이어짐)" @click="isContinuousEmoteMode = !isContinuousEmoteMode">연속</button>
+                            <button type="button" class="mep-mode-toggle furo" :class="{ active: isFuroEmoteMode }" title="후로(치/퐁/깡) 레버 입력 모드" @click="isFuroEmoteMode = !isFuroEmoteMode">후로</button>
                             <button type="button" class="mep-util-btn help" :class="{ active: showEmoteNotationHelp }" title="직접 입력 표기법 안내" @click="showEmoteNotationHelp = !showEmoteNotationHelp">?</button>
                             <button type="button" class="mep-util-btn close" title="닫기" @click="closeEmotePickers">✕</button>
                           </div>
                         </div>
 
+                        <!-- 연속/후로 모드 시 현재 입력 상황 실시간 미니 프리뷰 바 -->
+                        <div v-if="isContinuousEmoteMode || isFuroEmoteMode" class="mep-mini-preview">
+                          <div class="mep-mini-preview-body rich-mahjong-content">
+                            <template v-if="commentContentInput.trim()">
+                              <template v-for="(seg, sIdx) in parseRichMahjongText(commentContentInput)" :key="`new-mp-seg-${sIdx}`">
+                                <span v-if="seg.type === 'text'" class="mep-mp-text">{{ seg.text }}</span>
+                                <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                                  <span
+                                    v-for="(blk, bIdx) in seg.blocks"
+                                    :key="`new-mp-blk-${sIdx}-${bIdx}`"
+                                    class="mj-meld-block"
+                                    :class="{ 'is-draw-block': blk.isDraw }"
+                                  >
+                                    <template v-for="(item, iIdx) in blk.items" :key="`new-mp-it-${sIdx}-${bIdx}-${iIdx}`">
+                                      <span v-if="item.mode === 'side'" class="mj-side-wrap">
+                                        <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                      </span>
+                                      <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap">
+                                        <span class="mj-side-wrap">
+                                          <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                        </span>
+                                        <span class="mj-side-wrap">
+                                          <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                        </span>
+                                      </span>
+                                      <span v-else class="mj-upright-wrap">
+                                        <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" />
+                                      </span>
+                                    </template>
+                                  </span>
+                                </span>
+                                <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile">
+                                  <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" />
+                                </span>
+                                <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                                  {{ seg.action.label }}
+                                </span>
+                              </template>
+                            </template>
+                            <span v-else class="mep-mp-placeholder">패를 선택하면 현재 입력 상황이 표시됩니다</span>
+                          </div>
+                          <button
+                            v-if="commentContentInput.length > 0"
+                            type="button"
+                            class="mep-mini-backspace-btn"
+                            title="마지막 입력 패/글자 지우기"
+                            @click="deleteLastCommentToken('new')"
+                          >⌫</button>
+                        </div>
+
                         <Transition name="mep-guide-slide">
                           <div v-if="showEmoteNotationHelp" class="mep-notation-guide">
                             <div class="mng-row"><span class="mng-badge">연속/복합</span> <code>[234m5m7m9m]</code> <code>[123m 456p]</code> <span class="mng-sub">(공백=블록 분리, 0=적5)</span></div>
-                            <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-234m]</code> <code>[2-34m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
+                            <div class="mng-row"><span class="mng-badge">치 / 퐁</span> <code>[-456m]</code> <code>[-435m]</code> <code>[5-55p]</code> <span class="mng-sub">(- 붙인 패 눕힘)</span></div>
                             <div class="mng-row"><span class="mng-badge">가깡 / 안깡</span> <code>[7=77p]</code> <span class="mng-sub">(가깡 =)</span> · <code>[#8888m]</code> <span class="mng-sub">(안깡 #)</span></div>
                           </div>
                         </Transition>
@@ -11345,7 +11548,7 @@ const openGamePopupFromLightbox = async (
           :class="[`action-${furoDragState.action}`, { 'is-closing': furoDragState.closing }]"
           :style="{ left: `${furoDragState.hudX}px`, top: `${furoDragState.hudY}px` }"
         >
-          <!-- 4방향 프리뷰 슬롯 (상/좌/우/하) -->
+          <!-- 4방향 프리뷰 슬롯 (상/좌/우/하 - 패만 표시) -->
           <div
             v-for="dirKey in (['up', 'left', 'right', 'down'] as const)"
             :key="`furo-slot-${dirKey}`"
@@ -11358,12 +11561,6 @@ const openGamePopupFromLightbox = async (
               }
             ]"
           >
-            <div class="furo-hud-card-head">
-              <span class="furo-hud-dir-arrow">
-                {{ dirKey === 'up' ? '↑' : dirKey === 'down' ? '↓' : dirKey === 'left' ? '←' : '→' }}
-              </span>
-              <span class="furo-hud-dir-label">{{ furoHudSlots[dirKey].label }}</span>
-            </div>
             <div class="furo-hud-tiles-stage">
               <span
                 v-for="(blk, bIdx) in furoHudSlots[dirKey].blocks"
@@ -11388,10 +11585,9 @@ const openGamePopupFromLightbox = async (
                 </template>
               </span>
             </div>
-            <span class="furo-hud-code-chip">{{ furoHudSlots[dirKey].subCode }}</span>
           </div>
 
-          <!-- 중앙 아날로그 조이스틱 소켓 & 연속 물리 노브 -->
+          <!-- 중앙 아날로그 조이스틱 소켓 & 연속 물리 노브 (텍스트 없음) -->
           <div class="furo-joystick-socket" :class="{ 'is-engaged': furoDragState.activeDir !== 'center' }">
             <div class="furo-socket-ring">
               <span class="furo-socket-tick tick-up" :class="{ active: furoDragState.activeDir === 'up' }">▲</span>
@@ -11420,19 +11616,7 @@ const openGamePopupFromLightbox = async (
               :style="{
                 transform: `translate3d(${furoDragState.knobX.toFixed(1)}px, ${furoDragState.knobY.toFixed(1)}px, 0)`,
               }"
-            >
-              <span class="furo-knob-label">
-                {{
-                  furoDragState.activeDir === 'center'
-                    ? '취소'
-                    : furoDragState.action === 'chi'
-                    ? '치'
-                    : furoDragState.action === 'pon'
-                    ? '퐁'
-                    : '깡'
-                }}
-              </span>
-            </div>
+            ></div>
           </div>
         </div>
       </Transition>
@@ -19004,6 +19188,10 @@ html.dark .mep-mode-toggle.furo.active::before {
   white-space: nowrap;
 }
 .mep-util-btn.space-btn {
+  width: 26px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 800;
   border-color: rgba(37, 99, 235, 0.38);
   color: #2563eb;
   background: rgba(37, 99, 235, 0.06);
@@ -19042,6 +19230,120 @@ html.dark .mep-util-btn.active {
   background: rgba(96, 165, 250, 0.14);
 }
 html.dark .mep-util-btn.close:hover {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+
+/* 나니키루콘 팝업 내부 실시간 입력 상황 미니 프리뷰 바 */
+.mep-mini-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 8px;
+  min-height: 34px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--border-color, #cbd5e1);
+  box-sizing: border-box;
+}
+html.dark .mep-mini-preview {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: #2f2f3b;
+}
+.mep-mini-preview-body {
+  flex: 1;
+  min-width: 0;
+  max-height: 58px;
+  overflow-y: auto;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 3px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-color, #1e293b);
+}
+html.dark .mep-mini-preview-body {
+  color: #e4e4e7;
+}
+.mep-mp-placeholder {
+  font-size: 11px;
+  color: var(--text-dimmed, #94a3b8);
+  user-select: none;
+}
+.mep-mini-preview-body .mj-hand {
+  gap: 2px 5px;
+  margin: 0 1px;
+}
+.mep-mini-preview-body .mj-meld-block {
+  gap: 1.5px 0;
+}
+.mep-mini-preview-body .mj-upright-wrap {
+  width: 17px;
+  height: 25px;
+}
+.mep-mini-preview-body .mj-tile {
+  width: 19.6px;
+  height: 28.2px;
+}
+.mep-mini-preview-body .mj-side-wrap {
+  width: 24.5px;
+  height: 17px;
+}
+.mep-mini-preview-body .mj-side-wrap .mj-tile {
+  width: 19.6px;
+  height: 28.2px;
+  transform: rotate(-90deg) translateX(0.3px);
+}
+.mep-mini-preview-body .mj-kakan-wrap {
+  width: 24.5px;
+  height: 34px;
+}
+.mep-mini-preview-body .inline-mahjong-tile {
+  width: 17px;
+  height: 25px;
+  margin: 0;
+}
+.mep-mini-preview-body .inline-mahjong-tile img {
+  width: 19.6px;
+  height: 28.2px;
+}
+.mep-mini-preview-body .inline-mahjong-action {
+  padding: 1.5px 6px;
+  margin: 0 1px;
+  font-size: 10.5px;
+  border-radius: 4px;
+}
+.mep-mini-backspace-btn {
+  flex-shrink: 0;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-modal, #ffffff);
+  color: var(--text-dimmed, #475569);
+  font-size: 12px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.mep-mini-backspace-btn:hover {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+html.dark .mep-mini-backspace-btn {
+  background: #22222a;
+  border-color: #353542;
+  color: #a1a1aa;
+}
+html.dark .mep-mini-backspace-btn:hover {
   border-color: rgba(248, 113, 113, 0.5);
   color: #f87171;
   background: rgba(248, 113, 113, 0.12);
@@ -19169,9 +19471,11 @@ html.dark .mep-notation-guide code {
     padding: 0 6px;
     font-size: 10.5px;
   }
+  .mep-util-btn.space-btn,
   .mep-util-btn.help,
   .mep-util-btn.close {
     width: 23px;
+    padding: 0;
   }
   .mep-tiles-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -19418,12 +19722,12 @@ html.dark .mep-base-name {
 }
 
 /* =====================================================================
-   글래스모피즘 후로 조이스틱 4방향 HUD 오버레이 (60~120fps 물리 레버 연출)
+   글래스모피즘 후로 조이스틱 4방향 초소형 HUD 오버레이 (패 & 레버만 표시)
    ===================================================================== */
 .furo-joystick-hud {
   --hud-accent: #3b82f6;
   --hud-accent-glow: rgba(59, 130, 246, 0.48);
-  --hud-accent-soft: rgba(59, 130, 246, 0.16);
+  --hud-accent-soft: rgba(59, 130, 246, 0.22);
   position: fixed;
   z-index: 9999;
   pointer-events: none;
@@ -19434,58 +19738,42 @@ html.dark .mep-base-name {
     ". up ."
     "left center right"
     ". down .";
-  grid-template-columns: 122px 98px 122px;
-  grid-template-rows: auto 98px auto;
-  gap: 8px;
+  grid-template-columns: 76px 46px 76px;
+  grid-template-rows: auto 46px auto;
+  gap: 5px;
   align-items: center;
   justify-items: center;
-  padding: 14px;
-  border-radius: 24px;
-  max-width: calc(100vw - 12px);
+  padding: 8px;
+  border-radius: 16px;
+  max-width: calc(100vw - 8px);
   box-sizing: border-box;
-  background: rgba(15, 23, 42, 0.78);
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.15);
-}
-@media (max-width: 420px) {
-  .furo-joystick-hud {
-    grid-template-columns: 102px 82px 102px;
-    grid-template-rows: auto 82px auto;
-    gap: 6px;
-    padding: 10px;
-    border-radius: 20px;
-  }
-  .furo-hud-tiles-stage {
-    transform: scale(0.72);
-  }
-  .furo-joystick-socket {
-    width: 76px;
-    height: 76px;
-  }
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 .furo-joystick-hud.action-chi {
   --hud-accent: #10b981;
   --hud-accent-glow: rgba(16, 185, 129, 0.52);
-  --hud-accent-soft: rgba(16, 185, 129, 0.18);
+  --hud-accent-soft: rgba(16, 185, 129, 0.24);
 }
 .furo-joystick-hud.action-pon {
   --hud-accent: #3b82f6;
   --hud-accent-glow: rgba(59, 130, 246, 0.52);
-  --hud-accent-soft: rgba(59, 130, 246, 0.18);
+  --hud-accent-soft: rgba(59, 130, 246, 0.24);
 }
 .furo-joystick-hud.action-kan {
   --hud-accent: #8b5cf6;
   --hud-accent-glow: rgba(139, 92, 246, 0.52);
-  --hud-accent-soft: rgba(139, 92, 246, 0.18);
+  --hud-accent-soft: rgba(139, 92, 246, 0.24);
 }
 
 .furo-hud-pop-enter-active {
-  transition: opacity 0.18s ease-out, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 0.14s ease-out, transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .furo-hud-pop-leave-active {
-  transition: opacity 0.15s ease-in, transform 0.16s ease-in;
+  transition: opacity 0.12s ease-in, transform 0.14s ease-in;
 }
 .furo-hud-pop-enter-from,
 .furo-hud-pop-leave-to {
@@ -19495,22 +19783,20 @@ html.dark .mep-base-name {
 
 .furo-hud-card {
   width: 100%;
-  min-height: 76px;
-  padding: 7px 8px 6px;
-  border-radius: 14px;
-  background: rgba(30, 41, 59, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  min-height: 36px;
+  padding: 5px 5px 4px;
+  border-radius: 10px;
+  background: rgba(30, 41, 59, 0.76);
+  border: 1px solid rgba(255, 255, 255, 0.13);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
   box-sizing: border-box;
   transition:
-    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
-    background-color 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.18s ease;
+    transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.16s ease;
 }
 .furo-hud-card.dir-up {
   grid-area: up;
@@ -19527,131 +19813,133 @@ html.dark .mep-base-name {
 .furo-hud-card.is-active {
   background: var(--hud-accent-soft);
   border-color: var(--hud-accent);
-  box-shadow: 0 0 22px var(--hud-accent-glow), inset 0 0 12px rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 18px var(--hud-accent-glow), inset 0 0 10px rgba(255, 255, 255, 0.12);
 }
 .furo-hud-card.dir-up.is-active {
-  transform: translateY(-4px) scale(1.08);
+  transform: translateY(-3px) scale(1.08);
 }
 .furo-hud-card.dir-down.is-active {
-  transform: translateY(4px) scale(1.08);
+  transform: translateY(3px) scale(1.08);
 }
 .furo-hud-card.dir-left.is-active {
-  transform: translateX(-4px) scale(1.08);
+  transform: translateX(-3px) scale(1.08);
 }
 .furo-hud-card.dir-right.is-active {
-  transform: translateX(4px) scale(1.08);
+  transform: translateX(3px) scale(1.08);
 }
 .furo-hud-card.is-confirmed {
-  animation: furoSlotConfirmPulse 0.17s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation: furoSlotConfirmPulse 0.16s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 @keyframes furoSlotConfirmPulse {
   0% {
     transform: scale(1.08);
   }
   50% {
-    transform: scale(1.15);
-    filter: brightness(1.2);
+    transform: scale(1.16);
+    filter: brightness(1.22);
   }
   100% {
     transform: scale(1.04);
   }
 }
 
-.furo-hud-card-head {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  font-weight: 800;
-  color: rgba(226, 232, 240, 0.85);
-  white-space: nowrap;
-}
-.furo-hud-card.is-active .furo-hud-card-head {
-  color: #ffffff;
-}
-.furo-hud-dir-arrow {
-  color: var(--hud-accent);
-  font-weight: 900;
-}
-.furo-hud-card.is-active .furo-hud-dir-arrow {
-  color: #ffffff;
-  text-shadow: 0 0 8px var(--hud-accent);
-}
 .furo-hud-tiles-stage {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  min-height: 44px;
-  transform: scale(0.82);
-  transform-origin: center bottom;
+  min-height: 24px;
+  white-space: nowrap;
 }
-.furo-hud-code-chip {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 9.5px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.35);
-  color: rgba(148, 163, 184, 0.9);
+/* HUD 내부에서는 패 블록이 절대 개행되지 않도록 강제 & 타일 소형화 */
+.furo-joystick-hud .mj-meld-block {
+  display: inline-flex;
+  flex-wrap: nowrap !important;
+  white-space: nowrap !important;
+  max-width: none !important;
+  align-items: flex-end;
+  gap: 0;
+  margin: 0;
 }
-.furo-hud-card.is-active .furo-hud-code-chip {
-  background: var(--hud-accent);
-  color: #ffffff;
+.furo-joystick-hud .mj-upright-wrap {
+  width: 15px;
+  height: 22px;
+}
+.furo-joystick-hud .mj-tile {
+  width: 17.5px;
+  height: 25px;
+  filter: drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.38));
+}
+.furo-joystick-hud .mj-side-wrap {
+  width: 21.6px;
+  height: 15px;
+}
+.furo-joystick-hud .mj-side-wrap .mj-tile {
+  width: 17.5px;
+  height: 25px;
+  transform: rotate(-90deg) translateX(0.3px);
+}
+.furo-joystick-hud .mj-kakan-wrap {
+  width: 21.6px;
+  height: 30px;
+}
+.furo-joystick-hud .mj-kakan-wrap .mj-side-wrap + .mj-side-wrap {
+  margin-top: -0.3px;
 }
 
-/* 중앙 아날로그 조이스틱 소켓 & 물리 레버 노브 */
+/* 중앙 초소형 아날로그 조이스틱 소켓 & 물리 레버 노브 (글씨 없음) */
 .furo-joystick-socket {
   grid-area: center;
   position: relative;
-  width: 88px;
-  height: 88px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.78) 100%);
-  border: 1.5px solid rgba(255, 255, 255, 0.16);
-  box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.65), 0 0 0 4px rgba(255, 255, 255, 0.04);
+  background: radial-gradient(circle, rgba(15, 23, 42, 0.94) 0%, rgba(30, 41, 59, 0.8) 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.65), 0 0 0 2px rgba(255, 255, 255, 0.04);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 .furo-joystick-socket.is-engaged {
   border-color: var(--hud-accent);
-  box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.65), 0 0 18px var(--hud-accent-glow);
+  box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.65), 0 0 14px var(--hud-accent-glow);
 }
 .furo-socket-ring {
   position: absolute;
-  inset: 4px;
+  inset: 2px;
   border-radius: 50%;
   border: 1px dashed rgba(255, 255, 255, 0.15);
   pointer-events: none;
 }
 .furo-socket-tick {
   position: absolute;
-  font-size: 8px;
+  font-size: 6px;
+  line-height: 1;
   color: rgba(148, 163, 184, 0.45);
-  transition: color 0.15s ease, transform 0.15s ease;
+  transition: color 0.15s ease;
 }
 .furo-socket-tick.active {
   color: var(--hud-accent);
-  text-shadow: 0 0 6px var(--hud-accent);
+  text-shadow: 0 0 5px var(--hud-accent);
 }
 .furo-socket-tick.tick-up {
-  top: 2px;
+  top: 1px;
   left: 50%;
   transform: translateX(-50%);
 }
 .furo-socket-tick.tick-down {
-  bottom: 2px;
+  bottom: 1px;
   left: 50%;
   transform: translateX(-50%);
 }
 .furo-socket-tick.tick-left {
-  left: 3px;
+  left: 1.5px;
   top: 50%;
   transform: translateY(-50%);
 }
 .furo-socket-tick.tick-right {
-  right: 3px;
+  right: 1.5px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -19660,48 +19948,38 @@ html.dark .mep-base-name {
   position: absolute;
   left: 50%;
   top: 50%;
-  height: 6px;
-  margin-top: -3px;
+  height: 4px;
+  margin-top: -2px;
   transform-origin: 0 50%;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.15) 0%, var(--hud-accent) 100%);
-  box-shadow: 0 0 10px var(--hud-accent-glow);
+  box-shadow: 0 0 8px var(--hud-accent-glow);
   pointer-events: none;
 }
 
 .furo-joystick-knob {
   position: relative;
   z-index: 2;
-  width: 44px;
-  height: 44px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #475569 0%, #1e293b 75%, #0f172a 100%);
-  border: 2px solid rgba(255, 255, 255, 0.45);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.55), inset 0 2px 3px rgba(255, 255, 255, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: radial-gradient(circle at 35% 30%, #64748b 0%, #1e293b 72%, #0f172a 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.55), inset 0 1.5px 2px rgba(255, 255, 255, 0.4);
   will-change: transform;
-  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .furo-joystick-knob.is-engaged {
-  background: radial-gradient(circle at 35% 30%, #ffffff 0%, var(--hud-accent) 45%, #0f172a 100%);
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, var(--hud-accent) 48%, #0f172a 100%);
   border-color: #ffffff;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6), 0 0 18px var(--hud-accent-glow), inset 0 2px 4px rgba(255, 255, 255, 0.65);
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.6), 0 0 14px var(--hud-accent-glow), inset 0 1.5px 3px rgba(255, 255, 255, 0.7);
 }
 .furo-joystick-knob.is-spring-back {
   transition:
-    transform 0.26s cubic-bezier(0.34, 1.56, 0.64, 1),
-    background 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.16s ease;
-}
-.furo-knob-label {
-  font-size: 11px;
-  font-weight: 900;
-  color: #ffffff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
-  letter-spacing: -0.02em;
+    transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 /* =====================================================================
