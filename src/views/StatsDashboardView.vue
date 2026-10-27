@@ -4564,6 +4564,7 @@ const furoDragState = ref<{
 interface FuroHudSlotInfo {
   dir: 'up' | 'left' | 'right' | 'down';
   label: string;
+  notation: string;
   subCode: string;
   blocks: MahjongMeldBlock[];
 }
@@ -4602,6 +4603,7 @@ const furoHudSlots = computed<Record<'up' | 'left' | 'right' | 'down', FuroHudSl
     out[d] = {
       dir: d,
       label: labelsByAction[effectiveAction][d],
+      notation,
       subCode: `[${notation}]`,
       blocks: parseMahjongMeldBlocks(notation),
     };
@@ -4957,17 +4959,17 @@ const startFuroLeverDrag = (
   };
 
   const maxRadius = 20;
-  const deadzone = 10;
+  const deadzone = 3.5;
 
   const onPointerMove = (moveEv: PointerEvent) => {
     const rawDx = moveEv.clientX - originX;
     const rawDy = moveEv.clientY - originY;
     const dist = Math.hypot(rawDx, rawDy);
-    const dampedDist = maxRadius * Math.tanh(dist / 32);
+    const dampedDist = maxRadius * Math.tanh(dist / 16);
 
     const knobX = dist > 0.1 ? (rawDx / dist) * dampedDist : 0;
     const knobY = dist > 0.1 ? (rawDy / dist) * dampedDist : 0;
-    const pullRatio = Math.min(1, dist / 18);
+    const pullRatio = Math.min(1, dist / 10);
     const angleDeg = Math.atan2(rawDy, rawDx) * (180 / Math.PI);
 
     let nextDir: 'center' | 'left' | 'right' | 'up' | 'down' = 'center';
@@ -4976,9 +4978,9 @@ const startFuroLeverDrag = (
       const absX = Math.abs(rawDx);
       const absY = Math.abs(rawDy);
       // 대각선 경계 떨림 방지 히스테리시스
-      if ((prevDir === 'left' || prevDir === 'right') && absX + 4 >= absY) {
+      if ((prevDir === 'left' || prevDir === 'right') && absX + 2 >= absY) {
         nextDir = rawDx >= 0 ? 'right' : 'left';
-      } else if ((prevDir === 'up' || prevDir === 'down') && absY + 4 >= absX) {
+      } else if ((prevDir === 'up' || prevDir === 'down') && absY + 2 >= absX) {
         nextDir = rawDy >= 0 ? 'down' : 'up';
       } else if (absX >= absY) {
         nextDir = rawDx >= 0 ? 'right' : 'left';
@@ -5159,6 +5161,115 @@ const scrollToLightboxComments = () => {
 
 const loadedHighResImageIds = ref<Set<string>>(new Set());
 const isZoomHighResLoaded = ref<boolean>(false);
+const loadedThumbIds = ref<Set<string>>(new Set());
+const isLightboxImageLoaded = ref<boolean>(false);
+
+const THUMB_ASPECT_RATIO_STORAGE_KEY = 'mahjong_hl_thumb_ratios_v1';
+const loadSavedThumbAspectRatios = (): Record<string, number> => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.sessionStorage.getItem(THUMB_ASPECT_RATIO_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, number>;
+  } catch {
+    // ignore storage errors
+  }
+  return {};
+};
+const thumbAspectRatios = ref<Record<string, number>>(loadSavedThumbAspectRatios());
+let thumbRatioSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+const recordThumbAspectRatio = (imageId: string, naturalWidth: number, naturalHeight: number) => {
+  if (!imageId || !naturalWidth || !naturalHeight) return;
+  const ratio = Math.round((naturalWidth / naturalHeight) * 1000) / 1000;
+  if (ratio <= 0.1 || ratio >= 10) return;
+  if (thumbAspectRatios.value[imageId] === ratio) return;
+  thumbAspectRatios.value[imageId] = ratio;
+  if (typeof window !== 'undefined') {
+    if (thumbRatioSaveTimer) clearTimeout(thumbRatioSaveTimer);
+    thumbRatioSaveTimer = setTimeout(() => {
+      try {
+        window.sessionStorage.setItem(
+          THUMB_ASPECT_RATIO_STORAGE_KEY,
+          JSON.stringify(thumbAspectRatios.value)
+        );
+      } catch {
+        // ignore quota errors
+      }
+    }, 300);
+  }
+};
+
+const getThumbWrapStyle = (imageId?: string): Record<string, string> | undefined => {
+  if (!imageId) return undefined;
+  const ratio = thumbAspectRatios.value[imageId];
+  if (ratio && ratio > 0) {
+    return { aspectRatio: String(ratio) };
+  }
+  return undefined;
+};
+
+const handleThumbImageLoad = (imageId?: string, ev?: Event) => {
+  if (!imageId) return;
+  loadedThumbIds.value.add(imageId);
+  const imgEl = ev?.target as HTMLImageElement | null;
+  if (imgEl && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+    recordThumbAspectRatio(imageId, imgEl.naturalWidth, imgEl.naturalHeight);
+  }
+};
+
+const prewarmedThumbUrlSet = new Set<string>();
+const prewarmGalleryThumbnails = (records: HighlightRecord[], maxCount = 24) => {
+  if (typeof window === 'undefined' || !Array.isArray(records) || records.length === 0) return;
+  let count = 0;
+  for (const rec of records) {
+    if (count >= maxCount) break;
+    if (!rec.hasImage || !rec.imageId) continue;
+    count++;
+    const imageId = rec.imageId;
+    if (loadedThumbIds.value.has(imageId)) continue;
+    const url = getHighlightThumbnailUrl(imageId);
+    if (!url || prewarmedThumbUrlSet.has(url)) continue;
+    prewarmedThumbUrlSet.add(url);
+
+    const img = new Image();
+    img.decoding = 'async';
+    const finalize = () => {
+      loadedThumbIds.value.add(imageId);
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        recordThumbAspectRatio(imageId, img.naturalWidth, img.naturalHeight);
+      }
+    };
+    img.onload = () => {
+      if (typeof img.decode === 'function') {
+        img.decode().then(finalize).catch(finalize);
+      } else {
+        finalize();
+      }
+    };
+    img.src = url;
+    if (img.complete && img.naturalWidth > 0) {
+      finalize();
+    }
+  }
+};
+
+watch(
+  highlightsList,
+  (list) => {
+    if (!Array.isArray(list) || list.length === 0) return;
+    if (isInitialLightboxImagePending.value) return;
+    prewarmGalleryThumbnails(list, 24);
+  },
+  { immediate: true }
+);
+
+watch(activeTab, (tab) => {
+  if ((tab === 'gallery' || tab === 'sessions') && highlightsList.value.length > 0) {
+    prewarmGalleryThumbnails(highlightsList.value, 32);
+  }
+});
 
 const getDisplayHighlightImageSrc = (imageId?: string): string => {
   if (!imageId) return '';
@@ -5175,8 +5286,21 @@ const handleZoomHighResLoad = (imageId?: string) => {
   }
 };
 
-const handleLightboxImageLoad = () => {
+const handleLightboxImageLoad = (ev?: Event) => {
+  isLightboxImageLoaded.value = true;
+  const imgId = lightboxHighlight.value?.imageId;
+  if (imgId) {
+    loadedThumbIds.value.add(imgId);
+    const imgEl = ev?.target as HTMLImageElement | null;
+    if (imgEl && imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+      recordThumbAspectRatio(imgId, imgEl.naturalWidth, imgEl.naturalHeight);
+    }
+  }
+  const wasPendingInitial = isInitialLightboxImagePending.value;
   clearInitialLightboxImagePending();
+  if (wasPendingInitial && highlightsList.value.length > 0) {
+    prewarmGalleryThumbnails(highlightsList.value, 24);
+  }
   if (lightboxScrollAreaRef.value && lightboxScrollAreaRef.value.scrollTop < 10) {
     lightboxScrollAreaRef.value.scrollTop = 0;
   }
@@ -5207,9 +5331,14 @@ const cycleFullImageFitMode = () => {
 
 watch(lightboxHighlight, (val, oldVal) => {
   if (val) {
+    isLightboxImageLoaded.value = Boolean(
+      val.imageId &&
+        (loadedThumbIds.value.has(val.imageId) || loadedHighResImageIds.value.has(val.imageId))
+    );
     updateVisualViewportHeight();
   } else {
     clearInitialLightboxImagePending();
+    isLightboxImageLoaded.value = false;
     isFullImageZoomOpen.value = false;
     isZoomHighResLoaded.value = false;
     fullImageFitMode.value = 'contain';
@@ -5532,6 +5661,10 @@ const openHighlightLightbox = (rec: HighlightRecord, updateUrl = true) => {
   isFullImageZoomOpen.value = false;
   fullImageFitMode.value = 'contain';
   showLightboxCommentFab.value = true;
+  isLightboxImageLoaded.value = Boolean(
+    rec.imageId &&
+      (loadedThumbIds.value.has(rec.imageId) || loadedHighResImageIds.value.has(rec.imageId))
+  );
   lightboxHighlight.value = rec;
   if (rec.id) {
     void syncLatestHighlightOnOpen(rec.id);
@@ -7417,8 +7550,22 @@ const openGamePopupFromLightbox = async (
                   :class="'hl-cat-' + rec.category"
                   @click="openHighlightLightbox(rec)"
                 >
-                  <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
-                    <img :src="getHighlightThumbnailUrl(rec.imageId)" :alt="rec.caption || rec.winnerName" loading="lazy" decoding="async" class="pinterest-img" />
+                  <div
+                    v-if="rec.hasImage && rec.imageId"
+                    class="pinterest-img-wrap"
+                    :class="{ 'is-loaded': loadedThumbIds.has(rec.imageId) }"
+                    :style="getThumbWrapStyle(rec.imageId)"
+                  >
+                    <img
+                      :src="getHighlightThumbnailUrl(rec.imageId)"
+                      :alt="rec.caption || rec.winnerName"
+                      loading="lazy"
+                      decoding="async"
+                      class="pinterest-img"
+                      :class="{ 'is-loaded': loadedThumbIds.has(rec.imageId) }"
+                      @load="handleThumbImageLoad(rec.imageId, $event)"
+                      @error="handleThumbImageLoad(rec.imageId)"
+                    />
                   </div>
                   <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun', 'is-nanikiru-banner': rec.category === 'nanikiru' }">
                     <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : rec.category === 'nanikiru' ? '何切る' : '和了' }}</span>
@@ -7668,14 +7815,14 @@ const openGamePopupFromLightbox = async (
             </div>
           </div>
 
-          <!-- 서버 저장 용량 및 남은 용량 표시 바 (R2 10GB 무료 한도 합산 · M-Lab 외부 버킷 비활성 차감 반영) -->
+          <!-- 서버 저장 용량 및 남은 용량 표시 바 (R2 10GB 무료 한도 합산 · 비활성 차감 반영) -->
           <div class="gh-storage-status-bar">
             <div class="gh-storage-info">
               <span class="gh-storage-title">서버 저장소 용량</span>
               <span class="gh-storage-metrics">
                 남은 용량 <strong class="gh-storage-remain">{{ galleryStorageStats.remainingText }}</strong>
                 <span class="gh-storage-sub">
-                  (사용 {{ galleryStorageStats.usedText }}<template v-if="galleryStorageStats.externalR2Bytes > 0"> · <span class="gh-storage-ext-badge" title="동일 Cloudflare R2 계정(10GB 무료 한도)에서 m-lab-media 버킷이 점유하여 비활성 처리된 용량">M-Lab 비활성 {{ galleryStorageStats.externalUsedText }}</span></template> / 전체 {{ galleryStorageStats.maxText }} · 사진 {{ galleryStorageStats.imageCount }}장)
+                  (사용 {{ galleryStorageStats.usedText }}<template v-if="galleryStorageStats.externalR2Bytes > 0"> · <span class="gh-storage-ext-badge" title="비활성 처리된 저장소 용량">비활성 {{ galleryStorageStats.externalUsedText }}</span></template> / 전체 {{ galleryStorageStats.maxText }} · 사진 {{ galleryStorageStats.imageCount }}장)
                 </span>
               </span>
               <span
@@ -7690,7 +7837,7 @@ const openGamePopupFromLightbox = async (
             </div>
             <div
               class="gh-storage-track"
-              :title="`하이라이트 사용: ${galleryStorageStats.usedText} (${galleryStorageStats.usedPercent.toFixed(2)}%)${galleryStorageStats.externalR2Bytes > 0 ? ` / M-Lab 점유(비활성): ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)` : ''} / 남은 무료 용량: ${galleryStorageStats.remainingText}`"
+              :title="`하이라이트 사용: ${galleryStorageStats.usedText} (${galleryStorageStats.usedPercent.toFixed(2)}%)${galleryStorageStats.externalR2Bytes > 0 ? ` / 비활성: ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)` : ''} / 남은 용량: ${galleryStorageStats.remainingText}`"
             >
               <div
                 class="gh-storage-fill"
@@ -7704,7 +7851,7 @@ const openGamePopupFromLightbox = async (
                 v-if="galleryStorageStats.externalR2Bytes > 0"
                 class="gh-storage-fill-external"
                 :style="{ width: Math.max(1.5, galleryStorageStats.externalBarWidthPct) + '%' }"
-                :title="`M-Lab 버킷 사용 용량 (비활성/차감): ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)`"
+                :title="`비활성 용량: ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)`"
               ></div>
             </div>
           </div>
@@ -7722,14 +7869,21 @@ const openGamePopupFromLightbox = async (
             :class="'hl-cat-' + rec.category"
             @click="openHighlightLightbox(rec)"
           >
-            <div v-if="rec.hasImage && rec.imageId" class="pinterest-img-wrap">
+            <div
+              v-if="rec.hasImage && rec.imageId"
+              class="pinterest-img-wrap"
+              :class="{ 'is-loaded': loadedThumbIds.has(rec.imageId) }"
+              :style="getThumbWrapStyle(rec.imageId)"
+            >
               <img
-                v-if="!isInitialLightboxImagePending"
                 :src="getHighlightThumbnailUrl(rec.imageId)"
                 :alt="rec.caption || rec.winnerName"
                 loading="lazy"
                 decoding="async"
                 class="pinterest-img"
+                :class="{ 'is-loaded': loadedThumbIds.has(rec.imageId) }"
+                @load="handleThumbImageLoad(rec.imageId, $event)"
+                @error="handleThumbImageLoad(rec.imageId)"
               />
             </div>
             <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun', 'is-nanikiru-banner': rec.category === 'nanikiru' }">
@@ -9909,7 +10063,7 @@ const openGamePopupFromLightbox = async (
                 <span class="gh-storage-metrics">
                   <strong class="gh-storage-remain">{{ galleryStorageStats.remainingText }}</strong> 사용 가능
                   <span class="gh-storage-sub">
-                    (현재 {{ galleryStorageStats.usedText }}<template v-if="galleryStorageStats.externalR2Bytes > 0"> · <span class="gh-storage-ext-badge" title="동일 Cloudflare R2 계정(10GB 무료 한도)에서 m-lab-media 버킷이 점유하여 비활성 처리된 용량">M-Lab 비활성 {{ galleryStorageStats.externalUsedText }}</span></template> / {{ galleryStorageStats.maxText }} 사용 중)
+                    (현재 {{ galleryStorageStats.usedText }}<template v-if="galleryStorageStats.externalR2Bytes > 0"> · <span class="gh-storage-ext-badge" title="비활성 처리된 저장소 용량">비활성 {{ galleryStorageStats.externalUsedText }}</span></template> / {{ galleryStorageStats.maxText }} 사용 중)
                   </span>
                 </span>
                 <span
@@ -9935,7 +10089,7 @@ const openGamePopupFromLightbox = async (
                   v-if="galleryStorageStats.externalR2Bytes > 0"
                   class="gh-storage-fill-external"
                   :style="{ width: Math.max(1.5, galleryStorageStats.externalBarWidthPct) + '%' }"
-                  :title="`M-Lab 버킷 사용 용량 (비활성/차감): ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)`"
+                  :title="`비활성 용량: ${galleryStorageStats.externalUsedText} (${galleryStorageStats.externalUsedPercent.toFixed(2)}%)`"
                 ></div>
               </div>
             </div>
@@ -10423,15 +10577,18 @@ const openGamePopupFromLightbox = async (
             <div
               v-if="lightboxHighlight.hasImage && lightboxHighlight.imageId"
               class="lightbox-img-container"
+              :class="{ 'is-loaded': isLightboxImageLoaded }"
               title="클릭하여 고화질 원본 크게 보기"
               @click.stop="openFullImageZoom"
             >
               <img
                 :src="getDisplayHighlightImageSrc(lightboxHighlight.imageId)"
                 class="lightbox-full-img"
+                :class="{ 'is-loaded': isLightboxImageLoaded }"
                 alt="사진"
+                loading="eager"
                 fetchpriority="high"
-                decoding="async"
+                decoding="sync"
                 @load="handleLightboxImageLoad"
                 @error="handleLightboxImageLoad"
               />
@@ -10689,48 +10846,6 @@ const openGamePopupFromLightbox = async (
                         class="form-textarea lb-cmt-edit-textarea"
                         placeholder=""
                       ></textarea>
-                      <div
-                        v-if="editingCommentContent.includes('[') && editingCommentContent.includes(']')"
-                        class="lb-cf-live-preview"
-                      >
-                        <span class="lb-cf-preview-label">미리보기</span>
-                        <div class="lb-cf-preview-body rich-mahjong-content">
-                          <template v-for="(seg, sIdx) in parseRichMahjongText(editingCommentContent)" :key="`ed-prev-seg-${sIdx}`">
-                            <span v-if="seg.type === 'text'">{{ seg.text }}</span>
-                            <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
-                              <span
-                                v-for="(blk, bIdx) in seg.blocks"
-                                :key="`ed-prev-blk-${sIdx}-${bIdx}`"
-                                class="mj-meld-block"
-                                :class="{ 'is-draw-block': blk.isDraw }"
-                              >
-                                <template v-for="(item, iIdx) in blk.items" :key="`ed-prev-it-${sIdx}-${bIdx}-${iIdx}`">
-                                  <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
-                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                  </span>
-                                  <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
-                                    <span class="mj-side-wrap">
-                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                    </span>
-                                    <span class="mj-side-wrap">
-                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                    </span>
-                                  </span>
-                                  <span v-else class="mj-upright-wrap" :title="item.tile.label">
-                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                  </span>
-                                </template>
-                              </span>
-                            </span>
-                            <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
-                              <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
-                            </span>
-                            <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
-                              {{ seg.action.label }}
-                            </span>
-                          </template>
-                        </div>
-                      </div>
                       <div class="lb-cmt-edit-toolbar">
                         <div class="emote-picker-anchor">
                           <button
@@ -10916,6 +11031,49 @@ const openGamePopupFromLightbox = async (
                         </div>
                       </div>
 
+                      <div
+                        v-if="editingCommentContent.includes('[') && editingCommentContent.includes(']')"
+                        class="lb-cf-live-preview"
+                      >
+                        <span class="lb-cf-preview-label">미리보기</span>
+                        <div class="lb-cf-preview-body rich-mahjong-content">
+                          <template v-for="(seg, sIdx) in parseRichMahjongText(editingCommentContent)" :key="`ed-prev-seg-${sIdx}`">
+                            <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                            <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                              <span
+                                v-for="(blk, bIdx) in seg.blocks"
+                                :key="`ed-prev-blk-${sIdx}-${bIdx}`"
+                                class="mj-meld-block"
+                                :class="{ 'is-draw-block': blk.isDraw }"
+                              >
+                                <template v-for="(item, iIdx) in blk.items" :key="`ed-prev-it-${sIdx}-${bIdx}-${iIdx}`">
+                                  <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                  </span>
+                                  <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                    <span class="mj-side-wrap">
+                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                    </span>
+                                    <span class="mj-side-wrap">
+                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                    </span>
+                                  </span>
+                                  <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                  </span>
+                                </template>
+                              </span>
+                            </span>
+                            <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                              <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
+                            </span>
+                            <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                              {{ seg.action.label }}
+                            </span>
+                          </template>
+                        </div>
+                      </div>
+
                       <div v-if="commentActionError && editingCommentId === cmt.id" class="upload-error-msg">{{ commentActionError }}</div>
                     </div>
 
@@ -10997,49 +11155,6 @@ const openGamePopupFromLightbox = async (
                         placeholder=""
                         @keydown.ctrl.enter.prevent="submitReplyHighlightComment(cmt)"
                       ></textarea>
-
-                      <div
-                        v-if="replyContentInput.includes('[') && replyContentInput.includes(']')"
-                        class="lb-cf-live-preview"
-                      >
-                        <span class="lb-cf-preview-label">미리보기</span>
-                        <div class="lb-cf-preview-body rich-mahjong-content">
-                          <template v-for="(seg, sIdx) in parseRichMahjongText(replyContentInput)" :key="`rep-prev-seg-${sIdx}`">
-                            <span v-if="seg.type === 'text'">{{ seg.text }}</span>
-                            <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
-                              <span
-                                v-for="(blk, bIdx) in seg.blocks"
-                                :key="`rep-prev-blk-${sIdx}-${bIdx}`"
-                                class="mj-meld-block"
-                                :class="{ 'is-draw-block': blk.isDraw }"
-                              >
-                                <template v-for="(item, iIdx) in blk.items" :key="`rep-prev-it-${sIdx}-${bIdx}-${iIdx}`">
-                                  <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
-                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                  </span>
-                                  <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
-                                    <span class="mj-side-wrap">
-                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                    </span>
-                                    <span class="mj-side-wrap">
-                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                    </span>
-                                  </span>
-                                  <span v-else class="mj-upright-wrap" :title="item.tile.label">
-                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                  </span>
-                                </template>
-                              </span>
-                            </span>
-                            <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
-                              <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
-                            </span>
-                            <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
-                              {{ seg.action.label }}
-                            </span>
-                          </template>
-                        </div>
-                      </div>
 
                       <div class="lb-cmt-edit-toolbar">
                         <div class="emote-picker-anchor">
@@ -11217,6 +11332,49 @@ const openGamePopupFromLightbox = async (
                         </div>
                       </div>
 
+                      <div
+                        v-if="replyContentInput.includes('[') && replyContentInput.includes(']')"
+                        class="lb-cf-live-preview"
+                      >
+                        <span class="lb-cf-preview-label">미리보기</span>
+                        <div class="lb-cf-preview-body rich-mahjong-content">
+                          <template v-for="(seg, sIdx) in parseRichMahjongText(replyContentInput)" :key="`rep-prev-seg-${sIdx}`">
+                            <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                            <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                              <span
+                                v-for="(blk, bIdx) in seg.blocks"
+                                :key="`rep-prev-blk-${sIdx}-${bIdx}`"
+                                class="mj-meld-block"
+                                :class="{ 'is-draw-block': blk.isDraw }"
+                              >
+                                <template v-for="(item, iIdx) in blk.items" :key="`rep-prev-it-${sIdx}-${bIdx}-${iIdx}`">
+                                  <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                  </span>
+                                  <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                    <span class="mj-side-wrap">
+                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                    </span>
+                                    <span class="mj-side-wrap">
+                                      <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                    </span>
+                                  </span>
+                                  <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                    <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                  </span>
+                                </template>
+                              </span>
+                            </span>
+                            <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                              <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
+                            </span>
+                            <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                              {{ seg.action.label }}
+                            </span>
+                          </template>
+                        </div>
+                      </div>
+
                       <div v-if="replyFormError && replyingToComment?.id === cmt.id" class="upload-error-msg">{{ replyFormError }}</div>
                     </div>
                   </div>
@@ -11275,50 +11433,6 @@ const openGamePopupFromLightbox = async (
                       placeholder=""
                       @keydown.ctrl.enter.prevent="submitNewHighlightComment"
                     ></textarea>
-                  </div>
-
-                  <!-- 입력창에 포함된 마작패/액션 실시간 미리보기 -->
-                  <div
-                    v-if="commentContentInput.includes('[') && commentContentInput.includes(']')"
-                    class="lb-cf-live-preview"
-                  >
-                    <span class="lb-cf-preview-label">미리보기</span>
-                    <div class="lb-cf-preview-body rich-mahjong-content">
-                      <template v-for="(seg, sIdx) in parseRichMahjongText(commentContentInput)" :key="`prev-seg-${sIdx}`">
-                        <span v-if="seg.type === 'text'">{{ seg.text }}</span>
-                        <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
-                          <span
-                            v-for="(blk, bIdx) in seg.blocks"
-                            :key="`prev-blk-${sIdx}-${bIdx}`"
-                            class="mj-meld-block"
-                            :class="{ 'is-draw-block': blk.isDraw }"
-                          >
-                            <template v-for="(item, iIdx) in blk.items" :key="`prev-it-${sIdx}-${bIdx}-${iIdx}`">
-                              <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
-                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                              </span>
-                              <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
-                                <span class="mj-side-wrap">
-                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                </span>
-                                <span class="mj-side-wrap">
-                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                                </span>
-                              </span>
-                              <span v-else class="mj-upright-wrap" :title="item.tile.label">
-                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
-                              </span>
-                            </template>
-                          </span>
-                        </span>
-                        <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
-                          <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
-                        </span>
-                        <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
-                          {{ seg.action.label }}
-                        </span>
-                      </template>
-                    </div>
                   </div>
 
                   <!-- 하단 툴바: 나니키루콘 플로팅 팝업 토글 + 등록 버튼 -->
@@ -11536,6 +11650,50 @@ const openGamePopupFromLightbox = async (
                     </button>
                   </div>
 
+                  <!-- 입력창에 포함된 마작패/액션 실시간 미리보기 (하단 툴바 아래에 배치하여 팝업 위치 고정) -->
+                  <div
+                    v-if="commentContentInput.includes('[') && commentContentInput.includes(']')"
+                    class="lb-cf-live-preview"
+                  >
+                    <span class="lb-cf-preview-label">미리보기</span>
+                    <div class="lb-cf-preview-body rich-mahjong-content">
+                      <template v-for="(seg, sIdx) in parseRichMahjongText(commentContentInput)" :key="`prev-seg-${sIdx}`">
+                        <span v-if="seg.type === 'text'">{{ seg.text }}</span>
+                        <span v-else-if="seg.type === 'meld-group'" class="mj-hand" :title="seg.rawNotation">
+                          <span
+                            v-for="(blk, bIdx) in seg.blocks"
+                            :key="`prev-blk-${sIdx}-${bIdx}`"
+                            class="mj-meld-block"
+                            :class="{ 'is-draw-block': blk.isDraw }"
+                          >
+                            <template v-for="(item, iIdx) in blk.items" :key="`prev-it-${sIdx}-${bIdx}-${iIdx}`">
+                              <span v-if="item.mode === 'side'" class="mj-side-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                              </span>
+                              <span v-else-if="item.mode === 'kakan'" class="mj-kakan-wrap" :title="`${item.tile.label} 가깡`">
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                </span>
+                                <span class="mj-side-wrap">
+                                  <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                                </span>
+                              </span>
+                              <span v-else class="mj-upright-wrap" :title="item.tile.label">
+                                <img class="mj-tile" :src="getMahjongTileImageUrl(item.tile.fileName)" :alt="item.tile.label" loading="eager" decoding="sync" />
+                              </span>
+                            </template>
+                          </span>
+                        </span>
+                        <span v-else-if="seg.type === 'tile'" class="inline-mahjong-tile" :title="seg.tile.label">
+                          <img :src="getMahjongTileImageUrl(seg.tile.fileName)" :alt="seg.tile.label" loading="eager" decoding="sync" />
+                        </span>
+                        <span v-else-if="seg.type === 'action'" class="inline-mahjong-action" :class="seg.action.colorClass">
+                          {{ seg.action.label }}
+                        </span>
+                      </template>
+                    </div>
+                  </div>
+
                   <div v-if="commentFormError" class="upload-error-msg">{{ commentFormError }}</div>
                 </div>
               </div>
@@ -11613,6 +11771,7 @@ const openGamePopupFromLightbox = async (
                 </template>
               </span>
             </div>
+            <span class="furo-hud-notation">{{ furoHudSlots[dirKey].notation }}</span>
           </div>
 
           <!-- 중앙 아날로그 조이스틱 소켓 & 연속 물리 노브 (텍스트 없음) -->
@@ -15367,9 +15526,12 @@ html.dark .highlight-card {
 .highlight-thumb-wrap {
   width: 100%;
   aspect-ratio: 16 / 10;
-  background: #0f172a;
+  background: var(--bg-soft, #f1f5f9);
   overflow: hidden;
   position: relative;
+}
+html.dark .highlight-thumb-wrap {
+  background: #1e293b;
 }
 .highlight-thumb-img {
   width: 100%;
@@ -16052,12 +16214,28 @@ html.dark .btn-share-highlight-header:hover {
   min-height: min(64vh, 540px);
   min-height: min(64dvh, 540px);
   min-height: min(calc(var(--vvh, 100dvh) * 0.64), 540px);
-  background: #09090b;
+  background: linear-gradient(180deg, #141720 0%, #0f1219 100%);
   display: flex;
   justify-content: center;
   align-items: center;
   overflow: hidden;
   cursor: zoom-in;
+}
+.lightbox-img-container:not(.is-loaded)::before {
+  content: '';
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(148, 163, 184, 0.22);
+  border-top-color: rgba(226, 232, 240, 0.85);
+  animation: lightboxImgSpin 0.75s linear infinite;
+  pointer-events: none;
+}
+@keyframes lightboxImgSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .lightbox-full-img {
   max-width: 100%;
@@ -16068,6 +16246,11 @@ html.dark .btn-share-highlight-header:hover {
   height: auto;
   object-fit: contain;
   display: block;
+  opacity: 0;
+  transition: opacity 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lightbox-full-img.is-loaded {
+  opacity: 1;
 }
 @media (max-width: 640px) {
   .lightbox-modal-card {
@@ -16609,9 +16792,12 @@ html.dark .hl-card {
 .hl-img-wrap {
   width: 100%;
   aspect-ratio: 16 / 10;
-  background: #09090b;
+  background: var(--bg-soft, #f1f5f9);
   position: relative;
   overflow: hidden;
+}
+html.dark .hl-img-wrap {
+  background: #1e293b;
 }
 .hl-img {
   width: 100%;
@@ -17075,16 +17261,46 @@ html.dark .pinterest-pin-card {
 }
 .pinterest-img-wrap {
   width: 100%;
-  background: #09090b;
+  min-height: 140px;
+  background: linear-gradient(110deg, #f1f5f9 25%, #e2e8f0 37%, #f1f5f9 63%);
+  background-size: 200% 100%;
+  animation: pinterestThumbShimmer 1.4s ease infinite;
   position: relative;
   overflow: hidden;
   line-height: 0;
+  transition: background-color 0.2s ease;
+}
+html.dark .pinterest-img-wrap {
+  background: linear-gradient(110deg, #1e293b 25%, #27272a 37%, #1e293b 63%);
+  background-size: 200% 100%;
+}
+.pinterest-img-wrap.is-loaded {
+  min-height: 0;
+  animation: none;
+  background: var(--bg-soft, #f8fafc);
+}
+html.dark .pinterest-img-wrap.is-loaded {
+  background: #141418;
+}
+@keyframes pinterestThumbShimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
 }
 .pinterest-img {
   width: 100%;
   height: auto;
   display: block;
   object-fit: contain;
+  opacity: 0;
+  transition: opacity 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity;
+}
+.pinterest-img.is-loaded {
+  opacity: 1;
 }
 .pinterest-no-img {
   aspect-ratio: auto;
@@ -18975,6 +19191,7 @@ html.dark .btn-switch-guest-mode {
   background: rgba(59, 130, 246, 0.06);
   border: 1px dashed rgba(59, 130, 246, 0.28);
   flex-wrap: wrap;
+  overflow-anchor: none;
 }
 .lb-cf-preview-label {
   font-size: 10.5px;
@@ -19309,7 +19526,7 @@ html.dark .mep-util-btn.close:hover {
   justify-content: space-between;
   gap: 6px;
   padding: 5px 8px;
-  min-height: 34px;
+  min-height: 42px;
   border-radius: 8px;
   background: rgba(15, 23, 42, 0.04);
   border: 1px solid var(--border-color, #cbd5e1);
@@ -19322,12 +19539,14 @@ html.dark .mep-mini-preview {
 .mep-mini-preview-body {
   flex: 1;
   min-width: 0;
-  max-height: 58px;
+  max-height: 98px;
   overflow-y: auto;
+  padding: 4px 2px 2px;
   display: flex;
-  align-items: flex-end;
+  align-items: baseline;
+  align-content: flex-start;
   flex-wrap: wrap;
-  gap: 2px 3px;
+  gap: 4px 4px;
   font-size: 12px;
   line-height: 1.35;
   color: var(--text-color, #1e293b);
@@ -19341,7 +19560,7 @@ html.dark .mep-mini-preview-body {
   user-select: none;
 }
 .mep-mini-preview-body .mj-hand {
-  gap: 2px 5px;
+  gap: 4px 5px;
   margin: 0 1px;
 }
 .mep-mini-preview-body .mj-meld-block {
@@ -19357,7 +19576,7 @@ html.dark .mep-mini-preview-body {
 }
 .mep-mini-preview-body .mj-side-wrap {
   width: 24.5px;
-  height: 17px;
+  height: 18px;
 }
 .mep-mini-preview-body .mj-side-wrap .mj-tile {
   width: 19.6px;
@@ -19366,7 +19585,7 @@ html.dark .mep-mini-preview-body {
 }
 .mep-mini-preview-body .mj-kakan-wrap {
   width: 24.5px;
-  height: 34px;
+  height: 36px;
 }
 .mep-mini-preview-body .inline-mahjong-tile {
   width: 17px;
@@ -19382,6 +19601,39 @@ html.dark .mep-mini-preview-body {
   margin: 0 1px;
   font-size: 10.5px;
   border-radius: 4px;
+}
+@media (max-width: 580px) {
+  .mep-mini-preview-body {
+    max-height: 94px;
+    padding: 3px 1px 2px;
+    gap: 3px 3px;
+  }
+  .mep-mini-preview-body .mj-hand {
+    gap: 3px 4px;
+  }
+  .mep-mini-preview-body .mj-upright-wrap,
+  .mep-mini-preview-body .inline-mahjong-tile {
+    width: 14.5px;
+    height: 21.5px;
+  }
+  .mep-mini-preview-body .mj-tile,
+  .mep-mini-preview-body .inline-mahjong-tile img {
+    width: 17px;
+    height: 24.4px;
+  }
+  .mep-mini-preview-body .mj-side-wrap {
+    width: 21px;
+    height: 15.5px;
+  }
+  .mep-mini-preview-body .mj-side-wrap .mj-tile {
+    width: 17px;
+    height: 24.4px;
+    transform: rotate(-90deg) translateX(0.25px);
+  }
+  .mep-mini-preview-body .mj-kakan-wrap {
+    width: 21px;
+    height: 31px;
+  }
 }
 .mep-mini-backspace-btn {
   flex-shrink: 0;
@@ -19789,7 +20041,7 @@ html.dark .mep-base-name {
 }
 
 /* =====================================================================
-   글래스모피즘 후로 조이스틱 4방향 초소형 HUD 오버레이 (패 & 레버만 표시)
+   글래스모피즘 후로 조이스틱 4방향 초소형 HUD 오버레이 (패 & 표기 코드 & 레버)
    ===================================================================== */
 .furo-joystick-hud {
   --hud-accent: #3b82f6;
@@ -19802,10 +20054,10 @@ html.dark .mep-base-name {
   transform: translate(-50%, -50%);
   display: grid;
   grid-template-areas:
-    ". up ."
+    "up up up"
     "left center right"
-    ". down .";
-  grid-template-columns: 76px 46px 76px;
+    "down down down";
+  grid-template-columns: 82px 46px 82px;
   grid-template-rows: auto 46px auto;
   gap: 5px;
   align-items: center;
@@ -19814,7 +20066,7 @@ html.dark .mep-base-name {
   border-radius: 16px;
   max-width: calc(100vw - 8px);
   box-sizing: border-box;
-  background: rgba(15, 23, 42, 0.8);
+  background: rgba(15, 23, 42, 0.82);
   backdrop-filter: blur(14px) saturate(160%);
   -webkit-backdrop-filter: blur(14px) saturate(160%);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -19849,15 +20101,18 @@ html.dark .mep-base-name {
 }
 
 .furo-hud-card {
-  width: 100%;
-  min-height: 36px;
-  padding: 5px 5px 4px;
+  width: max-content;
+  min-width: 78px;
+  min-height: 44px;
+  padding: 5px 8px 4px;
   border-radius: 10px;
-  background: rgba(30, 41, 59, 0.76);
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(30, 41, 59, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 3px;
   box-sizing: border-box;
   transition:
     transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
@@ -19917,6 +20172,19 @@ html.dark .mep-base-name {
   min-height: 24px;
   white-space: nowrap;
 }
+.furo-hud-notation {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: rgba(203, 213, 225, 0.85);
+  white-space: nowrap;
+}
+.furo-hud-card.is-active .furo-hud-notation {
+  color: #ffffff;
+  text-shadow: 0 0 6px var(--hud-accent-glow);
+}
 /* HUD 내부에서는 패 블록이 절대 개행되지 않도록 강제 & 타일 소형화 */
 .furo-joystick-hud .mj-meld-block {
   display: inline-flex;
@@ -19938,7 +20206,7 @@ html.dark .mep-base-name {
 }
 .furo-joystick-hud .mj-side-wrap {
   width: 21.6px;
-  height: 15px;
+  height: 15.5px;
 }
 .furo-joystick-hud .mj-side-wrap .mj-tile {
   width: 17.5px;
@@ -19947,7 +20215,7 @@ html.dark .mep-base-name {
 }
 .furo-joystick-hud .mj-kakan-wrap {
   width: 21.6px;
-  height: 30px;
+  height: 31px;
 }
 .furo-joystick-hud .mj-kakan-wrap .mj-side-wrap + .mj-side-wrap {
   margin-top: -0.3px;

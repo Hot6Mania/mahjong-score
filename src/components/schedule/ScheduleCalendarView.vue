@@ -174,7 +174,7 @@ const todayStr = getKSTTodayString();
     <div class="calendar-days-grid">
       <div
         v-for="cell in calendarGrid"
-        :key="cell.dateStr"
+        :key="`${props.currentMonth}-${cell.dateStr}`"
         class="calendar-cell"
         :class="{
           'other-month': !cell.isCurrentMonth,

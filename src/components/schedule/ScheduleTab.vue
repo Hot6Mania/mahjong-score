@@ -83,6 +83,7 @@ const getInitialMonth = (): string => {
 };
 
 const currentMonth = ref<string>(getInitialMonth());
+const monthTransitionName = ref<'month-slide-next' | 'month-slide-prev' | 'month-fade'>('month-fade');
 const pendingUrlDate = ref<string>(parseDateParamFromLocation());
 const viewMode = ref<'calendar' | 'list'>('calendar');
 const isLoading = ref<boolean>(false);
@@ -106,11 +107,6 @@ const isCurrentMonthToday = computed(() => {
   return currentMonth.value === getKSTCurrentMonth();
 });
 
-// 이번 달(오늘) 바로가기
-const goToTodayMonth = () => {
-  currentMonth.value = getKSTCurrentMonth();
-};
-
 // 관리자 상태
 const isAdmin = ref<boolean>(false);
 const adminToken = ref<string | undefined>(undefined);
@@ -124,13 +120,25 @@ const getOffsetMonth = (ym: string, offset: number): string => {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 };
 
+// 세션 메모리 캐시 (월 이동 시 0ms 즉시 전환 보장)
+const monthScheduleMemoryCache = new Map<string, ScheduleMonthData>();
+const getCachedOrLocalMonthSchedule = (ym: string): ScheduleMonthData => {
+  const mem = monthScheduleMemoryCache.get(ym);
+  if (mem) return mem;
+  const local = getLocalMonthSchedule(ym);
+  if (local && Array.isArray(local.dates) && local.dates.length > 0) {
+    monthScheduleMemoryCache.set(ym, local);
+  }
+  return local;
+};
+
 // 일정 데이터: 초기 마운트 시 즉시 로컬 캐시를 바인딩하여 0초 만에 정상 화면 노출 (스피너 제거)
-const monthSchedule = ref<ScheduleMonthData>(getLocalMonthSchedule(currentMonth.value));
+const monthSchedule = ref<ScheduleMonthData>(getCachedOrLocalMonthSchedule(currentMonth.value));
 
 // 직전 월들의 일정 데이터 캐시 (10월 22회 확정 -> 11월 23회 연쇄 계산용)
 const priorMonthsSchedules = ref<Record<string, ScheduleDayItem[]>>({
-  [getOffsetMonth(currentMonth.value, -2)]: getLocalMonthSchedule(getOffsetMonth(currentMonth.value, -2)).dates || [],
-  [getOffsetMonth(currentMonth.value, -1)]: getLocalMonthSchedule(getOffsetMonth(currentMonth.value, -1)).dates || []
+  [getOffsetMonth(currentMonth.value, -2)]: getCachedOrLocalMonthSchedule(getOffsetMonth(currentMonth.value, -2)).dates || [],
+  [getOffsetMonth(currentMonth.value, -1)]: getCachedOrLocalMonthSchedule(getOffsetMonth(currentMonth.value, -1)).dates || []
 });
 
 // 내 참가자 이름
@@ -815,50 +823,103 @@ const verifyAdminPasscode = async () => {
   }
 };
 
-// 직전 월 스케줄 백그라운드 동기화 (현재 달의 정확한 시작 회차 계산 보장)
-const syncPriorMonthsSchedule = async (targetMonth: string) => {
-  const prev1 = getOffsetMonth(targetMonth, -1);
-  const prev2 = getOffsetMonth(targetMonth, -2);
-  priorMonthsSchedules.value = {
-    ...priorMonthsSchedules.value,
-    [prev2]: priorMonthsSchedules.value[prev2]?.length ? priorMonthsSchedules.value[prev2] : (getLocalMonthSchedule(prev2).dates || []),
-    [prev1]: priorMonthsSchedules.value[prev1]?.length ? priorMonthsSchedules.value[prev1] : (getLocalMonthSchedule(prev1).dates || [])
-  };
-  try {
-    const prevData = await fetchMonthSchedule(prev1);
-    if (prevData && Array.isArray(prevData.dates)) {
-      priorMonthsSchedules.value = {
-        ...priorMonthsSchedules.value,
-        [prev1]: prevData.dates
-      };
-    }
-  } catch {
-    // 직전 월 조회 실패 시 로컬 캐시 유지
+let scheduleLoadSeq = 0;
+const prewarmedMonthsSet = new Set<string>();
+
+// 인접 월(이전/다음 달) 백그라운드 프리페치 (월 이동 시 네트워크 대기 및 2차 리렌더링 제거)
+const prewarmAdjacentMonths = async (baseMonth: string) => {
+  const neighbors = [
+    getOffsetMonth(baseMonth, -1),
+    getOffsetMonth(baseMonth, 1),
+    getOffsetMonth(baseMonth, -2),
+  ];
+  for (const ym of neighbors) {
+    if (prewarmedMonthsSet.has(ym)) continue;
+    prewarmedMonthsSet.add(ym);
+    fetchMonthSchedule(ym)
+      .then((res) => {
+        if (res && res.month === ym && Array.isArray(res.dates)) {
+          monthScheduleMemoryCache.set(ym, res);
+          const curPrev1 = getOffsetMonth(currentMonth.value, -1);
+          const curPrev2 = getOffsetMonth(currentMonth.value, -2);
+          if (ym === curPrev1 || ym === curPrev2) {
+            const existing = priorMonthsSchedules.value[ym] || [];
+            if (!isScheduleDataEqual({ month: ym, updatedAt: 0, dates: existing }, res)) {
+              priorMonthsSchedules.value = {
+                ...priorMonthsSchedules.value,
+                [ym]: res.dates,
+              };
+            }
+          }
+        }
+      })
+      .catch(() => {
+        prewarmedMonthsSet.delete(ym);
+      });
   }
 };
 
 // 일정 데이터 로드 (silent: true일 경우 토스트 팝업 및 불필요한 스피너 없이 조용히 동기화)
 const loadSchedule = async (silent = true) => {
-  void syncPriorMonthsSchedule(currentMonth.value);
+  const targetMonth = currentMonth.value;
+  const reqSeq = ++scheduleLoadSeq;
+  const prev1 = getOffsetMonth(targetMonth, -1);
+  const prev2 = getOffsetMonth(targetMonth, -2);
+
+  // 직전 월 로컬/메모리 캐시 즉시 확보
+  if (!priorMonthsSchedules.value[prev1] || !priorMonthsSchedules.value[prev2]) {
+    priorMonthsSchedules.value = {
+      ...priorMonthsSchedules.value,
+      [prev2]: priorMonthsSchedules.value[prev2]?.length
+        ? priorMonthsSchedules.value[prev2]
+        : (getCachedOrLocalMonthSchedule(prev2).dates || []),
+      [prev1]: priorMonthsSchedules.value[prev1]?.length
+        ? priorMonthsSchedules.value[prev1]
+        : (getCachedOrLocalMonthSchedule(prev1).dates || []),
+    };
+  }
 
   if (silent) {
     if (isScheduleMutating()) return;
-    const hasData = monthSchedule.value.dates && monthSchedule.value.dates.length > 0;
-    if (!hasData) {
-      isLoading.value = true;
-    }
     try {
-      const data = await fetchMonthSchedule(currentMonth.value);
+      const [data, prev1Data] = await Promise.all([
+        fetchMonthSchedule(targetMonth),
+        fetchMonthSchedule(prev1).catch(() => null),
+      ]);
       if (isScheduleMutating()) return;
-      // 데이터 변동 여부 정밀 대조 (변동 없을 시 리렌더링 원천 차단)
-      if (!isScheduleDataEqual(monthSchedule.value, data)) {
+      if (data?.month) {
+        monthScheduleMemoryCache.set(data.month, data);
+      }
+      if (prev1Data?.month && Array.isArray(prev1Data.dates)) {
+        monthScheduleMemoryCache.set(prev1Data.month, prev1Data);
+      }
+
+      // 월이 이미 변경되었거나 더 최신 요청이 시작된 경우 이전 월 응답이 현재 UI를 덮어쓰지 않도록 즉시 중단
+      if (reqSeq !== scheduleLoadSeq || currentMonth.value !== targetMonth) {
+        return;
+      }
+
+      // 직전 월과 현재 월 데이터를 한 프레임 내에서 동시에 반영하여 회차 번호/일정 2단 깜빡임 차단
+      if (prev1Data && Array.isArray(prev1Data.dates)) {
+        const prevExisting = priorMonthsSchedules.value[prev1] || [];
+        if (!isScheduleDataEqual({ month: prev1, updatedAt: 0, dates: prevExisting }, prev1Data)) {
+          priorMonthsSchedules.value = {
+            ...priorMonthsSchedules.value,
+            [prev1]: prev1Data.dates,
+          };
+        }
+      }
+      if (data && data.month === targetMonth && !isScheduleDataEqual(monthSchedule.value, data)) {
         monthSchedule.value = data;
       }
-      tryOpenPendingUrlDate(data.dates);
+      if (data?.dates) {
+        tryOpenPendingUrlDate(data.dates);
+      }
+      void prewarmAdjacentMonths(targetMonth);
     } catch (e) {
       console.warn('백그라운드 일정 동기화 실패:', e);
     } finally {
-      if (!hasData) {
+      if (reqSeq === scheduleLoadSeq) {
         isLoading.value = false;
       }
     }
@@ -867,21 +928,34 @@ const loadSchedule = async (silent = true) => {
 
   // 사용자가 직접 새로고침을 눌렀을 때
   isRefreshing.value = true;
-  if (!monthSchedule.value.dates || monthSchedule.value.dates.length === 0) {
-    isLoading.value = true;
-  }
-
   const startTime = Date.now();
   try {
-    const data = await fetchMonthSchedule(currentMonth.value);
-    const hasChanged = !isScheduleDataEqual(monthSchedule.value, data);
-    if (hasChanged) {
-      monthSchedule.value = data;
-      showToast('일정이 최신 상태로 동기화되었습니다.');
-    } else {
-      showToast('이미 최신 일정입니다.');
+    const [data, prev1Data] = await Promise.all([
+      fetchMonthSchedule(targetMonth),
+      fetchMonthSchedule(prev1).catch(() => null),
+    ]);
+    if (data?.month) {
+      monthScheduleMemoryCache.set(data.month, data);
     }
-    tryOpenPendingUrlDate(data.dates);
+    if (prev1Data?.month && Array.isArray(prev1Data.dates)) {
+      monthScheduleMemoryCache.set(prev1Data.month, prev1Data);
+      priorMonthsSchedules.value = {
+        ...priorMonthsSchedules.value,
+        [prev1]: prev1Data.dates,
+      };
+    }
+
+    if (currentMonth.value === targetMonth) {
+      const hasChanged = !isScheduleDataEqual(monthSchedule.value, data);
+      if (hasChanged) {
+        monthSchedule.value = data;
+        showToast('일정이 최신 상태로 동기화되었습니다.');
+      } else {
+        showToast('이미 최신 일정입니다.');
+      }
+      tryOpenPendingUrlDate(data.dates);
+    }
+    void prewarmAdjacentMonths(targetMonth);
   } catch (e) {
     console.error('일정 로드 실패:', e);
     showToast('일정 동기화에 실패했습니다.', 'error');
@@ -901,6 +975,7 @@ watch(
   () => monthSchedule.value,
   (newData) => {
     if (newData?.month && Array.isArray(newData.dates)) {
+      monthScheduleMemoryCache.set(newData.month, newData);
       priorMonthsSchedules.value = {
         ...priorMonthsSchedules.value,
         [newData.month]: newData.dates
@@ -926,26 +1001,55 @@ watch([isDetailModalOpen, isAttendModalOpen], ([detailOpen, attendOpen], [oldDet
   }
 });
 
+// 원자적(Atomic) 월 전환 헬퍼: 이전 월 UI가 남아서 깜빡거리지 않도록 한 틱 내에서 상태 일괄 전환
+const switchScheduleMonth = (targetMonth: string, explicitDir?: 'prev' | 'next') => {
+  if (!targetMonth || targetMonth === currentMonth.value) return;
+  const dir = explicitDir || (targetMonth > currentMonth.value ? 'next' : 'prev');
+  monthTransitionName.value = dir === 'next' ? 'month-slide-next' : 'month-slide-prev';
+
+  const prev1 = getOffsetMonth(targetMonth, -1);
+  const prev2 = getOffsetMonth(targetMonth, -2);
+  const cachedTarget = getCachedOrLocalMonthSchedule(targetMonth);
+
+  priorMonthsSchedules.value = {
+    ...priorMonthsSchedules.value,
+    [prev2]: priorMonthsSchedules.value[prev2]?.length
+      ? priorMonthsSchedules.value[prev2]
+      : (getCachedOrLocalMonthSchedule(prev2).dates || []),
+    [prev1]: priorMonthsSchedules.value[prev1]?.length
+      ? priorMonthsSchedules.value[prev1]
+      : (getCachedOrLocalMonthSchedule(prev1).dates || []),
+  };
+  monthSchedule.value = cachedTarget;
+  currentMonth.value = targetMonth;
+  void loadSchedule(true);
+};
+
 // 월 이동
 const prevMonth = () => {
   const [y, m] = currentMonth.value.split('-').map(Number);
   const prevM = m === 1 ? 12 : m - 1;
   const prevY = m === 1 ? y - 1 : y;
-  currentMonth.value = `${prevY}-${String(prevM).padStart(2, '0')}`;
+  switchScheduleMonth(`${prevY}-${String(prevM).padStart(2, '0')}`, 'prev');
 };
 
 const nextMonth = () => {
   const [y, m] = currentMonth.value.split('-').map(Number);
   const nextM = m === 12 ? 1 : m + 1;
   const nextY = m === 12 ? y + 1 : y;
-  currentMonth.value = `${nextY}-${String(nextM).padStart(2, '0')}`;
+  switchScheduleMonth(`${nextY}-${String(nextM).padStart(2, '0')}`, 'next');
+};
+
+// 이번 달(오늘) 바로가기
+const goToTodayMonth = () => {
+  switchScheduleMonth(getKSTCurrentMonth());
 };
 
 watch(currentMonth, (newMonth) => {
-  // 월 이동 시 즉시 해당 월 로컬 캐시를 보여줘서 빈 화면 없앰
-  const cached = getLocalMonthSchedule(newMonth);
-  monthSchedule.value = cached;
-  loadSchedule(true);
+  if (monthSchedule.value.month !== newMonth) {
+    monthSchedule.value = getCachedOrLocalMonthSchedule(newMonth);
+    void loadSchedule(true);
+  }
 });
 
 // 토스트 트리거
@@ -1500,6 +1604,7 @@ onMounted(async () => {
 });
 
 const setViewMode = (mode: 'calendar' | 'list') => {
+  monthTransitionName.value = 'month-fade';
   viewMode.value = mode;
   localStorage.setItem('mahjong_schedule_view_mode', mode);
 };
@@ -1643,36 +1748,35 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       </div>
     </div>
 
-    <!-- 로딩 스피너 (데이터가 전혀 없을 때만 표시) -->
-    <div v-if="isLoading && (!monthSchedule.dates || monthSchedule.dates.length === 0)" class="schedule-loading">
-      <div class="spinner"></div>
-    </div>
+    <!-- 메인 뷰 영역 (월 이동 시 언마운트/깜빡임 없이 부드러운 방향성 전환 유지) -->
+    <div class="schedule-view-content">
+      <Transition :name="monthTransitionName" mode="out-in">
+        <div :key="`${viewMode}-${currentMonth}`" class="schedule-month-stage">
+          <!-- 달력 뷰 -->
+          <ScheduleCalendarView
+            v-if="viewMode === 'calendar'"
+            :currentMonth="currentMonth"
+            :dates="monthSchedule.dates"
+            :sessionMap="sessionMap"
+            :myAttendeeName="myAttendeeName"
+            :isAdmin="isAdmin"
+            @selectDay="onSelectDay"
+            @clickEmptyDay="onEmptyDayClick"
+          />
 
-    <!-- 메인 뷰 영역 (데이터가 있으면 상시 유지) -->
-    <div v-else class="schedule-view-content">
-      <!-- 달력 뷰 -->
-      <ScheduleCalendarView
-        v-if="viewMode === 'calendar'"
-        :currentMonth="currentMonth"
-        :dates="monthSchedule.dates"
-        :sessionMap="sessionMap"
-        :myAttendeeName="myAttendeeName"
-        :isAdmin="isAdmin"
-        @selectDay="onSelectDay"
-        @clickEmptyDay="onEmptyDayClick"
-      />
-
-      <!-- 리스트(모아보기) 뷰 -->
-      <ScheduleListView
-        v-else
-        :dates="monthSchedule.dates"
-        :sessionMap="sessionMap"
-        :myAttendeeName="myAttendeeName"
-        :isAdmin="isAdmin"
-        @selectDay="onSelectDay"
-        @openAttend="onOpenAttendModal"
-        @openAdmin="onOpenAdminOrAuth"
-      />
+          <!-- 리스트(모아보기) 뷰 -->
+          <ScheduleListView
+            v-else
+            :dates="monthSchedule.dates"
+            :sessionMap="sessionMap"
+            :myAttendeeName="myAttendeeName"
+            :isAdmin="isAdmin"
+            @selectDay="onSelectDay"
+            @openAttend="onOpenAttendModal"
+            @openAdmin="onOpenAdminOrAuth"
+          />
+        </div>
+      </Transition>
     </div>
 
     <!-- 모달들 -->
@@ -3187,6 +3291,52 @@ html.dark .user-auth-badge {
 .toast-fade-enter-from, .toast-fade-leave-to {
   opacity: 0;
   transform: translate(-50%, -10px);
+}
+
+.schedule-view-content {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+
+.schedule-month-stage {
+  width: 100%;
+  will-change: transform, opacity;
+}
+
+.month-slide-next-enter-active,
+.month-slide-prev-enter-active,
+.month-fade-enter-active {
+  transition: opacity 0.16s cubic-bezier(0.22, 1, 0.36, 1), transform 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.month-slide-next-leave-active,
+.month-slide-prev-leave-active,
+.month-fade-leave-active {
+  transition: opacity 0.11s cubic-bezier(0.4, 0, 1, 1), transform 0.11s cubic-bezier(0.4, 0, 1, 1);
+}
+
+.month-slide-next-enter-from {
+  opacity: 0;
+  transform: translate3d(14px, 0, 0);
+}
+.month-slide-next-leave-to {
+  opacity: 0;
+  transform: translate3d(-10px, 0, 0);
+}
+
+.month-slide-prev-enter-from {
+  opacity: 0;
+  transform: translate3d(-14px, 0, 0);
+}
+.month-slide-prev-leave-to {
+  opacity: 0;
+  transform: translate3d(10px, 0, 0);
+}
+
+.month-fade-enter-from,
+.month-fade-leave-to {
+  opacity: 0;
+  transform: translate3d(0, 4px, 0);
 }
 
 .schedule-loading {
