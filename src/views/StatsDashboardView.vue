@@ -17771,18 +17771,18 @@ html.dark .gh-storage-pct-badge.danger {
   color: #f87171;
 }
 .gh-storage-ext-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 5px;
-  border-radius: 4px;
+  display: inline;
+  padding: 0;
   font-size: 0.71rem;
-  font-weight: 700;
-  background: rgba(100, 116, 139, 0.14);
-  color: var(--text-dimmed, #64748b);
+  font-weight: 400;
+  background: transparent;
+  color: #94a3b8;
+  opacity: 0.78;
 }
 html.dark .gh-storage-ext-badge {
-  background: rgba(148, 163, 184, 0.16);
-  color: #94a3b8;
+  background: transparent;
+  color: #64748b;
+  opacity: 0.82;
 }
 .gh-storage-track {
   display: flex;
@@ -17813,23 +17813,23 @@ html.dark .gh-storage-track {
   flex-shrink: 0;
   background: repeating-linear-gradient(
     -45deg,
-    rgba(100, 116, 139, 0.55),
-    rgba(100, 116, 139, 0.55) 4px,
-    rgba(148, 163, 184, 0.32) 4px,
-    rgba(148, 163, 184, 0.32) 8px
+    rgba(100, 116, 139, 0.28),
+    rgba(100, 116, 139, 0.28) 4px,
+    rgba(148, 163, 184, 0.16) 4px,
+    rgba(148, 163, 184, 0.16) 8px
   );
-  border-left: 1px solid rgba(255, 255, 255, 0.45);
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
   transition: width 0.3s ease;
 }
 html.dark .gh-storage-fill-external {
   background: repeating-linear-gradient(
     -45deg,
-    rgba(148, 163, 184, 0.52),
-    rgba(148, 163, 184, 0.52) 4px,
-    rgba(71, 85, 105, 0.45) 4px,
-    rgba(71, 85, 105, 0.45) 8px
+    rgba(148, 163, 184, 0.26),
+    rgba(148, 163, 184, 0.26) 4px,
+    rgba(71, 85, 105, 0.22) 4px,
+    rgba(71, 85, 105, 0.22) 8px
   );
-  border-left-color: rgba(15, 23, 42, 0.65);
+  border-left-color: rgba(15, 23, 42, 0.5);
 }
 
 /* 이번 회차 레이팅 추이 탭 증감 인라인 표시 */
