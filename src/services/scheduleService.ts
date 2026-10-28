@@ -295,8 +295,15 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
           return getLocalMonthSchedule(month);
         }
 
-        // 만약 서버에서 반환된 dates가 비어있고, 로컬에 저장된 일정이 이미 있다면 (KV 미연결 등) 로컬 일정을 우선 보존 및 서버 KV 자동 복구
-        if ((!json.data.dates || json.data.dates.length === 0) && local.dates && local.dates.length > 0 && knownServerUpdatedAt === 0) {
+        // 서버 KV에 해당 월 데이터가 아직 한 번도 생성되지 않은 초기 상태(incomingUpdatedAt === 0)이고,
+        // 로컬에만 일정이 남아있는 경우에만 로컬 일정을 보존하며 서버 KV로 복원 시도
+        if (
+          incomingUpdatedAt === 0 &&
+          (!json.data.dates || json.data.dates.length === 0) &&
+          local.dates &&
+          local.dates.length > 0 &&
+          knownServerUpdatedAt === 0
+        ) {
           console.info('서버 일정이 비어 있어 로컬에 저장된 일정을 우선 유지하며, 서버 KV로 자동 복원 동기화를 시도합니다.');
           setTimeout(async () => {
             try {

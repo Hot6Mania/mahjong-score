@@ -2588,14 +2588,17 @@ const saveGameToSheet = async (silent: boolean = false) => {
         const sessMatch = (currentSessionSheetName.value || '').match(/제\s*(\d+)\s*회/);
         const cleanSessName = sessMatch ? `제${sessMatch[1]}회` : (currentSessionSheetName.value || '회차');
         const sessionRoundLabel = `${cleanSessName} ${todayGamesHistory.length}회전`;
-        updateMatchRatingsInSheet(
-          googleInfo.spreadsheetId,
-          matchPlayersForRating,
-          sessionRoundLabel,
-          todayGamesHistory.length
-        ).catch(sheetErr => {
+        try {
+          await ensureValidToken();
+          await updateMatchRatingsInSheet(
+            googleInfo.spreadsheetId,
+            matchPlayersForRating,
+            sessionRoundLabel,
+            todayGamesHistory.length
+          );
+        } catch (sheetErr) {
           console.warn("실시간 구글 레이팅 시트 갱신 중 오류 (무시 가능):", sheetErr);
-        });
+        }
       }
     } catch (rErr) {
       console.warn("대국 결과 레이팅 계산 실패:", rErr);

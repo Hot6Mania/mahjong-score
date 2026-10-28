@@ -29,6 +29,7 @@ import {
   attachRatingToSessionGames,
   clearPublicStatsCache,
   buildSessionDetailFromRatingHistory,
+  getExpectedSessionGameCount,
   computeFrequentOpponentsStats,
   type AllPlayersRatingTrajectory,
   type GameRatingHistoryRecord,
@@ -403,8 +404,14 @@ const buildDashboardRelativeUrl = (tab: DashboardTab, photoId?: string | null): 
 
 // 탭 전환 및 URL 동기화
 const switchTab = (tab: DashboardTab, updateUrl = true) => {
+  const prevTab = activeTab.value;
   activeTab.value = tab;
   scrollActiveTabIntoView(true);
+  if (tab === 'schedule' && prevTab !== 'schedule') {
+    void refreshScheduleSheetData();
+  } else if (tab === 'sessions' && prevTab !== 'sessions') {
+    void refreshSessionsTabData();
+  }
   if (updateUrl && typeof window !== 'undefined') {
     const activePhotoId = lightboxHighlight.value?.id || pendingUrlPhotoId.value || '';
     const nextUrl = buildDashboardRelativeUrl(tab, activePhotoId || null);
@@ -968,7 +975,7 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
     });
 
   try {
-    const [detail, historyRecords] = await Promise.all([
+    let [detail, historyRecords] = await Promise.all([
       fetchPublicSessionDetail(sessionName, undefined, forceRefresh),
       fetchPublicRatingHistoryRecords(undefined, forceRefresh)
     ]);
@@ -976,6 +983,31 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
       allRatingHistoryRecords.value = historyRecords;
     }
     if (!matchHighlightSession(selectedSession.value, sessionName)) return;
+
+    // '레이팅 이력' 또는 '통계' 매트릭스의 알려진 대국 수(예: 15국)보다 적게 조회된 경우(예: 13국) 즉시 강제 새로고침 재시도
+    const expectedCount = getExpectedSessionGameCount(sessionName, historyRecords);
+    if (!forceRefresh && detail && expectedCount > 0 && detail.games.length < expectedCount) {
+      const freshDetail = await fetchPublicSessionDetail(sessionName, undefined, true);
+      if (freshDetail && freshDetail.games.length >= detail.games.length) {
+        detail = freshDetail;
+      }
+      fetchSessionDetailedStats(sessionName, undefined, true)
+        .then(detailedMap => {
+          if (matchHighlightSession(selectedSession.value, sessionName)) {
+            currentSessionDetailedStatsMap.value = detailedMap;
+          }
+        })
+        .catch(() => {});
+    }
+
+    // 만약 raw 시트 GViz 응답 지연으로 여전히 레이팅 이력 대국 수보다 적다면 레이팅 이력 기반 조립본으로 보완
+    if (detail && expectedCount > 0 && detail.games.length < expectedCount && historyRecords.length > 0) {
+      const rebuilt = buildSessionDetailFromRatingHistory(sessionName, historyRecords);
+      if (rebuilt && rebuilt.games.length > detail.games.length) {
+        detail = rebuilt;
+      }
+    }
+
     if (detail && detail.games && historyRecords.length > 0) {
       attachRatingToSessionGames(sessionName, detail.games, historyRecords);
     }
@@ -1572,11 +1604,57 @@ const clearInitialLightboxImagePending = () => {
   }
 };
 
-// 전체 초기 데이터 로드 (forceRefresh=true 시 메모리 캐시 초기화 및 서버 최신 강제 조회)
+// 일정 탭 전용 구글 시트(회차 목록/멤버 통계) 무소음 강제 동기화
+const refreshScheduleSheetData = async () => {
+  try {
+    clearPublicStatsCache({ keepPastSessions: true });
+    const [sessions, stats] = await Promise.all([
+      fetchPublicSessions(undefined, true).catch(() => [] as string[]),
+      fetchPublicAllStats(undefined, true).catch(() => [] as MemberStatItem[]),
+    ]);
+    if (sessions && sessions.length > 0) {
+      availableSessions.value = sessions;
+    }
+    if (stats && stats.length > 0) {
+      allStats.value = stats;
+    }
+  } catch (e) {
+    console.warn('일정 탭 시트 데이터 동기화 실패:', e);
+  }
+};
+
+// 회차 상세 탭 진입 또는 브라우저 포커스 복귀 시 무소음 최신 회차/대국 동기화
+let lastSessionsSilentSyncAt = 0;
+const refreshSessionsTabData = async (force = false) => {
+  const now = Date.now();
+  if (!force && now - lastSessionsSilentSyncAt < 15_000) return;
+  lastSessionsSilentSyncAt = now;
+
+  try {
+    const [sessions, matrix] = await Promise.all([
+      fetchPublicSessions(undefined, true).catch(() => [] as string[]),
+      fetchPublicStatsMatrix(undefined, true).catch(() => null),
+    ]);
+    if (matrix) {
+      statsMatrix.value = matrix;
+    }
+    if (sessions && sessions.length > 0) {
+      availableSessions.value = sessions;
+    }
+    if (selectedSession.value) {
+      await loadSessionDetail(selectedSession.value, true);
+    }
+  } catch (e) {
+    console.warn('회차 상세 시트 데이터 무소음 동기화 실패:', e);
+  }
+};
+
+// 전체 초기 데이터 로드 (forceRefresh=true 시 메모리 및 로컬 캐시 초기화 후 서버 최신 강제 조회)
 const loadAllData = async (forceRefresh: boolean = false) => {
   if (forceRefresh) {
-    clearPublicStatsCache({ keepPastSessions: true });
+    clearPublicStatsCache({ keepPastSessions: false });
   }
+  lastSessionsSilentSyncAt = Date.now();
   isLoading.value = true;
   errorMessage.value = '';
   try {
@@ -1713,14 +1791,18 @@ const loadAllData = async (forceRefresh: boolean = false) => {
         }
       }
     }
+    const expectedGames = selectedSession.value ? getExpectedSessionGameCount(selectedSession.value) : 0;
+    const currentGamesCount = currentSessionDetail.value?.games?.length || 0;
+    const isSessionGameCountStale = expectedGames > 0 && currentGamesCount < expectedGames;
     if (
       selectedSession.value &&
       (forceRefresh ||
+        isSessionGameCountStale ||
         (!isLoadingSession.value &&
           (!currentSessionDetail.value ||
             !matchHighlightSession(currentSessionDetail.value.sessionName, selectedSession.value))))
     ) {
-      await loadSessionDetail(selectedSession.value, forceRefresh);
+      await loadSessionDetail(selectedSession.value, forceRefresh || isSessionGameCountStale);
     }
     if (forceRefresh) {
       showToast('최신 데이터로 새로고침되었습니다.');
@@ -2657,10 +2739,27 @@ const formatDonutPct = (pct: number): string => {
   return Math.round(pct) + '%';
 };
 
+const handleDashboardVisibilityOrFocus = () => {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  if (isLoading.value || isLoadingSession.value) return;
+  void refreshSessionsTabData(false);
+};
+
 onMounted(() => {
   preloadMahjongTileImages();
   loadAllData();
   refreshGalleryAuthState();
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', handleDashboardVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleDashboardVisibilityOrFocus);
+  }
+});
+
+onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('focus', handleDashboardVisibilityOrFocus);
+    document.removeEventListener('visibilitychange', handleDashboardVisibilityOrFocus);
+  }
 });
 
 const copyTextToClipboard = async (text: string) => {
@@ -7995,6 +8094,7 @@ const openGamePopupFromLightbox = async (
         <ScheduleTab
           :members="allStats"
           :availableSessions="availableSessions"
+          @refreshStats="refreshScheduleSheetData"
         />
       </section>
 

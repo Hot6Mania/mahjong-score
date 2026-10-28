@@ -35,6 +35,10 @@ const props = defineProps<{
   availableSessions: string[];
 }>();
 
+const emit = defineEmits<{
+  (e: 'refreshStats'): void;
+}>();
+
 // URL 쿼리의 ?date=YYMMDD 또는 ?date=YYYY-MM-DD를 YYYY-MM-DD 형식으로 정규화
 const parseDateParamFromLocation = (): string => {
   if (typeof window === 'undefined') return '';
@@ -287,9 +291,11 @@ const onCreateKeyDown = (e: KeyboardEvent) => {
   }
 };
 
-// 특정 월(ym) 이하의 완료된 시트 중 excludeDates를 제외한 최대 회차 번호 반환
+// 특정 월(ym) 이하의 완료된 시트 중 확정된 excludeDates를 제외한 최대 회차 번호 반환
 const getCompletedMaxBeforeOrInMonth = (ym: string, excludeDates: ScheduleDayItem[] = []): number => {
-  const excludeYymmdd = excludeDates.map(d => d.date.replace(/-/g, '').slice(2));
+  const excludeYymmdd = excludeDates
+    .filter(d => d.isConfirmed && (d.attendees ? d.attendees.length : 0) >= 4)
+    .map(d => d.date.replace(/-/g, '').slice(2));
   const targetYymm = ym.replace('-', '').slice(2, 6);
   const filtered = (props.availableSessions || []).filter(s => {
     if (!s) return false;
@@ -303,7 +309,7 @@ const getCompletedMaxBeforeOrInMonth = (ym: string, excludeDates: ScheduleDayIte
   return getMaxCompletedSessionNumber(filtered);
 };
 
-// 이번 달 스케줄 날짜와 일치하지 않는 과거 완료 회차 + 직전 월들의 확정 일정 회차 최대 번호
+// 직전 월까지 완료된 시트 회차 및 직전 월들의 확정 일정 회차 최대 번호
 const currentBaseSessionNumber = computed(() => {
   let runningBase = getCompletedMaxBeforeOrInMonth(
     getOffsetMonth(currentMonth.value, -3),
@@ -313,26 +319,27 @@ const currentBaseSessionNumber = computed(() => {
   for (const offset of [-2, -1]) {
     const mKey = getOffsetMonth(currentMonth.value, offset);
     const mDates = priorMonthsSchedules.value[mKey] || getLocalMonthSchedule(mKey).dates || [];
-    const completedBeforeM = getCompletedMaxBeforeOrInMonth(mKey, mDates);
-    runningBase = Math.max(runningBase, completedBeforeM);
+    const completedInOrBeforeM = getCompletedMaxBeforeOrInMonth(mKey, []);
+    const completedBeforeConfirmedM = getCompletedMaxBeforeOrInMonth(mKey, mDates);
+    runningBase = Math.max(runningBase, completedBeforeConfirmedM);
     if (mDates.length > 0) {
       const mSessionMap = computeScheduleSessionNumbers(props.availableSessions, mDates, runningBase);
       for (const num of mSessionMap.values()) {
         if (num > runningBase) runningBase = num;
       }
-      for (const d of mDates) {
-        if (d.isConfirmed && (d.attendees?.length || 0) >= 4 && typeof d.sessionNumber === 'number' && d.sessionNumber > runningBase) {
-          runningBase = d.sessionNumber;
+      // availableSessions가 아직 로드되지 않은 초기 폴백 시에만 DB sessionNumber 참조
+      if (!props.availableSessions || props.availableSessions.length === 0) {
+        for (const d of mDates) {
+          if (d.isConfirmed && (d.attendees?.length || 0) >= 4 && typeof d.sessionNumber === 'number' && d.sessionNumber > runningBase) {
+            runningBase = d.sessionNumber;
+          }
         }
       }
     }
+    runningBase = Math.max(runningBase, completedInOrBeforeM);
   }
 
-  const maxCompletedBeforeCurrent = getCompletedMaxBeforeOrInMonth(
-    currentMonth.value,
-    monthSchedule.value.dates || []
-  );
-  return Math.max(runningBase, maxCompletedBeforeCurrent);
+  return runningBase;
 });
 
 // 역대 회차 및 직전 월 확정 회차 기반 이번 달 확정 일정의 자동 회차(제N회) 맵
@@ -882,9 +889,10 @@ const loadSchedule = async (silent = true) => {
   if (silent) {
     if (isScheduleMutating()) return;
     try {
-      const [data, prev1Data] = await Promise.all([
+      const [data, prev1Data, prev2Data] = await Promise.all([
         fetchMonthSchedule(targetMonth),
         fetchMonthSchedule(prev1).catch(() => null),
+        fetchMonthSchedule(prev2).catch(() => null),
       ]);
       if (isScheduleMutating()) return;
       if (data?.month) {
@@ -893,6 +901,9 @@ const loadSchedule = async (silent = true) => {
       if (prev1Data?.month && Array.isArray(prev1Data.dates)) {
         monthScheduleMemoryCache.set(prev1Data.month, prev1Data);
       }
+      if (prev2Data?.month && Array.isArray(prev2Data.dates)) {
+        monthScheduleMemoryCache.set(prev2Data.month, prev2Data);
+      }
 
       // 월이 이미 변경되었거나 더 최신 요청이 시작된 경우 이전 월 응답이 현재 UI를 덮어쓰지 않도록 즉시 중단
       if (reqSeq !== scheduleLoadSeq || currentMonth.value !== targetMonth) {
@@ -900,6 +911,15 @@ const loadSchedule = async (silent = true) => {
       }
 
       // 직전 월과 현재 월 데이터를 한 프레임 내에서 동시에 반영하여 회차 번호/일정 2단 깜빡임 차단
+      if (prev2Data && Array.isArray(prev2Data.dates)) {
+        const prev2Existing = priorMonthsSchedules.value[prev2] || [];
+        if (!isScheduleDataEqual({ month: prev2, updatedAt: 0, dates: prev2Existing }, prev2Data)) {
+          priorMonthsSchedules.value = {
+            ...priorMonthsSchedules.value,
+            [prev2]: prev2Data.dates,
+          };
+        }
+      }
       if (prev1Data && Array.isArray(prev1Data.dates)) {
         const prevExisting = priorMonthsSchedules.value[prev1] || [];
         if (!isScheduleDataEqual({ month: prev1, updatedAt: 0, dates: prevExisting }, prev1Data)) {
@@ -926,16 +946,25 @@ const loadSchedule = async (silent = true) => {
     return;
   }
 
-  // 사용자가 직접 새로고침을 눌렀을 때
+  // 사용자가 직접 새로고침을 눌렀을 때: 구글 시트 기반 회차/멤버 데이터도 함께 강제 새로고침
+  emit('refreshStats');
   isRefreshing.value = true;
   const startTime = Date.now();
   try {
-    const [data, prev1Data] = await Promise.all([
+    const [data, prev1Data, prev2Data] = await Promise.all([
       fetchMonthSchedule(targetMonth),
       fetchMonthSchedule(prev1).catch(() => null),
+      fetchMonthSchedule(prev2).catch(() => null),
     ]);
     if (data?.month) {
       monthScheduleMemoryCache.set(data.month, data);
+    }
+    if (prev2Data?.month && Array.isArray(prev2Data.dates)) {
+      monthScheduleMemoryCache.set(prev2Data.month, prev2Data);
+      priorMonthsSchedules.value = {
+        ...priorMonthsSchedules.value,
+        [prev2]: prev2Data.dates,
+      };
     }
     if (prev1Data?.month && Array.isArray(prev1Data.dates)) {
       monthScheduleMemoryCache.set(prev1Data.month, prev1Data);
@@ -1573,14 +1602,27 @@ onMounted(async () => {
 
   let pollingTimer: any = null;
 
+  let lastStatsRefreshAt = Date.now();
+
   const handleVisibilityOrStorage = () => {
     syncAdminAuth();
     if (typeof document !== 'undefined' && !document.hidden) {
       loadSchedule(true);
+      if (Date.now() - lastStatsRefreshAt > 15000) {
+        lastStatsRefreshAt = Date.now();
+        emit('refreshStats');
+      }
     }
   };
 
+  const handleSessionSheetChanged = () => {
+    lastStatsRefreshAt = Date.now();
+    emit('refreshStats');
+    loadSchedule(true);
+  };
+
   window.addEventListener('mahjong_admin_auth_changed', syncAdminAuth);
+  window.addEventListener('mahjong_session_sheet_changed', handleSessionSheetChanged);
   window.addEventListener('storage', handleVisibilityOrStorage);
   window.addEventListener('focus', handleVisibilityOrStorage);
   document.addEventListener('visibilitychange', handleVisibilityOrStorage);
@@ -1595,6 +1637,7 @@ onMounted(async () => {
   onUnmounted(() => {
     if (pollingTimer) clearInterval(pollingTimer);
     window.removeEventListener('mahjong_admin_auth_changed', syncAdminAuth);
+    window.removeEventListener('mahjong_session_sheet_changed', handleSessionSheetChanged);
     window.removeEventListener('storage', handleVisibilityOrStorage);
     window.removeEventListener('focus', handleVisibilityOrStorage);
     document.removeEventListener('visibilitychange', handleVisibilityOrStorage);
@@ -1794,6 +1837,7 @@ const setViewMode = (mode: 'calendar' | 'list') => {
       @removeAttendee="onRemoveAttendee"
       @clearAttendees="onClearAttendees"
       @toggleConfirm="onToggleConfirmSession"
+      @refreshStats="emit('refreshStats')"
       @toast="showToast"
     />
 

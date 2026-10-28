@@ -26,10 +26,14 @@ export function isScheduleDataEqual(
     // 1. 회차 및 날짜 기본 속성 비교
     if (curD.sessionType !== incD.sessionType) return false;
     if ((curD.adminSessionType || curD.sessionType) !== (incD.adminSessionType || incD.sessionType)) return false;
+    const curDefaultEnd = (curD.sessionType === 'overnight' || curD.customIsOvernight) ? '익일' : '22:00';
+    const incDefaultEnd = (incD.sessionType === 'overnight' || incD.customIsOvernight) ? '익일' : '22:00';
     if ((curD.customStartTime || '10:00') !== (incD.customStartTime || '10:00')) return false;
-    if ((curD.customEndTime || '22:00') !== (incD.customEndTime || '22:00')) return false;
+    if ((curD.customEndTime || curDefaultEnd) !== (incD.customEndTime || incDefaultEnd)) return false;
     if (Boolean(curD.customIsOvernight) !== Boolean(incD.customIsOvernight)) return false;
     if ((curD.creator || '') !== (incD.creator || '')) return false;
+    if (Boolean(curD.hasCreatorPin) !== Boolean(incD.hasCreatorPin)) return false;
+    if (Boolean(curD.isCreatorAdminBypass) !== Boolean(incD.isCreatorAdminBypass)) return false;
     if ((curD.note || '') !== (incD.note || '')) return false;
     if (Boolean(curD.isClosed) !== Boolean(incD.isClosed)) return false;
     if (Boolean(curD.isConfirmed) !== Boolean(incD.isConfirmed)) return false;
@@ -50,6 +54,8 @@ export function isScheduleDataEqual(
       if ((ca.endTime || '22:00') !== (ia.endTime || '22:00')) return false;
       if (Boolean(ca.isCustomTime) !== Boolean(ia.isCustomTime)) return false;
       if ((ca.memo || '') !== (ia.memo || '')) return false;
+      if (Boolean(ca.hasPin) !== Boolean(ia.hasPin)) return false;
+      if (Boolean(ca.isAdminBypass) !== Boolean(ia.isAdminBypass)) return false;
     }
   }
 

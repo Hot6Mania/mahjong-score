@@ -14,7 +14,7 @@ import {
   recordPinSuccess,
   applyDelayIfRepeated
 } from '@/utils/pinRateLimiter';
-import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName } from '@/utils/googleSheets';
+import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName, notifyWorkerCacheInvalidate } from '@/utils/googleSheets';
 import { getKSTDayOfWeekName, isKSTPastDate } from '@/utils/kstTime';
 
 const props = defineProps<{
@@ -43,6 +43,7 @@ const emit = defineEmits<{
   (e: 'removeAttendee', dateStr: string, attendeeName: string, pin?: string): void;
   (e: 'clearAttendees', dateStr: string): void;
   (e: 'toggleConfirm', dateStr: string): void;
+  (e: 'refreshStats'): void;
   (e: 'toast', message: string, type?: 'success' | 'error'): void;
 }>();
 
@@ -706,6 +707,8 @@ const handleCreateSessionSheetConfirm = async () => {
     }
 
     window.dispatchEvent(new CustomEvent('mahjong_session_sheet_changed', { detail: { sheetName: title } }));
+    await notifyWorkerCacheInvalidate(title);
+    emit('refreshStats');
 
     if (props.dayItem) {
       props.dayItem.sheetTitle = title;
@@ -930,6 +933,8 @@ const handleUnconfirmAndDeleteSheet = async () => {
   try {
     if (spreadsheetId && sheetTitle) {
       await deleteSessionSheetByName(spreadsheetId, sheetTitle);
+      await notifyWorkerCacheInvalidate(sheetTitle);
+      emit('refreshStats');
       emit('toast', `'${sheetTitle}' 시트 탭이 삭제되었습니다.`, 'success');
       if (localStorage.getItem('current_session_sheet_name') === sheetTitle) {
         localStorage.removeItem('current_session_sheet_name');

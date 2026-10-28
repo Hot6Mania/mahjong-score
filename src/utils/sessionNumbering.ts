@@ -37,24 +37,42 @@ export function computeScheduleSessionNumbers(
   const sessionMap = new Map<string, number>();
   const sorted = [...scheduleDates].sort((a, b) => a.date.localeCompare(b.date));
 
-  // 현재 일정들의 YYMMDD 패턴 목록 생성 (예: "2026-04-23" -> "260423")
-  const currentScheduleYymmddList = sorted.map(item => {
-    const raw = item.date.replace(/-/g, '');
-    return raw.length === 8 ? raw.slice(2) : raw;
-  });
+  // 현재 확정된 일정들의 YYMMDD 패턴 목록 생성 (예: "2026-04-23" -> "260423")
+  const confirmedScheduleYymmddList = sorted
+    .filter(item => item.isConfirmed && (item.attendees ? item.attendees.length : 0) >= 4)
+    .map(item => {
+      const raw = item.date.replace(/-/g, '');
+      return raw.length === 8 ? raw.slice(2) : raw;
+    });
 
   // 현재 일정이 속한 월의 YYMM 접두사 추출 (예: "2026-11-15" -> "2611")
   const targetYymm = sorted.length > 0
     ? sorted[0].date.replace(/-/g, '').slice(2, 6)
     : '';
 
-  // 이번 달 일정과 연동된 시트 탭 및 현재 조회 월보다 미래 월의 시트 탭은 과거 완료 회차 목록에서 제외
+  // 모든 유효 시트 탭의 (회차번호, YYMMDD) 메타데이터 추출
+  const parsedSessions: { num: number; yymmdd: string }[] = [];
+  for (const s of availableSessions) {
+    if (!s) continue;
+    const numMatch = s.match(/제\s*(\d+)\s*회/i);
+    if (!numMatch) continue;
+    const num = parseInt(numMatch[1], 10);
+    if (isNaN(num) || num <= 0) continue;
+    const dateMatch = s.match(/(\d{6})/);
+    const yymmdd = dateMatch ? dateMatch[1] : '';
+    if (targetYymm.length === 4 && yymmdd && yymmdd.slice(0, 4) > targetYymm) {
+      continue;
+    }
+    parsedSessions.push({ num, yymmdd });
+  }
+
+  // 이번 달 확정 일정과 연동된 시트 탭 및 현재 조회 월보다 미래 월의 시트 탭은 과거 완료 회차 목록에서 제외
   const pastSessions = availableSessions.filter(s => {
     if (!s) return false;
-    if (currentScheduleYymmddList.some(yymmdd => s.includes(yymmdd))) return false;
+    if (confirmedScheduleYymmddList.some(yymmdd => s.includes(yymmdd))) return false;
     if (targetYymm.length === 4) {
       const m = s.match(/(\d{6})/);
-      if (m && m[1].slice(0, 4) > targetYymm) {
+      if (m && m[1].slice(0, 4) >= targetYymm) {
         return false;
       }
     }
@@ -64,6 +82,11 @@ export function computeScheduleSessionNumbers(
   const maxCompleted = getMaxCompletedSessionNumber(pastSessions);
   const effectiveBase = Math.max(maxCompleted, baseSessionNumberOverride || 0);
   const usedNumbers = new Set<number>();
+
+  // 이번 달 이하의 모든 실제 시트 회차 번호는 중복 할당되지 않도록 선점 등록
+  for (const ps of parsedSessions) {
+    usedNumbers.add(ps.num);
+  }
 
   // 1차 패스: 실제 시트 탭이 연동된 회차(sheetTitle 또는 availableSessions 매칭) 우선 고정
   for (const item of sorted) {
@@ -96,11 +119,28 @@ export function computeScheduleSessionNumbers(
     }
   }
 
-  // 2차 패스: 시트 미생성 확정 일정에 effectiveBase + 1부터 순차 번호 부여
+  // 2차 패스: 시트 미생성 확정 일정에 날짜 순으로 번호 부여 (이전 날짜의 시트/확정 회차 번호 이후로 단조 증가 보장)
   let candidateNum = effectiveBase + 1;
   for (const item of sorted) {
+    const itemYymmdd = item.date.replace(/-/g, '').slice(2);
+
+    // 해당 날짜 이전에 이미 완료된 구글 시트 회차가 있다면 그 번호 이후로 기준점 전진
+    for (const ps of parsedSessions) {
+      if (ps.yymmdd && ps.yymmdd <= itemYymmdd && ps.num >= candidateNum) {
+        candidateNum = ps.num + 1;
+      }
+    }
+
+    if (sessionMap.has(item.date)) {
+      const lockedNum = sessionMap.get(item.date)!;
+      if (lockedNum >= candidateNum) {
+        candidateNum = lockedNum + 1;
+      }
+      continue;
+    }
+
     const count = item.attendees ? item.attendees.length : 0;
-    if (count >= 4 && item.isConfirmed && !sessionMap.has(item.date)) {
+    if (count >= 4 && item.isConfirmed) {
       while (usedNumbers.has(candidateNum)) {
         candidateNum++;
       }
