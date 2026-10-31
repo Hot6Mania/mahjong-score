@@ -2,13 +2,27 @@ import type { ScheduleDayItem, ScheduleMonthData, ScheduleHistoryItem, ScheduleC
 import { computeSessionTimeFromAttendees } from '@/utils/timelineEngine';
 
 export function getWorkerUrl(): string {
-  const custom = localStorage.getItem('google_auth_worker_url');
-  if (custom && custom.trim()) {
-    return custom.trim().replace(/\/+$/, '');
-  }
   const envUrl = (import.meta as any).env?.VITE_GOOGLE_AUTH_WORKER_URL;
   if (envUrl && envUrl.trim()) {
     return envUrl.trim().replace(/\/+$/, '');
+  }
+  try {
+    const custom = localStorage.getItem('google_auth_worker_url');
+    if (custom && custom.trim()) {
+      const trimmed = custom.trim().replace(/\/+$/, '');
+      const isLocalHostPage =
+        typeof window !== 'undefined' &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+      if (
+        /^https:\/\/[a-z0-9.-]+\.workers\.dev$/i.test(trimmed) ||
+        (isLocalHostPage && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(trimmed))
+      ) {
+        return trimmed;
+      }
+      localStorage.removeItem('google_auth_worker_url');
+    }
+  } catch {
+    // ignore storage access errors
   }
   return 'https://mahjong-score.cnabe.workers.dev';
 }

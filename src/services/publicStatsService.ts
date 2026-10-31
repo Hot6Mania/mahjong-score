@@ -173,13 +173,71 @@ export interface SessionDetail {
   games: SessionGame[];
 }
 
-// 헬퍼: Worker 주소 가져오기
+const DEFAULT_WORKER_URL = "https://mahjong-score.cnabe.workers.dev";
+
+// 헬퍼: Worker 주소 가져오기 (비정상 localStorage 값 오염 방어)
 function getWorkerUrl(): string {
   const envWorkerUrl = import.meta.env.VITE_GOOGLE_AUTH_WORKER_URL;
   if (envWorkerUrl) return envWorkerUrl.trim().replace(/\/+$/, '');
-  const saved = localStorage.getItem("google_auth_worker_url");
-  if (saved) return saved.trim().replace(/\/+$/, '');
-  return "https://mahjong-score.cnabe.workers.dev";
+  try {
+    const saved = localStorage.getItem("google_auth_worker_url");
+    if (saved) {
+      const trimmed = saved.trim().replace(/\/+$/, '');
+      const isLocalHostPage =
+        typeof window !== 'undefined' &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+      if (
+        /^https:\/\/[a-z0-9.-]+\.workers\.dev$/i.test(trimmed) ||
+        (isLocalHostPage && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(trimmed))
+      ) {
+        return trimmed;
+      }
+      localStorage.removeItem("google_auth_worker_url");
+    }
+  } catch {
+    // ignore storage access errors
+  }
+  return DEFAULT_WORKER_URL;
+}
+
+// 헬퍼: 엑셀/구글시트 일련번호 날짜(예: "46326")를 "YYYY. M. D." 문자열로 변환
+function formatSheetDateValue(rawDate: string): string {
+  const trimmed = String(rawDate || '').trim();
+  if (!trimmed) return '';
+  if (/^\d{5}(\.\d+)?$/.test(trimmed)) {
+    const serial = parseFloat(trimmed);
+    if (serial > 40000 && serial < 80000) {
+      const utcMs = Math.round((serial - 25569) * 86400 * 1000);
+      const d = new Date(utcMs);
+      if (!isNaN(d.getTime())) {
+        return `${d.getUTCFullYear()}. ${d.getUTCMonth() + 1}. ${d.getUTCDate()}.`;
+      }
+    }
+  }
+  return trimmed;
+}
+
+// 헬퍼: 테이블이 9회차 이후 (raw) 시트 구조인지 검증 (Google GViz의 첫 번째 시트 폴백 오인 방지)
+function isRawSessionSheetTable(table: any): boolean {
+  if (!table) return false;
+  if (Array.isArray(table.cols)) {
+    const hasRawCol = table.cols.some((c: any) => {
+      const label = c && c.label ? String(c.label).trim() : '';
+      return label === '대국 ID' || label === '대국 일시' || label === '최종 우마' || label === '누적 점수변동';
+    });
+    if (hasRawCol) return true;
+  }
+  if (Array.isArray(table.rows) && table.rows.length > 0) {
+    const firstRowCells = table.rows[0]?.c;
+    if (Array.isArray(firstRowCells)) {
+      const hasRawHeaderCell = firstRowCells.some((cell: any) => {
+        const val = getCellStr(cell).trim();
+        return val === '대국 ID' || val === '대국 일시' || val === '최종 우마';
+      });
+      if (hasRawHeaderCell) return true;
+    }
+  }
+  return false;
 }
 
 // 헬퍼: 타임아웃(AbortController) 및 503/네트워크 오류 시 캐시 폴백 자동 재시도 지원 fetch
@@ -472,8 +530,7 @@ export function parseSessionSheetTable(table: any, sessionName: string): Session
   }
 
   // 만약 raw 포맷의 cols가 들어왔다면 parseRawSessionSheet로 위임
-  const hasRawFormat = table.cols.some((c: any) => c && (c.label === "대국 ID" || c.id === "F"));
-  if (hasRawFormat) {
+  if (isRawSessionSheetTable(table)) {
     return parseRawSessionSheet(table, sessionName);
   }
 
@@ -646,8 +703,46 @@ let pendingSessionRoundsPromises: Record<string, Promise<any[]> | undefined> = {
 let cachedStatsMatrix: StatsMatrixData | null = null;
 let pendingStatsMatrixPromise: Promise<StatsMatrixData> | null = null;
 
-const PAST_SESSION_CACHE_PREFIX = 'mahjong_past_sess_v2_';
+const PAST_SESSION_CACHE_PREFIX = 'mahjong_past_sess_v3_';
 let knownMaxSessionNumber = 0;
+
+// 구버전(v1/v2) 로컬스토리지 회차 캐시 자동 정리 (과거 오염된 더미/폴백 캐시 영구 고착 방지)
+try {
+  if (typeof localStorage !== 'undefined') {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('mahjong_past_sess_v2_') || k.startsWith('mahjong_past_session_v1_'))) {
+        localStorage.removeItem(k);
+      }
+    }
+  }
+} catch {
+  // ignore storage access errors
+}
+
+function isValidSessionDetailObject(detail: SessionDetail | null | undefined, sessionName: string): detail is SessionDetail {
+  if (!detail || !Array.isArray(detail.games) || !Array.isArray(detail.members)) return false;
+  if (detail.games.length === 0) return false;
+  // 비정상 파싱(표시용 시트가 raw 파서로 오인된 경우: '1회전', '성적' 등이 이름으로 들어감) 차단
+  const hasCorruptMember = detail.members.some(
+    m => !m?.name || /^\d+\s*(회전|국)$/.test(m.name.trim()) || m.name.trim() === '성적' || m.name.trim() === '대국'
+  );
+  if (hasCorruptMember) return false;
+
+  const sessMatch = String(sessionName || '').match(/제\s*(\d+)\s*회/);
+  const sessionNum = sessMatch ? parseInt(sessMatch[1], 10) : 0;
+  if (sessionNum >= 9) {
+    // 9회차 이상에서 레이팅 이력 기반 임시 조립 객체(gameId가 `${sessionName}_1` 형태이거나 일련번호 시간)는 정식 캐시로 인정하지 않음
+    const firstGame = detail.games[0];
+    if (
+      firstGame &&
+      (firstGame.gameId === `${sessionName}_1` || /^\d{5}(\.\d+)?$/.test(String(firstGame.time || '').trim()))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function updateKnownMaxSessionNumber(sessionList: string[]): void {
   for (const s of sessionList) {
@@ -687,14 +782,15 @@ export function getExpectedSessionGameCount(
   const sessionNum = sessMatch ? parseInt(sessMatch[1], 10) : 0;
   if (!sessionNum) return 0;
 
-  let expected = 0;
   const records = historyRecords && historyRecords.length > 0 ? historyRecords : cachedRatingHistoryRecords;
   if (records && records.length > 0) {
     const matchedCount = records.filter(r => {
       const m = r.sessionLabel?.match(/제\s*(\d+)\s*회/);
       return m && parseInt(m[1], 10) === sessionNum;
     }).length;
-    if (matchedCount > expected) expected = matchedCount;
+    if (matchedCount > 0) {
+      return matchedCount;
+    }
   }
 
   if (cachedStatsMatrix && cachedStatsMatrix.sessionLabels) {
@@ -702,11 +798,11 @@ export function getExpectedSessionGameCount(
     const countMatch = label.match(/(\d+)\s*국/);
     if (countMatch) {
       const matrixCount = parseInt(countMatch[1], 10);
-      if (matrixCount > expected) expected = matrixCount;
+      if (matrixCount > 0) return matrixCount;
     }
   }
 
-  return expected;
+  return 0;
 }
 
 function removePastSessionLocalCache(subKey: string): void {
@@ -742,7 +838,12 @@ export function clearPublicStatsCache(options?: { keepPastSessions?: boolean; se
     try {
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const key = localStorage.key(i);
-        if (key && (key.startsWith(PAST_SESSION_CACHE_PREFIX) || key.startsWith('mahjong_past_session_v1_'))) {
+        if (
+          key &&
+          (key.startsWith(PAST_SESSION_CACHE_PREFIX) ||
+            key.startsWith('mahjong_past_sess_v2_') ||
+            key.startsWith('mahjong_past_session_v1_'))
+        ) {
           localStorage.removeItem(key);
         }
       }
@@ -764,7 +865,7 @@ export function clearPublicStatsCache(options?: { keepPastSessions?: boolean; se
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const key = localStorage.key(i);
         if (key && key.startsWith(PAST_SESSION_CACHE_PREFIX)) {
-          const sessPart = key.replace(/^mahjong_past_sess_v2_(detail_|stats_)/, '');
+          const sessPart = key.replace(/^mahjong_past_sess_v3_(detail_|stats_)/, '');
           if (!isPastImmutableSessionClient(sessPart) || (targetPrefix && key.includes(targetPrefix))) {
             localStorage.removeItem(key);
           }
@@ -793,28 +894,29 @@ export function clearPublicStatsCache(options?: { keepPastSessions?: boolean; se
 }
 
 /**
- * 이미 로드된 '레이팅 이력'(cachedRatingHistoryRecords)에서 특정 회차의 SessionDetail을 0ms 만에 즉시 조립합니다.
- * 회차 전환 시 네트워크 응답을 기다리지 않고 즉시 순위표/우마 그래프/대국 카드를 먼저 보여주는 용도로 사용됩니다.
+ * 이미 검증되어 메모리/로컬스토리지 또는 1~8회차 내장 데이터에 존재하는 정식 SessionDetail만 0ms에 반환합니다.
+ * (가짜 좌석/시간이 들어가는 레이팅 이력 조립본은 반환하지 않음)
  */
-export function buildSessionDetailFromRatingHistory(
-  sessionName: string,
-  historyRecords?: GameRatingHistoryRecord[]
-): SessionDetail | null {
-  const expectedCount = getExpectedSessionGameCount(sessionName, historyRecords);
+export function getCachedSessionDetailImmediate(sessionName: string): SessionDetail | null {
+  const expectedCount = getExpectedSessionGameCount(sessionName);
 
   if (cachedSessionsDetail[sessionName]) {
-    if (expectedCount > 0 && cachedSessionsDetail[sessionName].games.length < expectedCount) {
+    const cached = cachedSessionsDetail[sessionName];
+    if (!isValidSessionDetailObject(cached, sessionName) || (expectedCount > 0 && cached.games.length < expectedCount)) {
       delete cachedSessionsDetail[sessionName];
     } else {
-      return cachedSessionsDetail[sessionName];
+      return cached;
     }
   }
 
   const isPastSession = isPastImmutableSessionClient(sessionName);
   if (isPastSession) {
     const localCached = readPastSessionLocalCache<SessionDetail>(`detail_${sessionName}`);
-    if (localCached && Array.isArray(localCached.games) && localCached.games.length > 0) {
-      if (expectedCount > 0 && localCached.games.length < expectedCount) {
+    if (localCached) {
+      if (
+        !isValidSessionDetailObject(localCached, sessionName) ||
+        (expectedCount > 0 && localCached.games.length < expectedCount)
+      ) {
         removePastSessionLocalCache(`detail_${sessionName}`);
       } else {
         cachedSessionsDetail[sessionName] = localCached;
@@ -832,6 +934,25 @@ export function buildSessionDetailFromRatingHistory(
       return legacy;
     }
   }
+
+  return null;
+}
+
+/**
+ * '레이팅 이력'(cachedRatingHistoryRecords)에서 특정 회차의 SessionDetail을 조립합니다.
+ * 정식 (raw) 시트 조회가 완전히 실패한 경우의 최후 폴백 용도로만 사용됩니다.
+ */
+export function buildSessionDetailFromRatingHistory(
+  sessionName: string,
+  historyRecords?: GameRatingHistoryRecord[]
+): SessionDetail | null {
+  const immediate = getCachedSessionDetailImmediate(sessionName);
+  if (immediate) {
+    return immediate;
+  }
+
+  const sessMatch = sessionName.match(/제\s*(\d+)\s*회/);
+  const sessionNum = sessMatch ? parseInt(sessMatch[1], 10) : 0;
 
   const records = historyRecords && historyRecords.length > 0 ? historyRecords : cachedRatingHistoryRecords;
   if (!records || records.length === 0 || !sessionNum) return null;
@@ -871,10 +992,11 @@ export function buildSessionDetailFromRatingHistory(
 
     players.sort((a, b) => a.rank - b.rank);
 
+    const formattedDate = formatSheetDateValue(r.date || '');
     return {
       gameIndex: idx + 1,
       gameId: `${sessionName}_${idx + 1}`,
-      time: r.date || `${idx + 1}회전`,
+      time: formattedDate ? `${formattedDate} (${idx + 1}회전)` : `${idx + 1}회전`,
       players,
     };
   });
@@ -886,7 +1008,7 @@ export function buildSessionDetailFromRatingHistory(
       totalUma: parseFloat(s.totalUma.toFixed(1)),
       avgRank: s.gamesCount > 0 ? parseFloat((s.rankSum / s.gamesCount).toFixed(3)) : 0,
       totalGames: s.gamesCount,
-      deltaScore: s.scoresSum,
+      deltaScore: s.scoresSum - 25000 * s.gamesCount,
     };
   });
   members.sort((a, b) => b.totalUma - a.totalUma);
@@ -1533,18 +1655,22 @@ export async function fetchPublicSessionDetail(
   const expectedCount = getExpectedSessionGameCount(sessionName);
 
   if (!forceRefresh && cachedSessionsDetail[sessionName]) {
-    if (expectedCount > 0 && cachedSessionsDetail[sessionName].games.length < expectedCount) {
+    const cached = cachedSessionsDetail[sessionName];
+    if (!isValidSessionDetailObject(cached, sessionName) || (expectedCount > 0 && cached.games.length < expectedCount)) {
       delete cachedSessionsDetail[sessionName];
     } else {
-      return cachedSessionsDetail[sessionName];
+      return cached;
     }
   }
 
   const isPastSession = isPastImmutableSessionClient(sessionName);
   if (!forceRefresh && isPastSession) {
     const localCached = readPastSessionLocalCache<SessionDetail>(`detail_${sessionName}`);
-    if (localCached && Array.isArray(localCached.games) && localCached.games.length > 0) {
-      if (expectedCount > 0 && localCached.games.length < expectedCount) {
+    if (localCached) {
+      if (
+        !isValidSessionDetailObject(localCached, sessionName) ||
+        (expectedCount > 0 && localCached.games.length < expectedCount)
+      ) {
         removePastSessionLocalCache(`detail_${sessionName}`);
       } else {
         cachedSessionsDetail[sessionName] = localCached;
@@ -1582,9 +1708,10 @@ export async function fetchPublicSessionDetail(
       if (res.ok) {
         const data = await res.json();
         if (data.table) {
-          table = data.table;
-          if (data.table.cols && data.table.cols.some((c: any) => c && (c.label === "대국 ID" || c.id === "F" || c.label === "대국 일시"))) {
-            isRawParsed = true;
+          const rawCheck = isRawSessionSheetTable(data.table);
+          if (!isRawFormat || rawCheck) {
+            table = data.table;
+            isRawParsed = rawCheck;
           }
         }
       }
@@ -1598,7 +1725,7 @@ export async function fetchPublicSessionDetail(
     const sId = spreadsheetId || await resolveSpreadsheetId();
     if (sId) {
       if (isRawFormat) {
-        // 9회차 이상: (raw) 시트 우선 조회
+        // 9회차 이상: (raw) 시트 우선 조회 (미존재 시 GViz가 첫 번째 탭을 반환하므로 헤더 검증 필수)
         try {
           const rawSheetName = `${sessionName} (raw)`;
           const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(rawSheetName)}&_t=${Date.now()}`;
@@ -1606,18 +1733,16 @@ export async function fetchPublicSessionDetail(
           if (res.ok) {
             const text = await res.text();
             const gvizData = parseGVizResponse(text);
-            if (gvizData && gvizData.table) {
+            if (gvizData && gvizData.table && isRawSessionSheetTable(gvizData.table)) {
               table = gvizData.table;
               isRawParsed = true;
             }
           }
         } catch (e) {
-          console.warn(`${sessionName} (raw) fetch failed, falling back to normal sheet:`, e);
+          console.warn(`${sessionName} (raw) fetch failed:`, e);
         }
-      }
-
-      // raw 시트가 없거나 8회차 이하인 경우 일반 회차 시트 조회
-      if (!table) {
+      } else {
+        // 8회차 이하인 경우 일반 회차 시트 조회
         try {
           const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sessionName)}&_t=${Date.now()}`;
           const res = await fetchWithTimeout(gvizUrl, { cache: 'no-store' });
@@ -1626,7 +1751,7 @@ export async function fetchPublicSessionDetail(
             const gvizData = parseGVizResponse(text);
             if (gvizData && gvizData.table) {
               table = gvizData.table;
-              isRawParsed = false;
+              isRawParsed = isRawSessionSheetTable(gvizData.table);
             }
           }
         } catch (e) {
@@ -1641,7 +1766,7 @@ export async function fetchPublicSessionDetail(
   }
 
   // 파서 분기: raw 컬럼이 존재하거나 isRawParsed인 경우 parseRawSessionSheet 사용
-  const hasRawCols = table.cols && table.cols.some((c: any) => c && (c.label === "대국 ID" || c.id === "F" || c.label === "대국 일시"));
+  const hasRawCols = isRawSessionSheetTable(table);
   let detail: SessionDetail;
   if (isRawParsed || hasRawCols) {
     detail = parseRawSessionSheet(table, sessionName);
@@ -1656,7 +1781,7 @@ export async function fetchPublicSessionDetail(
     return fetchPublicSessionDetail(sessionName, spreadsheetId, true);
   }
 
-  if (detail.games.length > 0 || detail.members.length > 0) {
+  if (isValidSessionDetailObject(detail, sessionName)) {
     cachedSessionsDetail[sessionName] = detail;
     if (isPastSession && detail.games.length > 0) {
       writePastSessionLocalCache(`detail_${sessionName}`, detail);
@@ -2462,7 +2587,7 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
             if (!r.c) return;
             const gameIdx = Number(getCellNum(r.c[0])) || 0;
             const sessLabel = getCellStr(r.c[1]).trim();
-            const dateStr = getCellStr(r.c[2]).trim();
+            const dateStr = formatSheetDateValue(getCellStr(r.c[2]).trim());
             if (!sessLabel || sessLabel === '회차') return;
 
             // 5열(우마 포함) 또는 4열(점수만) 규격 자동 판별

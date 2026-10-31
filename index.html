@@ -141,7 +141,7 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          const deployVersion = "20261031_1200";
+          const deployVersion = "20261101_0650";
           const swBase = window.location.pathname.startsWith('/mahjong-score') ? '/mahjong-score' : '';
           navigator.serviceWorker.register(`${swBase}/sw.js?v=${deployVersion}`)
             .then(reg => {

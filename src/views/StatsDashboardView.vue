@@ -28,6 +28,7 @@ import {
   fetchPublicRatingHistoryRecords,
   attachRatingToSessionGames,
   clearPublicStatsCache,
+  getCachedSessionDetailImmediate,
   buildSessionDetailFromRatingHistory,
   getExpectedSessionGameCount,
   computeFrequentOpponentsStats,
@@ -950,11 +951,11 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
     currentSessionDetailedStatsMap.value = {};
   }
 
-  // 1) 이미 로드된 캐시 또는 '레이팅 이력'에서 0ms 즉시 렌더링하여 로딩 스피너 대기 제거
+  // 1) 이미 검증된 정식 캐시(메모리/로컬스토리지/1~8회차 내장)가 있는 경우에만 0ms 즉시 렌더링
   if (!forceRefresh) {
-    const optimistic = buildSessionDetailFromRatingHistory(sessionName);
-    if (optimistic && optimistic.games.length > 0) {
-      currentSessionDetail.value = optimistic;
+    const cachedImmediate = getCachedSessionDetailImmediate(sessionName);
+    if (cachedImmediate && cachedImmediate.games.length > 0) {
+      currentSessionDetail.value = cachedImmediate;
       isLoadingSession.value = false;
     } else {
       isLoadingSession.value = true;
@@ -1000,10 +1001,10 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
         .catch(() => {});
     }
 
-    // 만약 raw 시트 GViz 응답 지연으로 여전히 레이팅 이력 대국 수보다 적다면 레이팅 이력 기반 조립본으로 보완
-    if (detail && expectedCount > 0 && detail.games.length < expectedCount && historyRecords.length > 0) {
+    // 만약 (raw) 시트 조회가 완전히 실패하여 대국 목록이 비어있는 경우에만 레이팅 이력 기반 조립본으로 폴백
+    if ((!detail || detail.games.length === 0) && historyRecords.length > 0) {
       const rebuilt = buildSessionDetailFromRatingHistory(sessionName, historyRecords);
-      if (rebuilt && rebuilt.games.length > detail.games.length) {
+      if (rebuilt && rebuilt.games.length > 0) {
         detail = rebuilt;
       }
     }
