@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mahjong-score-v10';
+const CACHE_NAME = 'mahjong-score-v11';
 const ASSETS = [
   '/',
   '/index.html',
@@ -34,8 +34,8 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
   const url = new URL(e.request.url);
-  // 외부 도메인 API(구글 Sheets API, Cloudflare Workers, Google Auth 등)는 네이티브 네트워크로 직접 위임
-  if (url.origin !== self.location.origin) {
+  // 외부 도메인 API(구글 Sheets API, Cloudflare Workers, Google Auth 등) 및 API 경로는 네이티브 네트워크로 직접 위임
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
     return;
   }
 
@@ -66,6 +66,11 @@ self.addEventListener('fetch', (e) => {
         if (e.request.mode === 'navigate') {
           const indexFallback = (await caches.match('/index.html')) || (await caches.match('/'));
           if (indexFallback) return indexFallback;
+        }
+
+        // 이미지 프리로드 등 비필수 정적 리소스 요청이 리디렉션/취소로 중단된 경우 503 콘솔 에러 방지
+        if (e.request.destination === 'image') {
+          return new Response('', { status: 204, statusText: 'No Content' });
         }
 
         // 캐시에도 존재하지 않을 경우 안전한 Response 객체를 반환하여 TypeError 방지

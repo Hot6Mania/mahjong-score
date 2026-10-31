@@ -182,6 +182,40 @@ function getWorkerUrl(): string {
   return "https://mahjong-score.cnabe.workers.dev";
 }
 
+// 헬퍼: 타임아웃(AbortController) 및 503/네트워크 오류 시 캐시 폴백 자동 재시도 지원 fetch
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = 8000
+): Promise<Response> {
+  const attempt = async (targetUrl: string, ms: number): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    try {
+      return await fetch(targetUrl, {
+        ...options,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  try {
+    const res = await attempt(url, timeoutMs);
+    if (res.status >= 500) {
+      const fallbackUrl = url.replace(/([?&])refresh=1(&?)/, (_m, p1, p2) => (p2 ? p1 : ''));
+      await new Promise(r => setTimeout(r, 250));
+      return await attempt(fallbackUrl, timeoutMs);
+    }
+    return res;
+  } catch (err) {
+    const fallbackUrl = url.replace(/([?&])refresh=1(&?)/, (_m, p1, p2) => (p2 ? p1 : ''));
+    await new Promise(r => setTimeout(r, 250));
+    return await attempt(fallbackUrl, timeoutMs);
+  }
+}
+
 // 헬퍼: GViz 응답 문자열 파싱
 function parseGVizResponse(text: string): any {
   const start = text.indexOf('{');
@@ -1025,7 +1059,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
     if (workerUrl) {
       try {
         const refreshQuery = forceRefresh ? `?refresh=1&_t=${Date.now()}` : '';
-        const res = await fetch(`${workerUrl}/api/public/stats${refreshQuery}`, { cache: 'no-store' });
+        const res = await fetchWithTimeout(`${workerUrl}/api/public/stats${refreshQuery}`, { cache: 'no-store' });
         if (res.ok) {
           const data = await res.json();
           if (data.table) table = data.table;
@@ -1038,7 +1072,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
     if (!table && sId) {
       try {
         const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&gid=${STATS_GID}`;
-        const res = await fetch(gvizUrl);
+        const res = await fetchWithTimeout(gvizUrl);
         if (res.ok) {
           const text = await res.text();
           const json = parseGVizResponse(text);
@@ -1324,7 +1358,7 @@ export async function fetchPublicRatings(spreadsheetId?: string, forceRefresh: b
   if (workerUrl) {
     try {
       const refreshQuery = forceRefresh ? `?refresh=1&_t=${Date.now()}` : '';
-      const res = await fetch(`${workerUrl}/api/public/ratings${refreshQuery}`, { cache: 'no-store' });
+      const res = await fetchWithTimeout(`${workerUrl}/api/public/ratings${refreshQuery}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (data.table) table = data.table;
@@ -1340,7 +1374,7 @@ export async function fetchPublicRatings(spreadsheetId?: string, forceRefresh: b
     if (sId) {
       try {
         const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('레이팅')}`;
-        const res = await fetch(gvizUrl);
+        const res = await fetchWithTimeout(gvizUrl);
         if (res.ok) {
           const text = await res.text();
           const data = parseGVizResponse(text);
@@ -1446,11 +1480,14 @@ export async function fetchPublicSessions(_spreadsheetId?: string, forceRefresh:
   if (workerUrl) {
     try {
       const refreshQuery = forceRefresh ? `?refresh=1&_t=${Date.now()}` : `?_t=${Date.now()}`;
-      const res = await fetch(`${workerUrl}/api/public/sessions${refreshQuery}`, { cache: 'no-store' });
+      const res = await fetchWithTimeout(`${workerUrl}/api/public/sessions${refreshQuery}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.sessions) && data.sessions.length > 0) {
           updateKnownMaxSessionNumber(data.sessions);
+          try {
+            localStorage.setItem('mahjong_public_sessions_v2', JSON.stringify(data.sessions));
+          } catch (_) {}
           return data.sessions;
         }
       }
@@ -1459,14 +1496,28 @@ export async function fetchPublicSessions(_spreadsheetId?: string, forceRefresh:
     }
   }
 
+  try {
+    const rawSaved = localStorage.getItem('mahjong_public_sessions_v2');
+    if (rawSaved) {
+      const parsed = JSON.parse(rawSaved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        updateKnownMaxSessionNumber(parsed);
+        return parsed;
+      }
+    }
+  } catch (_) {}
+
   // B. 실제 스프레드시트 기본 공인 회차 시드 리스트
   const fallbackSessions = [
-    '제15회 260926', '제14회 260829', '제13회 260817', '제12회 260808',
-    '제11회 260720', '제10회 260718', '제9회 260713', '제8회 260614',
-    '제7회 260603',  '제6회 260530',  '제5회 260516',  '제4회 260510',
-    '제3회 260504',  '제2회 260421',  '제1회 260411'
+    '제22회 261031', '제21회 261028', '제20회 261026', '제19회 261017',
+    '제18회 261016', '제17회 261010', '제16회 261009', '제15회 260926',
+    '제14회 260829', '제13회 260817', '제12회 260808', '제11회 260720',
+    '제10회 260718', '제9회 260713',  '제8회 260614',  '제7회 260603',
+    '제6회 260530',  '제5회 260516',  '제4회 260510',  '제3회 260504',
+    '제2회 260421',  '제1회 260411'
   ];
 
+  updateKnownMaxSessionNumber(fallbackSessions);
   return fallbackSessions;
 }
 
@@ -1523,8 +1574,8 @@ export async function fetchPublicSessionDetail(
   // A. Worker 시도 (스프레드시트 ID는 서버 내부 Secret에서 자동 복호화)
   if (workerUrl) {
     try {
-      const refreshParam = (forceRefresh || !isPastSession) ? `&refresh=1&_t=${Date.now()}` : `&_t=${Date.now()}`;
-      const res = await fetch(
+      const refreshParam = forceRefresh ? `&refresh=1&_t=${Date.now()}` : `&_t=${Date.now()}`;
+      const res = await fetchWithTimeout(
         `${workerUrl}/api/public/session-detail?session=${encodeURIComponent(sessionName)}${refreshParam}`,
         { cache: 'no-store' }
       );
@@ -1551,7 +1602,7 @@ export async function fetchPublicSessionDetail(
         try {
           const rawSheetName = `${sessionName} (raw)`;
           const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(rawSheetName)}&_t=${Date.now()}`;
-          const res = await fetch(gvizUrl, { cache: 'no-store' });
+          const res = await fetchWithTimeout(gvizUrl, { cache: 'no-store' });
           if (res.ok) {
             const text = await res.text();
             const gvizData = parseGVizResponse(text);
@@ -1569,7 +1620,7 @@ export async function fetchPublicSessionDetail(
       if (!table) {
         try {
           const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sessionName)}&_t=${Date.now()}`;
-          const res = await fetch(gvizUrl, { cache: 'no-store' });
+          const res = await fetchWithTimeout(gvizUrl, { cache: 'no-store' });
           if (res.ok) {
             const text = await res.text();
             const gvizData = parseGVizResponse(text);
@@ -1983,7 +2034,7 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string, forceRefres
       if (workerUrl) {
         try {
           const refreshQuery = forceRefresh ? `?refresh=1&_t=${Date.now()}` : '';
-          const res = await fetch(`${workerUrl}/api/public/stats-matrix${refreshQuery}`, { cache: 'no-store' });
+          const res = await fetchWithTimeout(`${workerUrl}/api/public/stats-matrix${refreshQuery}`, { cache: 'no-store' });
           if (res.ok) {
             const data = await res.json();
             if (data.table) table = data.table;
@@ -1999,7 +2050,7 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string, forceRefres
         if (sId) {
           const sheetParam = encodeURIComponent("통계");
           const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${sheetParam}`;
-          const res = await fetch(gvizUrl);
+          const res = await fetchWithTimeout(gvizUrl);
           if (!res.ok) {
             throw new Error(`Google GViz stats matrix request failed: ${res.status}`);
           }
@@ -2366,7 +2417,7 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
       if (workerUrl) {
         try {
           const refreshQuery = forceRefresh ? `?refresh=1&_t=${Date.now()}` : '';
-          const res = await fetch(`${workerUrl}/api/public/rating-history${refreshQuery}`, { cache: 'no-store' });
+          const res = await fetchWithTimeout(`${workerUrl}/api/public/rating-history${refreshQuery}`, { cache: 'no-store' });
           if (res.ok) {
             const data = await res.json();
             if (data.table) table = data.table;
@@ -2382,7 +2433,7 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
         if (sId) {
           try {
             const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('레이팅 이력')}`;
-            const res = await fetch(gvizUrl);
+            const res = await fetchWithTimeout(gvizUrl);
             if (res.ok) {
               const text = await res.text();
               const data = parseGVizResponse(text);

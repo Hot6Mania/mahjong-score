@@ -801,10 +801,13 @@ export async function fetchHighlights(forceRefresh: boolean = false): Promise<Hi
   if (!forceRefresh && cachedHighlights !== null) {
     return cachedHighlights;
   }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
     const refreshQuery = forceRefresh ? '?refresh=1' : '';
     const res = await fetch(`${getWorkerUrl()}/api/public/highlights${refreshQuery}`, {
       cache: 'no-store',
+      signal: controller.signal,
     });
     if (res.ok) {
       const data = await res.json();
@@ -822,6 +825,8 @@ export async function fetchHighlights(forceRefresh: boolean = false): Promise<Hi
     }
   } catch (e) {
     console.warn('Failed to fetch highlights:', e);
+  } finally {
+    clearTimeout(timer);
   }
   return cachedHighlights || [];
 }

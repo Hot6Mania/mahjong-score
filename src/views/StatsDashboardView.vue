@@ -408,9 +408,9 @@ const switchTab = (tab: DashboardTab, updateUrl = true) => {
   activeTab.value = tab;
   scrollActiveTabIntoView(true);
   if (tab === 'schedule' && prevTab !== 'schedule') {
-    void refreshScheduleSheetData();
+    void refreshScheduleSheetData(false);
   } else if (tab === 'sessions' && prevTab !== 'sessions') {
-    void refreshSessionsTabData();
+    void refreshSessionsTabData(false);
   }
   if (updateUrl && typeof window !== 'undefined') {
     const activePhotoId = lightboxHighlight.value?.id || pendingUrlPhotoId.value || '';
@@ -1604,13 +1604,20 @@ const clearInitialLightboxImagePending = () => {
   }
 };
 
-// 일정 탭 전용 구글 시트(회차 목록/멤버 통계) 무소음 강제 동기화
-const refreshScheduleSheetData = async () => {
+// 일정 탭 전용 구글 시트(회차 목록/멤버 통계) 무소음 동기화
+let lastScheduleSilentSyncAt = 0;
+const refreshScheduleSheetData = async (force = true) => {
+  const now = Date.now();
+  if (!force && now - lastScheduleSilentSyncAt < 60_000) return;
+  lastScheduleSilentSyncAt = now;
+
   try {
-    clearPublicStatsCache({ keepPastSessions: true });
+    if (force) {
+      clearPublicStatsCache({ keepPastSessions: true });
+    }
     const [sessions, stats] = await Promise.all([
-      fetchPublicSessions(undefined, true).catch(() => [] as string[]),
-      fetchPublicAllStats(undefined, true).catch(() => [] as MemberStatItem[]),
+      fetchPublicSessions(undefined, force).catch(() => [] as string[]),
+      fetchPublicAllStats(undefined, force).catch(() => [] as MemberStatItem[]),
     ]);
     if (sessions && sessions.length > 0) {
       availableSessions.value = sessions;
@@ -1627,13 +1634,13 @@ const refreshScheduleSheetData = async () => {
 let lastSessionsSilentSyncAt = 0;
 const refreshSessionsTabData = async (force = false) => {
   const now = Date.now();
-  if (!force && now - lastSessionsSilentSyncAt < 15_000) return;
+  if (!force && now - lastSessionsSilentSyncAt < 60_000) return;
   lastSessionsSilentSyncAt = now;
 
   try {
     const [sessions, matrix] = await Promise.all([
-      fetchPublicSessions(undefined, true).catch(() => [] as string[]),
-      fetchPublicStatsMatrix(undefined, true).catch(() => null),
+      fetchPublicSessions(undefined, force).catch(() => [] as string[]),
+      fetchPublicStatsMatrix(undefined, force).catch(() => null),
     ]);
     if (matrix) {
       statsMatrix.value = matrix;
@@ -1642,7 +1649,12 @@ const refreshSessionsTabData = async (force = false) => {
       availableSessions.value = sessions;
     }
     if (selectedSession.value) {
-      await loadSessionDetail(selectedSession.value, true);
+      const expected = getExpectedSessionGameCount(selectedSession.value);
+      const currentCount = currentSessionDetail.value?.games?.length || 0;
+      const isStale = !isLoadingSession.value && currentSessionDetail.value !== null && expected > 0 && currentCount < expected;
+      if (force || isStale || (!isLoadingSession.value && !currentSessionDetail.value)) {
+        await loadSessionDetail(selectedSession.value, force || isStale);
+      }
     }
   } catch (e) {
     console.warn('회차 상세 시트 데이터 무소음 동기화 실패:', e);
@@ -1793,7 +1805,11 @@ const loadAllData = async (forceRefresh: boolean = false) => {
     }
     const expectedGames = selectedSession.value ? getExpectedSessionGameCount(selectedSession.value) : 0;
     const currentGamesCount = currentSessionDetail.value?.games?.length || 0;
-    const isSessionGameCountStale = expectedGames > 0 && currentGamesCount < expectedGames;
+    const isSessionGameCountStale =
+      !isLoadingSession.value &&
+      currentSessionDetail.value !== null &&
+      expectedGames > 0 &&
+      currentGamesCount < expectedGames;
     if (
       selectedSession.value &&
       (forceRefresh ||
@@ -1802,7 +1818,10 @@ const loadAllData = async (forceRefresh: boolean = false) => {
           (!currentSessionDetail.value ||
             !matchHighlightSession(currentSessionDetail.value.sessionName, selectedSession.value))))
     ) {
-      await loadSessionDetail(selectedSession.value, forceRefresh || isSessionGameCountStale);
+      const detailPromise = loadSessionDetail(selectedSession.value, forceRefresh || isSessionGameCountStale);
+      if (forceRefresh) {
+        await detailPromise;
+      }
     }
     if (forceRefresh) {
       showToast('최신 데이터로 새로고침되었습니다.');
@@ -2746,10 +2765,12 @@ const handleDashboardVisibilityOrFocus = () => {
 };
 
 onMounted(() => {
-  preloadMahjongTileImages();
   loadAllData();
   refreshGalleryAuthState();
   if (typeof window !== 'undefined') {
+    setTimeout(() => {
+      preloadMahjongTileImages();
+    }, 1500);
     window.addEventListener('focus', handleDashboardVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleDashboardVisibilityOrFocus);
   }
