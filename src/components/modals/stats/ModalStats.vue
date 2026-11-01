@@ -424,7 +424,7 @@ function getRankLabelPos(stats: { p1: number; p2: number; p3: number; p4: number
   else if (rank === 3) midPct = stats.p1 + stats.p2 + stats.p3 / 2
   else if (rank === 4) midPct = stats.p1 + stats.p2 + stats.p3 + stats.p4 / 2
 
-  const rad = ((midPct / 100) * 360 - 90) * (Math.PI / 180)
+  const rad = -((midPct / 100) * 360) * (Math.PI / 180)
   return {
     x: Number((100 + 70 * Math.cos(rad)).toFixed(2)),
     y: Number((100 + 70 * Math.sin(rad)).toFixed(2))
@@ -1512,8 +1512,8 @@ const emptyScopeMessage = computed(() => {
                 stroke-width="24"
               />
               
-              <!-- 원형 조각들 (12시 방향 시작 회전) -->
-              <g transform="rotate(-90 100 100)">
+              <!-- 원형 조각들 (3시 방향 시작 반시계 방향) -->
+              <g transform="translate(0 200) scale(1 -1)">
                 <!-- 4위 (빨강: Player.vue 등수 색상) -->
                 <circle 
                   v-if="rankStats.p4 > 0"

@@ -748,7 +748,7 @@ function getRankLabelPos(stats: { p1: number; p2: number; p3: number; p4: number
   else if (rank === 3) midPct = stats.p1 + stats.p2 + stats.p3 / 2;
   else if (rank === 4) midPct = stats.p1 + stats.p2 + stats.p3 + stats.p4 / 2;
 
-  const rad = ((midPct / 100) * 360 - 90) * (Math.PI / 180);
+  const rad = -((midPct / 100) * 360) * (Math.PI / 180);
   return {
     x: Number((100 + 73 * Math.cos(rad)).toFixed(2)),
     y: Number((100 + 73 * Math.sin(rad)).toFixed(2))
@@ -8650,7 +8650,7 @@ const openGamePopupFromLightbox = async (
                                 stroke="var(--border-color, rgba(0,0,0,0.08))" 
                                 stroke-width="38" 
                               />
-                              <g transform="rotate(-90 100 100)">
+                              <g transform="translate(0 200) scale(1 -1)">
                                 <!-- 4위 (빨강) -->
                                 <circle 
                                   v-if="currentSessionRankStats.p4 > 0"
@@ -9548,7 +9548,7 @@ const openGamePopupFromLightbox = async (
                       stroke-width="38"
                     />
                     <!-- 조각 링 -->
-                    <g transform="rotate(-90 100 100)">
+                    <g transform="translate(0 200) scale(1 -1)">
                       <!-- 4위 (빨강) -->
                       <circle 
                         v-if="modalRankStats.p4 > 0"
