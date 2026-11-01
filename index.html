@@ -1,15 +1,60 @@
 <!doctype html>
 <html lang="ko">
   <head>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121212">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <script>
       (function() {
+        function applyThemeMeta(isDark) {
+          var themeColor = isDark ? '#121212' : '#ffffff';
+          document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          for (var i = 0; i < metas.length; i++) {
+            metas[i].setAttribute('content', themeColor);
+          }
+          var appleStatus = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+          if (appleStatus) {
+            appleStatus.setAttribute('content', isDark ? 'black-translucent' : 'default');
+          }
+        }
         try {
           var saved = localStorage.getItem('theme');
           var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-          if (saved === 'dark' || (!saved && prefersDark)) {
+          var isDark = saved === 'dark' || (!saved && prefersDark);
+          if (isDark) {
             document.documentElement.classList.add('dark');
           } else {
             document.documentElement.classList.remove('dark');
+          }
+          applyThemeMeta(isDark);
+
+          if (typeof MutationObserver !== 'undefined') {
+            var observer = new MutationObserver(function() {
+              applyThemeMeta(document.documentElement.classList.contains('dark'));
+            });
+            observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+          }
+
+          if (window.matchMedia) {
+            var mq = window.matchMedia('(prefers-color-scheme: dark)');
+            var onChange = function(e) {
+              if (!localStorage.getItem('theme')) {
+                if (e.matches) {
+                  document.documentElement.classList.add('dark');
+                } else {
+                  document.documentElement.classList.remove('dark');
+                }
+                applyThemeMeta(e.matches);
+              }
+            };
+            if (mq.addEventListener) {
+              mq.addEventListener('change', onChange);
+            } else if (mq.addListener) {
+              mq.addListener(onChange);
+            }
           }
         } catch (e) {}
       })();
@@ -87,10 +132,8 @@
 
     <!-- PWA Manifest & iOS Standalone App config -->
     <link rel="manifest" href="./manifest.json">
-    <meta name="theme-color" content="#4caf50">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="김케이 하우스">
     <link rel="apple-touch-icon" href="./images/icon-192.png">
 
@@ -141,7 +184,7 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          const deployVersion = "20261101_0650";
+          const deployVersion = "20261101_1810";
           const swBase = window.location.pathname.startsWith('/mahjong-score') ? '/mahjong-score' : '';
           navigator.serviceWorker.register(`${swBase}/sw.js?v=${deployVersion}`)
             .then(reg => {

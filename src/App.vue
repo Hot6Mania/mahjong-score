@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, isGoogleAuthError, type SessionMigrationBackup } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
 import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
@@ -2973,7 +2973,31 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
         console.warn("'통계' 시트 최종우마 동기화 중 오류:", statsSyncErr);
       }
 
-      // [7] 모든 시트 기록 완료 후 Worker KV/메모리 및 클라이언트 캐시 최종 무효화
+      // [7] KML 기록 시스템(kml.or.kr/stat255) 신규 대국 자동 동기화 (Worker KV 중복 방지 보장)
+      try {
+        const kmlGamesPayload: KmlSyncGameInput[] = todayGamesHistory
+          .filter((game: any) => Array.isArray(game?.results) && game.results.length === 4)
+          .map((game: any) => ({
+            gameId: new Date(game.timestamp).getTime().toString(),
+            sessionName: sessionSheetName,
+            timestamp: game.timestamp,
+            gameLength: 1, // 1: 남장(반장전, 0=동장, 1=남장, 2=서장, 3=전장)
+            commonPoint: 0,
+            players: game.results.slice(0, 4).map((r: any, idx: number) => ({
+              name: String(r?.name || '').trim(),
+              score: Number(r?.score || 0),
+              wind: idx, // 0: 동, 1: 남, 2: 서, 3: 북
+              rank: Number(r?.rank || idx + 1),
+            })),
+          }));
+        if (kmlGamesPayload.length > 0) {
+          await syncGamesToKmlViaWorker(kmlGamesPayload);
+        }
+      } catch (kmlSyncErr) {
+        console.warn("KML 기록 시스템 자동 동기화 중 오류 (무시 가능):", kmlSyncErr);
+      }
+
+      // [8] 모든 시트 기록 완료 후 Worker KV/메모리 및 클라이언트 캐시 최종 무효화
       notifyWorkerCacheInvalidate(sessionSheetName);
 
       syncProgress.value = 98;
@@ -2991,6 +3015,28 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       return true;
     } else {
       if (skipCount > 0) {
+        // 시트에는 이미 올라갔으나 KML에 미등록된 대국이 있을 경우를 대비해 백그라운드 보충 동기화
+        try {
+          const kmlGamesPayload: KmlSyncGameInput[] = todayGamesHistory
+            .filter((game: any) => Array.isArray(game?.results) && game.results.length === 4)
+            .map((game: any) => ({
+              gameId: new Date(game.timestamp).getTime().toString(),
+              sessionName: sessionSheetName,
+              timestamp: game.timestamp,
+              gameLength: 1, // 1: 남장(반장전, 0=동장, 1=남장, 2=서장, 3=전장)
+              commonPoint: 0,
+              players: game.results.slice(0, 4).map((r: any, idx: number) => ({
+                name: String(r?.name || '').trim(),
+                score: Number(r?.score || 0),
+                wind: idx,
+                rank: Number(r?.rank || idx + 1),
+              })),
+            }));
+          if (kmlGamesPayload.length > 0) {
+            syncGamesToKmlViaWorker(kmlGamesPayload).catch(() => {});
+          }
+        } catch (_) {}
+
         if (!skipConfirm) {
           alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재합니다.)`);
         } else {

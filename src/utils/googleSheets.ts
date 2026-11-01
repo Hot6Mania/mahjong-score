@@ -1282,6 +1282,86 @@ export const notifyWorkerCacheInvalidate = (sessionTitle?: string) => {
   } catch (_) {}
 };
 
+export interface KmlSyncGamePlayerInput {
+  name: string;
+  score: number;
+  wind: number; // 0: 동, 1: 남, 2: 서, 3: 북
+  rank?: number;
+}
+
+export interface KmlSyncGameInput {
+  gameId: string;
+  sessionName?: string;
+  timestamp?: string;
+  gameLength?: number; // 기본값 2 (남장/반장전)
+  commonPoint?: number; // 기본값 0
+  players: KmlSyncGamePlayerInput[];
+}
+
+/**
+ * Cloudflare Worker 프록시를 통해 KML 기록 시스템(kml.or.kr/stat255)에 신규 대국들을 자동 업로드합니다.
+ * Worker KV(kml:v1:synced_games)에서 이미 업로드된 gameId는 자동으로 건너뛰므로 중복 등록이 발생하지 않습니다.
+ */
+export const syncGamesToKmlViaWorker = async (
+  games: KmlSyncGameInput[]
+): Promise<{ success: boolean; uploadedCount: number; skippedCount: number }> => {
+  if (!games || games.length === 0) {
+    return { success: true, uploadedCount: 0, skippedCount: 0 };
+  }
+  try {
+    const envWorkerUrl = (import.meta as any).env?.VITE_GOOGLE_AUTH_WORKER_URL;
+    const savedWorkerUrl = typeof localStorage !== 'undefined' ? localStorage.getItem('google_auth_worker_url') : '';
+    const workerUrl = (envWorkerUrl || savedWorkerUrl || 'https://mahjong-score.cnabe.workers.dev').trim().replace(/\/+$/, '');
+    if (!workerUrl) {
+      return { success: false, uploadedCount: 0, skippedCount: 0 };
+    }
+
+    const res = await fetch(`${workerUrl}/api/kml/sync-games`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ games }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      console.warn('KML 대국 자동 동기화 응답 경고:', data.error || data);
+      return { success: false, uploadedCount: 0, skippedCount: 0 };
+    }
+    console.log(`KML 자동 동기화 완료: 신규 업로드 ${data.uploadedCount || 0}건, 기등록 스킵 ${data.skippedCount || 0}건`);
+    return {
+      success: true,
+      uploadedCount: Number(data.uploadedCount || 0),
+      skippedCount: Number(data.skippedCount || 0),
+    };
+  } catch (err) {
+    console.warn('KML 대국 자동 동기화 네트워크 오류 (무시 가능):', err);
+    return { success: false, uploadedCount: 0, skippedCount: 0 };
+  }
+};
+
+/**
+ * Cloudflare Worker를 통해 KML에 등록된 특정 대국 기록을 삭제 처리합니다.
+ */
+export const deleteGameFromKmlViaWorker = async (gameId: string): Promise<boolean> => {
+  if (!gameId) return false;
+  try {
+    const envWorkerUrl = (import.meta as any).env?.VITE_GOOGLE_AUTH_WORKER_URL;
+    const savedWorkerUrl = typeof localStorage !== 'undefined' ? localStorage.getItem('google_auth_worker_url') : '';
+    const workerUrl = (envWorkerUrl || savedWorkerUrl || 'https://mahjong-score.cnabe.workers.dev').trim().replace(/\/+$/, '');
+    if (!workerUrl) return false;
+
+    const res = await fetch(`${workerUrl}/api/kml/delete-game`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gameId: gameId.trim() }),
+    });
+    const data = await res.json();
+    return Boolean(res.ok && data?.success);
+  } catch (err) {
+    console.warn('KML 대국 삭제 연동 실패 (무시 가능):', err);
+    return false;
+  }
+};
+
 /**
  * 대국 로그(Tidy Data)를 시트에 추가합니다.
  */
@@ -1456,6 +1536,7 @@ export const deleteGameFromSheets = async (spreadsheetId: string, gameId: string
         resource: { requests }
       });
       console.log(`구글 시트 대국 ID(${gameId}) 삭제 완료!`);
+      deleteGameFromKmlViaWorker(gameId).catch(() => {});
       notifyWorkerCacheInvalidate();
     } catch (err) {
       console.error("구글 시트 행 삭제 batchUpdate 실패:", err);

@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg-color: #f8fafc;
   --text-color: #0f172a;
   --text-dimmed: #64748b;
@@ -30,6 +31,7 @@
 }
 
 html.dark {
+  color-scheme: dark;
   --bg-color: #121212;
   --text-color: #e5e5e5;
   --text-dimmed: #94a3b8;

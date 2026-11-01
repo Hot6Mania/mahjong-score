@@ -64,6 +64,7 @@ export interface HighlightRecord {
   hasThumb?: boolean;
   thumbSize?: number;
   comments?: HighlightComment[];
+  kmlYakumanId?: number;
   createdAt: number;
 }
 
