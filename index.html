@@ -4,7 +4,7 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121212">
-    <meta name="theme-color" content="#ffffff">
+    <meta name="theme-color" content="#121212">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <script>
       (function() {
@@ -138,7 +138,7 @@
     <link rel="apple-touch-icon" href="./images/icon-192.png">
 
     <!-- Screen Size -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 
     <!-- Single Page Apps for GitHub Pages -->
     <script type="text/javascript">
@@ -184,7 +184,7 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          const deployVersion = "20261101_1810";
+          const deployVersion = "20261101_1816";
           const swBase = window.location.pathname.startsWith('/mahjong-score') ? '/mahjong-score' : '';
           navigator.serviceWorker.register(`${swBase}/sw.js?v=${deployVersion}`)
             .then(reg => {
