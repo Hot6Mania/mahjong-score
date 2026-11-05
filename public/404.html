@@ -1,26 +1,54 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
   <head>
     <meta charset="utf-8">
-    <title>Single Page Apps for GitHub Pages</title>
+    <title>김케이 하우스</title>
+    <meta name="description" content="김케이 하우스 마작 대시보드 및 점수 기록기">
+    <link rel="icon" type="image/svg+xml" href="/riichi-stick.svg" />
     <script type="text/javascript">
-      // Single Page Apps for GitHub Pages
-      // MIT License
-      // https://github.com/rafgraph/spa-github-pages
-      // This script takes the current url and converts the path and query
-      // string into just a query string, and then redirects the browser
-      // to the new url with only a query string and hash fragment,
-      // e.g. https://www.foo.tld/one/two?a=b&c=d#qwe, becomes
-      // https://www.foo.tld/?/one/two&a=b~and~c=d#qwe
-      // Note: this 404.html file must be at least 512 bytes for it to work
-      // with Internet Explorer (it is currently > 512 bytes)
+      // GitHub Pages SPA Redirect Handler (MIT License)
+      // Converts the current path and query string into a query-based redirect
+      // while immediately setting the accurate Korean page title so browser tabs,
+      // history entries, and link previews never show a generic placeholder title.
+      (function() {
+        try {
+          var l = window.location;
+          var params = new URLSearchParams(l.search || '');
+          var qPlayer = (params.get('player') || '').trim();
+          var qSession = (params.get('session') || '').trim();
+          var qDate = (params.get('date') || '').trim();
+          var qPhoto = (params.get('photo') || '').trim();
+          var qTab = (params.get('tab') || '').trim();
+          var tabMap = {
+            ranking: '종합 랭킹',
+            rating: '레이팅',
+            matrix: '역대 전적',
+            sessions: '회차 상세',
+            schedule: '일정',
+            rules: '룰',
+            gallery: '갤러리'
+          };
+          if (qPlayer) {
+            var sessLabel = qSession ? (/^\d+$/.test(qSession) ? '제' + qSession + '회' : qSession) : '';
+            document.title = (sessLabel ? qPlayer + ' (' + sessLabel + ') 통계' : qPlayer + ' 통계') + ' | 김케이 하우스';
+          } else if (qSession) {
+            var sLabel = /^\d+$/.test(qSession) ? '제' + qSession + '회' : qSession;
+            document.title = sLabel + ' 상세 | 김케이 하우스';
+          } else if (qDate) {
+            var dLabel = /^\d{6}$/.test(qDate) ? (qDate.slice(0, 2) + '.' + qDate.slice(2, 4) + '.' + qDate.slice(4, 6)) : qDate;
+            document.title = '일정 (' + dLabel + ') | 김케이 하우스';
+          } else if (qPhoto) {
+            document.title = '갤러리 | 김케이 하우스';
+          } else if (qTab && tabMap[qTab]) {
+            document.title = tabMap[qTab] + ' | 김케이 하우스';
+          } else if (l.pathname.indexOf('/dashboard') !== -1 || l.pathname.indexOf('/stats') !== -1) {
+            document.title = '종합 랭킹 | 김케이 하우스';
+          } else {
+            document.title = '점수 기록기 | 김케이 하우스';
+          }
+        } catch (e) {}
+      })();
 
-      // If you're creating a Project Pages site and NOT using a custom domain,
-      // then set pathSegmentsToKeep to 1 (enterprise users may need to set it to > 1).
-      // This way the code will only replace the route part of the path, and not
-      // the real directory in which the app resides, for example:
-      // https://username.github.io/repo-name/one/two?a=b&c=d#qwe becomes
-      // https://username.github.io/repo-name/?/one/two&a=b~and~c=d#qwe
       var pathSegmentsToKeep = window.location.hostname.includes('github.io') ? 1 : 0;
 
       var l = window.location;

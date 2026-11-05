@@ -66,30 +66,28 @@ export function getAttendeeInterval(attendee: ScheduleAttendee, isDayOnly: boole
 }
 
 /**
- * 해당 날짜의 참석자들을 바탕으로 4인 이상 겹치는 시간대 구간을 계산합니다.
- * 반환값: 예 "14:00 ~ 22:00" 또는 "10:00 ~ 익일" 또는 null
+ * 해당 날짜의 참석자들을 바탕으로 4인 이상 겹치는 시간대 구간을 [시작분, 종료분]으로 정밀 계산합니다 (1분 단위).
  */
-export function computeEffectiveOverlapRange(attendees: ScheduleAttendee[] = [], isDayOnly: boolean = false): string | null {
+export function computeEffectiveOverlapMinutes(
+  attendees: ScheduleAttendee[] = [],
+  isDayOnly: boolean = false
+): [number, number] | null {
   if (!attendees || attendees.length < 4) {
     return null;
   }
 
-  // 모든 시작/종료 분 포인트 수집
   const intervals = attendees.map(a => getAttendeeInterval(a, isDayOnly));
-  
-  // 10분 단위로 카운트 샘플링 (10:00 ~ 익일 12:00)
-  const startCheck = 600; // 10:00
-  const endCheck = 2160;  // 익일 12:00
-  const step = 30; // 30분 단위
+  const minStart = Math.min(...intervals.map(([s]) => s));
+  const maxEnd = Math.max(...intervals.map(([, e]) => e));
 
   let firstValidMin: number | null = null;
   let lastValidMin: number | null = null;
 
-  for (let m = startCheck; m <= endCheck; m += step) {
+  for (let m = minStart; m < maxEnd; m += 1) {
     const activeCount = intervals.filter(([s, e]) => s <= m && m < e).length;
     if (activeCount >= 4) {
       if (firstValidMin === null) firstValidMin = m;
-      lastValidMin = m + step;
+      lastValidMin = m + 1;
     }
   }
 
@@ -97,6 +95,20 @@ export function computeEffectiveOverlapRange(attendees: ScheduleAttendee[] = [],
     return null;
   }
 
+  return [firstValidMin, lastValidMin];
+}
+
+/**
+ * 해당 날짜의 참석자들을 바탕으로 4인 이상 겹치는 시간대 구간을 계산합니다.
+ * 반환값: 예 "14:00 ~ 22:00" 또는 "10:00 ~ 21:35" 또는 null
+ */
+export function computeEffectiveOverlapRange(attendees: ScheduleAttendee[] = [], isDayOnly: boolean = false): string | null {
+  const overlap = computeEffectiveOverlapMinutes(attendees, isDayOnly);
+  if (!overlap) {
+    return null;
+  }
+
+  const [firstValidMin, lastValidMin] = overlap;
   const startStr = minutesToTimeString(firstValidMin);
   const endStr = minutesToTimeString(lastValidMin);
 

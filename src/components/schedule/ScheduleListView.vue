@@ -90,7 +90,7 @@ const handleActionClick = (item: ScheduleDayItem) => {
 };
 
 const getOverlapRange = (day: ScheduleDayItem) => {
-  return computeEffectiveOverlapRange(day.attendees);
+  return computeEffectiveOverlapRange(day.attendees, day.sessionType === 'day');
 };
 </script>
 

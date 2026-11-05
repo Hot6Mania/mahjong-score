@@ -28,6 +28,9 @@ const isStatsRoute = computed(() => {
 watch(isStatsRoute, (val) => {
   if (typeof document !== 'undefined') {
     document.body.classList.toggle('stats-mode', !!val);
+    if (!val) {
+      document.title = t('pageTitle');
+    }
   }
 }, { immediate: true });
 
@@ -821,7 +824,9 @@ const toggleFullScreen = () => {
 const changeLocale = () => {
   const targetLanguage = 'ko'; // 한국어로 고정
   locale.value=targetLanguage; // 언어 변경
-  document.title=t('pageTitle') // 페이지 이름 설정
+  if (!isStatsRoute.value) {
+    document.title=t('pageTitle'); // 점수 기록기 화면일 때만 기본 페이지 이름 설정
+  }
   document.documentElement.setAttribute('lang', targetLanguage); // lang 속성 변경
   localStorage.setItem("language", locale.value); // 로컬 스토리지에 저장
 }

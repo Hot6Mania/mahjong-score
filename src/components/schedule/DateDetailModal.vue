@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import type { ScheduleDayItem, SessionType, ScheduleAttendee } from '@/types/schedule';
 import {
+  computeEffectiveOverlapMinutes,
   computeEffectiveOverlapRange,
   getAttendeeInterval,
   computeSessionTimeFromAttendees,
@@ -352,7 +353,7 @@ const verticalTimeTicks = computed(() => {
 
 // 개별 참가자 바/블록 위치 및 시간 레이블
 const getAttendeeBar = (att: ScheduleAttendee) => {
-  const [sMin, eMin] = getAttendeeInterval(att);
+  const [sMin, eMin] = getAttendeeInterval(att, isDayOnly.value);
   const { startMin, totalMin } = timetableWindow.value;
 
   const leftPercent = Math.max(0, Math.min(100, ((sMin - startMin) / totalMin) * 100));
@@ -362,7 +363,7 @@ const getAttendeeBar = (att: ScheduleAttendee) => {
   const heightPercent = Math.max(4, Math.min(100 - topPercent, ((eMin - sMin) / totalMin) * 100));
 
   const startFormatted = att.startTime || '10:00';
-  const endFormatted = att.isOvernight ? '익일' : (att.endTime || '22:00');
+  const endFormatted = (!isDayOnly.value && att.isOvernight) ? '익일' : (att.endTime || '22:00');
 
   return {
     left: `${leftPercent}%`,
@@ -370,27 +371,18 @@ const getAttendeeBar = (att: ScheduleAttendee) => {
     top: `${topPercent}%`,
     height: `${heightPercent}%`,
     timeLabel: `${startFormatted} ~ ${endFormatted}`,
-    isOvernight: att.isOvernight
+    isOvernight: !isDayOnly.value && att.isOvernight
   };
 };
 
-// 골든타임(4인 이상 겹치는 시간) 영역 하이라이트
+// 골든타임(4인 이상 겹치는 시간) 영역 하이라이트 (1분 단위 정밀 계산)
 const overlapHighlightRegion = computed(() => {
   if (!props.dayItem?.attendees || props.dayItem.attendees.length < 4) return null;
-  const intervals = props.dayItem.attendees.map(a => getAttendeeInterval(a));
-  const { startMin, endMin, totalMin } = timetableWindow.value;
+  const overlap = computeEffectiveOverlapMinutes(props.dayItem.attendees, isDayOnly.value);
+  if (!overlap) return null;
 
-  let firstMin: number | null = null;
-  let lastMin: number | null = null;
-  for (let m = startMin; m <= endMin; m += 15) {
-    const active = intervals.filter(([s, e]) => s <= m && m < e).length;
-    if (active >= 4) {
-      if (firstMin === null) firstMin = m;
-      lastMin = m + 15;
-    }
-  }
-
-  if (firstMin === null || lastMin === null) return null;
+  const [firstMin, lastMin] = overlap;
+  const { startMin, totalMin } = timetableWindow.value;
 
   const leftPercent = Math.max(0, Math.min(100, ((firstMin - startMin) / totalMin) * 100));
   const widthPercent = Math.max(0, Math.min(100 - leftPercent, ((lastMin - firstMin) / totalMin) * 100));

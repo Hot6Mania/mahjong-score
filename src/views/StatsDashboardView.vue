@@ -132,7 +132,67 @@ const parsePhotoIdFromLocation = (): string => {
   return String(routePhoto).trim();
 };
 
-// URL 쿼리(?tab=), 경로(/dashboard/:tab) 및 해시(#tab)에서 현재 탭 추출 (사진 ID가 있으면 'gallery', date가 있으면 'schedule')
+// URL 쿼리(?player=) 또는 경로(/dashboard/player/:name)에서 플레이어 이름 추출
+const parsePlayerFromLocation = (): string => {
+  if (typeof window !== 'undefined') {
+    const searchParams = new URLSearchParams(window.location.search);
+    const qPlayer = (searchParams.get('player') || '').trim();
+    if (qPlayer) return qPlayer;
+
+    const pathMatch = window.location.pathname.match(/\/dashboard\/player\/([^/?#]+)/);
+    if (pathMatch && pathMatch[1]) {
+      return decodeURIComponent(pathMatch[1]).trim();
+    }
+  }
+  const routePlayer = (route.query.player as string) || '';
+  return String(routePlayer).trim();
+};
+
+// URL 쿼리(?session=) 또는 경로(/dashboard/sessions/:session)에서 회차 식별자 추출
+const parseSessionFromLocation = (): string => {
+  if (typeof window !== 'undefined') {
+    const searchParams = new URLSearchParams(window.location.search);
+    const qSession = (searchParams.get('session') || '').trim();
+    if (qSession) return qSession;
+
+    const pathMatch = window.location.pathname.match(/\/dashboard\/sessions\/([^/?#]+)/);
+    if (pathMatch && pathMatch[1]) {
+      return decodeURIComponent(pathMatch[1]).trim();
+    }
+  }
+  const routeSession = (route.query.session as string) || '';
+  return String(routeSession).trim();
+};
+
+// 회차 문자열("제22회 (26.10.25)")에서 URL 파라미터용 짧은 회차 번호("22") 추출
+const toSessionUrlParam = (sessionName?: string | null): string => {
+  const raw = (sessionName || '').trim();
+  if (!raw) return '';
+  if (/^\d+$/.test(raw)) return raw;
+  const m = raw.match(/제\s*(\d+)\s*회/);
+  if (m && m[1]) return m[1];
+  return raw;
+};
+
+// 회차 문자열("제22회 (26.10.25)" 또는 "22")에서 탭 제목용 짧은 라벨("제22회") 추출
+const toShortSessionLabel = (sessionName?: string | null): string => {
+  const raw = (sessionName || '').trim();
+  if (!raw) return '';
+  if (/^\d+$/.test(raw)) return `제${raw}회`;
+  const m = raw.match(/제\s*(\d+)\s*회/);
+  if (m && m[1]) return `제${m[1]}회`;
+  return raw.split('(')[0].trim() || raw;
+};
+
+// URL 회차 파라미터("22" 또는 "제22회")와 실제 회차 이름("제22회 (26.10.25)") 매칭 확인
+const matchSessionByUrlParam = (candidateSession: string, urlSessionParam: string): boolean => {
+  const cleanParam = (urlSessionParam || '').trim();
+  if (!cleanParam || !candidateSession) return false;
+  const target = /^\d+$/.test(cleanParam) ? `제${cleanParam}회` : cleanParam;
+  return matchHighlightSession(candidateSession, target) || candidateSession.includes(cleanParam);
+};
+
+// URL 쿼리(?tab=), 경로(/dashboard/:tab) 및 해시(#tab)에서 현재 탭 추출
 const parseTabFromLocation = (): DashboardTab => {
   if (typeof window !== 'undefined') {
     const searchParams = new URLSearchParams(window.location.search);
@@ -144,11 +204,16 @@ const parseTabFromLocation = (): DashboardTab => {
     if (qDate) {
       return 'schedule';
     }
+    const qSession = (searchParams.get('session') || '').trim();
+    if (qSession) {
+      return 'sessions';
+    }
 
     const pathMatch = window.location.pathname.match(/\/dashboard\/([^/?#]+)/);
     if (pathMatch && pathMatch[1]) {
       const seg = decodeURIComponent(pathMatch[1]).trim();
       if (seg === 'photo') return 'gallery';
+      if (seg === 'player') return 'ranking';
       if (VALID_TABS.includes(seg as DashboardTab)) {
         return seg as DashboardTab;
       }
@@ -166,6 +231,9 @@ const parseTabFromLocation = (): DashboardTab => {
   if (route.query.date) {
     return 'schedule';
   }
+  if (route.query.session) {
+    return 'sessions';
+  }
   if (parsePhotoIdFromLocation()) {
     return 'gallery';
   }
@@ -175,6 +243,14 @@ const parseTabFromLocation = (): DashboardTab => {
 // 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules' | 'gallery')
 const activeTab = ref<DashboardTab>(parseTabFromLocation());
 const pendingUrlPhotoId = ref<string>(parsePhotoIdFromLocation());
+const pendingUrlPlayerName = ref<string>(parsePlayerFromLocation());
+const pendingUrlSession = ref<string>(parseSessionFromLocation());
+const pendingUrlPlayerFromSession = ref<boolean>(Boolean(parseSessionFromLocation() && parsePlayerFromLocation()));
+const selectedPlayer = ref<MemberStatItem | null>(null);
+const isModalFromSession = ref(false);
+const modalScopeTab = ref<'session' | 'all'>('all');
+const selectedSession = ref('');
+const currentSessionDetail = ref<SessionDetail | null>(null);
 const tabsNavRef = ref<HTMLElement | null>(null);
 const isDraggingTabsNav = ref(false);
 const hasDraggedTabsNav = ref(false);
@@ -388,15 +464,114 @@ const scrollActiveTabIntoView = (smooth = true) => {
 
 watch(activeTab, () => {
   scrollActiveTabIntoView(true);
+  updateDashboardDocumentTitle();
 });
 
-// 대시보드 상대 URL 생성 헬퍼 (?tab= 및 ?photo= 쿼리 방식 사용하여 커뮤니티 # 잘림 방지)
-const buildDashboardRelativeUrl = (tab: DashboardTab, photoId?: string | null, preserveScheduleQuery = false): string => {
+const DASHBOARD_TAB_TITLES: Record<DashboardTab, string> = {
+  ranking: '종합 랭킹',
+  rating: '레이팅',
+  matrix: '역대 전적',
+  sessions: '회차 상세',
+  schedule: '일정',
+  rules: '룰',
+  gallery: '갤러리',
+};
+
+// 현재 보고 있는 대시보드 탭 / 회차 상세 / 플레이어 개인 통계에 맞춰 브라우저 탭 이름(document.title) 실시간 반영
+const updateDashboardDocumentTitle = () => {
+  if (typeof document === 'undefined') return;
+
+  // 1) 플레이어 개인 통계 모달이 열려 있거나 URL 파라미터로 대기 중일 때
+  const activePlayerName = (selectedPlayer.value?.name || pendingUrlPlayerName.value || '').trim();
+  if (activePlayerName) {
+    const isSessScope =
+      (selectedPlayer.value && isModalFromSession.value && modalScopeTab.value === 'session') ||
+      (!selectedPlayer.value && pendingUrlPlayerFromSession.value);
+    const rawSess = currentSessionDetail.value?.sessionName || selectedSession.value || pendingUrlSession.value;
+    const shortSess = isSessScope && rawSess ? toShortSessionLabel(rawSess) : '';
+    document.title = shortSess
+      ? `${activePlayerName} (${shortSess}) 통계 | 김케이 하우스`
+      : `${activePlayerName} 통계 | 김케이 하우스`;
+    return;
+  }
+
+  // 2) 회차 상세 탭일 때: 선택된 회차(또는 URL 회차 파라미터) 반영
+  if (activeTab.value === 'sessions') {
+    const rawSess = selectedSession.value || pendingUrlSession.value;
+    const shortSess = rawSess ? toShortSessionLabel(rawSess) : '';
+    document.title = shortSess
+      ? `${shortSess} 상세 | 김케이 하우스`
+      : '회차 상세 | 김케이 하우스';
+    return;
+  }
+
+  // 3) 일정 탭일 때: URL에 ?date=가 있으면 날짜 표시
+  if (activeTab.value === 'schedule' && typeof window !== 'undefined') {
+    const searchParams = new URLSearchParams(window.location.search);
+    const qDate = (searchParams.get('date') || '').trim();
+    if (qDate) {
+      const dLabel = /^\d{6}$/.test(qDate)
+        ? `${qDate.slice(0, 2)}.${qDate.slice(2, 4)}.${qDate.slice(4, 6)}`
+        : qDate;
+      document.title = `일정 (${dLabel}) | 김케이 하우스`;
+      return;
+    }
+  }
+
+  // 4) 기본 탭 제목
+  const tabLabel = DASHBOARD_TAB_TITLES[activeTab.value] || '대시보드';
+  document.title = `${tabLabel} | 김케이 하우스`;
+};
+
+// 대시보드 상대 URL 생성 헬퍼 (?tab=, ?photo=, ?session=, ?player=, ?date= 쿼리 지원)
+const buildDashboardRelativeUrl = (
+  tab: DashboardTab,
+  photoId?: string | null,
+  preserveScheduleQuery = false,
+  options?: {
+    playerName?: string | null;
+    sessionParam?: string | null;
+  }
+): string => {
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
   const cleanPhotoId = (photoId || '').trim();
   if (cleanPhotoId) {
     return `${base}/dashboard?photo=${encodeURIComponent(cleanPhotoId)}`;
   }
+
+  const rawPlayer =
+    options?.playerName !== undefined
+      ? (options.playerName || '').trim()
+      : (selectedPlayer.value?.name || pendingUrlPlayerName.value || '').trim();
+
+  const isSessionScopedPlayer =
+    Boolean(rawPlayer) &&
+    ((selectedPlayer.value && isModalFromSession.value && modalScopeTab.value === 'session') ||
+      (!selectedPlayer.value && pendingUrlPlayerFromSession.value));
+
+  const rawSession =
+    options?.sessionParam !== undefined
+      ? (options.sessionParam || '').trim()
+      : (selectedSession.value || pendingUrlSession.value || '').trim();
+  const sessionCode = toSessionUrlParam(rawSession);
+
+  if (rawPlayer) {
+    if ((tab === 'sessions' || isSessionScopedPlayer) && sessionCode) {
+      return `${base}/dashboard?session=${encodeURIComponent(sessionCode)}&player=${encodeURIComponent(rawPlayer)}`;
+    }
+    if (tab !== 'ranking' && tab !== 'sessions') {
+      return `${base}/dashboard?tab=${encodeURIComponent(tab)}&player=${encodeURIComponent(rawPlayer)}`;
+    }
+    return `${base}/dashboard?player=${encodeURIComponent(rawPlayer)}`;
+  }
+
+  if (tab === 'sessions') {
+    if (sessionCode) {
+      return `${base}/dashboard?session=${encodeURIComponent(sessionCode)}`;
+    }
+    return `${base}/dashboard?tab=sessions`;
+  }
+
   if (tab === 'schedule' && preserveScheduleQuery && typeof window !== 'undefined') {
     const searchParams = new URLSearchParams(window.location.search);
     const qDate = (searchParams.get('date') || String(route.query.date || '')).trim();
@@ -414,6 +589,14 @@ const buildDashboardRelativeUrl = (tab: DashboardTab, photoId?: string | null, p
   return `${base}/dashboard?tab=${encodeURIComponent(tab)}`;
 };
 
+const syncDashboardUrl = (preserveScheduleQuery = false) => {
+  if (typeof window === 'undefined') return;
+  const activePhotoId = lightboxHighlight.value?.id || pendingUrlPhotoId.value || '';
+  const nextUrl = buildDashboardRelativeUrl(activeTab.value, activePhotoId || null, preserveScheduleQuery);
+  window.history.replaceState(null, '', nextUrl);
+  updateDashboardDocumentTitle();
+};
+
 // 탭 전환 및 URL 동기화
 const switchTab = (tab: DashboardTab, updateUrl = true, preserveScheduleQuery = false) => {
   const prevTab = activeTab.value;
@@ -429,6 +612,7 @@ const switchTab = (tab: DashboardTab, updateUrl = true, preserveScheduleQuery = 
     const nextUrl = buildDashboardRelativeUrl(tab, activePhotoId || null, preserveScheduleQuery);
     window.history.replaceState(null, '', nextUrl);
   }
+  updateDashboardDocumentTitle();
 };
 
 const handleLocationChange = () => {
@@ -437,6 +621,37 @@ const handleLocationChange = () => {
     activeTab.value = current;
     scrollActiveTabIntoView(true);
   }
+
+  // URL 회차(?session=) 변경 동기화
+  const urlSession = parseSessionFromLocation();
+  if (urlSession) {
+    const matchedSess = displayedAvailableSessions.value.find(s => matchSessionByUrlParam(s, urlSession));
+    if (matchedSess) {
+      pendingUrlSession.value = '';
+      if (selectedSession.value !== matchedSess) {
+        selectedSession.value = matchedSess;
+      }
+    } else {
+      pendingUrlSession.value = urlSession;
+    }
+  }
+
+  // URL 플레이어(?player=) 변경 동기화
+  const urlPlayer = parsePlayerFromLocation();
+  if (!urlPlayer && selectedPlayer.value) {
+    selectedPlayer.value = null;
+    pendingUrlPlayerName.value = '';
+  } else if (urlPlayer && selectedPlayer.value?.name !== urlPlayer) {
+    const matchedPlayer = findMemberStatByName(urlPlayer);
+    if (matchedPlayer) {
+      pendingUrlPlayerName.value = '';
+      openPlayerModal(matchedPlayer, Boolean(urlSession), false, false, false);
+    } else {
+      pendingUrlPlayerName.value = urlPlayer;
+      pendingUrlPlayerFromSession.value = Boolean(urlSession);
+    }
+  }
+
   const urlPhotoId = parsePhotoIdFromLocation();
   if (!urlPhotoId && lightboxHighlight.value) {
     lightboxHighlight.value = null;
@@ -448,6 +663,7 @@ const handleLocationChange = () => {
       pendingUrlPhotoId.value = urlPhotoId;
     }
   }
+  updateDashboardDocumentTitle();
 };
 
 // 테마 상태 실시간 감지
@@ -496,13 +712,18 @@ onMounted(() => {
     }
   }
 
-  // 초기 URL 동기화 (?date=YYMMDD 또는 ?month=YYYY-MM 쿼리 보존)
+  // 초기 URL 동기화 (?date=, ?month=, ?session=, ?player= 쿼리 보존)
   const initial = parseTabFromLocation();
   const initialPhoto = parsePhotoIdFromLocation();
   if (initialPhoto) {
     pendingUrlPhotoId.value = initialPhoto;
   }
-  switchTab(initial, initial !== 'ranking' || Boolean(initialPhoto), true);
+  const hasInitialDeepQuery = Boolean(
+    initialPhoto ||
+    pendingUrlPlayerName.value ||
+    pendingUrlSession.value
+  );
+  switchTab(initial, initial !== 'ranking' || hasInitialDeepQuery, true);
   if (initial === 'schedule') {
     void refreshScheduleSheetData(false);
   }
@@ -537,9 +758,21 @@ onUnmounted(() => {
 });
 
 // Vue 라우트 변화 감시
-watch(() => [route.hash, route.query.tab, route.query.photo, route.query.date, route.params.tab, route.params.photoId], () => {
-  handleLocationChange();
-});
+watch(
+  () => [
+    route.hash,
+    route.query.tab,
+    route.query.photo,
+    route.query.date,
+    route.query.session,
+    route.query.player,
+    route.params.tab,
+    route.params.photoId
+  ],
+  () => {
+    handleLocationChange();
+  }
+);
 
 const toggleTheme = () => {
   isDark.value = !isDark.value;
@@ -586,7 +819,6 @@ const sortKey = ref<SortKey>('totalUma');
 const sortOrder = ref<'asc' | 'desc'>('desc');
 
 // 선택된 플레이어 상세 모달 상태
-const selectedPlayer = ref<MemberStatItem | null>(null);
 const displayPlayerStats = computed<MemberStatItem>(() => {
   if (!selectedPlayer.value) {
     return {} as MemberStatItem;
@@ -804,22 +1036,19 @@ const getMatrixScoreClass = (score: number | null | undefined): string => {
 // 회차별 경기 상세 뷰 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
 const sessionScopeTab = ref<'session' | 'all'>('session');
 
-// 모달 진입 맥락 (회차 상세에서 열렸는지 여부)
-const isModalFromSession = ref(false);
 // 스탯 모달 내부(역만 탭 등)에서 화료 사진 라이트박스를 열었을 때 라이트박스가 스탯 모달 앞에 오도록 제어
 const isPlayerModalBehindLightbox = ref(false);
-
-// 모달 스코프 탭 ('session' = 이번 회차, 'all' = 전체 기간)
-const modalScopeTab = ref<'session' | 'all'>('all');
 
 const openPlayerModal = (
   player: MemberStatItem,
   fromSession: boolean = false,
   keepScopeTab: boolean = false,
-  keepActiveTab: boolean = false
+  keepActiveTab: boolean = false,
+  updateUrl: boolean = true
 ) => {
   isPlayerModalBehindLightbox.value = false;
   selectedPlayer.value = player;
+  pendingUrlPlayerName.value = '';
   isModalFromSession.value = fromSession;
   if (!keepScopeTab) {
     modalScopeTab.value = fromSession ? 'session' : 'all';
@@ -827,6 +1056,22 @@ const openPlayerModal = (
   if (!keepActiveTab) {
     sessionModalActiveTab.value = 'basic';
     modalActiveTab.value = 'basic';
+  }
+  if (updateUrl) {
+    syncDashboardUrl();
+  } else {
+    updateDashboardDocumentTitle();
+  }
+};
+
+const closePlayerModal = (updateUrl: boolean = true) => {
+  selectedPlayer.value = null;
+  pendingUrlPlayerName.value = '';
+  pendingUrlPlayerFromSession.value = false;
+  if (updateUrl) {
+    syncDashboardUrl();
+  } else {
+    updateDashboardDocumentTitle();
   }
 };
 
@@ -925,13 +1170,41 @@ const displayedAvailableSessions = computed(() => {
   return availableSessions.value;
 });
 
-const selectedSession = ref('');
-const currentSessionDetail = ref<SessionDetail | null>(null);
 const isLoadingSession = ref(false);
 
-// 유효 회차가 결정되면 selectedSession 자동 동기화 (라이트박스 등에서 이미 선택된 회차가 있으면 매칭 유지)
+const tryOpenPendingUrlPlayer = () => {
+  if (!pendingUrlPlayerName.value || allStats.value.length === 0) return;
+  const matched = findMemberStatByName(pendingUrlPlayerName.value);
+  if (matched) {
+    const fromSess = pendingUrlPlayerFromSession.value;
+    pendingUrlPlayerName.value = '';
+    pendingUrlPlayerFromSession.value = false;
+    openPlayerModal(matched, fromSess, false, false, true);
+  }
+};
+
+watch(allStats, () => {
+  tryOpenPendingUrlPlayer();
+}, { immediate: true });
+
+// 유효 회차가 결정되면 selectedSession 자동 동기화 (?session= 딥링크 또는 라이트박스 매칭 유지)
 watch(displayedAvailableSessions, (newSessions) => {
   if (newSessions.length === 0) return;
+  if (pendingUrlSession.value) {
+    const urlMatched = newSessions.find(s => matchSessionByUrlParam(s, pendingUrlSession.value));
+    if (urlMatched) {
+      pendingUrlSession.value = '';
+      if (selectedSession.value !== urlMatched) {
+        selectedSession.value = urlMatched;
+      }
+      if (activeTab.value === 'sessions' || selectedPlayer.value) {
+        syncDashboardUrl();
+      } else {
+        updateDashboardDocumentTitle();
+      }
+      return;
+    }
+  }
   if (selectedSession.value) {
     const matched = newSessions.find(s => matchHighlightSession(s, selectedSession.value));
     if (matched) {
@@ -955,6 +1228,9 @@ watch(modalScopeTab, (newScope) => {
     sessionModalActiveTab.value = modalActiveTab.value;
   } else {
     modalActiveTab.value = sessionModalActiveTab.value;
+  }
+  if (selectedPlayer.value) {
+    syncDashboardUrl();
   }
 });
 
@@ -1048,6 +1324,11 @@ const loadSessionDetail = async (sessionName: string, forceRefresh: boolean = fa
 watch(selectedSession, (newVal) => {
   if (newVal) {
     loadSessionDetail(newVal);
+    if (activeTab.value === 'sessions' || (selectedPlayer.value && isModalFromSession.value && modalScopeTab.value === 'session')) {
+      syncDashboardUrl();
+    } else {
+      updateDashboardDocumentTitle();
+    }
   }
 });
 
@@ -1808,15 +2089,28 @@ const loadAllData = async (forceRefresh: boolean = false) => {
       availableSessions.value = sessions;
       const valid = displayedAvailableSessions.value;
       if (valid.length > 0) {
+        const urlSessTarget = pendingUrlSession.value || parseSessionFromLocation();
+        const matchedUrlSess = urlSessTarget
+          ? valid.find(s => matchSessionByUrlParam(s, urlSessTarget))
+          : undefined;
         const matchedCurrent = selectedSession.value
           ? valid.find(s => matchHighlightSession(s, selectedSession.value))
           : undefined;
-        if (matchedCurrent) {
+        if (matchedUrlSess) {
+          pendingUrlSession.value = '';
+          selectedSession.value = matchedUrlSess;
+        } else if (matchedCurrent) {
           selectedSession.value = matchedCurrent;
         } else if (!selectedSession.value || !valid.includes(selectedSession.value)) {
           selectedSession.value = valid[0];
         }
       }
+    }
+    tryOpenPendingUrlPlayer();
+    if (activeTab.value === 'sessions' || selectedPlayer.value) {
+      syncDashboardUrl();
+    } else {
+      updateDashboardDocumentTitle();
     }
     const expectedGames = selectedSession.value ? getExpectedSessionGameCount(selectedSession.value) : 0;
     const currentGamesCount = currentSessionDetail.value?.games?.length || 0;
@@ -2814,13 +3108,21 @@ const copyTextToClipboard = async (text: string) => {
   }
 };
 
-// 대시보드 링크 복사 (# 대신 ?tab= / ?photo= 쿼리 사용으로 커뮤니티 링크 잘림 방지)
+// 대시보드 링크 복사 (# 대신 ?tab= / ?photo= / ?session= / ?player= 쿼리 사용으로 커뮤니티 링크 잘림 방지)
 const copyDashboardLink = async () => {
   try {
-    const relUrl = buildDashboardRelativeUrl(activeTab.value, lightboxHighlight.value?.id || null);
+    const relUrl = buildDashboardRelativeUrl(activeTab.value, lightboxHighlight.value?.id || null, true);
     const url = `${window.location.origin}${relUrl}`;
     await copyTextToClipboard(url);
-    showToast(lightboxHighlight.value ? '현재 사진 공유 링크가 복사되었습니다!' : '대시보드 링크가 복사되었습니다!');
+    if (lightboxHighlight.value) {
+      showToast('현재 사진 공유 링크가 복사되었습니다!');
+    } else if (selectedPlayer.value) {
+      showToast(`'${selectedPlayer.value.name}' 통계 링크가 복사되었습니다!`);
+    } else if (activeTab.value === 'sessions' && selectedSession.value) {
+      showToast(`'${toShortSessionLabel(selectedSession.value)}' 상세 링크가 복사되었습니다!`);
+    } else {
+      showToast('대시보드 링크가 복사되었습니다!');
+    }
   } catch (e) {
     showToast('링크 복사에 실패했습니다.');
   }
@@ -8151,7 +8453,7 @@ const openGamePopupFromLightbox = async (
         v-if="selectedPlayer"
         class="player-modal-overlay"
         :class="{ 'is-behind-lightbox': isPlayerModalBehindLightbox && Boolean(lightboxHighlight) }"
-        v-backdrop-dismiss="() => selectedPlayer = null"
+        v-backdrop-dismiss="() => closePlayerModal()"
       >
         <div class="player-modal-card modal_content">
           <div class="container_stats_modal">
@@ -8170,7 +8472,12 @@ const openGamePopupFromLightbox = async (
                   </option>
                 </select>
               </div>
-              <button class="btn-close" @click="selectedPlayer = null" title="닫기">✕</button>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <button class="btn-action" @click="copyDashboardLink" title="현재 플레이어 통계 링크 복사" style="padding: 5px 10px; font-size: 0.78rem;">
+                  <span>링크 복사</span>
+                </button>
+                <button class="btn-close" @click="closePlayerModal()" title="닫기">✕</button>
+              </div>
             </div>
 
             <!-- 모달 스코프 탭 (회차 상세에서 진입했을 때만 노출) -->
@@ -9985,7 +10292,7 @@ const openGamePopupFromLightbox = async (
               class="gdm-hint" 
               @click="gameModalMode = 'chart'"
             >
-              표를 클릭하면 국별 점수 변동 그래프를 볼 수 있습니다.
+              표를 클릭하면 점수 변동 그래프를 볼 수 있습니다.
             </div>
             <div v-else-if="!isLoadingGameDetail" class="gdm-legacy-notice">
               해당 대국은 국별 상세 기록(리치/론/쯔모/방총 및 국별 점수 변동)이 제공되지 않아 최종 점수와 우마만 표시됩니다.
@@ -10011,7 +10318,7 @@ const openGamePopupFromLightbox = async (
             </div>
 
             <div class="gdm-hint" @click="gameModalMode = 'sheet'">
-              차트를 클릭하면 국별 결과 표로 돌아갑니다.
+              차트를 클릭하면 결과 표로 돌아갑니다.
             </div>
           </div>
 

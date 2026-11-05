@@ -61,10 +61,19 @@ const toShortYymmdd = (dateStr: string): string => {
 const updateScheduleDateUrl = (dateStr: string | null) => {
   if (typeof window === 'undefined') return;
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-  const nextUrl = dateStr
-    ? `${base}/dashboard?date=${encodeURIComponent(toShortYymmdd(dateStr))}`
+  const shortDate = dateStr ? toShortYymmdd(dateStr) : '';
+  const nextUrl = shortDate
+    ? `${base}/dashboard?date=${encodeURIComponent(shortDate)}`
     : `${base}/dashboard?tab=schedule`;
   window.history.replaceState(null, '', nextUrl);
+  if (typeof document !== 'undefined') {
+    const formattedDate = /^\d{6}$/.test(shortDate)
+      ? `${shortDate.slice(0, 2)}.${shortDate.slice(2, 4)}.${shortDate.slice(4, 6)}`
+      : shortDate;
+    document.title = formattedDate
+      ? `일정 (${formattedDate}) | 김케이 하우스`
+      : '일정 | 김케이 하우스';
+  }
 };
 
 // 현재 연월 ("YYYY-MM") - 세션 목록 및 URL 파라미터를 우선 분석하여 텅 빈 월이 열리지 않도록 보정
