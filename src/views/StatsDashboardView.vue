@@ -391,11 +391,22 @@ watch(activeTab, () => {
 });
 
 // 대시보드 상대 URL 생성 헬퍼 (?tab= 및 ?photo= 쿼리 방식 사용하여 커뮤니티 # 잘림 방지)
-const buildDashboardRelativeUrl = (tab: DashboardTab, photoId?: string | null): string => {
+const buildDashboardRelativeUrl = (tab: DashboardTab, photoId?: string | null, preserveScheduleQuery = false): string => {
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
   const cleanPhotoId = (photoId || '').trim();
   if (cleanPhotoId) {
     return `${base}/dashboard?photo=${encodeURIComponent(cleanPhotoId)}`;
+  }
+  if (tab === 'schedule' && preserveScheduleQuery && typeof window !== 'undefined') {
+    const searchParams = new URLSearchParams(window.location.search);
+    const qDate = (searchParams.get('date') || String(route.query.date || '')).trim();
+    if (qDate) {
+      return `${base}/dashboard?date=${encodeURIComponent(qDate)}`;
+    }
+    const qMonth = (searchParams.get('month') || String(route.query.month || '')).trim();
+    if (qMonth) {
+      return `${base}/dashboard?tab=schedule&month=${encodeURIComponent(qMonth)}`;
+    }
   }
   if (tab === 'ranking') {
     return `${base}/dashboard`;
@@ -404,7 +415,7 @@ const buildDashboardRelativeUrl = (tab: DashboardTab, photoId?: string | null): 
 };
 
 // 탭 전환 및 URL 동기화
-const switchTab = (tab: DashboardTab, updateUrl = true) => {
+const switchTab = (tab: DashboardTab, updateUrl = true, preserveScheduleQuery = false) => {
   const prevTab = activeTab.value;
   activeTab.value = tab;
   scrollActiveTabIntoView(true);
@@ -415,7 +426,7 @@ const switchTab = (tab: DashboardTab, updateUrl = true) => {
   }
   if (updateUrl && typeof window !== 'undefined') {
     const activePhotoId = lightboxHighlight.value?.id || pendingUrlPhotoId.value || '';
-    const nextUrl = buildDashboardRelativeUrl(tab, activePhotoId || null);
+    const nextUrl = buildDashboardRelativeUrl(tab, activePhotoId || null, preserveScheduleQuery);
     window.history.replaceState(null, '', nextUrl);
   }
 };
@@ -485,13 +496,16 @@ onMounted(() => {
     }
   }
 
-  // 초기 URL 동기화
+  // 초기 URL 동기화 (?date=YYMMDD 또는 ?month=YYYY-MM 쿼리 보존)
   const initial = parseTabFromLocation();
   const initialPhoto = parsePhotoIdFromLocation();
   if (initialPhoto) {
     pendingUrlPhotoId.value = initialPhoto;
   }
-  switchTab(initial, initial !== 'ranking' || Boolean(initialPhoto));
+  switchTab(initial, initial !== 'ranking' || Boolean(initialPhoto), true);
+  if (initial === 'schedule') {
+    void refreshScheduleSheetData(false);
+  }
   // 마운트 후 초기 활성 탭 스크롤 및 인디케이터 계산
   setTimeout(() => {
     scrollActiveTabIntoView(false);
@@ -523,7 +537,7 @@ onUnmounted(() => {
 });
 
 // Vue 라우트 변화 감시
-watch(() => [route.hash, route.query.tab, route.query.photo, route.params.tab, route.params.photoId], () => {
+watch(() => [route.hash, route.query.tab, route.query.photo, route.query.date, route.params.tab, route.params.photoId], () => {
   handleLocationChange();
 });
 
@@ -2761,6 +2775,7 @@ const formatDonutPct = (pct: number): string => {
 
 const handleDashboardVisibilityOrFocus = () => {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  void refreshGalleryAuthState();
   if (isLoading.value || isLoadingSession.value) return;
   void refreshSessionsTabData(false);
 };
@@ -2772,6 +2787,7 @@ onMounted(() => {
     setTimeout(() => {
       preloadMahjongTileImages();
     }, 1500);
+    window.addEventListener('mahjong_admin_auth_changed', refreshGalleryAuthState);
     window.addEventListener('focus', handleDashboardVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleDashboardVisibilityOrFocus);
   }
@@ -2779,6 +2795,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (typeof window !== 'undefined') {
+    window.removeEventListener('mahjong_admin_auth_changed', refreshGalleryAuthState);
     window.removeEventListener('focus', handleDashboardVisibilityOrFocus);
     document.removeEventListener('visibilitychange', handleDashboardVisibilityOrFocus);
   }

@@ -657,13 +657,15 @@ watch(() => googleInfo.spreadsheetId, (newVal) => {
 
 /**시작시 언어 변경 및 자리선택 타일창 띄우기*/
 onMounted(async () => {
-  // 버전 체크를 통한 모바일/데스크톱 브라우저 캐시 강제 갱신 (마이그레이션 적용)
+  // 버전 체크를 통한 모바일/데스크톱 브라우저 캐시 강제 갱신 (최초 방문/시크릿 창에서는 리로드하지 않음)
   const CURRENT_VERSION = "20260710_2335";
   const savedVersion = localStorage.getItem("app_version");
   if (savedVersion !== CURRENT_VERSION) {
     localStorage.setItem("app_version", CURRENT_VERSION);
-    window.location.reload();
-    return;
+    if (savedVersion !== null) {
+      window.location.reload();
+      return;
+    }
   }
 
   await router.isReady();
@@ -737,6 +739,7 @@ onMounted(async () => {
     }
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
+    restoreGoogleSessionIfValid();
   }
 
   // 레이팅 데이터 초기 로드
@@ -2286,11 +2289,16 @@ const googleLogin = () => {
         onGoogleTokenReceived(data.access_token, data.expires_in);
       },
       (err: any) => {
-        console.warn("Worker 인증 서버 연결 실패, 기본 구글 로그인 모드로 전환합니다:", err);
-        localStorage.setItem("google_auth_mode", "direct");
-        localStorage.removeItem("google_refresh_cipher");
-        triggerToast("서버 Secret 미등록: 기본 로그인 모드로 자동 전환되었습니다. [구글 로그인] 버튼을 다시 눌러주세요.", "info");
-        initGis(googleInfo.clientId, onGoogleTokenReceived);
+        isManualLogin.value = false;
+        if (err && err.code === "MISSING_CLIENT_SECRET") {
+          console.warn("Worker Secret 미등록, 기본 구글 로그인 모드로 전환합니다:", err);
+          localStorage.setItem("google_auth_mode", "direct");
+          localStorage.removeItem("google_refresh_cipher");
+          triggerToast("서버 Secret 미등록: 기본 로그인 모드로 자동 전환되었습니다. [구글 로그인] 버튼을 다시 눌러주세요.", "info");
+          initGis(googleInfo.clientId, onGoogleTokenReceived);
+        } else {
+          console.warn("구글 로그인 취소 또는 일시적 오류:", err);
+        }
       }
     );
     loginGoogleWithCode();

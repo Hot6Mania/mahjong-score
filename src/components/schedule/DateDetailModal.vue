@@ -14,7 +14,7 @@ import {
   recordPinSuccess,
   applyDelayIfRepeated
 } from '@/utils/pinRateLimiter';
-import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName, notifyWorkerCacheInvalidate } from '@/utils/googleSheets';
+import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName, notifyWorkerCacheInvalidate, ensureValidGoogleAccessToken } from '@/utils/googleSheets';
 import { getKSTDayOfWeekName, isKSTPastDate } from '@/utils/kstTime';
 
 const props = defineProps<{
@@ -671,6 +671,7 @@ const handleCreateSessionSheetConfirm = async () => {
   const title = newSessionSheetTitle.value.trim();
   if (!spreadsheetId || !title) return;
 
+  await ensureValidGoogleAccessToken();
   const token = (window as any).gapi?.client?.getToken();
   if (!token || !token.access_token) {
     emit('toast', '회차 시트 생성 실패: 로그인 문제일 수 있습니다. 상단 메뉴에서 재로그인 해주세요.', 'error');
@@ -932,6 +933,7 @@ const handleUnconfirmAndDeleteSheet = async () => {
   isDeletingSheetOnUnconfirm.value = true;
   try {
     if (spreadsheetId && sheetTitle) {
+      await ensureValidGoogleAccessToken();
       await deleteSessionSheetByName(spreadsheetId, sheetTitle);
       await notifyWorkerCacheInvalidate(sheetTitle);
       emit('refreshStats');

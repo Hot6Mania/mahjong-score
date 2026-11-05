@@ -12,6 +12,14 @@ import { getKSTNowParts, getKSTTodayString, formatKSTTimestamp } from '@/utils/k
 let tokenClient: any = null;
 let codeClient: any = null;
 let accessToken: string | null = null;
+let inFlightWorkerRefresh: Promise<{
+  access_token: string;
+  expires_in: number;
+  refresh_cipher?: string;
+  attendeeName?: string;
+  isAdmin?: boolean;
+  gapi_valid?: boolean;
+} | null> | null = null;
 
 /**
  * GAPI 라이브러리를 로드하고 초기화합니다.
@@ -27,6 +35,11 @@ export const initGapi = (): Promise<void> => {
           try {
             await window.gapi.client.init({});
             await window.gapi.client.load('https://sheets.googleapis.com/$discovery/rest?version=v4');
+            const savedToken = accessToken || (typeof window !== 'undefined' ? localStorage.getItem('google_access_token') : null);
+            if (savedToken && savedToken.startsWith('ya29.')) {
+              accessToken = savedToken;
+              window.gapi.client.setToken({ access_token: savedToken });
+            }
             resolve();
           } catch (err) {
             reject(err);
@@ -105,13 +118,18 @@ export const initGisCodeClient = (
         });
         const data = await res.json();
         if (!res.ok || data.error) {
-          throw new Error(data.error || 'Worker token exchange failed');
+          const ex: any = new Error(data.error || 'Worker token exchange failed');
+          ex.code = data.code;
+          throw ex;
         }
         accessToken = data.access_token;
         if (typeof window.gapi !== 'undefined' && window.gapi.client) {
           window.gapi.client.setToken({ access_token: accessToken });
         }
         localStorage.setItem("google_is_logged_in", "true");
+        localStorage.setItem("google_access_token", data.access_token);
+        const expiresAt = Date.now() + Math.max((data.expires_in || 3600) - 60, 300) * 1000;
+        localStorage.setItem("google_token_expires_at", String(expiresAt));
         if (data.refresh_cipher) {
           localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
         }
@@ -152,53 +170,120 @@ export const loginGoogleWithCode = (): void => {
 
 /**
  * Cloudflare Worker를 통해 암호화된 Refresh Token으로 새 Access Token을 발급받습니다.
+ * 동시에 여러 컴포넌트에서 호출하더라도 단일 네트워크 요청만 실행되도록 Deduplication 처리합니다.
  */
 export const refreshAccessTokenViaWorker = async (
   workerUrl: string,
   cipher: string
-): Promise<{ access_token: string; expires_in: number } | null> => {
+): Promise<{
+  access_token: string;
+  expires_in: number;
+  refresh_cipher?: string;
+  attendeeName?: string;
+  isAdmin?: boolean;
+  gapi_valid?: boolean;
+} | null> => {
   if (!workerUrl || !cipher) return null;
-  try {
-    const cleanWorkerUrl = workerUrl.replace(/\/$/, '');
-    const res = await fetch(`${cleanWorkerUrl}/api/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_cipher: cipher }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) {
-      if (
-        data.code === 'MISSING_CLIENT_SECRET' ||
-        data.code === 'INVALID_CIPHER' ||
-        res.status === 401 ||
-        String(data.error || '').toLowerCase().includes('expired or revoked')
-      ) {
-        localStorage.removeItem("google_refresh_cipher");
-      }
-      console.warn("Worker 토큰 갱신 안내:", data.error || 'Worker refresh failed');
-      return null;
-    }
-    if (data.access_token) {
-      accessToken = data.access_token;
-      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-        window.gapi.client.setToken({ access_token: data.access_token });
-      }
-      return data;
-    }
-  } catch (err) {
-    console.warn("Worker 백그라운드 토큰 갱신 에러:", err);
+  if (inFlightWorkerRefresh) {
+    return await inFlightWorkerRefresh;
   }
-  return null;
+
+  inFlightWorkerRefresh = (async () => {
+    try {
+      const cleanWorkerUrl = workerUrl.replace(/\/$/, '');
+      const res = await fetch(`${cleanWorkerUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_cipher: cipher }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) {
+        // 암호화 키 불일치(INVALID_CIPHER) 등 영구적으로 복호화 불가능한 경우에만 cipher를 제거하고,
+        // 일시적 장애(5xx, 네트워크 오류 등)에서는 절대 삭제하지 않음
+        if (data.code === 'MISSING_CLIENT_SECRET' || data.code === 'INVALID_CIPHER') {
+          localStorage.removeItem("google_refresh_cipher");
+        }
+        console.warn("Worker 토큰 갱신 안내:", data.error || 'Worker refresh failed');
+        return null;
+      }
+      if (data.access_token) {
+        localStorage.setItem("google_access_token", data.access_token);
+        const newExpiresAt = Date.now() + Math.max((data.expires_in || 3600) - 60, 300) * 1000;
+        localStorage.setItem("google_token_expires_at", String(newExpiresAt));
+        localStorage.setItem("google_is_logged_in", "true");
+        if (data.refresh_cipher) {
+          localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
+        }
+        if (data.attendeeName) {
+          sessionStorage.setItem("schedule_admin_attendee_name", data.attendeeName);
+        }
+        if (data.gapi_valid !== false && String(data.access_token).startsWith('ya29.')) {
+          accessToken = data.access_token;
+          if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+            window.gapi.client.setToken({ access_token: data.access_token });
+          }
+        }
+        return data;
+      }
+    } catch (err) {
+      console.warn("Worker 백그라운드 토큰 갱신 에러:", err);
+    } finally {
+      inFlightWorkerRefresh = null;
+    }
+    return null;
+  })();
+
+  return await inFlightWorkerRefresh;
 };
 
 /**
  * GAPI 메모리에 Access Token을 수동으로 주입합니다.
  */
 export const setGapiAccessToken = (token: string): void => {
-  accessToken = token;
-  if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-    window.gapi.client.setToken({ access_token: token });
+  if (!token) return;
+  if (token.startsWith('ya29.')) {
+    accessToken = token;
+    if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+      window.gapi.client.setToken({ access_token: token });
+    }
   }
+};
+
+/**
+ * 구글 시트(GAPI) 직접 호출 전 유효한 Google Access Token이 주입되어 있는지 확인하고,
+ * 만료되었거나 임박(3분 이내)한 경우 Worker를 통해 자동 갱신합니다.
+ */
+export const ensureValidGoogleAccessToken = async (workerUrl?: string): Promise<string | null> => {
+  if (typeof window === 'undefined') return null;
+  const resolvedWorkerUrl =
+    workerUrl ||
+    (import.meta as any).env?.VITE_GOOGLE_AUTH_WORKER_URL ||
+    localStorage.getItem('google_auth_worker_url') ||
+    'https://mahjong-score.cnabe.workers.dev';
+
+  const token = localStorage.getItem('google_access_token') || '';
+  const expiresAt = Number(localStorage.getItem('google_token_expires_at') || 0);
+  const cipher = localStorage.getItem('google_refresh_cipher') || '';
+
+  if (token && token.startsWith('ya29.') && Date.now() < expiresAt - 180_000) {
+    setGapiAccessToken(token);
+    return token;
+  }
+
+  if (cipher && resolvedWorkerUrl) {
+    const refreshed = await refreshAccessTokenViaWorker(resolvedWorkerUrl, cipher);
+    if (refreshed && refreshed.access_token && String(refreshed.access_token).startsWith('ya29.')) {
+      setGapiAccessToken(refreshed.access_token);
+      return refreshed.access_token;
+    }
+  }
+
+  const gapiToken = window.gapi?.client?.getToken()?.access_token;
+  if (gapiToken && String(gapiToken).startsWith('ya29.')) {
+    return gapiToken;
+  }
+
+  return null;
 };
 
 /**

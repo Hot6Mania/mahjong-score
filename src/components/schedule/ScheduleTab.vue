@@ -165,6 +165,7 @@ const tryOpenPendingUrlDate = (dates?: ScheduleDayItem[]) => {
     pendingUrlDate.value = '';
     selectedDayItem.value = matched;
     isDetailModalOpen.value = true;
+    updateScheduleDateUrl(matched.date);
   }
 };
 
@@ -686,7 +687,13 @@ const isGoogleLoggedIn = ref<boolean>(
 
 // 관리자 권한 및 구글 로그인 상태 동기화
 const syncAdminAuth = async () => {
-  isGoogleLoggedIn.value = typeof window !== 'undefined' && localStorage.getItem('google_is_logged_in') === 'true';
+  const hasCipher = typeof window !== 'undefined' && Boolean(localStorage.getItem('google_refresh_cipher'));
+  if (hasCipher && typeof window !== 'undefined' && localStorage.getItem('google_is_logged_in') !== 'true') {
+    localStorage.setItem('google_is_logged_in', 'true');
+  }
+  isGoogleLoggedIn.value =
+    typeof window !== 'undefined' &&
+    (localStorage.getItem('google_is_logged_in') === 'true' || hasCipher);
   const googleLoggedIn = isGoogleLoggedIn.value;
   const passcodePresent = typeof window !== 'undefined' && !!sessionStorage.getItem('schedule_admin_passcode');
 
@@ -698,17 +705,22 @@ const syncAdminAuth = async () => {
     return;
   }
 
-  // 만약 구글 로그인은 켜져 있으나 토큰이 만료되었거나 임박(1분 이내)하고 refresh_cipher가 있다면 선제적 갱신
+  // 만약 구글 로그인은 켜져 있으나 토큰이 만료되었거나 임박(5분 이내)하고 refresh_cipher가 있다면 선제적 갱신
   if (googleLoggedIn && typeof window !== 'undefined') {
     const expiresAt = Number(localStorage.getItem('google_token_expires_at') || 0);
     const cipher = localStorage.getItem('google_refresh_cipher');
-    if (cipher && (expiresAt === 0 || Date.now() >= expiresAt - 60000)) {
+    if (cipher && (expiresAt === 0 || Date.now() >= expiresAt - 5 * 60 * 1000)) {
       try {
         const refreshRes = await refreshAccessTokenViaWorker(getWorkerUrl(), cipher);
-        if (refreshRes && refreshRes.access_token) {
-          localStorage.setItem('google_access_token', refreshRes.access_token);
-          const newExpiresAt = Date.now() + (refreshRes.expires_in || 3600) * 1000;
-          localStorage.setItem('google_token_expires_at', String(newExpiresAt));
+        if (refreshRes) {
+          if (refreshRes.refresh_cipher) {
+            localStorage.setItem('google_refresh_cipher', refreshRes.refresh_cipher);
+          }
+          if (refreshRes.access_token) {
+            localStorage.setItem('google_access_token', refreshRes.access_token);
+            const newExpiresAt = Date.now() + (refreshRes.expires_in || 3600) * 1000;
+            localStorage.setItem('google_token_expires_at', String(newExpiresAt));
+          }
         }
       } catch (e) {
         console.warn('백그라운드 선제 토큰 갱신 실패:', e);
@@ -743,9 +755,11 @@ const handleGoogleLogin = () => {
       clientId,
       workerUrl,
       async (data) => {
-        localStorage.setItem("google_access_token", data.access_token);
-        const newExpiresAt = Date.now() + (data.expires_in || 3600) * 1000;
-        localStorage.setItem("google_token_expires_at", String(newExpiresAt));
+        if (data.access_token) {
+          localStorage.setItem("google_access_token", data.access_token);
+          const newExpiresAt = Date.now() + (data.expires_in || 3600) * 1000;
+          localStorage.setItem("google_token_expires_at", String(newExpiresAt));
+        }
         localStorage.setItem("google_is_logged_in", "true");
         if (data.refresh_cipher) {
           localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
@@ -764,16 +778,20 @@ const handleGoogleLogin = () => {
         }
       },
       (err: any) => {
-        console.warn("Worker 인증 서버 연결 실패, 기본 모드로 전환:", err);
-        initGis(clientId, async (token: string) => {
-          localStorage.setItem("google_access_token", token);
-          localStorage.setItem("google_token_expires_at", String(Date.now() + 3600 * 1000));
-          localStorage.setItem("google_is_logged_in", "true");
-          isGoogleLoggedIn.value = true;
-          window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
-          await syncAdminAuth();
-        });
-        loginGoogle();
+        if (err && err.code === "MISSING_CLIENT_SECRET") {
+          console.warn("Worker에 Client Secret 미설정, 기본 모드로 전환:", err);
+          initGis(clientId, async (token: string) => {
+            localStorage.setItem("google_access_token", token);
+            localStorage.setItem("google_token_expires_at", String(Date.now() + 3600 * 1000));
+            localStorage.setItem("google_is_logged_in", "true");
+            isGoogleLoggedIn.value = true;
+            window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+            await syncAdminAuth();
+          });
+          loginGoogle();
+        } else {
+          console.warn("Google 로그인 취소 또는 일시적 오류:", err);
+        }
       }
     );
     loginGoogleWithCode();
@@ -1598,16 +1616,13 @@ onMounted(async () => {
   localStorage.removeItem('schedule_admin_verified');
   localStorage.removeItem('schedule_admin_passcode');
 
-  await syncAdminAuth();
-
   let pollingTimer: any = null;
-
   let lastStatsRefreshAt = Date.now();
 
   const handleVisibilityOrStorage = () => {
-    syncAdminAuth();
+    void syncAdminAuth();
     if (typeof document !== 'undefined' && !document.hidden) {
-      loadSchedule(true);
+      void loadSchedule(true);
       if (Date.now() - lastStatsRefreshAt > 15000) {
         lastStatsRefreshAt = Date.now();
         emit('refreshStats');
@@ -1618,19 +1633,38 @@ onMounted(async () => {
   const handleSessionSheetChanged = () => {
     lastStatsRefreshAt = Date.now();
     emit('refreshStats');
-    loadSchedule(true);
+    void loadSchedule(true);
+  };
+
+  const handleSchedulePopState = () => {
+    const dParam = parseDateParamFromLocation();
+    if (dParam) {
+      pendingUrlDate.value = dParam;
+      const targetMonth = dParam.slice(0, 7);
+      if (targetMonth && targetMonth !== currentMonth.value) {
+        currentMonth.value = targetMonth;
+        monthSchedule.value = getCachedOrLocalMonthSchedule(targetMonth);
+        tryOpenPendingUrlDate(monthSchedule.value.dates);
+        void loadSchedule(true);
+      } else {
+        tryOpenPendingUrlDate(monthSchedule.value.dates);
+      }
+    } else if (isDetailModalOpen.value) {
+      isDetailModalOpen.value = false;
+    }
   };
 
   window.addEventListener('mahjong_admin_auth_changed', syncAdminAuth);
   window.addEventListener('mahjong_session_sheet_changed', handleSessionSheetChanged);
   window.addEventListener('storage', handleVisibilityOrStorage);
   window.addEventListener('focus', handleVisibilityOrStorage);
+  window.addEventListener('popstate', handleSchedulePopState);
   document.addEventListener('visibilitychange', handleVisibilityOrStorage);
 
   // 다른 기기 변경 사항을 조용히 즉시 반영하기 위한 10초 백그라운드 폴링 (무깜빡임 Silent Refresh)
   pollingTimer = setInterval(() => {
     if (typeof document !== 'undefined' && !document.hidden && !isLoading.value && !isRefreshing.value && !isScheduleMutating()) {
-      loadSchedule(true);
+      void loadSchedule(true);
     }
   }, 10000);
 
@@ -1640,10 +1674,15 @@ onMounted(async () => {
     window.removeEventListener('mahjong_session_sheet_changed', handleSessionSheetChanged);
     window.removeEventListener('storage', handleVisibilityOrStorage);
     window.removeEventListener('focus', handleVisibilityOrStorage);
+    window.removeEventListener('popstate', handleSchedulePopState);
     document.removeEventListener('visibilitychange', handleVisibilityOrStorage);
   });
 
-  await loadSchedule(true);
+  // 초기 일정 조회와 관리자 인증 동기화를 병렬 실행하여 첫 방문 시에도 ?date= 팝업이 지연 없이 즉시 열리도록 보장
+  await Promise.all([
+    loadSchedule(true),
+    syncAdminAuth()
+  ]);
 });
 
 const setViewMode = (mode: 'calendar' | 'list') => {

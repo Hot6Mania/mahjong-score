@@ -1,5 +1,6 @@
 import type { ScheduleDayItem, ScheduleMonthData, ScheduleHistoryItem, ScheduleCommitsResponse } from '@/types/schedule';
 import { computeSessionTimeFromAttendees } from '@/utils/timelineEngine';
+import { refreshAccessTokenViaWorker, setGapiAccessToken } from '@/utils/googleSheets';
 
 export function getWorkerUrl(): string {
   const envUrl = (import.meta as any).env?.VITE_GOOGLE_AUTH_WORKER_URL;
@@ -359,8 +360,9 @@ export async function fetchMonthSchedule(month: string): Promise<ScheduleMonthDa
  */
 export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken?: string; attendeeName?: string }> {
   const isGoogleLoggedIn = localStorage.getItem('google_is_logged_in') === 'true';
-  const cipher = localStorage.getItem('google_refresh_cipher');
-  const accessToken = localStorage.getItem('google_access_token');
+  let cipher = localStorage.getItem('google_refresh_cipher');
+  let accessToken = localStorage.getItem('google_access_token');
+  const expiresAt = Number(localStorage.getItem('google_token_expires_at') || 0);
   const passcode = getAdminPasscode();
 
   // 구글 로그인이 명시적으로 풀려있고 관리자 패스코드도 없는 경우 즉시 관리자 해제
@@ -368,6 +370,21 @@ export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken
     sessionStorage.removeItem('schedule_admin_verified');
     sessionStorage.removeItem('schedule_admin_attendee_name');
     return { isAdmin: false };
+  }
+
+  // 토큰이 만료되었거나 임박(1분 이내)했고 refresh_cipher가 존재하면 선제 갱신
+  if (cipher && (!accessToken || expiresAt === 0 || Date.now() >= expiresAt - 60_000)) {
+    try {
+      const refreshed = await refreshAccessTokenViaWorker(getWorkerUrl(), cipher);
+      if (refreshed && refreshed.access_token) {
+        accessToken = refreshed.access_token;
+        if (refreshed.refresh_cipher) {
+          cipher = refreshed.refresh_cipher;
+        }
+      }
+    } catch (e) {
+      console.warn('관리자 확인 전 토큰 선제 갱신 실패:', e);
+    }
   }
 
   try {
@@ -388,13 +405,19 @@ export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken
         if (data.attendeeName) {
           sessionStorage.setItem('schedule_admin_attendee_name', data.attendeeName);
         }
+        if (data.refresh_cipher) {
+          cipher = data.refresh_cipher;
+          localStorage.setItem('google_refresh_cipher', data.refresh_cipher);
+        }
         if (data.access_token) {
           localStorage.setItem('google_access_token', data.access_token);
-          localStorage.setItem('google_token_expires_at', String(Date.now() + 3600 * 1000));
+          localStorage.setItem('google_token_expires_at', String(Date.now() + 3540 * 1000));
+          localStorage.setItem('google_is_logged_in', 'true');
+          setGapiAccessToken(data.access_token);
         }
         return {
           isAdmin: true,
-          adminToken: data.adminToken,
+          adminToken: data.adminToken || data.refresh_cipher || cipher || undefined,
           attendeeName: data.attendeeName
         };
       } else {
@@ -411,8 +434,8 @@ export async function checkAdminStatus(): Promise<{ isAdmin: boolean; adminToken
   // API 호출이 일시적 네트워크 장애로 실패했을 때, 구글 로그인이 실제로 유지되어 있고 캐시가 있을 때만 한정 폴백
   const cachedAdmin = sessionStorage.getItem('schedule_admin_verified') === 'true';
   const cachedAttendeeName = sessionStorage.getItem('schedule_admin_attendee_name') || undefined;
-  if ((isGoogleLoggedIn || passcode) && cachedAdmin) {
-    return { isAdmin: true, attendeeName: cachedAttendeeName };
+  if ((isGoogleLoggedIn || cipher || passcode) && cachedAdmin) {
+    return { isAdmin: true, adminToken: cipher || undefined, attendeeName: cachedAttendeeName };
   }
 
   sessionStorage.removeItem('schedule_admin_verified');
