@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
 import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
@@ -340,15 +340,17 @@ const setupAutoRefreshTimer = () => {
     if (!isLogged || !workerUrl) return;
     const cipher = localStorage.getItem("google_refresh_cipher");
     if (!cipher) return;
+    const currentToken = localStorage.getItem("google_access_token") || "";
     const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
-    // 만료 10분 전(또는 이미 지난 경우) 백그라운드 갱신
-    if (expiresAt === 0 || Date.now() > expiresAt - 10 * 60 * 1000) {
+    // 만료 10분 전(또는 이미 지난 경우, 혹은 유효한 ya29 토큰이 아닌 경우) 백그라운드 갱신
+    if (expiresAt === 0 || !currentToken.startsWith("ya29.") || Date.now() > expiresAt - 10 * 60 * 1000) {
       console.log("토큰 만료 임박(10분 전) 또는 만료됨: Worker를 통해 백그라운드 무인 갱신 시도...");
       const res = await refreshAccessTokenViaWorker(workerUrl, cipher);
-      if (res && res.access_token) {
+      if (res && res.access_token && res.gapi_valid !== false && String(res.access_token).startsWith("ya29.")) {
         localStorage.setItem("google_access_token", res.access_token);
-        const newExpiresAt = Date.now() + (res.expires_in || 3600) * 1000;
+        const newExpiresAt = Date.now() + Math.max((res.expires_in || 3600) - 60, 300) * 1000;
         localStorage.setItem("google_token_expires_at", newExpiresAt.toString());
+        setGapiAccessToken(res.access_token);
         console.log("Worker를 통한 구글 토큰 백그라운드 자동 갱신 완료.");
         window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
       }
@@ -361,15 +363,14 @@ const restoreGoogleSessionIfValid = async () => {
   const keep = localStorage.getItem("keep_logged_in") !== "false";
   const token = localStorage.getItem("google_access_token");
   const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
+  const hasValidCachedGapiToken = Boolean(token && token.startsWith("ya29.") && Date.now() < expiresAt);
 
   // 1. Worker 프록시 + Refresh Cipher가 있는 경우
   if (keep && googleInfo.workerUrl && localStorage.getItem("google_refresh_cipher")) {
     const cipher = localStorage.getItem("google_refresh_cipher")!;
-    // 기존 캐시 토큰이 아직 유효하면 즉시 재사용
-    if (token && Date.now() < expiresAt) {
-      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-        window.gapi.client.setToken({ access_token: token });
-      }
+    // 기존 캐시 Google OAuth 토큰(ya29.*)이 아직 유효하면 즉시 재사용
+    if (hasValidCachedGapiToken && token) {
+      setGapiAccessToken(token);
       googleInfo.isLoggedIn = true;
       const savedSyncMode = localStorage.getItem("sync_mode");
       if (savedSyncMode === "google") {
@@ -393,10 +394,16 @@ const restoreGoogleSessionIfValid = async () => {
     // 캐시 토큰이 없거나 만료된 경우 Worker를 통해 백그라운드 즉시 갱신
     console.log("Worker를 통해 백그라운드 토큰 자동 복원 시도...");
     const refreshRes = await refreshAccessTokenViaWorker(googleInfo.workerUrl, cipher);
-    if (refreshRes && refreshRes.access_token) {
+    if (
+      refreshRes &&
+      refreshRes.access_token &&
+      refreshRes.gapi_valid !== false &&
+      String(refreshRes.access_token).startsWith("ya29.")
+    ) {
       localStorage.setItem("google_access_token", refreshRes.access_token);
-      const newExpiresAt = Date.now() + (refreshRes.expires_in || 3600) * 1000;
+      const newExpiresAt = Date.now() + Math.max((refreshRes.expires_in || 3600) - 60, 300) * 1000;
       localStorage.setItem("google_token_expires_at", newExpiresAt.toString());
+      setGapiAccessToken(refreshRes.access_token);
       googleInfo.isLoggedIn = true;
       const savedSyncMode = localStorage.getItem("sync_mode");
       if (savedSyncMode === "google") {
@@ -419,12 +426,10 @@ const restoreGoogleSessionIfValid = async () => {
     }
   }
 
-  // 2. 일반 클라이언트 단독 모드 (토큰 유효기간 내일 때 복원)
-  if (keep && token && Date.now() < expiresAt) {
+  // 2. 일반 클라이언트 단독 모드 (유효한 Google OAuth 토큰 유효기간 내일 때 복원)
+  if (keep && hasValidCachedGapiToken && token) {
     try {
-      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-        window.gapi.client.setToken({ access_token: token });
-      }
+      setGapiAccessToken(token);
       
       googleInfo.isLoggedIn = true;
       const savedSyncMode = localStorage.getItem("sync_mode");
@@ -661,7 +666,7 @@ watch(() => googleInfo.spreadsheetId, (newVal) => {
 /**시작시 언어 변경 및 자리선택 타일창 띄우기*/
 onMounted(async () => {
   // 버전 체크를 통한 모바일/데스크톱 브라우저 캐시 강제 갱신 (최초 방문/시크릿 창에서는 리로드하지 않음)
-  const CURRENT_VERSION = "20260710_2335";
+  const CURRENT_VERSION = "20261115_1015";
   const savedVersion = localStorage.getItem("app_version");
   if (savedVersion !== CURRENT_VERSION) {
     localStorage.setItem("app_version", CURRENT_VERSION);
@@ -776,7 +781,11 @@ onMounted(async () => {
 
   // 일정 탭 등 외부에서 구글 로그인/로그아웃 시 전역 googleInfo 상태 실시간 동기화
   const handleAuthSync = async () => {
-    const isLogged = localStorage.getItem('google_is_logged_in') === 'true';
+    const token = localStorage.getItem('google_access_token') || '';
+    const isLogged = localStorage.getItem('google_is_logged_in') === 'true' && token.startsWith('ya29.');
+    if (isLogged && token) {
+      setGapiAccessToken(token);
+    }
     if (googleInfo.isLoggedIn !== isLogged) {
       googleInfo.isLoggedIn = isLogged;
       if (isLogged) {
@@ -2014,14 +2023,9 @@ const ensureValidToken = async (): Promise<void> => {
   const token = localStorage.getItem("google_access_token");
   const expiresAt = Number(localStorage.getItem("google_token_expires_at") || 0);
 
-  // 1. 이미 유효한 토큰이 있는 경우 (만료 1분 이상 남음)
-  if (keep && token && Date.now() < (expiresAt - 60 * 1000)) {
-    if (typeof window.gapi !== 'undefined' && window.gapi.client) {
-      const gapiToken = window.gapi.client.getToken();
-      if (!gapiToken || !gapiToken.access_token) {
-        window.gapi.client.setToken({ access_token: token });
-      }
-    }
+  // 1. 이미 유효한 Google OAuth 토큰(ya29.*)이 있는 경우 (만료 1분 이상 남음)
+  if (keep && token && token.startsWith("ya29.") && Date.now() < (expiresAt - 60 * 1000)) {
+    setGapiAccessToken(token);
     return;
   }
 
@@ -2031,10 +2035,11 @@ const ensureValidToken = async (): Promise<void> => {
     console.log("Worker를 통한 백그라운드 토큰 갱신 시도...");
     try {
       const res = await refreshAccessTokenViaWorker(googleInfo.workerUrl, cipher);
-      if (res && res.access_token) {
+      if (res && res.access_token && res.gapi_valid !== false && String(res.access_token).startsWith("ya29.")) {
         localStorage.setItem("google_access_token", res.access_token);
-        const newExpiresAt = Date.now() + (res.expires_in || 3600) * 1000;
+        const newExpiresAt = Date.now() + Math.max((res.expires_in || 3600) - 60, 300) * 1000;
         localStorage.setItem("google_token_expires_at", newExpiresAt.toString());
+        setGapiAccessToken(res.access_token);
         console.log("Worker를 통한 구글 토큰 백그라운드 자동 갱신 완료.");
         return;
       }
@@ -2295,12 +2300,25 @@ const googleLogin = () => {
       },
       (err: any) => {
         isManualLogin.value = false;
+        const errType = err?.type || err?.error || "";
+        if (errType === "popup_closed") {
+          return;
+        }
+        if (errType === "popup_failed_to_open") {
+          triggerToast("브라우저에서 구글 로그인 팝업이 차단되었습니다. 주소창의 팝업 차단을 해제해 주세요.", "error");
+          return;
+        }
         if (err && err.code === "MISSING_CLIENT_SECRET") {
           console.warn("Worker Secret 미등록, 기본 구글 로그인 모드로 전환합니다:", err);
           localStorage.setItem("google_auth_mode", "direct");
           localStorage.removeItem("google_refresh_cipher");
           triggerToast("서버 Secret 미등록: 기본 로그인 모드로 자동 전환되었습니다. [구글 로그인] 버튼을 다시 눌러주세요.", "info");
           initGis(googleInfo.clientId, onGoogleTokenReceived);
+        } else if (err && err.isServerExchangeError) {
+          console.warn("Worker 토큰 교환 실패, 임시 직통 로그인 모드로 전환합니다:", err);
+          localStorage.setItem("google_auth_mode", "direct");
+          initGis(googleInfo.clientId, onGoogleTokenReceived);
+          triggerToast("인증 서버 일시 오류로 기본 로그인 모드로 전환되었습니다. [구글 로그인] 버튼을 한 번 더 눌러주세요.", "info");
         } else {
           console.warn("구글 로그인 취소 또는 일시적 오류:", err);
         }
@@ -2309,7 +2327,13 @@ const googleLogin = () => {
     loginGoogleWithCode();
   } else {
     // 기본 TokenClient 방식 (직통 모드: 사용자 직접 클릭 제스처로 팝업 차단 없이 즉시 실행)
-    initGis(googleInfo.clientId, onGoogleTokenReceived);
+    initGis(googleInfo.clientId, onGoogleTokenReceived, (err: any) => {
+      isManualLogin.value = false;
+      const errType = err?.type || err?.error || "";
+      if (errType === "popup_failed_to_open") {
+        triggerToast("브라우저에서 구글 로그인 팝업이 차단되었습니다. 주소창의 팝업 차단을 해제해 주세요.", "error");
+      }
+    });
     loginGoogle();
   }
 };
@@ -3028,7 +3052,8 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       return true;
     } else {
       if (skipCount > 0) {
-        // 시트에는 이미 올라갔으나 KML에 미등록된 대국이 있을 경우를 대비해 백그라운드 보충 동기화
+        // 시트에는 이미 올라갔으나 KML에 미등록된 대국이 있을 경우를 대비해 보충 동기화
+        let kmlUploaded = 0;
         try {
           const kmlGamesPayload: KmlSyncGameInput[] = todayGamesHistory
             .filter((game: any) => Array.isArray(game?.results) && game.results.length === 4)
@@ -3046,11 +3071,14 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
               })),
             }));
           if (kmlGamesPayload.length > 0) {
-            syncGamesToKmlViaWorker(kmlGamesPayload).catch(() => {});
+            const kmlRes = await syncGamesToKmlViaWorker(kmlGamesPayload);
+            kmlUploaded = kmlRes.uploadedCount || 0;
           }
         } catch (_) {}
 
-        if (!skipConfirm) {
+        if (kmlUploaded > 0) {
+          triggerToast(`KML 기록 시스템에 누락된 ${kmlUploaded}개 대국이 동기화되었습니다!`);
+        } else if (!skipConfirm) {
           alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재합니다.)`);
         } else {
           triggerToast("이미 구글 시트에 최신 반영되어 있습니다.");
@@ -3396,13 +3424,10 @@ const loadExistingSession = async (cleanTitle: string) => {
       }
     });
 
-    // 수동 대국 정보(raw) 파싱
+    // 대국 요약 정보(raw) 파싱 (공탁금 포함 최종 점수 및 동/남/서/북 좌석 순서 정밀 보정 + 수동 대국 복원)
     rawDataRows.forEach((row: any) => {
       const gameId = row[0] ? row[0].toString().trim() : '';
       if (!gameId) return;
-
-      // 이미 상세 시트에서 파싱 완료된 것은 스킵
-      if (gamesMap[gameId]) return;
 
       const timestamp = row[1];
       let parsedTime = new Date().toISOString();
@@ -3438,13 +3463,19 @@ const loadExistingSession = async (cleanTitle: string) => {
       }
 
       if (playerNames.length === 4) {
-        gamesMap[gameId] = {
-          timestamp: parsedTime,
-          isManual: true,
-          results,
-          playerNames,
-          rounds: {}
-        };
+        if (gamesMap[gameId]) {
+          // 상세 시트에서 이미 파싱된 대국이라도 raw 시트의 동/남/서/북 순서 및 공탁금 포함 최종 점수로 보정
+          gamesMap[gameId].results = results;
+          gamesMap[gameId].playerNames = playerNames;
+        } else {
+          gamesMap[gameId] = {
+            timestamp: parsedTime,
+            isManual: true,
+            results,
+            playerNames,
+            rounds: {}
+          };
+        }
       }
     });
 

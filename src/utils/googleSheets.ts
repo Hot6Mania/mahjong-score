@@ -62,7 +62,11 @@ export const initGapi = (): Promise<void> => {
 /**
  * Google Identity Services (GIS) Token Client를 초기화합니다 (클라이언트 단독 모드).
  */
-export const initGis = (clientId: string, onTokenCallback: (token: string) => void): void => {
+export const initGis = (
+  clientId: string,
+  onTokenCallback: (token: string) => void,
+  onError?: (err: any) => void
+): void => {
   if (typeof window.google === 'undefined') {
     console.error('Google Identity SDK not loaded yet.');
     return;
@@ -73,12 +77,19 @@ export const initGis = (clientId: string, onTokenCallback: (token: string) => vo
     callback: (tokenResponse: any) => {
       if (tokenResponse.error !== undefined) {
         console.error('Token Client Error:', tokenResponse);
+        if (onError) onError(tokenResponse);
         return;
       }
       accessToken = tokenResponse.access_token;
-      window.gapi.client.setToken({ access_token: accessToken });
+      if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+        window.gapi.client.setToken({ access_token: accessToken });
+      }
       localStorage.setItem("google_is_logged_in", "true");
       onTokenCallback(tokenResponse.access_token);
+    },
+    error_callback: (err: any) => {
+      console.warn('Token Client Popup Error:', err);
+      if (onError) onError(err);
     },
   });
 };
@@ -102,6 +113,10 @@ export const initGisCodeClient = (
     scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email openid',
     ux_mode: 'popup',
     prompt: 'consent',
+    error_callback: (err: any) => {
+      console.warn('Code Client Popup Error:', err);
+      if (onError) onError(err);
+    },
     callback: async (response: any) => {
       if (response.error !== undefined) {
         console.error('Code Client Error:', response);
@@ -111,15 +126,21 @@ export const initGisCodeClient = (
       const code = response.code;
       try {
         const cleanWorkerUrl = workerUrl.replace(/\/$/, '');
+        const existingCipher = localStorage.getItem("google_refresh_cipher") || undefined;
         const res = await fetch(`${cleanWorkerUrl}/api/auth/exchange`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code }),
+          body: JSON.stringify({
+            code,
+            ...(existingCipher ? { existing_refresh_cipher: existingCipher } : {}),
+          }),
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
           const ex: any = new Error(data.error || 'Worker token exchange failed');
           ex.code = data.code;
+          ex.status = res.status;
+          ex.isServerExchangeError = true;
           throw ex;
         }
         accessToken = data.access_token;
@@ -138,7 +159,10 @@ export const initGisCodeClient = (
         }
         window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
         onTokensReceived(data);
-      } catch (err) {
+      } catch (err: any) {
+        if (err && typeof err === 'object') {
+          err.isServerExchangeError = true;
+        }
         console.error("Worker 토큰 교환 오류:", err);
         if (onError) onError(err);
       }
@@ -151,6 +175,10 @@ export const initGisCodeClient = (
  */
 export const loginGoogle = (): void => {
   if (!tokenClient) {
+    if (typeof window !== 'undefined' && typeof window.google === 'undefined') {
+      alert('구글 로그인 SDK(accounts.google.com)가 로드되지 않았습니다. 브라우저 추적 방지(엄격 모드) 또는 광고 차단 확장 프로그램을 확인해 주세요.');
+      return;
+    }
     alert('구글 로그인 클라이언트가 초기화되지 않았습니다. Client ID 설정을 확인해 주세요.');
     return;
   }
@@ -162,6 +190,10 @@ export const loginGoogle = (): void => {
  */
 export const loginGoogleWithCode = (): void => {
   if (!codeClient) {
+    if (typeof window !== 'undefined' && typeof window.google === 'undefined') {
+      alert('구글 로그인 SDK(accounts.google.com)가 로드되지 않았습니다. 브라우저 추적 방지(엄격 모드) 또는 광고 차단 확장 프로그램을 확인해 주세요.');
+      return;
+    }
     alert('구글 로그인 클라이언트가 초기화되지 않았습니다. Client ID 및 Worker 설정을 확인해 주세요.');
     return;
   }
