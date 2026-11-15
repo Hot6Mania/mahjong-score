@@ -28,7 +28,7 @@ import DateDetailModal from './DateDetailModal.vue';
 import AttendModal from './AttendModal.vue';
 import AdminScheduleModal from './AdminScheduleModal.vue';
 import UserPinLoginModal from './UserPinLoginModal.vue';
-import { initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, refreshAccessTokenViaWorker } from '@/utils/googleSheets';
+import { initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, refreshAccessTokenViaWorker, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, startGoogleRedirectLogin } from '@/utils/googleSheets';
 
 const props = defineProps<{
   members: MemberStatItem[];
@@ -760,6 +760,10 @@ const handleGoogleLogin = () => {
   const workerUrl = getWorkerUrl();
 
   if (workerUrl) {
+    if (shouldPreferGoogleRedirectFlow()) {
+      startGoogleRedirectLogin(clientId, "schedule");
+      return;
+    }
     initGisCodeClient(
       clientId,
       workerUrl,
@@ -787,6 +791,11 @@ const handleGoogleLogin = () => {
         }
       },
       (err: any) => {
+        const errType = err?.type || err?.error || "";
+        if (errType === "popup_failed_to_open" && canUseGoogleRedirectFlow()) {
+          startGoogleRedirectLogin(clientId, "schedule");
+          return;
+        }
         if (err && err.code === "MISSING_CLIENT_SECRET") {
           console.warn("Worker에 Client Secret 미설정, 기본 모드로 전환:", err);
           initGis(clientId, async (token: string) => {

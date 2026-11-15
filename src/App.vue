@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, hasPendingOAuthRedirectParams, startGoogleRedirectLogin, consumeGoogleRedirectCallback, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
 import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
@@ -665,12 +665,12 @@ watch(() => googleInfo.spreadsheetId, (newVal) => {
 
 /**시작시 언어 변경 및 자리선택 타일창 띄우기*/
 onMounted(async () => {
-  // 버전 체크를 통한 모바일/데스크톱 브라우저 캐시 강제 갱신 (최초 방문/시크릿 창에서는 리로드하지 않음)
-  const CURRENT_VERSION = "20261115_1015";
+  // 버전 체크를 통한 모바일/데스크톱 브라우저 캐시 강제 갱신 (최초 방문/시크릿 창/OAuth 콜백 복귀 시에는 리로드하지 않음)
+  const CURRENT_VERSION = "20261115_1125";
   const savedVersion = localStorage.getItem("app_version");
   if (savedVersion !== CURRENT_VERSION) {
     localStorage.setItem("app_version", CURRENT_VERSION);
-    if (savedVersion !== null) {
+    if (savedVersion !== null && !hasPendingOAuthRedirectParams()) {
       window.location.reload();
       return;
     }
@@ -700,53 +700,85 @@ onMounted(async () => {
   }
 
   // 구글 API 및 GIS 초기화
+  let redirectLoginCompleted = false;
   try {
     await initGapi();
-    if (googleInfo.clientId) {
-      // Worker 인증 상태 백그라운드 사전 점검 (Secret 유무에 따른 모드 자동 결정)
-      if (googleInfo.workerUrl) {
-        fetch(`${googleInfo.workerUrl.replace(/\/$/, '')}/api/auth/status`)
-          .then(r => r.json())
-          .then(status => {
-            if (status && !status.hasSecret) {
-              localStorage.setItem("google_auth_mode", "direct");
-            } else if (status && status.hasSecret) {
-              localStorage.setItem("google_auth_mode", "worker");
-            }
-          })
-          .catch(() => {});
-      }
-
-      // google GIS SDK 로드 대기 (최대 5초)
-      let gisRetry = 0;
-      const initGisWithRetry = () => {
-        if (typeof window.google !== 'undefined' && window.google.accounts) {
-          const authMode = localStorage.getItem("google_auth_mode");
-          if (googleInfo.workerUrl && authMode !== "direct") {
-            initGisCodeClient(googleInfo.clientId, googleInfo.workerUrl, (data) => {
-              if (data.refresh_cipher) {
-                localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
-              }
-              onGoogleTokenReceived(data.access_token, data.expires_in);
-            });
-          } else {
-            initGis(googleInfo.clientId, onGoogleTokenReceived);
-          }
-          restoreGoogleSessionIfValid();
-        } else if (gisRetry < 50) {
-          gisRetry++;
-          setTimeout(initGisWithRetry, 100);
-        } else {
-          console.error("Google Identity SDK 로드 실패 (Timeout 5s)");
-          restoreGoogleSessionIfValid();
-        }
-      };
-      initGisWithRetry();
-    } else {
-      restoreGoogleSessionIfValid();
-    }
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
+  }
+
+  // 데스크톱 Edge 등 동일 탭 OAuth 2.0 리디렉션 복귀 콜백 우선 처리
+  if (googleInfo.workerUrl) {
+    const redirectAuth = await consumeGoogleRedirectCallback(googleInfo.workerUrl);
+    if (redirectAuth.handled) {
+      if (
+        redirectAuth.returnPath &&
+        redirectAuth.returnPath !== `${window.location.pathname}${window.location.search}${window.location.hash}`
+      ) {
+        await router.replace(redirectAuth.returnPath).catch(() => {});
+      }
+      if (redirectAuth.success && redirectAuth.access_token) {
+        redirectLoginCompleted = true;
+        if (redirectAuth.context === 'schedule') {
+          googleInfo.isLoggedIn = true;
+          setGapiAccessToken(redirectAuth.access_token);
+          setupAutoRefreshTimer();
+          window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+        } else {
+          isManualLogin.value = true;
+          await onGoogleTokenReceived(redirectAuth.access_token, redirectAuth.expires_in);
+        }
+      } else if (redirectAuth.error && redirectAuth.error !== 'access_denied') {
+        triggerToast(`구글 로그인 실패: ${redirectAuth.error}`, "error");
+      }
+    }
+  }
+
+  if (googleInfo.clientId) {
+    // Worker 인증 상태 백그라운드 사전 점검 (Secret 유무에 따른 모드 자동 결정)
+    if (googleInfo.workerUrl) {
+      fetch(`${googleInfo.workerUrl.replace(/\/$/, '')}/api/auth/status`)
+        .then(r => r.json())
+        .then(status => {
+          if (status && !status.hasSecret) {
+            localStorage.setItem("google_auth_mode", "direct");
+          } else if (status && status.hasSecret) {
+            localStorage.setItem("google_auth_mode", "worker");
+          }
+        })
+        .catch(() => {});
+    }
+
+    // google GIS SDK 로드 대기 (최대 5초)
+    let gisRetry = 0;
+    const initGisWithRetry = () => {
+      if (typeof window.google !== 'undefined' && window.google.accounts) {
+        const authMode = localStorage.getItem("google_auth_mode");
+        if (googleInfo.workerUrl && authMode !== "direct") {
+          initGisCodeClient(googleInfo.clientId, googleInfo.workerUrl, (data) => {
+            if (data.refresh_cipher) {
+              localStorage.setItem("google_refresh_cipher", data.refresh_cipher);
+            }
+            onGoogleTokenReceived(data.access_token, data.expires_in);
+          });
+        } else {
+          initGis(googleInfo.clientId, onGoogleTokenReceived);
+        }
+        if (!redirectLoginCompleted) {
+          restoreGoogleSessionIfValid();
+        }
+      } else if (gisRetry < 50) {
+        gisRetry++;
+        setTimeout(initGisWithRetry, 100);
+      } else {
+        console.error("Google Identity SDK 로드 실패 (Timeout 5s)");
+        if (!redirectLoginCompleted) {
+          restoreGoogleSessionIfValid();
+        }
+      }
+    };
+    initGisWithRetry();
+  } else if (!redirectLoginCompleted) {
     restoreGoogleSessionIfValid();
   }
 
@@ -770,7 +802,14 @@ onMounted(async () => {
     }
   }
 
-  if (!isStatsRoute.value && !hasActiveGame) {
+  if (
+    !isStatsRoute.value &&
+    !hasActiveGame &&
+    !redirectLoginCompleted &&
+    !isShowSpreadsheetIdPrompt.value &&
+    !isShowSessionChoosePopup.value &&
+    !isSaving.value
+  ) {
     showModal('choose_seat');
   }
 
@@ -2286,8 +2325,14 @@ const googleLogin = () => {
   isManualLogin.value = true;
   const authMode = localStorage.getItem("google_auth_mode");
 
-  // Worker URL이 있고 직통(direct) 모드가 아닌 경우 Code Client 방식 시도
+  // Worker URL이 있고 직통(direct) 모드가 아닌 경우 Code Client 또는 동일 탭 리디렉션 방식 시도
   if (googleInfo.workerUrl && authMode !== "direct") {
+    // 데스크톱 Edge 등 COOP/보안 격리로 팝업 window.opener가 단절되는 브라우저는 동일 탭 리디렉션으로 즉시 인증
+    if (shouldPreferGoogleRedirectFlow()) {
+      startGoogleRedirectLogin(googleInfo.clientId, "scorer");
+      return;
+    }
+
     initGisCodeClient(
       googleInfo.clientId,
       googleInfo.workerUrl,
@@ -2305,6 +2350,10 @@ const googleLogin = () => {
           return;
         }
         if (errType === "popup_failed_to_open") {
+          if (canUseGoogleRedirectFlow()) {
+            startGoogleRedirectLogin(googleInfo.clientId, "scorer");
+            return;
+          }
           triggerToast("브라우저에서 구글 로그인 팝업이 차단되었습니다. 주소창의 팝업 차단을 해제해 주세요.", "error");
           return;
         }

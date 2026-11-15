@@ -21,6 +21,29 @@ let inFlightWorkerRefresh: Promise<{
   gapi_valid?: boolean;
 } | null> | null = null;
 
+const AUTHORIZED_REDIRECT_ORIGIN = 'https://kimk-house.party';
+const OAUTH_PENDING_STORAGE_KEY = 'mahjong_oauth_pending';
+const OAUTH_SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email openid';
+
+// 라우터 초기화 전 최초 진입 URL의 OAuth 콜백 파라미터 스냅샷 캡처
+let capturedInitialOAuthParams: {
+  code: string | null;
+  error: string | null;
+  state: string | null;
+} | null = (() => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const error = params.get('error');
+    const state = params.get('state');
+    if ((code || error) && state && state.startsWith('mjoauth_')) {
+      return { code, error, state };
+    }
+  } catch (_) {}
+  return null;
+})();
+
 /**
  * GAPI 라이브러리를 로드하고 초기화합니다.
  */
@@ -198,6 +221,232 @@ export const loginGoogleWithCode = (): void => {
     return;
   }
   codeClient.requestCode();
+};
+
+/**
+ * 현재 도메인이 Google Cloud Console에 승인된 리디렉션 URI(https://kimk-house.party)인지 확인합니다.
+ */
+export const canUseGoogleRedirectFlow = (): boolean => {
+  return typeof window !== 'undefined' && window.location.origin === AUTHORIZED_REDIRECT_ORIGIN;
+};
+
+/**
+ * 데스크톱 Edge 등 팝업 프로세스 격리(COOP / Enhanced Security / 추적 방지)로 인해
+ * window.opener가 끊기는 브라우저 환경인지 판별합니다.
+ */
+export const shouldPreferGoogleRedirectFlow = (): boolean => {
+  if (!canUseGoogleRedirectFlow()) return false;
+  if (typeof navigator === 'undefined') return false;
+  return /\bEdg\//i.test(navigator.userAgent);
+};
+
+/**
+ * 현재 페이지 진입 시 처리 대기 중인 Google OAuth 리디렉션 콜백 파라미터가 있는지 확인합니다.
+ */
+export const hasPendingOAuthRedirectParams = (): boolean => {
+  if (capturedInitialOAuthParams) return true;
+  if (typeof window === 'undefined') return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const state = params.get('state') || '';
+    return Boolean((params.get('code') || params.get('error')) && state.startsWith('mjoauth_'));
+  } catch (_) {
+    return false;
+  }
+};
+
+/**
+ * 팝업 없이 동일 탭 전체 페이지 리디렉션으로 Google OAuth 2.0 Authorization Code 흐름을 시작합니다.
+ * 데스크톱 Edge의 COOP / 보안 격리 문제를 100% 우회합니다.
+ */
+export const startGoogleRedirectLogin = (
+  clientId: string,
+  context: 'scorer' | 'schedule' = 'scorer'
+): void => {
+  if (typeof window === 'undefined') return;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const nonce = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  const state = `mjoauth_${nonce}`;
+
+  // 현재 경로에서 OAuth 잔여 쿼리 파라미터만 제거한 복귀 주소 생성
+  const currentParams = new URLSearchParams(window.location.search);
+  ['code', 'scope', 'state', 'authuser', 'prompt', 'hd', 'error'].forEach((k) => currentParams.delete(k));
+  const cleanSearch = currentParams.toString();
+  const returnPath = `${window.location.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${window.location.hash || ''}` || '/';
+
+  localStorage.setItem(
+    OAUTH_PENDING_STORAGE_KEY,
+    JSON.stringify({
+      state,
+      context,
+      returnPath,
+      redirectUri: AUTHORIZED_REDIRECT_ORIGIN,
+      createdAt: Date.now(),
+    })
+  );
+
+  const authParams = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: AUTHORIZED_REDIRECT_ORIGIN,
+    response_type: 'code',
+    scope: OAUTH_SCOPES,
+    access_type: 'offline',
+    prompt: 'consent',
+    include_granted_scopes: 'true',
+    state,
+  });
+
+  window.location.assign(`https://accounts.google.com/o/oauth2/v2/auth?${authParams.toString()}`);
+};
+
+/**
+ * Google OAuth 리디렉션 복귀 시 URL의 code를 Worker와 교환하여 로그인을 완료합니다.
+ */
+export const consumeGoogleRedirectCallback = async (
+  workerUrl: string
+): Promise<{
+  handled: boolean;
+  success: boolean;
+  context?: 'scorer' | 'schedule';
+  returnPath?: string;
+  access_token?: string;
+  expires_in?: number;
+  refresh_cipher?: string;
+  attendeeName?: string;
+  isAdmin?: boolean;
+  error?: string;
+}> => {
+  if (typeof window === 'undefined') return { handled: false, success: false };
+
+  let code: string | null = null;
+  let oauthError: string | null = null;
+  let state: string | null = null;
+
+  if (capturedInitialOAuthParams) {
+    code = capturedInitialOAuthParams.code;
+    oauthError = capturedInitialOAuthParams.error;
+    state = capturedInitialOAuthParams.state;
+    capturedInitialOAuthParams = null;
+  } else {
+    const params = new URLSearchParams(window.location.search);
+    const s = params.get('state');
+    if (s && s.startsWith('mjoauth_')) {
+      code = params.get('code');
+      oauthError = params.get('error');
+      state = s;
+    }
+  }
+
+  if (!state || (!code && !oauthError)) {
+    return { handled: false, success: false };
+  }
+
+  let pending: {
+    state?: string;
+    context?: 'scorer' | 'schedule';
+    returnPath?: string;
+    redirectUri?: string;
+    createdAt?: number;
+  } | null = null;
+  try {
+    const raw = localStorage.getItem(OAUTH_PENDING_STORAGE_KEY);
+    localStorage.removeItem(OAUTH_PENDING_STORAGE_KEY);
+    if (raw) {
+      pending = JSON.parse(raw);
+    }
+  } catch (_) {}
+
+  const context: 'scorer' | 'schedule' = pending?.context === 'schedule' ? 'schedule' : 'scorer';
+  const returnPath = pending?.returnPath || '/';
+  const redirectUri = pending?.redirectUri || AUTHORIZED_REDIRECT_ORIGIN;
+
+  // 주소창에서 일회용 code/state 파라미터 즉시 제거
+  try {
+    window.history.replaceState(null, '', returnPath);
+  } catch (_) {}
+
+  if (pending?.state && pending.state !== state) {
+    return {
+      handled: true,
+      success: false,
+      context,
+      returnPath,
+      error: '인증 상태 값(state)이 일치하지 않습니다. 다시 시도해 주세요.',
+    };
+  }
+
+  if (oauthError || !code) {
+    return {
+      handled: true,
+      success: false,
+      context,
+      returnPath,
+      error: oauthError || 'missing_code',
+    };
+  }
+
+  try {
+    const cleanWorkerUrl = workerUrl.replace(/\/$/, '');
+    const existingCipher = localStorage.getItem('google_refresh_cipher') || undefined;
+    const res = await fetch(`${cleanWorkerUrl}/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        redirect_uri: redirectUri,
+        ...(existingCipher ? { existing_refresh_cipher: existingCipher } : {}),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error || !data.access_token) {
+      return {
+        handled: true,
+        success: false,
+        context,
+        returnPath,
+        error: data.error || 'Worker token exchange failed',
+      };
+    }
+
+    accessToken = data.access_token;
+    if (typeof window.gapi !== 'undefined' && window.gapi.client) {
+      window.gapi.client.setToken({ access_token: accessToken });
+    }
+    localStorage.setItem('google_is_logged_in', 'true');
+    localStorage.setItem('google_auth_mode', 'worker');
+    localStorage.setItem('google_access_token', data.access_token);
+    const expiresAt = Date.now() + Math.max((data.expires_in || 3600) - 60, 300) * 1000;
+    localStorage.setItem('google_token_expires_at', String(expiresAt));
+    if (data.refresh_cipher) {
+      localStorage.setItem('google_refresh_cipher', data.refresh_cipher);
+    }
+    if (data.attendeeName) {
+      sessionStorage.setItem('schedule_admin_attendee_name', data.attendeeName);
+    }
+    window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+
+    return {
+      handled: true,
+      success: true,
+      context,
+      returnPath,
+      access_token: data.access_token,
+      expires_in: data.expires_in,
+      refresh_cipher: data.refresh_cipher,
+      attendeeName: data.attendeeName,
+      isAdmin: data.isAdmin,
+    };
+  } catch (err: any) {
+    console.error('OAuth Redirect 토큰 교환 오류:', err);
+    return {
+      handled: true,
+      success: false,
+      context,
+      returnPath,
+      error: err?.message || 'Network error during token exchange',
+    };
+  }
 };
 
 /**
