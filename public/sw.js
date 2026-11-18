@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mahjong-score-v17';
+const CACHE_NAME = 'mahjong-score-v18';
 const ASSETS = [
   '/',
   '/index.html',
@@ -34,8 +34,13 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
   const url = new URL(e.request.url);
-  // 외부 도메인 API(구글 Sheets API, Cloudflare Workers, Google Auth 등) 및 API 경로는 네이티브 네트워크로 직접 위임
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
+  // 외부 도메인 API(구글 Sheets API, Cloudflare Workers, Google Auth 등), API 경로 및 일회용 OAuth 콜백 쿼리는 네이티브 네트워크로 직접 위임
+  if (
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/api/') ||
+    url.searchParams.has('code') ||
+    (url.searchParams.get('state') || '').startsWith('mjoauth_')
+  ) {
     return;
   }
 

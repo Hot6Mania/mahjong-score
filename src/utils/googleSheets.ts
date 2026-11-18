@@ -21,9 +21,53 @@ let inFlightWorkerRefresh: Promise<{
   gapi_valid?: boolean;
 } | null> | null = null;
 
+const DEFAULT_GOOGLE_CLIENT_ID = '1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com';
 const AUTHORIZED_REDIRECT_ORIGIN = 'https://kimk-house.party';
 const OAUTH_PENDING_STORAGE_KEY = 'mahjong_oauth_pending';
+const OAUTH_REDIRECT_RESULT_STORAGE_KEY = 'mahjong_oauth_redirect_result';
 const OAUTH_SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email openid';
+
+export interface OAuthRedirectResult {
+  context: 'scorer' | 'schedule';
+  success: boolean;
+  isAdmin?: boolean;
+  attendeeName?: string | null;
+  error?: string;
+  ts: number;
+}
+
+const encodeOAuthStateMeta = (meta: { c: 'scorer' | 'schedule'; r: string }): string => {
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify(meta));
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  } catch (_) {
+    return '';
+  }
+};
+
+const decodeOAuthStateMeta = (stateStr: string): { c?: 'scorer' | 'schedule'; r?: string } | null => {
+  try {
+    // mjoauth_<32hex>_<base64url>
+    const match = stateStr.match(/^mjoauth_[0-9a-f]+_([A-Za-z0-9_-]+)$/);
+    if (!match || !match[1]) return null;
+    let b64 = match[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
+    }
+  } catch (_) {}
+  return null;
+};
 
 // 라우터 초기화 전 최초 진입 URL의 OAuth 콜백 파라미터 스냅샷 캡처
 let capturedInitialOAuthParams: {
@@ -231,13 +275,12 @@ export const canUseGoogleRedirectFlow = (): boolean => {
 };
 
 /**
- * 데스크톱 Edge 등 팝업 프로세스 격리(COOP / Enhanced Security / 추적 방지)로 인해
- * window.opener가 끊기는 브라우저 환경인지 판별합니다.
+ * 데스크톱/모바일/PWA 전반의 COOP(Cross-Origin-Opener-Policy) 팝업 격리 및 window.opener 단절 문제를
+ * 원천 차단하기 위해, 승인된 프로덕션 도메인(https://kimk-house.party)에서는 모든 브라우저에서
+ * 동일 탭 OAuth 2.0 리디렉션 흐름을 기본 사용합니다.
  */
 export const shouldPreferGoogleRedirectFlow = (): boolean => {
-  if (!canUseGoogleRedirectFlow()) return false;
-  if (typeof navigator === 'undefined') return false;
-  return /\bEdg\//i.test(navigator.userAgent);
+  return canUseGoogleRedirectFlow();
 };
 
 /**
@@ -256,18 +299,37 @@ export const hasPendingOAuthRedirectParams = (): boolean => {
 };
 
 /**
+ * 리디렉션 복귀 직후 일정 탭 등에서 1회성으로 인증 결과 토스트/모달 상태를 소비합니다.
+ */
+export const consumeOAuthRedirectResult = (): OAuthRedirectResult | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(OAUTH_REDIRECT_RESULT_STORAGE_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(OAUTH_REDIRECT_RESULT_STORAGE_KEY);
+    const parsed = JSON.parse(raw) as OAuthRedirectResult;
+    if (parsed && typeof parsed === 'object' && Date.now() - Number(parsed.ts || 0) < 5 * 60 * 1000) {
+      return parsed;
+    }
+  } catch (_) {}
+  return null;
+};
+
+/**
  * 팝업 없이 동일 탭 전체 페이지 리디렉션으로 Google OAuth 2.0 Authorization Code 흐름을 시작합니다.
- * 데스크톱 Edge의 COOP / 보안 격리 문제를 100% 우회합니다.
+ * 데스크톱/모바일 브라우저 및 PWA의 COOP / 팝업 차단 / window.opener 단절 문제를 100% 우회합니다.
  */
 export const startGoogleRedirectLogin = (
   clientId: string,
   context: 'scorer' | 'schedule' = 'scorer'
 ): void => {
   if (typeof window === 'undefined') return;
+  const resolvedClientId =
+    !clientId || clientId.startsWith('113337424108') ? DEFAULT_GOOGLE_CLIENT_ID : clientId;
+
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const nonce = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-  const state = `mjoauth_${nonce}`;
 
   // 현재 경로에서 OAuth 잔여 쿼리 파라미터만 제거한 복귀 주소 생성
   const currentParams = new URLSearchParams(window.location.search);
@@ -275,24 +337,30 @@ export const startGoogleRedirectLogin = (
   const cleanSearch = currentParams.toString();
   const returnPath = `${window.location.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${window.location.hash || ''}` || '/';
 
-  localStorage.setItem(
-    OAUTH_PENDING_STORAGE_KEY,
-    JSON.stringify({
-      state,
-      context,
-      returnPath,
-      redirectUri: AUTHORIZED_REDIRECT_ORIGIN,
-      createdAt: Date.now(),
-    })
-  );
+  const encodedMeta = encodeOAuthStateMeta({ c: context, r: returnPath });
+  const state = encodedMeta ? `mjoauth_${nonce}_${encodedMeta}` : `mjoauth_${nonce}`;
+
+  const pendingPayload = JSON.stringify({
+    state,
+    context,
+    returnPath,
+    redirectUri: AUTHORIZED_REDIRECT_ORIGIN,
+    createdAt: Date.now(),
+  });
+  try {
+    sessionStorage.setItem(OAUTH_PENDING_STORAGE_KEY, pendingPayload);
+  } catch (_) {}
+  try {
+    localStorage.setItem(OAUTH_PENDING_STORAGE_KEY, pendingPayload);
+  } catch (_) {}
 
   const authParams = new URLSearchParams({
-    client_id: clientId,
+    client_id: resolvedClientId,
     redirect_uri: AUTHORIZED_REDIRECT_ORIGIN,
     response_type: 'code',
     scope: OAUTH_SCOPES,
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: 'select_account consent',
     include_granted_scopes: 'true',
     state,
   });
@@ -350,39 +418,70 @@ export const consumeGoogleRedirectCallback = async (
     createdAt?: number;
   } | null = null;
   try {
-    const raw = localStorage.getItem(OAUTH_PENDING_STORAGE_KEY);
+    const rawSession = sessionStorage.getItem(OAUTH_PENDING_STORAGE_KEY);
+    const rawLocal = localStorage.getItem(OAUTH_PENDING_STORAGE_KEY);
+    sessionStorage.removeItem(OAUTH_PENDING_STORAGE_KEY);
     localStorage.removeItem(OAUTH_PENDING_STORAGE_KEY);
+    const raw = rawSession || rawLocal;
     if (raw) {
       pending = JSON.parse(raw);
     }
   } catch (_) {}
 
-  const context: 'scorer' | 'schedule' = pending?.context === 'schedule' ? 'schedule' : 'scorer';
-  const returnPath = pending?.returnPath || '/';
+  const stateMeta = decodeOAuthStateMeta(state);
+  const resolvedContextRaw = pending?.context || stateMeta?.c;
+  const context: 'scorer' | 'schedule' = resolvedContextRaw === 'schedule' ? 'schedule' : 'scorer';
+  const rawReturnPath = pending?.returnPath || stateMeta?.r || '/';
+  const returnPath = rawReturnPath.startsWith('/') ? rawReturnPath : '/';
   const redirectUri = pending?.redirectUri || AUTHORIZED_REDIRECT_ORIGIN;
 
-  // 주소창에서 일회용 code/state 파라미터 즉시 제거
+  // 중요: Vue Router의 router.replace(returnPath)가 정상 동작하도록
+  // 여기서는 현재 경로(window.location.pathname)를 유지한 채 일회용 OAuth 쿼리 파라미터만 제거합니다.
   try {
-    window.history.replaceState(null, '', returnPath);
+    const cleanParams = new URLSearchParams(window.location.search);
+    ['code', 'scope', 'state', 'authuser', 'prompt', 'hd', 'error'].forEach((k) => cleanParams.delete(k));
+    const qs = cleanParams.toString();
+    const cleanedCurrentUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash || ''}` || '/';
+    window.history.replaceState(null, '', cleanedCurrentUrl);
   } catch (_) {}
 
+  const saveScheduleRedirectResult = (result: Omit<OAuthRedirectResult, 'context' | 'ts'>) => {
+    if (context !== 'schedule') return;
+    try {
+      sessionStorage.setItem(
+        OAUTH_REDIRECT_RESULT_STORAGE_KEY,
+        JSON.stringify({
+          context,
+          ...result,
+          ts: Date.now(),
+        })
+      );
+    } catch (_) {}
+  };
+
   if (pending?.state && pending.state !== state) {
+    const errMsg = '인증 상태 값(state)이 일치하지 않습니다. 다시 시도해 주세요.';
+    saveScheduleRedirectResult({ success: false, error: errMsg });
     return {
       handled: true,
       success: false,
       context,
       returnPath,
-      error: '인증 상태 값(state)이 일치하지 않습니다. 다시 시도해 주세요.',
+      error: errMsg,
     };
   }
 
   if (oauthError || !code) {
+    const errMsg = oauthError || 'missing_code';
+    if (errMsg !== 'access_denied') {
+      saveScheduleRedirectResult({ success: false, error: errMsg });
+    }
     return {
       handled: true,
       success: false,
       context,
       returnPath,
-      error: oauthError || 'missing_code',
+      error: errMsg,
     };
   }
 
@@ -400,12 +499,14 @@ export const consumeGoogleRedirectCallback = async (
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.error || !data.access_token) {
+      const errMsg = data.error || 'Worker token exchange failed';
+      saveScheduleRedirectResult({ success: false, error: errMsg });
       return {
         handled: true,
         success: false,
         context,
         returnPath,
-        error: data.error || 'Worker token exchange failed',
+        error: errMsg,
       };
     }
 
@@ -421,9 +522,23 @@ export const consumeGoogleRedirectCallback = async (
     if (data.refresh_cipher) {
       localStorage.setItem('google_refresh_cipher', data.refresh_cipher);
     }
-    if (data.attendeeName) {
-      sessionStorage.setItem('schedule_admin_attendee_name', data.attendeeName);
+    if (data.isAdmin) {
+      sessionStorage.setItem('schedule_admin_verified', 'true');
+      if (data.attendeeName) {
+        sessionStorage.setItem('schedule_admin_attendee_name', data.attendeeName);
+        localStorage.setItem('mahjong_schedule_last_name', String(data.attendeeName).trim());
+      }
+    } else {
+      sessionStorage.removeItem('schedule_admin_verified');
+      sessionStorage.removeItem('schedule_admin_attendee_name');
     }
+
+    saveScheduleRedirectResult({
+      success: true,
+      isAdmin: Boolean(data.isAdmin),
+      attendeeName: data.attendeeName || null,
+    });
+
     window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
 
     return {
@@ -439,12 +554,14 @@ export const consumeGoogleRedirectCallback = async (
     };
   } catch (err: any) {
     console.error('OAuth Redirect 토큰 교환 오류:', err);
+    const errMsg = err?.message || 'Network error during token exchange';
+    saveScheduleRedirectResult({ success: false, error: errMsg });
     return {
       handled: true,
       success: false,
       context,
       returnPath,
-      error: err?.message || 'Network error during token exchange',
+      error: errMsg,
     };
   }
 };

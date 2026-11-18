@@ -28,7 +28,7 @@ import DateDetailModal from './DateDetailModal.vue';
 import AttendModal from './AttendModal.vue';
 import AdminScheduleModal from './AdminScheduleModal.vue';
 import UserPinLoginModal from './UserPinLoginModal.vue';
-import { initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, refreshAccessTokenViaWorker, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, startGoogleRedirectLogin } from '@/utils/googleSheets';
+import { initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, refreshAccessTokenViaWorker, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, startGoogleRedirectLogin, consumeOAuthRedirectResult } from '@/utils/googleSheets';
 
 const props = defineProps<{
   members: MemberStatItem[];
@@ -756,7 +756,11 @@ const syncAdminAuth = async () => {
 
 // 관리자 구글 계정 로그인 트리거 (Worker를 통한 Refresh Token 획득으로 1시간 만료 방지)
 const handleGoogleLogin = () => {
-  const clientId = localStorage.getItem("google_client_id") || "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com";
+  let clientId = localStorage.getItem("google_client_id") || "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com";
+  if (clientId.startsWith("113337424108")) {
+    clientId = "1089115695270-dui47hsqvfa9pmb5la64d5g6cinccitj.apps.googleusercontent.com";
+    localStorage.setItem("google_client_id", clientId);
+  }
   const workerUrl = getWorkerUrl();
 
   if (workerUrl) {
@@ -787,17 +791,21 @@ const handleGoogleLogin = () => {
           isAdminAuthModalOpen.value = false;
           isAdminModalOpen.value = true;
         } else {
-          showToast("구글 로그인이 완료되었습니다.", "info");
+          showToast("선택한 구글 계정에 관리자 권한이 없습니다. 등록된 관리자 계정으로 로그인해 주세요.", "error");
         }
       },
       (err: any) => {
         const errType = err?.type || err?.error || "";
-        if (errType === "popup_failed_to_open" && canUseGoogleRedirectFlow()) {
+        if ((errType === "popup_failed_to_open" || errType === "popup_closed") && canUseGoogleRedirectFlow()) {
           startGoogleRedirectLogin(clientId, "schedule");
           return;
         }
-        if (err && err.code === "MISSING_CLIENT_SECRET") {
-          console.warn("Worker에 Client Secret 미설정, 기본 모드로 전환:", err);
+        if (errType === "popup_failed_to_open") {
+          showToast("브라우저에서 구글 로그인 팝업이 차단되었습니다. 팝업 차단을 해제해 주세요.", "error");
+          return;
+        }
+        if (err && (err.code === "MISSING_CLIENT_SECRET" || err.isServerExchangeError)) {
+          console.warn("Worker 토큰 교환 실패 또는 Secret 미설정, 기본 모드로 전환:", err);
           initGis(clientId, async (token: string) => {
             localStorage.setItem("google_access_token", token);
             localStorage.setItem("google_token_expires_at", String(Date.now() + 3600 * 1000));
@@ -805,6 +813,13 @@ const handleGoogleLogin = () => {
             isGoogleLoggedIn.value = true;
             window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
             await syncAdminAuth();
+            if (isAdmin.value) {
+              showToast("관리자 구글 계정 인증이 완료되었습니다.", "success");
+              isAdminAuthModalOpen.value = false;
+              isAdminModalOpen.value = true;
+            } else {
+              showToast("선택한 구글 계정에 관리자 권한이 없습니다. 등록된 관리자 계정으로 로그인해 주세요.", "error");
+            }
           });
           loginGoogle();
         } else {
@@ -821,6 +836,13 @@ const handleGoogleLogin = () => {
       isGoogleLoggedIn.value = true;
       window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
       await syncAdminAuth();
+      if (isAdmin.value) {
+        showToast("관리자 구글 계정 인증이 완료되었습니다.", "success");
+        isAdminAuthModalOpen.value = false;
+        isAdminModalOpen.value = true;
+      } else {
+        showToast("선택한 구글 계정에 관리자 권한이 없습니다. 등록된 관리자 계정으로 로그인해 주세요.", "error");
+      }
     });
     loginGoogle();
   }
@@ -1701,6 +1723,33 @@ onMounted(async () => {
     loadSchedule(true),
     syncAdminAuth()
   ]);
+
+  // 동일 탭 Google OAuth 리디렉션 복귀 결과 소비 (관리자 모달 자동 오픈 및 피드백 토스트 표시)
+  const oauthResult = consumeOAuthRedirectResult();
+  if (oauthResult && oauthResult.context === 'schedule') {
+    if (oauthResult.success) {
+      isGoogleLoggedIn.value = true;
+      if (!isAdmin.value && oauthResult.isAdmin) {
+        await syncAdminAuth();
+      }
+      if (isAdmin.value || oauthResult.isAdmin) {
+        isAdmin.value = true;
+        if (oauthResult.attendeeName) {
+          myAttendeeName.value = oauthResult.attendeeName;
+          setLastAttendeeName(oauthResult.attendeeName);
+        }
+        showToast('관리자 구글 계정 인증이 완료되었습니다.', 'success');
+        isAdminAuthModalOpen.value = false;
+        isAdminModalOpen.value = true;
+      } else {
+        showToast('선택한 구글 계정에 관리자 권한이 없습니다. 등록된 관리자 계정으로 로그인해 주세요.', 'error');
+        isAdminAuthModalOpen.value = true;
+      }
+    } else if (oauthResult.error && oauthResult.error !== 'access_denied') {
+      showToast(`구글 로그인 실패: ${oauthResult.error}`, 'error');
+      isAdminAuthModalOpen.value = true;
+    }
+  }
 });
 
 const setViewMode = (mode: 'calendar' | 'list') => {

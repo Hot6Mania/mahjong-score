@@ -167,6 +167,7 @@
           var qDate = (params.get('date') || '').trim();
           var qPhoto = (params.get('photo') || '').trim();
           var qTab = (params.get('tab') || '').trim();
+          var qState = (params.get('state') || '').trim();
           var tabMap = {
             ranking: '종합 랭킹',
             rating: '레이팅',
@@ -177,7 +178,9 @@
             gallery: '갤러리'
           };
           var pathname = window.location.pathname || '';
-          if (qPlayer) {
+          if (qState && qState.indexOf('mjoauth_') === 0) {
+            document.title = '구글 인증 처리 중... | 김케이 하우스';
+          } else if (qPlayer) {
             var sessLabel = qSession ? (/^\d+$/.test(qSession) ? '제' + qSession + '회' : qSession) : '';
             document.title = (sessLabel ? qPlayer + ' (' + sessLabel + ') 통계' : qPlayer + ' 통계') + ' | 김케이 하우스';
           } else if (qSession) {
@@ -210,7 +213,7 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          const deployVersion = "20261115_1125";
+          const deployVersion = "20261118_1140";
           const swBase = window.location.pathname.startsWith('/mahjong-score') ? '/mahjong-score' : '';
           navigator.serviceWorker.register(`${swBase}/sw.js?v=${deployVersion}`)
             .then(reg => {

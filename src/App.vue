@@ -37,6 +37,7 @@ watch(isStatsRoute, (val) => {
 // 원클릭 대국 기록 + 동기화 상태 관리
 const isSyncingGame = ref(false)
 const isGameSynced = ref(false)
+const isProcessingOAuthRedirect = ref<boolean>(hasPendingOAuthRedirectParams())
 
 /**i18n 속성 가져오기*/
 const { t, locale } = useI18n()
@@ -666,7 +667,7 @@ watch(() => googleInfo.spreadsheetId, (newVal) => {
 /**시작시 언어 변경 및 자리선택 타일창 띄우기*/
 onMounted(async () => {
   // 버전 체크를 통한 모바일/데스크톱 브라우저 캐시 강제 갱신 (최초 방문/시크릿 창/OAuth 콜백 복귀 시에는 리로드하지 않음)
-  const CURRENT_VERSION = "20261115_1125";
+  const CURRENT_VERSION = "20261118_1140";
   const savedVersion = localStorage.getItem("app_version");
   if (savedVersion !== CURRENT_VERSION) {
     localStorage.setItem("app_version", CURRENT_VERSION);
@@ -699,39 +700,55 @@ onMounted(async () => {
     document.documentElement.classList.remove("dark");
   }
 
-  // 구글 API 및 GIS 초기화
+  // 구글 API 및 GIS 초기화 (동일 탭 OAuth 2.0 리디렉션 복귀 콜백을 GAPI 대기 없이 최우선 처리)
   let redirectLoginCompleted = false;
+  let pendingScorerToken: { token: string; expiresIn?: number } | null = null;
+
+  if (hasPendingOAuthRedirectParams() && googleInfo.workerUrl) {
+    try {
+      const redirectAuth = await consumeGoogleRedirectCallback(googleInfo.workerUrl);
+      if (redirectAuth.handled) {
+        const targetReturnPath = redirectAuth.returnPath || '/';
+        if (router.currentRoute.value.fullPath !== targetReturnPath) {
+          await router.replace(targetReturnPath).catch(() => {});
+        }
+        if (redirectAuth.success && redirectAuth.access_token) {
+          redirectLoginCompleted = true;
+          googleInfo.isLoggedIn = true;
+          setGapiAccessToken(redirectAuth.access_token);
+          setupAutoRefreshTimer();
+          if (redirectAuth.context === 'schedule') {
+            window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+          } else {
+            pendingScorerToken = {
+              token: redirectAuth.access_token,
+              expiresIn: redirectAuth.expires_in,
+            };
+          }
+        } else if (
+          redirectAuth.error &&
+          redirectAuth.error !== 'access_denied' &&
+          redirectAuth.context !== 'schedule'
+        ) {
+          triggerToast(`구글 로그인 실패: ${redirectAuth.error}`, "error");
+        }
+      }
+    } finally {
+      isProcessingOAuthRedirect.value = false;
+    }
+  } else {
+    isProcessingOAuthRedirect.value = false;
+  }
+
   try {
     await initGapi();
   } catch (err) {
     console.warn("Google API Client 로드 실패:", err);
   }
 
-  // 데스크톱 Edge 등 동일 탭 OAuth 2.0 리디렉션 복귀 콜백 우선 처리
-  if (googleInfo.workerUrl) {
-    const redirectAuth = await consumeGoogleRedirectCallback(googleInfo.workerUrl);
-    if (redirectAuth.handled) {
-      if (
-        redirectAuth.returnPath &&
-        redirectAuth.returnPath !== `${window.location.pathname}${window.location.search}${window.location.hash}`
-      ) {
-        await router.replace(redirectAuth.returnPath).catch(() => {});
-      }
-      if (redirectAuth.success && redirectAuth.access_token) {
-        redirectLoginCompleted = true;
-        if (redirectAuth.context === 'schedule') {
-          googleInfo.isLoggedIn = true;
-          setGapiAccessToken(redirectAuth.access_token);
-          setupAutoRefreshTimer();
-          window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
-        } else {
-          isManualLogin.value = true;
-          await onGoogleTokenReceived(redirectAuth.access_token, redirectAuth.expires_in);
-        }
-      } else if (redirectAuth.error && redirectAuth.error !== 'access_denied') {
-        triggerToast(`구글 로그인 실패: ${redirectAuth.error}`, "error");
-      }
-    }
+  if (pendingScorerToken) {
+    isManualLogin.value = true;
+    await onGoogleTokenReceived(pendingScorerToken.token, pendingScorerToken.expiresIn);
   }
 
   if (googleInfo.clientId) {
@@ -2323,16 +2340,17 @@ const googleLogin = () => {
   }
 
   isManualLogin.value = true;
+
+  // 프로덕션 도메인(https://kimk-house.party)에서는 모든 데스크톱/모바일 브라우저의 COOP 팝업 격리 문제를 우회하기 위해 동일 탭 리디렉션 최우선 사용
+  if (googleInfo.workerUrl && shouldPreferGoogleRedirectFlow()) {
+    startGoogleRedirectLogin(googleInfo.clientId, "scorer");
+    return;
+  }
+
   const authMode = localStorage.getItem("google_auth_mode");
 
-  // Worker URL이 있고 직통(direct) 모드가 아닌 경우 Code Client 또는 동일 탭 리디렉션 방식 시도
+  // Worker URL이 있고 직통(direct) 모드가 아닌 경우 Code Client 방식 시도
   if (googleInfo.workerUrl && authMode !== "direct") {
-    // 데스크톱 Edge 등 COOP/보안 격리로 팝업 window.opener가 단절되는 브라우저는 동일 탭 리디렉션으로 즉시 인증
-    if (shouldPreferGoogleRedirectFlow()) {
-      startGoogleRedirectLogin(googleInfo.clientId, "scorer");
-      return;
-    }
-
     initGisCodeClient(
       googleInfo.clientId,
       googleInfo.workerUrl,
@@ -2346,15 +2364,14 @@ const googleLogin = () => {
       (err: any) => {
         isManualLogin.value = false;
         const errType = err?.type || err?.error || "";
-        if (errType === "popup_closed") {
-          return;
-        }
-        if (errType === "popup_failed_to_open") {
+        if (errType === "popup_closed" || errType === "popup_failed_to_open") {
           if (canUseGoogleRedirectFlow()) {
             startGoogleRedirectLogin(googleInfo.clientId, "scorer");
             return;
           }
-          triggerToast("브라우저에서 구글 로그인 팝업이 차단되었습니다. 주소창의 팝업 차단을 해제해 주세요.", "error");
+          if (errType === "popup_failed_to_open") {
+            triggerToast("브라우저에서 구글 로그인 팝업이 차단되었습니다. 주소창의 팝업 차단을 해제해 주세요.", "error");
+          }
           return;
         }
         if (err && err.code === "MISSING_CLIENT_SECRET") {
@@ -3859,8 +3876,19 @@ const addBackupGameToCurrent = (game: any) => {
 </script>
 
 <template>
+  <!-- 전역 커스텀 토스트 알림 연출 (점수판 및 대시보드 공통 표시) -->
+  <Transition name="toast-fade">
+    <div v-if="toast.show" class="custom-toast" :class="toast.type">
+      {{ toast.message }}
+    </div>
+  </Transition>
+
+  <div v-if="isProcessingOAuthRedirect" class="oauth-redirect-loading">
+    <div class="oauth-redirect-spinner"></div>
+    <p class="oauth-redirect-text">구글 계정 인증 처리 중...</p>
+  </div>
   <StatsDashboardView 
-    v-if="isStatsRoute" 
+    v-else-if="isStatsRoute" 
     @go-to-scorer="router.push('/')" 
   />
   <div v-else class="scorer-root">
@@ -3868,12 +3896,6 @@ const addBackupGameToCurrent = (game: any) => {
     <div class="ios-scroll-spacer"></div>
 
     <div class="background" @dblclick.self="toggleFullScreen()" @click="onBackgroundClick">
-  <!-- 커스텀 토스트 알림 연출 -->
-  <Transition name="toast-fade">
-    <div v-if="toast.show" class="custom-toast" :class="toast.type">
-      {{ toast.message }}
-    </div>
-  </Transition>
 
 
 
@@ -4128,6 +4150,43 @@ const addBackupGameToCurrent = (game: any) => {
 </template>
 
 <style>
+/* OAuth 리디렉션 복귀 처리 로딩 화면 */
+.oauth-redirect-loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--bg-color, #f8fafc);
+  color: var(--text-color, #0f172a);
+  z-index: 10000;
+}
+html.dark .oauth-redirect-loading {
+  background: #121212;
+  color: #f8fafc;
+}
+.oauth-redirect-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(59, 130, 246, 0.2);
+  border-top-color: #3b82f6;
+  animation: oauth-spin 0.75s linear infinite;
+}
+.oauth-redirect-text {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+@keyframes oauth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* 동기화 진행률 모달 스타일 */
 .sync-loader-overlay {
   position: fixed;
