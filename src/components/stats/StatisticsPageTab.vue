@@ -2702,7 +2702,7 @@ onMounted(() => {
                       <th>회차</th>
                       <th>국</th>
                       <th>화료자 (론 화료)</th>
-                      <th>←</th>
+                      <th>→</th>
                       <th>방총자 (쏘인 사람)</th>
                       <th>타점</th>
                       <th>비고</th>
@@ -2720,7 +2720,7 @@ onMounted(() => {
                           {{ d.winnerName }}
                         </button>
                       </td>
-                      <td class="muted">←</td>
+                      <td class="muted">→</td>
                       <td class="nowrap">
                         <button type="button" class="table-player-link neg-link" @click="selectPlayer(d.loserName)">
                           {{ d.loserName }}
@@ -3416,7 +3416,7 @@ onMounted(() => {
                   <th>일자</th>
                   <th>국</th>
                   <th>화료자 (론 화료)</th>
-                  <th>←</th>
+                  <th>→</th>
                   <th>방총자 (쏘인 사람)</th>
                   <th>방총 타점</th>
                   <th>비고</th>
@@ -3432,7 +3432,7 @@ onMounted(() => {
                       {{ d.winnerName }}
                     </button>
                   </td>
-                  <td class="muted">←</td>
+                  <td class="muted">→</td>
                   <td class="nowrap">
                     <button type="button" class="table-player-link neg-link" @click="selectPlayer(d.loserName)">
                       {{ d.loserName }}
