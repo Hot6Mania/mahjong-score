@@ -230,6 +230,8 @@ const selectPlayer = (name: string) => {
   isDropdownOpen.value = false;
   showAllPlayerGames.value = false;
   inspectedMetricKey.value = null;
+  hoveredInlineBar.value = null;
+  tappedInlineBar.value = null;
   activeSubTab.value = 'player';
 };
 
@@ -237,6 +239,8 @@ const clearSelectedPlayer = () => {
   selectedPlayerName.value = '';
   searchInput.value = '';
   inspectedMetricKey.value = null;
+  hoveredInlineBar.value = null;
+  tappedInlineBar.value = null;
 };
 
 const onSearchBlur = () => {
@@ -460,7 +464,48 @@ const selectedRankDist = computed(() => {
 const inspectedMetricKey = ref<keyof MemberStatItem | null>(null);
 const inspectedMetricMeta = ref<{ label: string; higherIsBetter: boolean; unit: string; value: number } | null>(null);
 const hoveredInlineBar = ref<HistogramBar | null>(null);
+const tappedInlineBar = ref<HistogramBar | null>(null);
+const lastBarPointerIsTouch = ref(false);
 const drawerSelectedBandKey = ref<string>('all');
+
+const activeInlineBar = computed<HistogramBar | null>(
+  () => tappedInlineBar.value || hoveredInlineBar.value
+);
+
+const isTouchOrMobileBarMode = (): boolean => {
+  if (lastBarPointerIsTouch.value) return true;
+  if (typeof window === 'undefined') return false;
+  return Boolean(window.matchMedia?.('(pointer: coarse)').matches);
+};
+
+const handleInlineBarPointerDown = (e: PointerEvent) => {
+  lastBarPointerIsTouch.value = e.pointerType !== 'mouse';
+};
+
+const handleInlineBarEnter = (bar: HistogramBar) => {
+  if (lastBarPointerIsTouch.value) return;
+  hoveredInlineBar.value = bar;
+};
+
+const handleInlineBarLeave = () => {
+  if (lastBarPointerIsTouch.value) return;
+  hoveredInlineBar.value = null;
+};
+
+const handleInlineBarClick = (bar: HistogramBar) => {
+  if (isTouchOrMobileBarMode()) {
+    if (tappedInlineBar.value && tappedInlineBar.value.playerName === bar.playerName) {
+      tappedInlineBar.value = null;
+      hoveredInlineBar.value = null;
+      selectPlayer(bar.playerName);
+    } else {
+      tappedInlineBar.value = bar;
+      hoveredInlineBar.value = bar;
+    }
+    return;
+  }
+  selectPlayer(bar.playerName);
+};
 
 const toggleDrawerBand = (bandKey: string) => {
   drawerSelectedBandKey.value = drawerSelectedBandKey.value === bandKey ? 'all' : bandKey;
@@ -540,11 +585,13 @@ const toggleInspectMetric = (
     inspectedMetricKey.value = null;
     inspectedMetricMeta.value = null;
     hoveredInlineBar.value = null;
+    tappedInlineBar.value = null;
     return;
   }
   inspectedMetricKey.value = key;
   inspectedMetricMeta.value = { label, higherIsBetter, unit, value: val };
   hoveredInlineBar.value = null;
+  tappedInlineBar.value = null;
 };
 
 const inspectedDistribution = computed<DistributionData | null>(() => {
@@ -2163,7 +2210,7 @@ onMounted(() => {
                   총 {{ playerTabMinGames }}회 이상 기준
                 </span>
               </div>
-              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null; hoveredInlineBar = null; tappedInlineBar = null">닫기 ✕</button>
             </div>
             <div class="sp-inline-hist-wrap">
               <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
@@ -2175,7 +2222,7 @@ onMounted(() => {
                   :width="bar.width"
                   :height="bar.height"
                   :fill="
-                    hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                    activeInlineBar && activeInlineBar.playerName === bar.playerName
                       ? '#f59e0b'
                       : bar.isCurrent
                         ? '#3b82f6'
@@ -2216,9 +2263,10 @@ onMounted(() => {
                   :width="Math.max(bar.width, 2.5)"
                   height="46"
                   fill="transparent"
-                  @mouseenter="hoveredInlineBar = bar"
-                  @mouseleave="hoveredInlineBar = null"
-                  @click.stop="selectPlayer(bar.playerName)"
+                  @pointerdown="handleInlineBarPointerDown"
+                  @mouseenter="handleInlineBarEnter(bar)"
+                  @mouseleave="handleInlineBarLeave"
+                  @click.stop="handleInlineBarClick(bar)"
                 >
                   <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
                 </rect>
@@ -2227,9 +2275,16 @@ onMounted(() => {
             <div class="sp-inline-hist-footer">
               <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
               <span class="sp-inline-hover-mid">
-                <template v-if="hoveredInlineBar">
-                  <strong>{{ hoveredInlineBar.playerName }}</strong> ·
-                  {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                <template v-if="activeInlineBar">
+                  <button
+                    type="button"
+                    class="sp-inline-bar-go-btn"
+                    @click.stop="selectPlayer(activeInlineBar.playerName)"
+                  >
+                    <strong>{{ activeInlineBar.playerName }}</strong> ·
+                    {{ formatMetricVal(activeInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}
+                    ({{ tappedInlineBar ? '한 번 더 탭하여 이동 ↗' : '클릭하여 이동 ↗' }})
+                  </button>
                 </template>
                 <template v-else>
                   평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
@@ -2312,7 +2367,7 @@ onMounted(() => {
                   총 {{ playerTabMinGames }}회 이상 기준
                 </span>
               </div>
-              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null; hoveredInlineBar = null; tappedInlineBar = null">닫기 ✕</button>
             </div>
             <div class="sp-inline-hist-wrap">
               <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
@@ -2324,7 +2379,7 @@ onMounted(() => {
                   :width="bar.width"
                   :height="bar.height"
                   :fill="
-                    hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                    activeInlineBar && activeInlineBar.playerName === bar.playerName
                       ? '#f59e0b'
                       : bar.isCurrent
                         ? '#3b82f6'
@@ -2365,9 +2420,10 @@ onMounted(() => {
                   :width="Math.max(bar.width, 2.5)"
                   height="46"
                   fill="transparent"
-                  @mouseenter="hoveredInlineBar = bar"
-                  @mouseleave="hoveredInlineBar = null"
-                  @click.stop="selectPlayer(bar.playerName)"
+                  @pointerdown="handleInlineBarPointerDown"
+                  @mouseenter="handleInlineBarEnter(bar)"
+                  @mouseleave="handleInlineBarLeave"
+                  @click.stop="handleInlineBarClick(bar)"
                 >
                   <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
                 </rect>
@@ -2376,9 +2432,16 @@ onMounted(() => {
             <div class="sp-inline-hist-footer">
               <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
               <span class="sp-inline-hover-mid">
-                <template v-if="hoveredInlineBar">
-                  <strong>{{ hoveredInlineBar.playerName }}</strong> ·
-                  {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                <template v-if="activeInlineBar">
+                  <button
+                    type="button"
+                    class="sp-inline-bar-go-btn"
+                    @click.stop="selectPlayer(activeInlineBar.playerName)"
+                  >
+                    <strong>{{ activeInlineBar.playerName }}</strong> ·
+                    {{ formatMetricVal(activeInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}
+                    ({{ tappedInlineBar ? '한 번 더 탭하여 이동 ↗' : '클릭하여 이동 ↗' }})
+                  </button>
                 </template>
                 <template v-else>
                   평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
@@ -2461,7 +2524,7 @@ onMounted(() => {
                   총 {{ playerTabMinGames }}회 이상 기준
                 </span>
               </div>
-              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null; hoveredInlineBar = null; tappedInlineBar = null">닫기 ✕</button>
             </div>
             <div class="sp-inline-hist-wrap">
               <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
@@ -2473,7 +2536,7 @@ onMounted(() => {
                   :width="bar.width"
                   :height="bar.height"
                   :fill="
-                    hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                    activeInlineBar && activeInlineBar.playerName === bar.playerName
                       ? '#f59e0b'
                       : bar.isCurrent
                         ? '#3b82f6'
@@ -2514,9 +2577,10 @@ onMounted(() => {
                   :width="Math.max(bar.width, 2.5)"
                   height="46"
                   fill="transparent"
-                  @mouseenter="hoveredInlineBar = bar"
-                  @mouseleave="hoveredInlineBar = null"
-                  @click.stop="selectPlayer(bar.playerName)"
+                  @pointerdown="handleInlineBarPointerDown"
+                  @mouseenter="handleInlineBarEnter(bar)"
+                  @mouseleave="handleInlineBarLeave"
+                  @click.stop="handleInlineBarClick(bar)"
                 >
                   <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
                 </rect>
@@ -2525,9 +2589,16 @@ onMounted(() => {
             <div class="sp-inline-hist-footer">
               <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
               <span class="sp-inline-hover-mid">
-                <template v-if="hoveredInlineBar">
-                  <strong>{{ hoveredInlineBar.playerName }}</strong> ·
-                  {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                <template v-if="activeInlineBar">
+                  <button
+                    type="button"
+                    class="sp-inline-bar-go-btn"
+                    @click.stop="selectPlayer(activeInlineBar.playerName)"
+                  >
+                    <strong>{{ activeInlineBar.playerName }}</strong> ·
+                    {{ formatMetricVal(activeInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}
+                    ({{ tappedInlineBar ? '한 번 더 탭하여 이동 ↗' : '클릭하여 이동 ↗' }})
+                  </button>
                 </template>
                 <template v-else>
                   평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
@@ -4489,6 +4560,17 @@ onMounted(() => {
 .sp-inline-hover-mid {
   color: var(--sp-accent);
   font-weight: 600;
+}
+.sp-inline-bar-go-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.sp-inline-bar-go-btn:hover {
+  text-decoration: underline;
 }
 
 /* 스탯 타일 그리드 */
