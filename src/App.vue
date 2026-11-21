@@ -8,7 +8,7 @@ import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
 import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, hasPendingOAuthRedirectParams, startGoogleRedirectLogin, consumeGoogleRedirectCallback, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
-import { calculateMatchRatings, type PlayerRating } from "@/utils/ratingEngine"
+import { calculateMatchRatings, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
@@ -83,6 +83,15 @@ try {
   const rawRatings = localStorage.getItem("mahjong_ratings");
   if (rawRatings) {
     ratingsMap.value = JSON.parse(rawRatings);
+  }
+} catch (e) {}
+
+// 직전 저장된 대국의 레이팅 변동 스냅샷 (결과창 표시 및 이중 계산 방지용)
+const lastGameRatingDeltas = ref<Record<string, MatchDeltaResult> | null>(null);
+try {
+  const rawDeltas = localStorage.getItem("last_game_rating_deltas");
+  if (rawDeltas) {
+    lastGameRatingDeltas.value = JSON.parse(rawDeltas);
   }
 } catch (e) {}
 
@@ -1228,7 +1237,9 @@ const resetAll = () => {
   // 기록 여부 초기화
   isGameSaved.value = false;
   isGameSynced.value = false;
+  lastGameRatingDeltas.value = null;
   localStorage.removeItem("is_game_saved");
+  localStorage.removeItem("last_game_rating_deltas");
 }
 
 /**모달 창 켜기*/
@@ -1656,7 +1667,9 @@ const saveRound = () => {
   // 새 라운드 점수가 기록되기 시작하면 등록 완료 플래그를 완전히 해제하여 저장이 가능하도록 락 해제
   isGameSaved.value = false;
   isGameSynced.value = false;
+  lastGameRatingDeltas.value = null;
   localStorage.removeItem("is_game_saved");
+  localStorage.removeItem("last_game_rating_deltas");
   
   let chinIdx = players.findIndex(x => x['wind']==='東');
   let isChinWin = players[chinIdx].isWin;
@@ -2673,6 +2686,10 @@ const saveGameToSheet = async (silent: boolean = false) => {
       // ratingsMap에 병합 및 로컬 스토리지 보존
       Object.assign(ratingsMap.value, updatedRatings);
       localStorage.setItem("mahjong_ratings", JSON.stringify(ratingsMap.value));
+
+      // 결과창 레이팅 변화 스냅샷 보존 (저장 후 이중 계산 방지)
+      lastGameRatingDeltas.value = matchDeltas;
+      localStorage.setItem("last_game_rating_deltas", JSON.stringify(matchDeltas));
 
       // 플레이어 화면 뱃지 즉시 갱신
       players.forEach(p => {
@@ -3939,6 +3956,8 @@ const addBackupGameToCurrent = (game: any) => {
       :isGameSaved="isGameSaved"
       :isSyncingGame="isSyncingGame"
       :isGameSynced="isGameSynced"
+      :ratingsMap="ratingsMap"
+      :lastGameRatingDeltas="lastGameRatingDeltas"
       :googleMemberStats="googleMemberStats"
       :isSaving="isSaving"
       :syncProgress="syncProgress"

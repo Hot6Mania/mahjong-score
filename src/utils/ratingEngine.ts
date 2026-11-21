@@ -15,7 +15,8 @@ export const BETA = 60; // 마작의 운(패산/배패) 변동성 완충 계수
  * - 1500대: #E88640 (1500대 구간)
  * - 1400대: #E5B800 (1400대 구간)
  * - 1300대: #21A73C (1300대 구간)
- * - 1200대 이하: #98B324 (1200대 이하 구간)
+ * - 1200대: #98B324 (1200대 구간)
+ * - 1200 미만: #808080 (1200 미만 회색 구간)
  */
 export const RATING_COLORS = {
   choncheon: '#38BEDA',
@@ -23,17 +24,19 @@ export const RATING_COLORS = {
   jakho: '#E88640',
   jakgeol: '#E5B800',
   jaksa: '#21A73C',
-  chosim: '#98B324'
+  chosim: '#98B324',
+  below1200: '#808080'
 } as const;
 
 export function getRatingColor(rating: number | undefined | null): string {
-  if (!rating || isNaN(rating)) return '#64748b';
+  if (rating === undefined || rating === null || isNaN(rating)) return '#64748b';
   if (rating >= 1700) return RATING_COLORS.choncheon;
   if (rating >= 1600) return RATING_COLORS.jakseong;
   if (rating >= 1500) return RATING_COLORS.jakho;
   if (rating >= 1400) return RATING_COLORS.jakgeol;
   if (rating >= 1300) return RATING_COLORS.jaksa;
-  return RATING_COLORS.chosim;
+  if (rating >= 1200) return RATING_COLORS.chosim;
+  return RATING_COLORS.below1200;
 }
 
 export function hexToRgba(color: string, alpha: number): string {

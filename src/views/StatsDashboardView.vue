@@ -2523,8 +2523,8 @@ const codeforcesTierBandsPlugin = {
       { min: 1400, max: 1500, color: '#E5B800', alphaBoost: 0.02 }, // 1400대 (골드 고명도 보정)
       { min: 1300, max: 1400, color: '#21A73C' }, // 1300대
       { min: 1200, max: 1300, color: '#98B324' }, // 1200대
-      { min: 1100, max: 1200, color: '#7E941E' }, // 1100대
-      { min: 800,  max: 1100, color: '#687B16' }  // 1100 미만
+      { min: 1100, max: 1200, color: '#808080' }, // 1100대 (1200 미만 회색)
+      { min: 800,  max: 1100, color: '#6E6E6E' }  // 1100 미만 (회색)
     ];
 
     const dark = isDark.value;

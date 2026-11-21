@@ -5,6 +5,7 @@ import { ModalChooseMenu } from "@/components/modals/system";
 import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputManual, ModalBackupArchive } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
 import { compareSessionDesc } from "@/utils/googleSheets"
+import { calculateMatchRatings, getRatingColor, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { computed, ref, watch, onMounted, onUnmounted } from "vue"
 import { useI18n } from "vue-i18n"
 import { Line as LineChart } from "vue-chartjs"
@@ -54,6 +55,8 @@ interface Props {
   isGameSaved: boolean,
   isSyncingGame?: boolean,
   isGameSynced?: boolean,
+  ratingsMap?: Record<string, PlayerRating>,
+  lastGameRatingDeltas?: Record<string, MatchDeltaResult> | null,
   isSaving?: boolean,
   newlyAddedLocalMembers?: string[],
   syncProgress?: number,
@@ -190,8 +193,8 @@ const onSpreadsheetInput = (e: Event) => {
 /**data 정의*/
 const arr_wind = ['東', '南', '西', '北']
 const arr_seat = ['option.east', 'option.south', 'option.west', 'option.north',]
-const arr_resultsheet = ['resultSheet.wind', 'resultSheet.name', 'resultSheet.score', 'resultSheet.riichi', 'resultSheet.ron', 'resultSheet.tsumo', 'resultSheet.lose']
-const class_resultsheet = ['wind', 'name', 'score', 'riichi', 'ron', 'tsumo', 'lose']
+const arr_resultsheet = ['resultSheet.wind', 'resultSheet.name', 'resultSheet.score', 'resultSheet.rating', 'resultSheet.riichi', 'resultSheet.ron', 'resultSheet.tsumo', 'resultSheet.lose']
+const DEFAULT_PLACEHOLDER_NAMES = new Set(['▼', '▶', '▲', '◀'])
 
 /**순위표 정보 계산*/
 const scoreSheetInfo = computed(() => {
@@ -238,12 +241,69 @@ const scoreSheetInfo = computed(() => {
         cntLose++;
     }
     return {
+      rank,
       score: myScore,
       point: point.toFixed(1),
       cntRiichi,
       cntRon,
       cntTsumo,
       cntLose
+    };
+  });
+})
+
+/**대국 결과창 레이팅 변화 정보 계산 (저장 전: 실시간 예측 / 저장 후: 스냅샷 고정으로 이중 계산 방지)*/
+const resultRatingInfo = computed(() => {
+  const map = props.ratingsMap || {};
+  const isDefaultOnly = props.players.every(p => !p.name || DEFAULT_PLACEHOLDER_NAMES.has(p.name.trim()));
+  if (isDefaultOnly) {
+    return props.players.map(() => null);
+  }
+
+  if (props.isGameSaved) {
+    if (props.lastGameRatingDeltas) {
+      return props.players.map(p => {
+        const d = props.lastGameRatingDeltas?.[p.name];
+        if (!d) return null;
+        return {
+          oldOrdinal: d.oldOrdinal,
+          newOrdinal: d.newOrdinal,
+          delta: d.delta
+        };
+      });
+    }
+    return props.players.map(p => {
+      const saved = map[p.name];
+      if (!saved || saved.games <= 0) return null;
+      const delta = saved.recentDelta ?? 0;
+      return {
+        oldOrdinal: saved.ordinal - delta,
+        newOrdinal: saved.ordinal,
+        delta
+      };
+    });
+  }
+
+  const matchPlayers = props.players.map((p, idx) => ({
+    name: p.name,
+    rank: scoreSheetInfo.value[idx].rank,
+    score: scoreSheetInfo.value[idx].score,
+    uma: parseFloat(scoreSheetInfo.value[idx].point)
+  }));
+
+  const { matchDeltas } = calculateMatchRatings(matchPlayers, map);
+
+  return props.players.map(p => {
+    const trimmed = (p.name || '').trim();
+    if (!trimmed || (DEFAULT_PLACEHOLDER_NAMES.has(trimmed) && !map[p.name])) {
+      return null;
+    }
+    const d = matchDeltas[p.name];
+    if (!d) return null;
+    return {
+      oldOrdinal: d.oldOrdinal,
+      newOrdinal: d.newOrdinal,
+      delta: d.delta
     };
   });
 })
@@ -576,146 +636,98 @@ const getSignColor = (sign: number, x: boolean) => {
     />
   </div>
   <!-- 게임 결과창(표) -->
-  <div v-else-if="modalInfo.type==='result_sheet'" class="modal_content" @click.stop>
-    <div style="display: flex; flex-direction: column; align-items: stretch; gap: 10px;">
-      <div class="container_resultsheet" @click.stop="emit('show-modal', 'result_chart')">
-        <div v-for="(_, i) in class_resultsheet" 
-          :key="i"
-          :class="class_resultsheet[i]"
-          style="font-weight: bold;"
-        >
-          {{ t(arr_resultsheet[i]) }}
-        </div>
-        <div style="grid-area: wind_contents;">
-          <div v-for="(_, i) in arr_wind" :key="i">{{ arr_wind[i] }}</div>
-        </div>
-        <div style="grid-area: name_contents;">
-          <div v-for="(_, i) in players" :key="i">{{ players[i].name.length > 5 ? players[i].name.substring(0, 4) : players[i].name }}<span v-if="players[i].name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></div>
-        </div>
-        <div style="grid-area: score_contents;">
-          <div v-for="(_, i) in scoreSheetInfo" :key="i">
-            {{ scoreSheetInfo[i].score }}(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span>)
-          </div>
-        </div>
-        <div style="grid-area: riichi_contents;">
-          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntRiichi }}</div>
-        </div>
-        <div style="grid-area: ron_contents;">
-          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntRon }}</div>
-        </div>
-        <div style="grid-area: tsumo_contents;">
-          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntTsumo }}</div>
-        </div>
-        <div style="grid-area: lose_contents;">
-          <div v-for="(_, i) in scoreSheetInfo" :key="i">{{ scoreSheetInfo[i].cntLose }}</div>
-        </div>
+  <div v-else-if="modalInfo.type==='result_sheet'" class="modal_content result_sheet_modal" @click.stop>
+    <div class="result_sheet_wrapper">
+      <div class="result_sheet_table_wrap" @click.stop="emit('show-modal', 'result_chart')">
+        <table class="resultsheet_table">
+          <thead>
+            <tr>
+              <th v-for="(labelKey, i) in arr_resultsheet" :key="i">
+                {{ t(labelKey) }}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(player, i) in players" :key="i">
+              <td class="rs-wind" :class="{ 'rs-east': arr_wind[i] === '東' }">
+                {{ arr_wind[i] }}
+              </td>
+              <td class="rs-name">
+                {{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" class="rs-ellipsis">…</span>
+              </td>
+              <td class="rs-score">
+                <div class="rs-score-wrap">
+                  <span class="rs-score-val">{{ scoreSheetInfo[i].score }}</span>
+                  <span class="rs-score-uma">(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span>)</span>
+                </div>
+              </td>
+              <td class="rs-rating">
+                <div v-if="resultRatingInfo[i]" class="rs-rating-wrap">
+                  <span class="rs-rating-nums">
+                    <span class="rs-rating-before" :style="{ color: getRatingColor(resultRatingInfo[i]!.oldOrdinal) }">{{ resultRatingInfo[i]!.oldOrdinal }}</span>
+                    <span class="rs-rating-arrow">→</span>
+                    <span class="rs-rating-after" :style="{ color: getRatingColor(resultRatingInfo[i]!.newOrdinal) }">{{ resultRatingInfo[i]!.newOrdinal }}</span>
+                  </span>
+                  <span class="rs-rating-delta" :style="getSignColor(resultRatingInfo[i]!.delta, false)">({{ resultRatingInfo[i]!.delta > 0 ? '+' : '' }}{{ resultRatingInfo[i]!.delta }})</span>
+                </div>
+                <span v-else class="rs-rating-empty">-</span>
+              </td>
+              <td class="rs-stat">{{ scoreSheetInfo[i].cntRiichi }}</td>
+              <td class="rs-stat">{{ scoreSheetInfo[i].cntRon }}</td>
+              <td class="rs-stat">{{ scoreSheetInfo[i].cntTsumo }}</td>
+              <td class="rs-stat">{{ scoreSheetInfo[i].cntLose }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
+
       <!-- 구글 연동 모드일 때: 기록 + 동기화 (주), 결과 기록 (보조), 새 게임 시작 -->
-      <template v-if="googleInfo.isLoggedIn && googleInfo.syncMode === 'google'">
+      <div
+        v-if="googleInfo.isLoggedIn && googleInfo.syncMode === 'google'"
+        class="result_sheet_actions is-google"
+      >
         <button 
           @click.stop="(isSyncingGame || isGameSynced) ? null : emit('save-and-sync-game')" 
           :disabled="isSyncingGame || isGameSynced"
+          class="rs-btn rs-btn-sync"
           :class="isGameSynced ? 'saved-button' : 'sync-primary-btn'"
-          :style="{
-            margin: '0 5px',
-            padding: '10px 8px',
-            fontSize: '15px',
-            fontWeight: 'bold',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: (isSyncingGame || isGameSynced) ? 'default' : 'pointer',
-            transition: 'opacity 0.2s, background-color 0.2s',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }"
         >
           {{ isSyncingGame ? '동기화 중...' : (isGameSynced ? '동기화 완료' : '기록 + 동기화') }}
         </button>
         <button 
           @click.stop="(isGameSaved || isSyncingGame) ? null : emit('save-game-to-sheet')" 
           :disabled="isGameSaved || isSyncingGame"
+          class="rs-btn rs-btn-record"
           :class="isGameSaved ? 'saved-button' : 'record-btn'"
-          :style="{
-            margin: '0 5px',
-            padding: '8px',
-            fontSize: '14px',
-            fontWeight: 'bold',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: (isGameSaved || isSyncingGame) ? 'default' : 'pointer',
-            transition: 'opacity 0.2s, background-color 0.2s',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }"
         >
           {{ isGameSaved ? '기록 완료' : '결과 기록' }}
         </button>
         <button 
           @click.stop="isSyncingGame ? null : emit('start-new-game', true)"
           :disabled="isSyncingGame"
-          class="btn-new-game-modal"
-          :style="{
-            margin: '0 5px',
-            padding: '9px 8px',
-            fontSize: '15px',
-            fontWeight: 'bold',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: isSyncingGame ? 'default' : 'pointer',
-            transition: 'opacity 0.2s',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }"
+          class="rs-btn rs-btn-new btn-new-game-modal"
         >
           새 게임 시작
         </button>
-      </template>
+      </div>
 
       <!-- 로컬 모드일 때: 결과 기록, 새 게임 시작 -->
-      <template v-else>
+      <div v-else class="result_sheet_actions is-local">
         <button 
           @click.stop="isGameSaved ? null : emit('save-game-to-sheet')" 
           :disabled="isGameSaved"
+          class="rs-btn rs-btn-record"
           :class="isGameSaved ? 'saved-button' : 'record-btn'"
-          :style="{
-            margin: '0 5px',
-            padding: '8px',
-            fontSize: '16px',
-            fontWeight: 'bold',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: isGameSaved ? 'default' : 'pointer',
-            transition: 'opacity 0.2s, background-color 0.2s',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }"
         >
           {{ isGameSaved ? '기록 완료' : '결과 기록' }}
         </button>
         <button 
           @click.stop="emit('start-new-game', true)"
-          class="btn-new-game-modal"
-          :style="{
-            margin: '0 5px',
-            padding: '9px 8px',
-            fontSize: '16px',
-            fontWeight: 'bold',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            transition: 'opacity 0.2s',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }"
+          class="rs-btn rs-btn-new btn-new-game-modal"
         >
           새 게임 시작
         </button>
-      </template>
+      </div>
     </div>
   </div>
   <!-- 게임 결과창(차트) -->
@@ -1087,7 +1099,6 @@ const getSignColor = (sign: number, x: boolean) => {
   top: 0;
   width: 100%;
   height: 100%;
-  height: 100dvh;
   overflow: auto;
   background-color: var(--modal-overlay);
   transition: background-color 0.3s ease;
@@ -1104,10 +1115,10 @@ const getSignColor = (sign: number, x: boolean) => {
   transform: translate(-50%, -50%);
   width: auto;
   height: auto;
-  max-width: 95vw;
-  max-width: 95dvw;
-  max-height: 90%;
-  max-height: 90dvh;
+  max-width: 96vw;
+  max-width: 96dvw;
+  max-height: 94%;
+  max-height: 94dvh;
   overflow-y: auto;
   padding: 5px;
   box-sizing: border-box;
@@ -1175,23 +1186,125 @@ const getSignColor = (sign: number, x: boolean) => {
   scrollbar-color: #888888 var(--bg-stripe-dark);
 }
 
-/* 게임 결과창(표)*/
-.container_resultsheet{
-  display: grid;
-  grid-template-rows: repeat(2, auto);
-  grid-template-columns: 60px minmax(100px, max-content) minmax(150px, max-content) repeat(4, 60px);
-  grid-template-areas:
-  'wind name score riichi ron tsumo lose'
-  'wind_contents name_contents score_contents riichi_contents ron_contents tsumo_contents lose_contents';
-  text-align: center;
-  font-size: 20px;
-  margin: 5px;
+/* 게임 결과창(표) */
+.result_sheet_modal {
+  padding: 10px 12px;
+  border-radius: 10px;
 }
-.container_resultsheet div{
+.result_sheet_wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  max-width: 100%;
+}
+.result_sheet_table_wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  cursor: pointer;
+}
+.resultsheet_table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: center;
+  font-size: 16px;
+  white-space: nowrap;
+}
+.resultsheet_table th {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 7px 8px;
+  background-color: var(--bg-card);
+  color: var(--text-dimmed);
   border-top: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
+  transition: border-color 0.3s ease, background-color 0.3s ease;
+}
+.resultsheet_table td {
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
   transition: border-color 0.3s ease;
+}
+.rs-wind {
+  font-weight: 600;
+}
+.rs-east {
+  color: var(--color-east);
+  font-weight: 700;
+}
+.rs-name {
+  font-weight: 600;
+}
+.rs-ellipsis {
+  vertical-align: bottom;
+  line-height: 0.8;
+  display: inline-block;
+  transform: translateY(0.1em);
+}
+.rs-score-wrap,
+.rs-rating-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   white-space: nowrap;
+}
+.rs-score-val {
+  font-weight: 600;
+}
+.rs-score-uma {
+  font-size: 0.92em;
+}
+.rs-rating-nums {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.rs-rating-before {
+  font-weight: 600;
+  opacity: 0.82;
+}
+.rs-rating-arrow {
+  font-size: 0.85em;
+  color: var(--text-dimmed);
+}
+.rs-rating-after {
+  font-weight: 800;
+}
+.rs-rating-delta {
+  font-weight: 700;
+  font-size: 0.9em;
+  color: var(--text-dimmed);
+}
+.rs-rating-empty {
+  color: var(--text-dimmed);
+}
+.result_sheet_actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.result_sheet_actions.is-google .rs-btn-sync {
+  grid-column: 1 / -1;
+}
+.rs-btn {
+  padding: 10px 10px;
+  font-size: 15px;
+  font-weight: bold;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: opacity 0.2s, background-color 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+.rs-btn:disabled {
+  cursor: default;
 }
 
 /* 게임 결과창(차트)*/
@@ -1516,10 +1629,6 @@ const getSignColor = (sign: number, x: boolean) => {
 
 @media (max-width: 600px) {
   .modal_content {
-    max-width: 96vw;
-    max-width: 96dvw;
-    max-height: 94vh;
-    max-height: 94dvh;
     padding: 8px 6px;
     white-space: normal;
   }
@@ -1540,15 +1649,112 @@ const getSignColor = (sign: number, x: boolean) => {
     font-size: 15px;
     max-height: 50vh;
   }
-  .container_resultsheet {
-    font-size: 14px;
-    max-width: 92vw;
-    overflow-x: auto;
-  }
   .container_resultchart {
     width: 100% !important;
-    max-width: 92vw !important;
+    max-width: 100% !important;
     height: 200px !important;
+  }
+}
+
+/* 세로모드(.background가 -90deg 회전)일 때 모달 최대 크기를 회전된 뷰포트에 맞춤 */
+@media (orientation: portrait) {
+  .modal_content {
+    max-width: 96vh;
+    max-width: 96dvh;
+    max-height: 94vw;
+    max-height: 94dvw;
+  }
+  .container_option {
+    max-height: 55vw;
+  }
+}
+
+/* 모바일 / iPhone SE 대응 결과창 콤팩트 레이아웃 */
+@media (max-width: 768px), (max-height: 500px) {
+  .result_sheet_modal {
+    padding: 7px 8px;
+  }
+  .result_sheet_wrapper {
+    gap: 7px;
+  }
+  .resultsheet_table {
+    font-size: 12.5px;
+  }
+  .resultsheet_table th {
+    padding: 4px 4px;
+    font-size: 11px;
+  }
+  .resultsheet_table td {
+    padding: 5px 4px;
+  }
+  .rs-score-wrap,
+  .rs-rating-wrap {
+    gap: 2px;
+  }
+  .rs-rating-nums {
+    gap: 1px;
+  }
+  .rs-score-uma,
+  .rs-rating-delta {
+    font-size: 11px;
+  }
+  .rs-btn {
+    padding: 8px 6px;
+    font-size: 13px;
+  }
+}
+
+/* 세로 공간이 좁은 화면(iPhone SE 가로/세로 회전 포함)에서는 버튼을 1줄로 배치 */
+@media (max-height: 480px), (orientation: portrait) and (max-width: 480px) {
+  .result_sheet_actions.is-google {
+    grid-template-columns: 1.35fr 1fr 1fr;
+    gap: 6px;
+  }
+  .result_sheet_actions.is-google .rs-btn-sync {
+    grid-column: auto;
+  }
+  .result_sheet_actions.is-local {
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .rs-btn {
+    padding: 7px 6px;
+    font-size: 12.5px;
+  }
+}
+
+/* 초협소 화면(iPhone SE 1세대 / 사파리 툴바 활성 세로모드 등) 2줄 스택 최적화 */
+@media (max-width: 520px) and (orientation: landscape), (max-height: 580px) and (orientation: portrait) {
+  .result_sheet_modal {
+    padding: 6px 5px;
+  }
+  .result_sheet_wrapper {
+    gap: 6px;
+  }
+  .resultsheet_table {
+    font-size: 11px;
+  }
+  .resultsheet_table th {
+    padding: 4px 2px;
+    font-size: 10px;
+    letter-spacing: -0.3px;
+  }
+  .resultsheet_table td {
+    padding: 4px 2px;
+  }
+  .rs-score-wrap,
+  .rs-rating-wrap {
+    flex-direction: column;
+    gap: 0;
+    line-height: 1.15;
+  }
+  .rs-score-uma,
+  .rs-rating-delta {
+    font-size: 9.5px;
+  }
+  .rs-btn {
+    padding: 6px 4px;
+    font-size: 11.5px;
   }
 }
 </style>
