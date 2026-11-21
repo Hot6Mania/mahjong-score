@@ -7686,7 +7686,7 @@ const openGamePopupFromLightbox = async (
             pointer-events="none"
           />
 
-          <!-- 레이팅 구간별 평균치 컬러 점선 -->
+          <!-- 레이팅 구간별 평균치 컬러 실선 -->
           <line
             v-for="band in activeDist.ratingBandAverages"
             :key="'rband-line-' + band.key"
@@ -7698,7 +7698,6 @@ const openGamePopupFromLightbox = async (
             :stroke="band.color"
             :stroke-width="activeDistBandFilter === band.key ? 2.1 : 1.3"
             :stroke-opacity="activeDistBandFilter === band.key ? 1 : 0.85"
-            stroke-dasharray="2.5,2"
             pointer-events="none"
           />
 
@@ -7734,7 +7733,7 @@ const openGamePopupFromLightbox = async (
         <span>최대 {{ formatDistValue(activeDist.max) }}</span>
       </div>
 
-      <!-- 레이팅 구간별 평균치 점선 범례/선택 칩 -->
+      <!-- 레이팅 구간별 평균치 실선 범례/선택 칩 -->
       <div v-if="activeDist.ratingBandAverages && activeDist.ratingBandAverages.length > 0" class="dist-rband-list">
         <button
           type="button"
@@ -14506,7 +14505,7 @@ html.dark .dist-rband-chip.active {
   display: inline-block;
   width: 8px;
   height: 0;
-  border-top: 2px dashed currentColor;
+  border-top: 2px solid currentColor;
 }
 .dist-rb-val {
   color: #475569;

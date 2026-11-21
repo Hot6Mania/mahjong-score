@@ -1398,7 +1398,7 @@ watch(
 );
 
 const getDealInTierBadge = (score: number, isOyaWin: boolean): { text: string; cls: string } => {
-  if (score >= 32000) return { text: '역만급', cls: 'tier-yakuman' };
+  if (score >= 32000) return { text: '역만', cls: 'tier-yakuman' };
   if (score >= 24000) return { text: '삼배만+', cls: 'tier-sanbaiman' };
   if (score >= 16000) return { text: '배만+', cls: 'tier-baiman' };
   if (score >= 12000) return { text: isOyaWin ? '오야만관/하네만' : '하네만+', cls: 'tier-haneman' };
@@ -2077,7 +2077,7 @@ onMounted(() => {
                       <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
                       <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
                       <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <!-- 레이팅 구간별 평균치 점선 -->
+                      <!-- 레이팅 구간별 평균치 실선 -->
                       <line
                         v-for="band in inspectedDistribution.ratingBandAverages"
                         :key="'dr-rband-' + band.key"
@@ -2089,7 +2089,6 @@ onMounted(() => {
                         :stroke="band.color"
                         :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
                         :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
-                        stroke-dasharray="2.5,2"
                         pointer-events="none"
                       />
                       <rect
@@ -2122,9 +2121,9 @@ onMounted(() => {
                     </span>
                     <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
                   </div>
-                  <!-- 레이팅 구간별 평균치 점선 선택 칩 -->
+                  <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
                   <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
-                    <span class="sp-rband-lbl">구간별 평균 점선:</span>
+                    <span class="sp-rband-lbl">구간별 평균 실선:</span>
                     <button
                       type="button"
                       class="sp-rband-chip"
@@ -2227,7 +2226,7 @@ onMounted(() => {
                       <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
                       <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
                       <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <!-- 레이팅 구간별 평균치 점선 -->
+                      <!-- 레이팅 구간별 평균치 실선 -->
                       <line
                         v-for="band in inspectedDistribution.ratingBandAverages"
                         :key="'dr-rband-' + band.key"
@@ -2239,7 +2238,6 @@ onMounted(() => {
                         :stroke="band.color"
                         :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
                         :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
-                        stroke-dasharray="2.5,2"
                         pointer-events="none"
                       />
                       <rect
@@ -2272,9 +2270,9 @@ onMounted(() => {
                     </span>
                     <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
                   </div>
-                  <!-- 레이팅 구간별 평균치 점선 선택 칩 -->
+                  <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
                   <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
-                    <span class="sp-rband-lbl">구간별 평균 점선:</span>
+                    <span class="sp-rband-lbl">구간별 평균 실선:</span>
                     <button
                       type="button"
                       class="sp-rband-chip"
@@ -2377,7 +2375,7 @@ onMounted(() => {
                       <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
                       <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
                       <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <!-- 레이팅 구간별 평균치 점선 -->
+                      <!-- 레이팅 구간별 평균치 실선 -->
                       <line
                         v-for="band in inspectedDistribution.ratingBandAverages"
                         :key="'dr-rband-' + band.key"
@@ -2389,7 +2387,6 @@ onMounted(() => {
                         :stroke="band.color"
                         :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
                         :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
-                        stroke-dasharray="2.5,2"
                         pointer-events="none"
                       />
                       <rect
@@ -2422,9 +2419,9 @@ onMounted(() => {
                     </span>
                     <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
                   </div>
-                  <!-- 레이팅 구간별 평균치 점선 선택 칩 -->
+                  <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
                   <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
-                    <span class="sp-rband-lbl">구간별 평균 점선:</span>
+                    <span class="sp-rband-lbl">구간별 평균 실선:</span>
                     <button
                       type="button"
                       class="sp-rband-chip"
@@ -2513,7 +2510,7 @@ onMounted(() => {
                   <option :value="12000">12,000점+ (하네만/오야만관)</option>
                   <option :value="16000">16,000점+ (배만)</option>
                   <option :value="24000">24,000점+ (삼배만)</option>
-                  <option :value="32000">32,000점+ (역만급)</option>
+                  <option :value="32000">32,000점+ (역만)</option>
                 </select>
               </div>
             </div>
@@ -3215,7 +3212,7 @@ onMounted(() => {
                   <th>일자</th>
                   <th>국</th>
                   <th>방총자 (쏘인 사람)</th>
-                  <th>→</th>
+                  <th>←</th>
                   <th>화료자 (론 화료)</th>
                   <th>방총 타점</th>
                   <th>비고</th>
@@ -3231,7 +3228,7 @@ onMounted(() => {
                       {{ d.loserName }}
                     </button>
                   </td>
-                  <td class="muted">→</td>
+                  <td class="muted">←</td>
                   <td class="nowrap">
                     <button type="button" class="table-player-link" @click="selectPlayer(d.winnerName)">
                       {{ d.winnerName }}
@@ -4385,7 +4382,7 @@ onMounted(() => {
   display: inline-block;
   width: 10px;
   height: 0;
-  border-top: 2px dashed currentColor;
+  border-top: 2px solid currentColor;
 }
 .sp-stable-pill {
   font-size: 12px;
