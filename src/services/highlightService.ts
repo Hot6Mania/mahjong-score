@@ -934,6 +934,8 @@ export async function createHighlight(params: {
   record?: HighlightRecord;
   records?: HighlightRecord[];
   storage?: HighlightStorageInfo;
+  kmlSynced?: boolean;
+  kmlSyncError?: string;
   pinInvalidated?: boolean;
   error?: string;
 }> {
@@ -1017,6 +1019,8 @@ export async function createHighlight(params: {
         record: data.record,
         records: data.records || [],
         storage: data.storage,
+        kmlSynced: Boolean(data.kmlSynced || data.record?.kmlYakumanId !== undefined && data.record?.kmlYakumanId !== null),
+        kmlSyncError: data.kmlSyncError,
       };
     }
     if (res.status === 403) {
@@ -1035,6 +1039,56 @@ export async function createHighlight(params: {
     return {
       success: false,
       error: e.message || '서버 통신 중 오류가 발생했습니다.',
+    };
+  }
+}
+
+/**
+ * 갤러리에 등록되어 있으나 KML에 미전송된 역만 기록들을 KML 서버로 일괄 보충 전송합니다.
+ */
+export async function syncMissingYakumansToKml(): Promise<{
+  success: boolean;
+  uploadedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  records?: HighlightRecord[];
+  errors?: string[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`${getWorkerUrl()}/api/kml/sync-yakumans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const data = await res.json().catch(() => null);
+    if (res.ok && data?.success) {
+      if (Array.isArray(data.records)) {
+        cachedHighlights = data.records;
+      }
+      return {
+        success: true,
+        uploadedCount: Number(data.uploadedCount || 0),
+        skippedCount: Number(data.skippedCount || 0),
+        failedCount: Number(data.failedCount || 0),
+        records: data.records,
+        errors: data.errors,
+      };
+    }
+    return {
+      success: false,
+      uploadedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      error: data?.error || data?.details || 'KML 역만 동기화에 실패했습니다.',
+    };
+  } catch (e: any) {
+    return {
+      success: false,
+      uploadedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      error: e?.message || 'KML 역만 동기화 중 네트워크 오류가 발생했습니다.',
     };
   }
 }
@@ -1104,6 +1158,8 @@ export async function updateHighlightMemo(
   record?: HighlightRecord;
   records?: HighlightRecord[];
   storage?: HighlightStorageInfo;
+  kmlSynced?: boolean;
+  kmlSyncError?: string;
   pinInvalidated?: boolean;
   error?: string;
 }> {
@@ -1134,6 +1190,8 @@ export async function updateHighlightMemo(
         record: data.record,
         records: data.records || [],
         storage: data.storage,
+        kmlSynced: Boolean(data.kmlSynced || data.record?.kmlYakumanId !== undefined && data.record?.kmlYakumanId !== null),
+        kmlSyncError: data.kmlSyncError,
       };
     }
     if (res.status === 403) {
@@ -1178,6 +1236,8 @@ export async function updateHighlightRecord(params: {
   record?: HighlightRecord;
   records?: HighlightRecord[];
   storage?: HighlightStorageInfo;
+  kmlSynced?: boolean;
+  kmlSyncError?: string;
   pinInvalidated?: boolean;
   error?: string;
 }> {
@@ -1259,6 +1319,8 @@ export async function updateHighlightRecord(params: {
         record: data.record,
         records: data.records || [],
         storage: data.storage,
+        kmlSynced: Boolean(data.kmlSynced || data.record?.kmlYakumanId !== undefined && data.record?.kmlYakumanId !== null),
+        kmlSyncError: data.kmlSyncError,
       };
     }
     if (res.status === 403) {

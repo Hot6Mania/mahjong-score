@@ -441,6 +441,7 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <Teleport to="body">
   <div class="vs-modal-overlay" @click.self="emit('close')">
     <div class="vs-modal-card" :class="{ dark: isDark }">
       <!-- 헤더 -->
@@ -683,13 +684,14 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <style scoped>
 .vs-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2650;
+  z-index: 3200;
   background: rgba(15, 23, 42, 0.62);
   backdrop-filter: blur(4px);
   display: flex;

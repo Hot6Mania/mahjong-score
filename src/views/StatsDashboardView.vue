@@ -71,6 +71,7 @@ import {
   fetchHighlights,
   createHighlight,
   deleteHighlight,
+  syncMissingYakumansToKml,
   updateHighlightMemo,
   updateHighlightRecord,
   getHighlightImageUrl,
@@ -5313,7 +5314,17 @@ const submitHighlightUpload = async () => {
         highlightsList.value = await fetchHighlights(true);
       }
       closeHighlightUploadModal();
-      showToast('성공적으로 등록되었습니다!');
+      if (f.category === 'yakuman') {
+        if (res.kmlSynced) {
+          showToast('역만이 등록되었으며 KML에도 자동 전송되었습니다!');
+        } else if (res.kmlSyncError) {
+          showToast(`역만이 등록되었습니다. (KML 전송 재시도 필요: ${res.kmlSyncError})`);
+        } else {
+          showToast('역만이 성공적으로 등록되었습니다!');
+        }
+      } else {
+        showToast('성공적으로 등록되었습니다!');
+      }
     } else {
       if (res.pinInvalidated) {
         hasSavedValidPin.value = false;
@@ -5323,6 +5334,45 @@ const submitHighlightUpload = async () => {
     }
   } finally {
     isSubmittingHighlight.value = false;
+  }
+};
+
+// KML 미전송 역만 기록 수 및 일괄 보충 전송
+const isSyncingKmlYakumans = ref(false);
+const unsyncedKmlYakumansCount = computed(() =>
+  highlightsList.value.filter(
+    (r) =>
+      r.category === 'yakuman' &&
+      Boolean(r.winnerName) &&
+      Array.isArray(r.yakumanTypes) &&
+      r.yakumanTypes.length > 0 &&
+      (r.kmlYakumanId === undefined || r.kmlYakumanId === null)
+  ).length
+);
+
+const handleSyncMissingYakumansToKml = async () => {
+  if (isSyncingKmlYakumans.value) return;
+  isSyncingKmlYakumans.value = true;
+  try {
+    const res = await syncMissingYakumansToKml();
+    if (res.success) {
+      if (res.records) {
+        highlightsList.value = res.records;
+      } else {
+        highlightsList.value = await fetchHighlights(true);
+      }
+      if (res.uploadedCount > 0) {
+        showToast(`KML에 미전송 역만 ${res.uploadedCount}건이 전송되었습니다!`);
+      } else if (res.failedCount > 0) {
+        showToast(`KML 전송 실패 (${res.failedCount}건): ${(res.errors || []).join(', ')}`);
+      } else {
+        showToast('모든 역만 기록이 이미 KML에 동기화되어 있습니다.');
+      }
+    } else {
+      showToast(res.error || 'KML 역만 동기화에 실패했습니다.');
+    }
+  } finally {
+    isSyncingKmlYakumans.value = false;
   }
 };
 
@@ -7654,20 +7704,7 @@ const openGamePopupFromLightbox = async (
           class="btn-action btn-kml-link"
           title="김케이 하우스 KML 공식 랭킹 페이지 열기"
         >
-          <svg class="kml-icon-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
-            <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
-            <path d="M4 22h16"></path>
-            <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path>
-            <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path>
-            <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>
-          </svg>
           <span>KML</span>
-          <svg class="kml-ext-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-            <polyline points="15 3 21 3 21 9"></polyline>
-            <line x1="10" y1="14" x2="21" y2="3"></line>
-          </svg>
         </a>
         <button class="btn-action" @click="copyDashboardLink" title="대시보드 링크 복사">
           <span>링크 복사</span>
@@ -9067,6 +9104,16 @@ const openGamePopupFromLightbox = async (
             </div>
 
             <div class="gh-actions">
+              <button
+                v-if="unsyncedKmlYakumansCount > 0"
+                type="button"
+                class="btn-hl-upload kml-yak-sync-btn"
+                :disabled="isSyncingKmlYakumans"
+                @click="handleSyncMissingYakumansToKml"
+                title="갤러리에 등록되었으나 KML에 아직 전송되지 않은 역만 기록을 KML로 보충 전송합니다"
+              >
+                <span>{{ isSyncingKmlYakumans ? 'KML 전송 중...' : `KML 역만 전송 (${unsyncedKmlYakumansCount}건)` }}</span>
+              </button>
               <button
                 type="button"
                 class="btn-hl-upload refresh-gallery-btn"
@@ -19581,6 +19628,30 @@ html.dark .gh-storage-fill-external {
   word-break: keep-all;
   padding: 8px 11px;
   font-size: 13px;
+}
+
+/* KML 미전송 역만 동기화 버튼 */
+.kml-yak-sync-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+  border: 1px solid rgba(245, 158, 11, 0.48);
+  font-weight: 700;
+}
+.kml-yak-sync-btn:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: #d97706;
+}
+.kml-yak-sync-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+html.dark .kml-yak-sync-btn {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+  border-color: rgba(251, 191, 36, 0.45);
 }
 
 /* 갤러리 새로고침 버튼 */

@@ -3690,10 +3690,11 @@ export function computeFrequentOpponentsStats(
 // 조건별 성적 DB 조회 엔진 (최근 N국 / 최근 N회차 / 기간 지정 / 회차 구간)
 // ==========================================
 
-export type StatsQueryMode = 'all' | 'recent_rounds' | 'recent_sessions' | 'date_range' | 'session_range';
+export type StatsQueryMode = 'all' | 'recent_games' | 'recent_rounds' | 'recent_sessions' | 'date_range' | 'session_range';
 
 export interface StatsQueryFilter {
   mode: StatsQueryMode;
+  recentGames?: number;
   recentRounds?: number;
   recentSessions?: number;
   startDate?: string; // 'YYYY-MM-DD'
@@ -4307,6 +4308,192 @@ export async function queryMemberStatsByFilter(
       hasLegacyOnlyGames: false,
       queryElapsedMs: elapsed,
       summaryLabel: `플레이어별 최근 ${limitN}국`,
+    };
+  }
+
+  // 1-2) 최근 N전 (플레이어별 최신 N대국 기준: 전체 우마/순위 + 국별 상세 스탯 동시 집계)
+  if (filter.mode === 'recent_games') {
+    const limitN = Math.max(1, Math.min(2000, Math.floor(Number(filter.recentGames) || 10)));
+    const [allRows, allGames] = await Promise.all([
+      fetchAllPublicRoundsRows(options.spreadsheetId, options.forceRefresh),
+      fetchPublicRatingHistoryRecords(options.spreadsheetId, options.forceRefresh),
+    ]);
+
+    // A) 역대 전체 대국 이력에서 플레이어별 최신 N전 추출
+    const gamesByPlayer = new Map<
+      string,
+      Array<{ sessionLabel: string; sessNum: number; rank: number; uma: number; score: number }>
+    >();
+    for (const g of allGames) {
+      const sessNum = parseSessionNumber(g.sessionLabel);
+      for (const p of g.players || []) {
+        const canon = resolveCanonicalName(p.name);
+        if (!canon) continue;
+        let list = gamesByPlayer.get(canon);
+        if (!list) {
+          list = [];
+          gamesByPlayer.set(canon, list);
+        }
+        list.push({
+          sessionLabel: g.sessionLabel,
+          sessNum,
+          rank: Number(p.rank || 0),
+          uma: Number(p.uma || 0),
+          score: Number(p.score || 0),
+        });
+      }
+    }
+
+    const gameAggMap: Record<
+      string,
+      {
+        totalUma: number;
+        totalGames: number;
+        rank1Count: number;
+        rank2Count: number;
+        rank3Count: number;
+        rank4Count: number;
+        rankSum: number;
+        totalScore: number;
+        nonLegacyCount: number;
+      }
+    > = {};
+    const matchedSessionSet = new Set<string>();
+    let hasLegacyOnlyGames = false;
+
+    for (const [canon, entries] of gamesByPlayer.entries()) {
+      const sliced = entries.slice(-limitN);
+      const acc = {
+        totalUma: 0,
+        totalGames: 0,
+        rank1Count: 0,
+        rank2Count: 0,
+        rank3Count: 0,
+        rank4Count: 0,
+        rankSum: 0,
+        totalScore: 0,
+        nonLegacyCount: 0,
+      };
+      for (const e of sliced) {
+        acc.totalGames++;
+        acc.totalUma += e.uma;
+        acc.rankSum += e.rank;
+        acc.totalScore += e.score;
+        if (e.rank === 1) acc.rank1Count++;
+        else if (e.rank === 2) acc.rank2Count++;
+        else if (e.rank === 3) acc.rank3Count++;
+        else if (e.rank === 4) acc.rank4Count++;
+        if (e.sessionLabel) matchedSessionSet.add(e.sessionLabel);
+        if (e.sessNum > 0 && e.sessNum < 9) {
+          hasLegacyOnlyGames = true;
+        } else {
+          acc.nonLegacyCount++;
+        }
+      }
+      gameAggMap[canon] = acc;
+    }
+
+    // B) 국별 상세 기록에서 플레이어별 최신 대국(gameId 단위) 행 추출
+    const rowGamesByPlayer = new Map<
+      string,
+      Map<string, { sessNum: number; gameNum: number; firstIdx: number; rows: any[] }>
+    >();
+    for (let i = 0; i < allRows.length; i++) {
+      const r = allRows[i];
+      if (!r?.c) continue;
+      const canon = resolveCanonicalName(getCellStr(r.c[5]).trim());
+      const gId = getCellStr(r.c[1]).trim();
+      if (!canon || !gId) continue;
+      let pMap = rowGamesByPlayer.get(canon);
+      if (!pMap) {
+        pMap = new Map();
+        rowGamesByPlayer.set(canon, pMap);
+      }
+      let gEntry = pMap.get(gId);
+      if (!gEntry) {
+        gEntry = {
+          sessNum: parseSessionNumber(getCellStr(r.c[15])),
+          gameNum: Number(gId) || 0,
+          firstIdx: i,
+          rows: [],
+        };
+        pMap.set(gId, gEntry);
+      }
+      gEntry.rows.push(r);
+    }
+
+    const selectedRoundRows: any[] = [];
+    for (const [canon, pMap] of rowGamesByPlayer.entries()) {
+      const gAgg = gameAggMap[canon];
+      const takeDetGames = gAgg ? Math.min(limitN, gAgg.nonLegacyCount) : limitN;
+      if (takeDetGames <= 0) continue;
+      const orderedGames = Array.from(pMap.values()).sort((a, b) => {
+        if (a.sessNum !== b.sessNum) return a.sessNum - b.sessNum;
+        if (a.gameNum !== b.gameNum) return a.gameNum - b.gameNum;
+        return a.firstIdx - b.firstIdx;
+      });
+      const slicedGames = orderedGames.slice(-takeDetGames);
+      for (const ge of slicedGames) {
+        for (const r of ge.rows) {
+          selectedRoundRows.push(r);
+        }
+      }
+    }
+
+    const rawDetailedMap = aggregateRoundsRowsToMemberStats(selectedRoundRows);
+    const normalizedDetailedMap: Record<string, MemberStatItem> = {};
+    for (const [rawKey, item] of Object.entries(rawDetailedMap)) {
+      const canon = resolveCanonicalName(rawKey);
+      if (!normalizedDetailedMap[canon] || item.totalRounds > normalizedDetailedMap[canon].totalRounds) {
+        normalizedDetailedMap[canon] = { ...item, name: canon };
+      }
+    }
+
+    const allNames = new Set<string>([...Object.keys(gameAggMap), ...Object.keys(normalizedDetailedMap)]);
+    const members: MemberStatItem[] = [];
+    for (const name of allNames) {
+      const gAgg = gameAggMap[name];
+      const det = normalizedDetailedMap[name];
+      let merged: MemberStatItem;
+      if (gAgg) {
+        const overallBase = createZeroDetailedStatItem(name, gAgg);
+        if (det) {
+          merged = {
+            ...det,
+            totalUma: overallBase.totalUma,
+            avgUma: overallBase.avgUma,
+            avgRank: overallBase.avgRank,
+            totalGames: overallBase.totalGames,
+            rank1Count: overallBase.rank1Count,
+            rank2Count: overallBase.rank2Count,
+            rank3Count: overallBase.rank3Count,
+            rank4Count: overallBase.rank4Count,
+            top2Rate: overallBase.top2Rate,
+          };
+        } else {
+          merged = overallBase;
+        }
+      } else if (det) {
+        merged = det;
+      } else {
+        continue;
+      }
+
+      if (merged.totalGames >= minGames) {
+        members.push(attachRatingMetadata(merged, allStatsMap, normalizedAllStatsMap));
+      }
+    }
+
+    members.sort((a, b) => b.totalUma - a.totalUma);
+    const elapsed = Math.max(1, Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0));
+    return {
+      members,
+      matchedSessions: Array.from(matchedSessionSet).sort((a, b) => parseSessionNumber(b) - parseSessionNumber(a)),
+      totalMatchedGames: Math.round(members.reduce((s, m) => s + m.totalGames, 0) / 4),
+      totalMatchedRounds: selectedRoundRows.length,
+      hasLegacyOnlyGames,
+      queryElapsedMs: elapsed,
+      summaryLabel: `플레이어별 최근 ${limitN}전`,
     };
   }
 

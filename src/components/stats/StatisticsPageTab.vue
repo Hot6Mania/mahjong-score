@@ -12,6 +12,8 @@ import {
   type DistributionData,
   type HistogramBar,
   type SeatRankStatsResult,
+  type StatsQueryMode,
+  type StatsQueryResult,
 } from '@/services/publicStatsService';
 import { getRatingColor, normalizeRatingPlayerName } from '@/utils/ratingEngine';
 
@@ -140,7 +142,125 @@ const onSearchKeydown = (e: KeyboardEvent) => {
   }
 };
 
-const selectedPlayer = computed<MemberStatItem | null>(() => findMemberByName(selectedPlayerName.value));
+// ==========================================
+// 1-1. 개인별 기간 / 구간 스탯 필터 (전체 / 최근 N전 / 최근 N회차 / 일자 기간 / 회차 구간)
+// ==========================================
+type PlayerScopeMode = 'all' | 'recent_games' | 'recent_sessions' | 'date_range' | 'session_range';
+const playerScopeMode = ref<PlayerScopeMode>('all');
+const playerScopeRecentGames = ref<number>(10);
+const playerScopeRecentSessions = ref<number>(3);
+const playerScopeStartDate = ref<string>('');
+const playerScopeEndDate = ref<string>('');
+const playerScopeStartSession = ref<string>('');
+const playerScopeEndSession = ref<string>('');
+const playerScopeResult = ref<StatsQueryResult | null>(null);
+const isLoadingPlayerScope = ref(false);
+let playerScopeReqSeq = 0;
+
+const initPlayerScopeDefaults = () => {
+  const dates = availableIsoDates.value;
+  if (!playerScopeEndDate.value && dates.length > 0) {
+    playerScopeEndDate.value = dates[0];
+  }
+  if (!playerScopeStartDate.value && dates.length > 0) {
+    playerScopeStartDate.value = dates[Math.min(4, dates.length - 1)];
+  }
+  const sessions = sortedSessionsDesc.value;
+  if (!playerScopeEndSession.value && sessions.length > 0) {
+    playerScopeEndSession.value = sessions[0];
+  }
+  if (!playerScopeStartSession.value && sessions.length > 0) {
+    playerScopeStartSession.value = sessions[Math.min(4, sessions.length - 1)];
+  }
+};
+
+const runPlayerScopeQuery = async () => {
+  if (playerScopeMode.value === 'all') {
+    playerScopeResult.value = null;
+    isLoadingPlayerScope.value = false;
+    return;
+  }
+  initPlayerScopeDefaults();
+  const seq = ++playerScopeReqSeq;
+  isLoadingPlayerScope.value = true;
+  try {
+    const mode: StatsQueryMode = playerScopeMode.value;
+    const res = await queryMemberStatsByFilter(
+      {
+        mode,
+        recentGames: playerScopeRecentGames.value,
+        recentSessions: playerScopeRecentSessions.value,
+        startDate: playerScopeStartDate.value,
+        endDate: playerScopeEndDate.value,
+        startSession: playerScopeStartSession.value,
+        endSession: playerScopeEndSession.value,
+        minGames: 0,
+      },
+      {
+        allStats: props.allStats,
+        availableSessions: props.availableSessions,
+      }
+    );
+    if (seq === playerScopeReqSeq) {
+      playerScopeResult.value = res;
+      inspectedMetricKey.value = null;
+    }
+  } catch (e) {
+    console.warn('runPlayerScopeQuery failed:', e);
+  } finally {
+    if (seq === playerScopeReqSeq) {
+      isLoadingPlayerScope.value = false;
+    }
+  }
+};
+
+const setPlayerScopeMode = (mode: PlayerScopeMode) => {
+  playerScopeMode.value = mode;
+  initPlayerScopeDefaults();
+  runPlayerScopeQuery();
+};
+
+const setPlayerScopeDatePresetDays = (days: number) => {
+  const anchor = availableIsoDates.value[0] || new Date().toISOString().slice(0, 10);
+  const endD = new Date(anchor + 'T00:00:00');
+  const startD = new Date(endD.getTime() - days * 86400000);
+  playerScopeEndDate.value = anchor;
+  playerScopeStartDate.value = startD.toISOString().slice(0, 10);
+  playerScopeMode.value = 'date_range';
+  runPlayerScopeQuery();
+};
+
+const resetPlayerScope = () => {
+  playerScopeMode.value = 'all';
+  playerScopeResult.value = null;
+};
+
+const isPlayerScopeActive = computed(() => playerScopeMode.value !== 'all' && playerScopeResult.value !== null);
+
+const activePlayerScopeMembers = computed<MemberStatItem[]>(() => {
+  if (isPlayerScopeActive.value && playerScopeResult.value) {
+    return playerScopeResult.value.members;
+  }
+  return props.allStats || [];
+});
+
+const baseSelectedPlayer = computed<MemberStatItem | null>(() => findMemberByName(selectedPlayerName.value));
+
+const selectedPlayer = computed<MemberStatItem | null>(() => {
+  const base = baseSelectedPlayer.value;
+  if (!base) return null;
+  if (!isPlayerScopeActive.value || !playerScopeResult.value) return base;
+  const norm = normalizeRatingPlayerName(base.name);
+  const found = playerScopeResult.value.members.find(
+    (m) => m.name === base.name || normalizeRatingPlayerName(m.name) === norm
+  );
+  return found || null;
+});
+
+const isSelectedPlayerEmptyInScope = computed(
+  () => Boolean(baseSelectedPlayer.value) && isPlayerScopeActive.value && !selectedPlayer.value
+);
+
 const selectedDetail = computed<MemberStatItem | null>(() => {
   if (!selectedPlayer.value) return null;
   return selectedPlayer.value.detailedStats || selectedPlayer.value;
@@ -149,7 +269,12 @@ const hasSelectedDetail = computed(() => (selectedDetail.value?.totalRounds || 0
 
 const selectedOverallRank = computed(() => {
   if (!selectedPlayer.value) return 0;
-  return sortedAllMembers.value.findIndex((m) => m.name === selectedPlayer.value!.name) + 1;
+  const list = [...activePlayerScopeMembers.value].sort((a, b) => {
+    if (b.totalUma !== a.totalUma) return b.totalUma - a.totalUma;
+    return b.totalGames - a.totalGames;
+  });
+  const norm = normalizeRatingPlayerName(selectedPlayer.value.name);
+  return list.findIndex((m) => m.name === selectedPlayer.value!.name || normalizeRatingPlayerName(m.name) === norm) + 1;
 });
 
 const selectedRankDist = computed(() => {
@@ -206,10 +331,12 @@ const getMetricDistForSelected = (
   higherIsBetter: boolean,
   unit: string
 ): DistributionData | null => {
-  if (!selectedPlayer.value || props.allStats.length === 0) return null;
+  if (!selectedPlayer.value || activePlayerScopeMembers.value.length === 0) return null;
   const overallKeys: (keyof MemberStatItem)[] = ['totalGames', 'totalUma', 'avgUma', 'avgRank', 'top2Rate'];
   const isOverall = overallKeys.includes(key);
-  const targetList = isOverall ? props.allStats : props.allStats.map((m) => m.detailedStats || m);
+  const targetList = isOverall
+    ? activePlayerScopeMembers.value
+    : activePlayerScopeMembers.value.map((m) => m.detailedStats || m);
   const isUnrecorded = !isOverall && !hasSelectedDetail.value;
   return calculateMetricDistribution(
     targetList,
@@ -356,16 +483,64 @@ const otherStatCells = computed<PageStatCell[]>(() => {
   ]);
 });
 
+// 현재 선택된 개인 필터(전체/최근N전/최근N회차/일자기간/회차구간)에 해당하는 대국 기록 목록
+const scopedPlayerHistoryGames = computed<GameRatingHistoryRecord[]>(() => {
+  if (!baseSelectedPlayer.value || !props.ratingHistory.length) return [];
+  const normTarget = normalizeRatingPlayerName(baseSelectedPlayer.value.name);
+  const playerGames = props.ratingHistory.filter((g) =>
+    g.players.some((p) => normalizeRatingPlayerName(p.name) === normTarget)
+  );
+
+  if (playerScopeMode.value === 'all') return playerGames;
+
+  if (playerScopeMode.value === 'recent_games') {
+    const n = Math.max(1, Math.floor(Number(playerScopeRecentGames.value) || 10));
+    return playerGames.slice(-n);
+  }
+
+  if (playerScopeMode.value === 'recent_sessions') {
+    const n = Math.max(1, Math.floor(Number(playerScopeRecentSessions.value) || 3));
+    const pickedNums = new Set(
+      sortedSessionsDesc.value.slice(0, n).map((s) => parseSessionNumber(s)).filter((num) => num > 0)
+    );
+    return playerGames.filter((g) => pickedNums.has(parseSessionNumber(g.sessionLabel)));
+  }
+
+  if (playerScopeMode.value === 'session_range') {
+    const sNum = parseSessionNumber(playerScopeStartSession.value);
+    const eNum = parseSessionNumber(playerScopeEndSession.value);
+    const minN = sNum > 0 && eNum > 0 ? Math.min(sNum, eNum) : Math.max(sNum, eNum);
+    const maxN = sNum > 0 && eNum > 0 ? Math.max(sNum, eNum) : Math.max(sNum, eNum);
+    return playerGames.filter((g) => {
+      const num = parseSessionNumber(g.sessionLabel);
+      return num >= minN && num <= maxN;
+    });
+  }
+
+  if (playerScopeMode.value === 'date_range') {
+    const sd = (playerScopeStartDate.value || '').trim();
+    const ed = (playerScopeEndDate.value || '').trim();
+    return playerGames.filter((g) => {
+      const iso = extractIsoDateFromRecord(g.sessionLabel, g.date);
+      if (!iso) return false;
+      if (sd && iso < sd) return false;
+      if (ed && iso > ed) return false;
+      return true;
+    });
+  }
+
+  return playerGames;
+});
+
 const selectedPlayerOpponents = computed(() => {
-  if (!selectedPlayer.value || !props.ratingHistory.length) return [];
-  return computeFrequentOpponentsStats(selectedPlayer.value.name, props.ratingHistory).opponents.slice(0, 8);
+  if (!selectedPlayer.value || scopedPlayerHistoryGames.value.length === 0) return [];
+  return computeFrequentOpponentsStats(selectedPlayer.value.name, scopedPlayerHistoryGames.value).opponents.slice(0, 8);
 });
 
 const selectedPlayerGames = computed(() => {
-  if (!selectedPlayer.value || !props.ratingHistory.length) return [];
+  if (!selectedPlayer.value || scopedPlayerHistoryGames.value.length === 0) return [];
   const normTarget = normalizeRatingPlayerName(selectedPlayer.value.name);
-  const matched = props.ratingHistory
-    .filter((g) => g.players.some((p) => normalizeRatingPlayerName(p.name) === normTarget))
+  const matched = scopedPlayerHistoryGames.value
     .map((g) => {
       const me = g.players.find((p) => normalizeRatingPlayerName(p.name) === normTarget)!;
       return {
@@ -384,13 +559,7 @@ const selectedPlayerGames = computed(() => {
   return showAllPlayerGames.value ? matched : matched.slice(0, 15);
 });
 
-const selectedPlayerTotalGamesCount = computed(() => {
-  if (!selectedPlayer.value || !props.ratingHistory.length) return 0;
-  const normTarget = normalizeRatingPlayerName(selectedPlayer.value.name);
-  return props.ratingHistory.filter((g) =>
-    g.players.some((p) => normalizeRatingPlayerName(p.name) === normTarget)
-  ).length;
-});
+const selectedPlayerTotalGamesCount = computed(() => scopedPlayerHistoryGames.value.length);
 
 // ==========================================
 // 2. 레이팅 구간별 데이터 (작혼 통계 '단위별 데이터' 형식)
@@ -885,7 +1054,174 @@ onMounted(() => {
       </div>
 
       <!-- 선택된 플레이어 풀페이지 스탯 뷰 -->
-      <div v-if="selectedPlayer && selectedDetail" class="sp-player-page">
+      <div v-if="baseSelectedPlayer" class="sp-player-page">
+        <!-- 개인별 기간 / 구간 필터 카드 -->
+        <div class="sp-player-scope-card">
+          <div class="sp-scope-top-row">
+            <div class="sp-scope-title-wrap">
+              <span class="sp-scope-badge">개인 스탯 조회 조건</span>
+              <span v-if="isPlayerScopeActive && playerScopeResult" class="sp-scope-active-label">
+                {{ playerScopeResult.summaryLabel }}
+                <template v-if="selectedPlayer">
+                  ({{ selectedPlayer.totalGames }}전<template v-if="selectedDetail && selectedDetail.totalRounds > 0"> · {{ selectedDetail.totalRounds.toLocaleString() }}국</template>)
+                </template>
+              </span>
+            </div>
+            <button
+              v-if="playerScopeMode !== 'all'"
+              type="button"
+              class="sp-mini-toggle"
+              @click="resetPlayerScope"
+            >
+              전체 기간으로 초기화
+            </button>
+          </div>
+
+          <div class="sp-scope-modes">
+            <button
+              type="button"
+              class="sp-chip-filter"
+              :class="{ active: playerScopeMode === 'all' }"
+              @click="setPlayerScopeMode('all')"
+            >
+              전체 기간
+            </button>
+            <button
+              type="button"
+              class="sp-chip-filter"
+              :class="{ active: playerScopeMode === 'recent_games' }"
+              @click="setPlayerScopeMode('recent_games')"
+            >
+              최근 N전
+            </button>
+            <button
+              type="button"
+              class="sp-chip-filter"
+              :class="{ active: playerScopeMode === 'recent_sessions' }"
+              @click="setPlayerScopeMode('recent_sessions')"
+            >
+              최근 N회차
+            </button>
+            <button
+              type="button"
+              class="sp-chip-filter"
+              :class="{ active: playerScopeMode === 'date_range' }"
+              @click="setPlayerScopeMode('date_range')"
+            >
+              일자 기간
+            </button>
+            <button
+              type="button"
+              class="sp-chip-filter"
+              :class="{ active: playerScopeMode === 'session_range' }"
+              @click="setPlayerScopeMode('session_range')"
+            >
+              회차 구간
+            </button>
+          </div>
+
+          <!-- 최근 N전 컨트롤 -->
+          <div v-if="playerScopeMode === 'recent_games'" class="sp-scope-controls">
+            <div class="sp-scope-presets">
+              <button
+                v-for="n in [5, 10, 20, 30, 50]"
+                :key="'rg-' + n"
+                type="button"
+                class="sp-quick-chip"
+                :class="{ active: playerScopeRecentGames === n }"
+                @click="playerScopeRecentGames = n; runPlayerScopeQuery()"
+              >
+                최근 {{ n }}전
+              </button>
+            </div>
+            <div class="sp-scope-inline-input">
+              <span>직접 입력:</span>
+              <input
+                v-model.number="playerScopeRecentGames"
+                type="number"
+                min="1"
+                max="500"
+                class="sp-num-input"
+                @keyup.enter="runPlayerScopeQuery"
+              />
+              <span>전</span>
+              <button type="button" class="sp-action-btn primary" @click="runPlayerScopeQuery">조회</button>
+            </div>
+          </div>
+
+          <!-- 최근 N회차 컨트롤 -->
+          <div v-else-if="playerScopeMode === 'recent_sessions'" class="sp-scope-controls">
+            <div class="sp-scope-presets">
+              <button
+                v-for="n in [1, 3, 5, 10]"
+                :key="'rs-' + n"
+                type="button"
+                class="sp-quick-chip"
+                :class="{ active: playerScopeRecentSessions === n }"
+                @click="playerScopeRecentSessions = n; runPlayerScopeQuery()"
+              >
+                최근 {{ n }}회차
+              </button>
+            </div>
+            <div class="sp-scope-inline-input">
+              <span>직접 입력:</span>
+              <input
+                v-model.number="playerScopeRecentSessions"
+                type="number"
+                min="1"
+                :max="Math.max(1, sortedSessionsDesc.length)"
+                class="sp-num-input"
+                @keyup.enter="runPlayerScopeQuery"
+              />
+              <span>회차</span>
+              <button type="button" class="sp-action-btn primary" @click="runPlayerScopeQuery">조회</button>
+            </div>
+          </div>
+
+          <!-- 일자 기간 컨트롤 -->
+          <div v-else-if="playerScopeMode === 'date_range'" class="sp-scope-controls">
+            <div class="sp-scope-presets">
+              <button type="button" class="sp-quick-chip" @click="setPlayerScopeDatePresetDays(30)">최근 30일</button>
+              <button type="button" class="sp-quick-chip" @click="setPlayerScopeDatePresetDays(90)">최근 90일</button>
+              <button type="button" class="sp-quick-chip" @click="setPlayerScopeDatePresetDays(180)">최근 180일</button>
+            </div>
+            <div class="sp-scope-inline-input">
+              <input v-model="playerScopeStartDate" type="date" class="sp-date-input" />
+              <span>~</span>
+              <input v-model="playerScopeEndDate" type="date" class="sp-date-input" />
+              <button type="button" class="sp-action-btn primary" @click="runPlayerScopeQuery">조회</button>
+            </div>
+          </div>
+
+          <!-- 회차 구간 컨트롤 -->
+          <div v-else-if="playerScopeMode === 'session_range'" class="sp-scope-controls">
+            <div class="sp-scope-inline-input">
+              <select v-model="playerScopeStartSession" class="sp-select-box">
+                <option v-for="s in [...sortedSessionsDesc].reverse()" :key="'ps-' + s" :value="s">{{ s }}</option>
+              </select>
+              <span>~</span>
+              <select v-model="playerScopeEndSession" class="sp-select-box">
+                <option v-for="s in sortedSessionsDesc" :key="'pe-' + s" :value="s">{{ s }}</option>
+              </select>
+              <button type="button" class="sp-action-btn primary" @click="runPlayerScopeQuery">조회</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="isLoadingPlayerScope" class="sp-loading-box">
+          {{ baseSelectedPlayer.name }}님의 조건별 스탯을 집계하는 중입니다...
+        </div>
+
+        <div v-else-if="isSelectedPlayerEmptyInScope" class="sp-card sp-empty-scope-box">
+          <p>
+            <strong>{{ baseSelectedPlayer.name }}</strong>님은 선택한 조회 조건(<strong>{{ playerScopeResult?.summaryLabel }}</strong>)에 출전한 대국 기록이 없습니다.
+          </p>
+          <button type="button" class="sp-action-btn primary" @click="resetPlayerScope">
+            전체 기간 스탯 보기
+          </button>
+        </div>
+
+        <template v-else-if="selectedPlayer && selectedDetail">
         <!-- 프로필 요약 배너 -->
         <div class="sp-profile-banner">
           <div class="sp-profile-left">
@@ -1215,6 +1551,7 @@ onMounted(() => {
             </table>
           </div>
         </div>
+        </template>
       </div>
 
       <!-- 플레이어 미선택 시: 홈 미리보기 (작혼 통계 홈 스타일 대국 기록 바로가기) -->
@@ -2012,6 +2349,104 @@ onMounted(() => {
 .sp-chip-r {
   font-size: 10.5px;
   font-weight: 800;
+}
+
+/* 개인별 기간/구간 스탯 필터 카드 */
+.sp-player-scope-card {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.stat-page-root.dark .sp-player-scope-card {
+  background: #162032;
+  border-color: rgba(148, 163, 184, 0.24);
+}
+.sp-scope-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sp-scope-title-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sp-scope-badge {
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #0284c7;
+  background: rgba(2, 132, 199, 0.12);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.stat-page-root.dark .sp-scope-badge {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.16);
+}
+.sp-scope-active-label {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.sp-scope-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sp-scope-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.3);
+}
+.sp-scope-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.sp-scope-inline-input {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.sp-num-input {
+  width: 68px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  font-family: inherit;
+}
+.stat-page-root.dark .sp-num-input {
+  background: #0f172a;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+.sp-empty-scope-box {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 16px;
+}
+.sp-empty-scope-box p {
+  margin: 0;
+  font-size: 13.5px;
 }
 
 /* 개인 풀페이지 프로필 배너 */
