@@ -4528,3 +4528,167 @@ export async function queryMemberStatsByFilter(
   };
 }
 
+export interface SeatRankStatItem {
+  seat: '東' | '南' | '西' | '北';
+  seatLabel: string;
+  totalGames: number;
+  r1: number;
+  r2: number;
+  r3: number;
+  r4: number;
+  p1: number;
+  p2: number;
+  p3: number;
+  p4: number;
+  top2Rate: number;
+  tobiRate: number;
+  avgRank: number;
+  avgUma: number;
+}
+
+export interface SeatRankStatsResult {
+  seats: SeatRankStatItem[];
+  totalGames: number;
+}
+
+/**
+ * 시작 자리(東·南·西·北)별 1~4위율, 평균 순위, 평균 우마, 토비율을 국별 기록(제9회~)에서 집계합니다.
+ */
+export async function fetchSeatRankStats(options?: {
+  recentSessions?: number;
+  availableSessions?: string[];
+  spreadsheetId?: string;
+  forceRefresh?: boolean;
+}): Promise<SeatRankStatsResult> {
+  const allRows = await fetchAllPublicRoundsRows(options?.spreadsheetId, options?.forceRefresh);
+  const seatOrder: Array<'東' | '南' | '西' | '北'> = ['東', '南', '西', '北'];
+  const seatLabels: Record<'東' | '南' | '西' | '北', string> = {
+    '東': '東 (동가 · 기가)',
+    '南': '南 (남가)',
+    '西': '西 (서가)',
+    '北': '北 (북가)',
+  };
+
+  let targetSessionNums: Set<number> | null = null;
+  if (options?.recentSessions && options.recentSessions > 0 && options.availableSessions?.length) {
+    const sorted = [...options.availableSessions].sort(
+      (a, b) => parseSessionNumber(b) - parseSessionNumber(a)
+    );
+    const picked = sorted.slice(0, options.recentSessions);
+    targetSessionNums = new Set(picked.map((s) => parseSessionNumber(s)).filter((n) => n > 0));
+  }
+
+  // gameId별 첫 국(최소 roundSeq) 4인 순서 및 토비 여부 수집
+  const gameMap = new Map<
+    string,
+    {
+      minRound: number;
+      firstRoundEntries: { name: string; isEast: boolean; rank: number; uma: number }[];
+      tobiPlayers: Set<string>;
+    }
+  >();
+
+  for (let i = 0; i < allRows.length; i++) {
+    const r = allRows[i];
+    if (!r?.c) continue;
+    const gameId = getCellStr(r.c[1]).trim();
+    const player = getCellStr(r.c[5]).trim();
+    if (!gameId || !player) continue;
+
+    if (targetSessionNums) {
+      const sessNum = parseSessionNumber(getCellStr(r.c[15]));
+      if (!targetSessionNums.has(sessNum)) continue;
+    }
+
+    const roundSeq = getCellNum(r.c[3], 999);
+    const isEast = r.c[6]?.v === true || r.c[6]?.v === 'TRUE' || r.c[6]?.v === 1;
+    const finalScore = getCellNum(r.c[8], 0);
+    const rank = getCellNum(r.c[13], 0);
+    const uma = getCellNum(r.c[14], 0);
+
+    let g = gameMap.get(gameId);
+    if (!g) {
+      g = { minRound: roundSeq, firstRoundEntries: [], tobiPlayers: new Set<string>() };
+      gameMap.set(gameId, g);
+    }
+
+    if (finalScore < 0) {
+      g.tobiPlayers.add(player);
+    }
+
+    if (roundSeq < g.minRound) {
+      g.minRound = roundSeq;
+      g.firstRoundEntries = [{ name: player, isEast, rank, uma }];
+    } else if (roundSeq === g.minRound) {
+      if (!g.firstRoundEntries.some((e) => e.name === player)) {
+        g.firstRoundEntries.push({ name: player, isEast, rank, uma });
+      }
+    }
+  }
+
+  const acc: Record<
+    '東' | '南' | '西' | '北',
+    { total: number; r1: number; r2: number; r3: number; r4: number; rankSum: number; umaSum: number; tobi: number }
+  > = {
+    '東': { total: 0, r1: 0, r2: 0, r3: 0, r4: 0, rankSum: 0, umaSum: 0, tobi: 0 },
+    '南': { total: 0, r1: 0, r2: 0, r3: 0, r4: 0, rankSum: 0, umaSum: 0, tobi: 0 },
+    '西': { total: 0, r1: 0, r2: 0, r3: 0, r4: 0, rankSum: 0, umaSum: 0, tobi: 0 },
+    '北': { total: 0, r1: 0, r2: 0, r3: 0, r4: 0, rankSum: 0, umaSum: 0, tobi: 0 },
+  };
+
+  let validGames = 0;
+
+  for (const g of gameMap.values()) {
+    if (g.firstRoundEntries.length !== 4) continue;
+    const ordered = [...g.firstRoundEntries];
+    const eastIdx = ordered.findIndex((e) => e.isEast);
+    const rotated =
+      eastIdx > 0 ? [...ordered.slice(eastIdx), ...ordered.slice(0, eastIdx)] : ordered;
+
+    const allValidRanks = rotated.every((e) => e.rank >= 1 && e.rank <= 4);
+    if (!allValidRanks) continue;
+
+    validGames++;
+    for (let idx = 0; idx < 4; idx++) {
+      const seat = seatOrder[idx];
+      const entry = rotated[idx];
+      const bucket = acc[seat];
+      bucket.total++;
+      bucket.rankSum += entry.rank;
+      bucket.umaSum += entry.uma;
+      if (entry.rank === 1) bucket.r1++;
+      else if (entry.rank === 2) bucket.r2++;
+      else if (entry.rank === 3) bucket.r3++;
+      else if (entry.rank === 4) bucket.r4++;
+      if (g.tobiPlayers.has(entry.name)) bucket.tobi++;
+    }
+  }
+
+  const seats: SeatRankStatItem[] = seatOrder.map((seat) => {
+    const b = acc[seat];
+    const tot = b.total;
+    return {
+      seat,
+      seatLabel: seatLabels[seat],
+      totalGames: tot,
+      r1: b.r1,
+      r2: b.r2,
+      r3: b.r3,
+      r4: b.r4,
+      p1: tot > 0 ? parseFloat(((b.r1 / tot) * 100).toFixed(2)) : 0,
+      p2: tot > 0 ? parseFloat(((b.r2 / tot) * 100).toFixed(2)) : 0,
+      p3: tot > 0 ? parseFloat(((b.r3 / tot) * 100).toFixed(2)) : 0,
+      p4: tot > 0 ? parseFloat(((b.r4 / tot) * 100).toFixed(2)) : 0,
+      top2Rate: tot > 0 ? parseFloat((((b.r1 + b.r2) / tot) * 100).toFixed(2)) : 0,
+      tobiRate: tot > 0 ? parseFloat(((b.tobi / tot) * 100).toFixed(2)) : 0,
+      avgRank: tot > 0 ? parseFloat((b.rankSum / tot).toFixed(3)) : 0,
+      avgUma: tot > 0 ? parseFloat((b.umaSum / tot).toFixed(2)) : 0,
+    };
+  });
+
+  return {
+    seats,
+    totalGames: validGames,
+  };
+}
+

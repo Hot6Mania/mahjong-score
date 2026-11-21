@@ -5,6 +5,7 @@ import ScheduleTab from '@/components/schedule/ScheduleTab.vue';
 import RulesTab from '@/components/rules/RulesTab.vue';
 import FeedbackTab from '@/components/feedback/FeedbackTab.vue';
 import PlayerCompareModal from '@/components/stats/PlayerCompareModal.vue';
+import StatisticsPageTab from '@/components/stats/StatisticsPageTab.vue';
 import {
   Chart as ChartJS,
   Title,
@@ -119,8 +120,8 @@ const router = useRouter();
 const route = useRoute();
 
 // 탭 상태 타입 및 유효 탭 목록
-type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'gallery' | 'schedule' | 'rules' | 'feedback';
-const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'gallery', 'schedule', 'rules', 'feedback'];
+type DashboardTab = 'ranking' | 'statistics' | 'rating' | 'matrix' | 'sessions' | 'gallery' | 'schedule' | 'rules' | 'feedback';
+const VALID_TABS: DashboardTab[] = ['ranking', 'statistics', 'rating', 'matrix', 'sessions', 'gallery', 'schedule', 'rules', 'feedback'];
 
 // URL 쿼리(?photo=), 경로(/dashboard/gallery/:photoId) 및 해시에서 사진 ID 추출
 const parsePhotoIdFromLocation = (): string => {
@@ -480,6 +481,7 @@ watch(activeTab, () => {
 
 const DASHBOARD_TAB_TITLES: Record<DashboardTab, string> = {
   ranking: '종합 랭킹',
+  statistics: '통계 스탯',
   rating: '레이팅',
   matrix: '역대 전적',
   sessions: '회차 상세',
@@ -2138,6 +2140,15 @@ const openPlayerCompareModal = (playerAName = '', playerBName = '') => {
 const handleOpenPlayerFromCompare = (name: string) => {
   isCompareModalOpen.value = false;
   openPlayerByName(name, false, false, false);
+};
+
+// 통계 스탯 전용 페이지 (플레이어 검색 풀페이지 진입용)
+const statsPageInitialPlayer = ref('');
+const openPlayerInStatsPage = (name: string) => {
+  closePinnedDistTooltip();
+  closePlayerModal();
+  statsPageInitialPlayer.value = name;
+  switchTab('statistics');
 };
 
 const onHoverMetric = (
@@ -7714,6 +7725,13 @@ const openGamePopupFromLightbox = async (
         </button>
         <button 
           class="tab-btn" 
+          :class="{ active: activeTab === 'statistics' }" 
+          @click="switchTab('statistics')"
+        >
+          통계 스탯
+        </button>
+        <button 
+          class="tab-btn" 
           :class="{ active: activeTab === 'rating' }" 
           @click="switchTab('rating')"
         >
@@ -9291,6 +9309,19 @@ const openGamePopupFromLightbox = async (
       <section v-else-if="activeTab === 'feedback'" class="tab-feedback">
         <FeedbackTab />
       </section>
+
+      <!-- 통계 스탯 전용 페이지 탭 (플레이어 검색 풀페이지 + 구간별 데이터 + 자리별 순위 + 대국 기록 + 기록 플레이어 수) -->
+      <section v-else-if="activeTab === 'statistics'" class="tab-statistics">
+        <StatisticsPageTab
+          :all-stats="allStats"
+          :available-sessions="availableSessions"
+          :rating-history="allRatingHistoryRecords"
+          :initial-player-name="statsPageInitialPlayer"
+          :is-dark="isDark"
+          @open-compare="(a, b) => openPlayerCompareModal(a, b || '')"
+          @open-popup="(name) => openPlayerByName(name, false, false, false)"
+        />
+      </section>
     </main>
 
     <!-- ============================================== -->
@@ -9329,6 +9360,15 @@ const openGamePopupFromLightbox = async (
                 >
                   <span class="vs-pill-mark">VS</span>
                   <span>비교</span>
+                </button>
+                <button
+                  type="button"
+                  class="btn-action"
+                  @click="openPlayerInStatsPage(selectedPlayer.name)"
+                  title="통계 스탯 전체 페이지 형식으로 보기"
+                  style="padding: 5px 10px; font-size: 0.78rem;"
+                >
+                  <span>페이지로 보기</span>
                 </button>
                 <button class="btn-action" @click="copyDashboardLink" title="현재 플레이어 통계 링크 복사" style="padding: 5px 10px; font-size: 0.78rem;">
                   <span>링크 복사</span>
