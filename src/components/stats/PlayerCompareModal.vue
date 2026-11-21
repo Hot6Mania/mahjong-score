@@ -713,12 +713,11 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-.vs-modal-card.dark,
-:global(html.dark) .vs-modal-card {
-  background: #1e1e1e;
+.vs-modal-card.dark {
+  background: #141414;
   color: #f5f5f5;
-  border-color: #3a3a3a;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+  border-color: #333333;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.78);
 }
 
 .vs-modal-header {
@@ -729,10 +728,9 @@ onUnmounted(() => {
   border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
 }
-.vs-modal-card.dark .vs-modal-header,
-:global(html.dark) .vs-modal-card .vs-modal-header {
-  background: #252525;
-  border-bottom-color: #383838;
+.vs-modal-card.dark .vs-modal-header {
+  background: #1c1c1c;
+  border-bottom-color: #2f2f2f;
 }
 
 .vs-header-title-wrap {
@@ -848,11 +846,10 @@ onUnmounted(() => {
 .vs-select-col.side-b .vs-select-input:focus {
   border-color: #e11d48;
 }
-.vs-modal-card.dark .vs-select-input,
-:global(html.dark) .vs-modal-card .vs-select-input {
-  background: #141414;
+.vs-modal-card.dark .vs-select-input {
+  background: #0a0a0a;
   color: #f5f5f5;
-  border-color: #444444;
+  border-color: #3d3d3d;
 }
 
 .vs-swap-btn {
@@ -978,10 +975,9 @@ onUnmounted(() => {
 .vs-hero-card.side-b {
   border-top: 3px solid #e11d48;
 }
-.vs-modal-card.dark .vs-hero-card,
-:global(html.dark) .vs-modal-card .vs-hero-card {
-  background: #262626;
-  border-color: #3a3a3a;
+.vs-modal-card.dark .vs-hero-card {
+  background: #1c1c1c;
+  border-color: #333333;
 }
 .vs-modal-card.dark .vs-hero-card.side-a {
   border-top-color: #3b82f6;
@@ -1108,10 +1104,9 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 9px;
 }
-.vs-modal-card.dark .vs-h2h-card,
-:global(html.dark) .vs-modal-card .vs-h2h-card {
-  border-color: #3f3f46;
-  background: #242424;
+.vs-modal-card.dark .vs-h2h-card {
+  border-color: #333333;
+  background: #1b1b1b;
 }
 .vs-h2h-header {
   display: flex;
@@ -1265,11 +1260,10 @@ onUnmounted(() => {
   color: #334155;
   border-bottom: 1px solid #e2e8f0;
 }
-.vs-modal-card.dark .vs-section-title,
-:global(html.dark) .vs-modal-card .vs-section-title {
-  background: #262626;
+.vs-modal-card.dark .vs-section-title {
+  background: #1c1c1c;
   color: #f5f5f5;
-  border-bottom-color: #3a3a3a;
+  border-bottom-color: #333333;
 }
 
 .vs-rows-wrap {

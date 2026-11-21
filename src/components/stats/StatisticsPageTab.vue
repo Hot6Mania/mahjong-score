@@ -1550,72 +1550,6 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- 클릭한 지표의 인라인 분포 히스토그램 인스펙터 -->
-          <div v-if="inspectedDistribution && inspectedMetricMeta" class="sp-card sp-dist-inline-card">
-            <div class="sp-card-header">
-              <div class="sp-dist-title-group">
-                <h4>{{ inspectedMetricMeta.label }} 전체 분포</h4>
-                <span
-                  v-if="!inspectedDistribution.isUnrecorded"
-                  class="sp-pct-badge"
-                  :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
-                >
-                  상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
-                </span>
-              </div>
-              <button type="button" class="sp-mini-close" @click="inspectedMetricKey = null">닫기 ✕</button>
-            </div>
-            <div class="sp-inline-hist-wrap">
-              <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
-                <rect
-                  v-for="(bar, idx) in inspectedDistribution.bars"
-                  :key="'ib-' + idx"
-                  :x="bar.x"
-                  :y="bar.y"
-                  :width="bar.width"
-                  :height="bar.height"
-                  :fill="
-                    hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
-                      ? '#f59e0b'
-                      : bar.isCurrent
-                        ? '#3b82f6'
-                        : 'rgba(148,163,184,0.45)'
-                  "
-                  rx="1"
-                />
-                <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(148,163,184,0.65)" stroke-width="1.2" stroke-dasharray="3,2" />
-                <rect
-                  v-for="(bar, idx) in inspectedDistribution.bars"
-                  :key="'ihit-' + idx"
-                  class="sp-bar-hit"
-                  :x="bar.x"
-                  y="0"
-                  :width="Math.max(bar.width, 2.5)"
-                  height="46"
-                  fill="transparent"
-                  @mouseenter="hoveredInlineBar = bar"
-                  @mouseleave="hoveredInlineBar = null"
-                  @click="selectPlayer(bar.playerName)"
-                >
-                  <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
-                </rect>
-              </svg>
-            </div>
-            <div class="sp-inline-hist-footer">
-              <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-              <span class="sp-inline-hover-mid">
-                <template v-if="hoveredInlineBar">
-                  <strong>{{ hoveredInlineBar.playerName }}</strong> ·
-                  {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
-                </template>
-                <template v-else>
-                  평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
-                </template>
-              </span>
-              <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-            </div>
-          </div>
-
           <div class="sp-stat-notice" v-if="!hasSelectedDetail">
             ※ 제9회 이후 국별 세부 기록이 없는 플레이어(또는 구간)입니다. 종합 대국 기록(우마·순위·레이팅)만 집계됩니다.
           </div>
@@ -1624,25 +1558,107 @@ onMounted(() => {
           <div class="sp-stat-section-card">
             <div class="sp-card-header">
               <h4>기본 · 공격 / 수비 스탯</h4>
-              <span class="sp-card-sub">각 항목 클릭 시 분포 히스토그램 표시</span>
+              <span class="sp-card-sub">각 스탯 박스 클릭 시 바로 아래에 분포 히스토그램이 펼쳐집니다</span>
             </div>
             <div class="sp-metrics-grid">
-              <button
-                v-for="cell in basicStatCells"
-                :key="cell.key"
-                type="button"
-                class="sp-metric-tile"
-                :class="{ inspected: inspectedMetricKey === cell.key }"
-                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-              >
-                <div class="tile-top">
-                  <span class="tile-label">{{ cell.label }}</span>
-                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                    {{ cell.topPctText }}
-                  </span>
+              <template v-for="cell in basicStatCells" :key="cell.key">
+                <button
+                  type="button"
+                  class="sp-metric-tile"
+                  :class="{ inspected: inspectedMetricKey === cell.key }"
+                  @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+                >
+                  <div class="tile-top">
+                    <span class="tile-label">{{ cell.label }}</span>
+                    <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                      {{ cell.topPctText }}
+                    </span>
+                  </div>
+                  <div class="tile-bottom">
+                    <span class="tile-value">{{ cell.displayText }}</span>
+                    <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
+                  </div>
+                </button>
+                <div
+                  v-if="inspectedMetricKey === cell.key && inspectedDistribution && inspectedMetricMeta"
+                  class="sp-tile-hist-drawer"
+                >
+                  <div class="sp-drawer-header">
+                    <div class="sp-dist-title-group">
+                      <strong>{{ inspectedMetricMeta.label }} 분포</strong>
+                      <span
+                        v-if="!inspectedDistribution.isUnrecorded"
+                        class="sp-pct-badge"
+                        :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
+                      >
+                        상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
+                      </span>
+                      <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
+                        총 {{ playerTabMinGames }}회 이상 기준
+                      </span>
+                    </div>
+                    <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+                  </div>
+                  <div class="sp-inline-hist-wrap">
+                    <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
+                      <rect
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'b-ib-' + idx"
+                        :x="bar.x"
+                        :y="bar.y"
+                        :width="bar.width"
+                        :height="bar.height"
+                        :fill="
+                          hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                            ? '#f59e0b'
+                            : bar.isCurrent
+                              ? '#3b82f6'
+                              : 'rgba(160,160,160,0.45)'
+                        "
+                        rx="1"
+                      />
+                      <polygon
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'b-pin-' + idx"
+                        v-show="bar.isCurrent"
+                        :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
+                        fill="#3b82f6"
+                      />
+                      <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
+                      <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <rect
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'b-ihit-' + idx"
+                        class="sp-bar-hit"
+                        :x="bar.x"
+                        y="0"
+                        :width="Math.max(bar.width, 2.5)"
+                        height="46"
+                        fill="transparent"
+                        @mouseenter="hoveredInlineBar = bar"
+                        @mouseleave="hoveredInlineBar = null"
+                        @click.stop="selectPlayer(bar.playerName)"
+                      >
+                        <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
+                      </rect>
+                    </svg>
+                  </div>
+                  <div class="sp-inline-hist-footer">
+                    <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                    <span class="sp-inline-hover-mid">
+                      <template v-if="hoveredInlineBar">
+                        <strong>{{ hoveredInlineBar.playerName }}</strong> ·
+                        {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                      </template>
+                      <template v-else>
+                        평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
+                      </template>
+                    </span>
+                    <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                  </div>
                 </div>
-                <div class="tile-value">{{ cell.displayText }}</div>
-              </button>
+              </template>
             </div>
           </div>
 
@@ -1650,24 +1666,107 @@ onMounted(() => {
           <div class="sp-stat-section-card">
             <div class="sp-card-header">
               <h4>리치 스탯</h4>
+              <span class="sp-card-sub">클릭 시 박스 아래에 히스토그램 펼침</span>
             </div>
             <div class="sp-metrics-grid">
-              <button
-                v-for="cell in riichiStatCells"
-                :key="cell.key"
-                type="button"
-                class="sp-metric-tile"
-                :class="{ inspected: inspectedMetricKey === cell.key }"
-                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-              >
-                <div class="tile-top">
-                  <span class="tile-label">{{ cell.label }}</span>
-                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                    {{ cell.topPctText }}
-                  </span>
+              <template v-for="cell in riichiStatCells" :key="cell.key">
+                <button
+                  type="button"
+                  class="sp-metric-tile"
+                  :class="{ inspected: inspectedMetricKey === cell.key }"
+                  @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+                >
+                  <div class="tile-top">
+                    <span class="tile-label">{{ cell.label }}</span>
+                    <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                      {{ cell.topPctText }}
+                    </span>
+                  </div>
+                  <div class="tile-bottom">
+                    <span class="tile-value">{{ cell.displayText }}</span>
+                    <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
+                  </div>
+                </button>
+                <div
+                  v-if="inspectedMetricKey === cell.key && inspectedDistribution && inspectedMetricMeta"
+                  class="sp-tile-hist-drawer"
+                >
+                  <div class="sp-drawer-header">
+                    <div class="sp-dist-title-group">
+                      <strong>{{ inspectedMetricMeta.label }} 분포</strong>
+                      <span
+                        v-if="!inspectedDistribution.isUnrecorded"
+                        class="sp-pct-badge"
+                        :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
+                      >
+                        상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
+                      </span>
+                      <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
+                        총 {{ playerTabMinGames }}회 이상 기준
+                      </span>
+                    </div>
+                    <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+                  </div>
+                  <div class="sp-inline-hist-wrap">
+                    <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
+                      <rect
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'r-ib-' + idx"
+                        :x="bar.x"
+                        :y="bar.y"
+                        :width="bar.width"
+                        :height="bar.height"
+                        :fill="
+                          hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                            ? '#f59e0b'
+                            : bar.isCurrent
+                              ? '#3b82f6'
+                              : 'rgba(160,160,160,0.45)'
+                        "
+                        rx="1"
+                      />
+                      <polygon
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'r-pin-' + idx"
+                        v-show="bar.isCurrent"
+                        :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
+                        fill="#3b82f6"
+                      />
+                      <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
+                      <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <rect
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'r-ihit-' + idx"
+                        class="sp-bar-hit"
+                        :x="bar.x"
+                        y="0"
+                        :width="Math.max(bar.width, 2.5)"
+                        height="46"
+                        fill="transparent"
+                        @mouseenter="hoveredInlineBar = bar"
+                        @mouseleave="hoveredInlineBar = null"
+                        @click.stop="selectPlayer(bar.playerName)"
+                      >
+                        <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
+                      </rect>
+                    </svg>
+                  </div>
+                  <div class="sp-inline-hist-footer">
+                    <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                    <span class="sp-inline-hover-mid">
+                      <template v-if="hoveredInlineBar">
+                        <strong>{{ hoveredInlineBar.playerName }}</strong> ·
+                        {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                      </template>
+                      <template v-else>
+                        평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
+                      </template>
+                    </span>
+                    <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                  </div>
                 </div>
-                <div class="tile-value">{{ cell.displayText }}</div>
-              </button>
+              </template>
             </div>
           </div>
 
@@ -1675,24 +1774,107 @@ onMounted(() => {
           <div class="sp-stat-section-card">
             <div class="sp-card-header">
               <h4>기타 스탯</h4>
+              <span class="sp-card-sub">클릭 시 박스 아래에 히스토그램 펼침</span>
             </div>
             <div class="sp-metrics-grid">
-              <button
-                v-for="cell in otherStatCells"
-                :key="cell.key"
-                type="button"
-                class="sp-metric-tile"
-                :class="{ inspected: inspectedMetricKey === cell.key }"
-                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-              >
-                <div class="tile-top">
-                  <span class="tile-label">{{ cell.label }}</span>
-                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                    {{ cell.topPctText }}
-                  </span>
+              <template v-for="cell in otherStatCells" :key="cell.key">
+                <button
+                  type="button"
+                  class="sp-metric-tile"
+                  :class="{ inspected: inspectedMetricKey === cell.key }"
+                  @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+                >
+                  <div class="tile-top">
+                    <span class="tile-label">{{ cell.label }}</span>
+                    <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                      {{ cell.topPctText }}
+                    </span>
+                  </div>
+                  <div class="tile-bottom">
+                    <span class="tile-value">{{ cell.displayText }}</span>
+                    <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
+                  </div>
+                </button>
+                <div
+                  v-if="inspectedMetricKey === cell.key && inspectedDistribution && inspectedMetricMeta"
+                  class="sp-tile-hist-drawer"
+                >
+                  <div class="sp-drawer-header">
+                    <div class="sp-dist-title-group">
+                      <strong>{{ inspectedMetricMeta.label }} 분포</strong>
+                      <span
+                        v-if="!inspectedDistribution.isUnrecorded"
+                        class="sp-pct-badge"
+                        :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
+                      >
+                        상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
+                      </span>
+                      <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
+                        총 {{ playerTabMinGames }}회 이상 기준
+                      </span>
+                    </div>
+                    <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+                  </div>
+                  <div class="sp-inline-hist-wrap">
+                    <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
+                      <rect
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'o-ib-' + idx"
+                        :x="bar.x"
+                        :y="bar.y"
+                        :width="bar.width"
+                        :height="bar.height"
+                        :fill="
+                          hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                            ? '#f59e0b'
+                            : bar.isCurrent
+                              ? '#3b82f6'
+                              : 'rgba(160,160,160,0.45)'
+                        "
+                        rx="1"
+                      />
+                      <polygon
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'o-pin-' + idx"
+                        v-show="bar.isCurrent"
+                        :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
+                        fill="#3b82f6"
+                      />
+                      <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
+                      <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <rect
+                        v-for="(bar, idx) in inspectedDistribution.bars"
+                        :key="'o-ihit-' + idx"
+                        class="sp-bar-hit"
+                        :x="bar.x"
+                        y="0"
+                        :width="Math.max(bar.width, 2.5)"
+                        height="46"
+                        fill="transparent"
+                        @mouseenter="hoveredInlineBar = bar"
+                        @mouseleave="hoveredInlineBar = null"
+                        @click.stop="selectPlayer(bar.playerName)"
+                      >
+                        <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
+                      </rect>
+                    </svg>
+                  </div>
+                  <div class="sp-inline-hist-footer">
+                    <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                    <span class="sp-inline-hover-mid">
+                      <template v-if="hoveredInlineBar">
+                        <strong>{{ hoveredInlineBar.playerName }}</strong> ·
+                        {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                      </template>
+                      <template v-else>
+                        평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
+                      </template>
+                    </span>
+                    <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                  </div>
                 </div>
-                <div class="tile-value">{{ cell.displayText }}</div>
-              </button>
+              </template>
             </div>
           </div>
 
@@ -2482,6 +2664,7 @@ onMounted(() => {
 <style scoped>
 /* 라이트 / 다크 테마 CSS 변수 통합 정의 (props.isDark + html.dark 동시 지원) */
 .stat-page-root {
+  --sp-root-bg: transparent;
   --sp-card-bg: #ffffff;
   --sp-sub-bg: #f8fafc;
   --sp-nav-bg: #f1f5f9;
@@ -2498,9 +2681,9 @@ onMounted(() => {
   --sp-row-divider: rgba(226, 232, 240, 0.8);
   --sp-pos: #16a34a;
   --sp-neg: #dc2626;
-  --sp-banner-bg: linear-gradient(135deg, rgba(2, 132, 199, 0.08), rgba(37, 99, 235, 0.04));
-  --sp-banner-border: rgba(2, 132, 199, 0.28);
-  --sp-rating-pill-bg: rgba(255, 255, 255, 0.8);
+  --sp-banner-bg: #f8fafc;
+  --sp-banner-border: #cbd5e1;
+  --sp-rating-pill-bg: #ffffff;
   --sp-rank-pill-bg: #0f172a;
   --sp-rank-pill-text: #ffffff;
   --sp-chip-active-bg: #0f172a;
@@ -2510,34 +2693,90 @@ onMounted(() => {
   flex-direction: column;
   gap: 14px;
   color: var(--sp-text);
+  background: var(--sp-root-bg);
 }
 
-.stat-page-root.dark,
-:global(html.dark) .stat-page-root {
-  --sp-card-bg: #1e1e1e;
-  --sp-sub-bg: #262626;
-  --sp-nav-bg: #1a1a1a;
-  --sp-input-bg: #141414;
-  --sp-th-bg: #252525;
-  --sp-border: #363636;
-  --sp-border-strong: #4a4a4a;
+/* 다크모드: 보라/남색 기운 완전 제거, 순수 블랙 & 뉴트럴 다크 그레이 팔레트 */
+.stat-page-root.dark {
+  --sp-root-bg: #0b0b0b;
+  --sp-card-bg: #141414;
+  --sp-sub-bg: #1d1d1d;
+  --sp-nav-bg: #121212;
+  --sp-input-bg: #0a0a0a;
+  --sp-th-bg: #1c1c1c;
+  --sp-border: #2c2c2c;
+  --sp-border-strong: #404040;
   --sp-text: #f5f5f5;
   --sp-text-secondary: #e5e5e5;
-  --sp-text-muted: #b0b7c3;
+  --sp-text-muted: #a8a8a8;
   --sp-accent: #60a5fa;
-  --sp-hover-bg: rgba(96, 165, 250, 0.14);
-  --sp-summary-bg: #2a2a2a;
-  --sp-row-divider: #2e2e2e;
+  --sp-hover-bg: rgba(255, 255, 255, 0.08);
+  --sp-summary-bg: #1f1f1f;
+  --sp-row-divider: #262626;
   --sp-pos: #4ade80;
   --sp-neg: #f87171;
-  --sp-banner-bg: #222222;
-  --sp-banner-border: #3d3d3d;
-  --sp-rating-pill-bg: #141414;
-  --sp-rank-pill-bg: #3b82f6;
+  --sp-banner-bg: #151515;
+  --sp-banner-border: #333333;
+  --sp-rating-pill-bg: #0a0a0a;
+  --sp-rank-pill-bg: #2563eb;
   --sp-rank-pill-text: #ffffff;
-  --sp-chip-active-bg: #3b82f6;
+  --sp-chip-active-bg: #2563eb;
   --sp-chip-active-text: #ffffff;
   color-scheme: dark;
+  background-color: #0b0b0b !important;
+  padding: 10px;
+  border-radius: 12px;
+}
+.stat-page-root.dark .sp-card,
+.stat-page-root.dark .sp-search-card,
+.stat-page-root.dark .sp-stat-section-card,
+.stat-page-root.dark .sp-player-scope-card,
+.stat-page-root.dark .sp-summary-kpi-card {
+  background-color: #141414 !important;
+  border-color: #2c2c2c !important;
+  color: #f5f5f5 !important;
+  box-shadow: none !important;
+}
+.stat-page-root.dark .sp-subnav {
+  background-color: #121212 !important;
+  border-color: #2c2c2c !important;
+}
+.stat-page-root.dark .sp-profile-banner {
+  background: #151515 !important;
+  border-color: #333333 !important;
+}
+.stat-page-root.dark .sp-metric-tile,
+.stat-page-root.dark .sp-opp-card,
+.stat-page-root.dark .sp-log-subpanel,
+.stat-page-root.dark .sp-toggle-group,
+.stat-page-root.dark .sp-tile-hist-drawer {
+  background-color: #1b1b1b !important;
+  border-color: #323232 !important;
+  color: #f5f5f5 !important;
+}
+.stat-page-root.dark .sp-input-box,
+.stat-page-root.dark .sp-num-input,
+.stat-page-root.dark .sp-date-input,
+.stat-page-root.dark .sp-select-box,
+.stat-page-root.dark .sp-dropdown {
+  background-color: #0a0a0a !important;
+  border-color: #3d3d3d !important;
+  color: #f5f5f5 !important;
+}
+.stat-page-root.dark .sp-table,
+.stat-page-root.dark .sp-table td {
+  background-color: #141414 !important;
+  color: #f5f5f5 !important;
+}
+.stat-page-root.dark .sp-table th {
+  background-color: #1e1e1e !important;
+  color: #e5e5e5 !important;
+}
+.stat-page-root.dark .sp-table tbody tr.summary-row td {
+  background-color: #1f1f1f !important;
+}
+.stat-page-root.dark .sp-table tbody tr.clickable-row:hover td {
+  background-color: #222222 !important;
 }
 
 /* 상단 서브탭 */
@@ -3162,10 +3401,54 @@ onMounted(() => {
   background: rgba(220, 38, 38, 0.15);
   color: var(--sp-neg);
 }
+.tile-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
 .tile-value {
   font-size: 15px;
   font-weight: 800;
   color: var(--sp-text);
+}
+.tile-chevron {
+  font-size: 11px;
+  color: var(--sp-text-muted);
+}
+
+/* 스탯 박스 바로 아래 펼쳐지는 풀-폭 히스토그램 드로어 */
+.sp-tile-hist-drawer {
+  grid-column: 1 / -1;
+  border: 1.5px solid var(--sp-accent);
+  background: var(--sp-sub-bg);
+  border-radius: 10px;
+  padding: 12px 14px;
+  animation: spDrawerOpen 0.16s ease-out;
+}
+@keyframes spDrawerOpen {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.sp-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.sp-drawer-scope {
+  font-size: 11px;
+  color: var(--sp-text-muted);
+  font-weight: 600;
 }
 
 /* 자주 만난 상대 */
