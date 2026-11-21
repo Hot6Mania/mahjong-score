@@ -623,6 +623,15 @@ const otherStatCells = computed<PageStatCell[]>(() => {
   ]);
 });
 
+const inspectedSection = computed<'basic' | 'riichi' | 'other' | null>(() => {
+  const key = inspectedMetricKey.value;
+  if (!key) return null;
+  if (basicStatCells.value.some((c) => c.key === key)) return 'basic';
+  if (riichiStatCells.value.some((c) => c.key === key)) return 'riichi';
+  if (otherStatCells.value.some((c) => c.key === key)) return 'other';
+  return null;
+});
+
 const scopedPlayerHistoryGames = computed<GameRatingHistoryRecord[]>(() => {
   if (!baseSelectedPlayer.value || !props.ratingHistory.length) return [];
   const normTarget = normalizeRatingPlayerName(baseSelectedPlayer.value.name);
@@ -1062,8 +1071,13 @@ const seatStartNum = ref<number>(9);
 const seatEndNum = ref<number>(1);
 const seatStartDate = ref<string>('');
 const seatEndDate = ref<string>('');
+const seatPlayerFilter = ref<string>('');
 const seatStatsResult = ref<SeatRankStatsResult | null>(null);
 const isLoadingSeatStats = ref(false);
+
+// 개인 페이지 내 해당 플레이어의 시작 자리별 순위 통계
+const playerSeatStatsResult = ref<SeatRankStatsResult | null>(null);
+const isLoadingPlayerSeatStats = ref(false);
 
 const initSeatScopeDefaults = () => {
   if (!seatEndDate.value && availableIsoDates.value.length > 0) {
@@ -1113,6 +1127,7 @@ const loadSeatStats = async () => {
       endSession: seatScopeMode.value === 'session_range' ? seatEndSession.value : undefined,
       startDate: seatScopeMode.value === 'date_range' ? seatStartDate.value : undefined,
       endDate: seatScopeMode.value === 'date_range' ? seatEndDate.value : undefined,
+      playerName: seatPlayerFilter.value || undefined,
       availableSessions: props.availableSessions,
     });
   } catch (e) {
@@ -1120,6 +1135,43 @@ const loadSeatStats = async () => {
   } finally {
     isLoadingSeatStats.value = false;
   }
+};
+
+const loadPlayerSeatStats = async () => {
+  const player = baseSelectedPlayer.value;
+  if (!player) {
+    playerSeatStatsResult.value = null;
+    return;
+  }
+  isLoadingPlayerSeatStats.value = true;
+  try {
+    playerSeatStatsResult.value = await fetchSeatRankStats({
+      playerName: player.name,
+      recentGames:
+        playerScopeMode.value === 'recent_games'
+          ? Math.max(1, Math.floor(Number(playerScopeRecentGames.value) || 10))
+          : undefined,
+      recentSessions:
+        playerScopeMode.value === 'recent_sessions'
+          ? Math.max(1, Math.floor(Number(playerScopeRecentSessions.value) || 3))
+          : undefined,
+      startSession: playerScopeMode.value === 'session_range' ? playerScopeStartSession.value : undefined,
+      endSession: playerScopeMode.value === 'session_range' ? playerScopeEndSession.value : undefined,
+      startDate: playerScopeMode.value === 'date_range' ? playerScopeStartDate.value : undefined,
+      endDate: playerScopeMode.value === 'date_range' ? playerScopeEndDate.value : undefined,
+      availableSessions: props.availableSessions,
+    });
+  } catch (e) {
+    console.warn('loadPlayerSeatStats failed:', e);
+  } finally {
+    isLoadingPlayerSeatStats.value = false;
+  }
+};
+
+const openSeatTabForPlayer = (playerName: string) => {
+  seatPlayerFilter.value = playerName;
+  activeSubTab.value = 'by-seat';
+  loadSeatStats();
 };
 
 const setSeatScopeMode = (mode: SeatScopeMode) => {
@@ -1132,6 +1184,27 @@ watch(activeSubTab, (tab) => {
     loadSeatStats();
   }
 });
+
+watch(
+  [
+    () => baseSelectedPlayer.value?.name,
+    playerScopeMode,
+    playerScopeRecentGames,
+    playerScopeRecentSessions,
+    playerScopeStartSession,
+    playerScopeEndSession,
+    playerScopeStartDate,
+    playerScopeEndDate,
+  ],
+  () => {
+    if (baseSelectedPlayer.value) {
+      loadPlayerSeatStats();
+    } else {
+      playerSeatStatsResult.value = null;
+    }
+  },
+  { immediate: true }
+);
 
 // ==========================================
 // 4. 대국 기록 (최신 / 일자 선택 / 일자 기간 / 최근 N회차 / 회차 구간 / 특정 회차)
@@ -1397,12 +1470,12 @@ watch(
   { immediate: true }
 );
 
-const getDealInTierBadge = (score: number, isOyaWin: boolean): { text: string; cls: string } => {
-  if (score >= 32000) return { text: '역만', cls: 'tier-yakuman' };
-  if (score >= 24000) return { text: '삼배만+', cls: 'tier-sanbaiman' };
-  if (score >= 16000) return { text: '배만+', cls: 'tier-baiman' };
-  if (score >= 12000) return { text: isOyaWin ? '오야만관/하네만' : '하네만+', cls: 'tier-haneman' };
-  return { text: '만관+', cls: 'tier-mangan' };
+const getDealInTierBadge = (score: number): { text: string; cls: string } => {
+  if (score >= 32000) return { text: '32000+', cls: 'tier-yakuman' };
+  if (score >= 24000) return { text: '24000+', cls: 'tier-sanbaiman' };
+  if (score >= 16000) return { text: '16000+', cls: 'tier-baiman' };
+  if (score >= 12000) return { text: '12000+', cls: 'tier-haneman' };
+  return { text: '8000+', cls: 'tier-mangan' };
 };
 
 // 개인 페이지 내 해당 플레이어 고타점 방총 필터링
@@ -2008,148 +2081,148 @@ onMounted(() => {
           <div class="sp-stat-section-card">
             <div class="sp-card-header">
               <h4>기본 · 공격 / 수비 스탯</h4>
-              <span class="sp-card-sub">각 스탯 박스 클릭 시 바로 아래에 분포 히스토그램이 펼쳐집니다</span>
+              <span class="sp-card-sub">각 스탯 클릭 시 이 박스 아래에 분포 히스토그램이 펼쳐집니다</span>
             </div>
             <div class="sp-metrics-grid">
-              <template v-for="cell in basicStatCells" :key="cell.key">
-                <button
-                  type="button"
-                  class="sp-metric-tile"
-                  :class="{ inspected: inspectedMetricKey === cell.key }"
-                  @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-                >
-                  <div class="tile-top">
-                    <span class="tile-label">{{ cell.label }}</span>
-                    <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                      {{ cell.topPctText }}
-                    </span>
-                  </div>
-                  <div class="tile-bottom">
-                    <span class="tile-value">{{ cell.displayText }}</span>
-                    <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
-                  </div>
-                </button>
-                <div
-                  v-if="inspectedMetricKey === cell.key && inspectedDistribution && inspectedMetricMeta"
-                  class="sp-tile-hist-drawer"
-                >
-                  <div class="sp-drawer-header">
-                    <div class="sp-dist-title-group">
-                      <strong>{{ inspectedMetricMeta.label }} 분포</strong>
-                      <span
-                        v-if="!inspectedDistribution.isUnrecorded"
-                        class="sp-pct-badge"
-                        :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
-                      >
-                        상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
-                      </span>
-                      <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
-                        총 {{ playerTabMinGames }}회 이상 기준
-                      </span>
-                    </div>
-                    <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
-                  </div>
-                  <div class="sp-inline-hist-wrap">
-                    <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
-                      <rect
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'b-ib-' + idx"
-                        :x="bar.x"
-                        :y="bar.y"
-                        :width="bar.width"
-                        :height="bar.height"
-                        :fill="
-                          hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
-                            ? '#f59e0b'
-                            : bar.isCurrent
-                              ? '#3b82f6'
-                              : 'rgba(160,160,160,0.45)'
-                        "
-                        rx="1"
-                      />
-                      <polygon
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'b-pin-' + idx"
-                        v-show="bar.isCurrent"
-                        :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
-                        fill="#3b82f6"
-                      />
-                      <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
-                      <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <!-- 레이팅 구간별 평균치 실선 -->
-                      <line
-                        v-for="band in inspectedDistribution.ratingBandAverages"
-                        :key="'dr-rband-' + band.key"
-                        v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
-                        :x1="band.x"
-                        y1="1"
-                        :x2="band.x"
-                        y2="45"
-                        :stroke="band.color"
-                        :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
-                        :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
-                        pointer-events="none"
-                      />
-                      <rect
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'b-ihit-' + idx"
-                        class="sp-bar-hit"
-                        :x="bar.x"
-                        y="0"
-                        :width="Math.max(bar.width, 2.5)"
-                        height="46"
-                        fill="transparent"
-                        @mouseenter="hoveredInlineBar = bar"
-                        @mouseleave="hoveredInlineBar = null"
-                        @click.stop="selectPlayer(bar.playerName)"
-                      >
-                        <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
-                      </rect>
-                    </svg>
-                  </div>
-                  <div class="sp-inline-hist-footer">
-                    <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                    <span class="sp-inline-hover-mid">
-                      <template v-if="hoveredInlineBar">
-                        <strong>{{ hoveredInlineBar.playerName }}</strong> ·
-                        {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
-                      </template>
-                      <template v-else>
-                        평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
-                      </template>
-                    </span>
-                    <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                  </div>
-                  <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
-                  <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
-                    <span class="sp-rband-lbl">구간별 평균 실선:</span>
-                    <button
-                      type="button"
-                      class="sp-rband-chip"
-                      :class="{ active: drawerSelectedBandKey === 'all' }"
-                      @click.stop="drawerSelectedBandKey = 'all'"
-                    >
-                      전체 구간
-                    </button>
-                    <button
-                      v-for="band in inspectedDistribution.ratingBandAverages"
-                      :key="'dr-chip-' + band.key"
-                      type="button"
-                      class="sp-rband-chip"
-                      :class="{ active: drawerSelectedBandKey === band.key }"
-                      :style="{ '--rb-color': band.color }"
-                      @click.stop="toggleDrawerBand(band.key)"
-                      :title="`${band.label} 평균 (${band.count}명)`"
-                    >
-                      <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
-                      <strong :style="{ color: band.color }">{{ band.label }}</strong>
-                      <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                      <span class="muted-mini">({{ band.count }})</span>
-                    </button>
-                  </div>
+              <button
+                v-for="cell in basicStatCells"
+                :key="cell.key"
+                type="button"
+                class="sp-metric-tile"
+                :class="{ inspected: inspectedMetricKey === cell.key }"
+                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+              >
+                <div class="tile-top">
+                  <span class="tile-label">{{ cell.label }}</span>
+                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                    {{ cell.topPctText }}
+                  </span>
                 </div>
-              </template>
+                <div class="tile-bottom">
+                  <span class="tile-value">{{ cell.displayText }}</span>
+                  <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
+                </div>
+              </button>
+            </div>
+          </div>
+          <div
+            v-if="inspectedSection === 'basic' && inspectedDistribution && inspectedMetricMeta"
+            class="sp-tile-hist-drawer"
+          >
+            <div class="sp-drawer-header">
+              <div class="sp-dist-title-group">
+                <strong>{{ inspectedMetricMeta.label }} 분포</strong>
+                <span
+                  v-if="!inspectedDistribution.isUnrecorded"
+                  class="sp-pct-badge"
+                  :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
+                >
+                  상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
+                </span>
+                <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
+                  총 {{ playerTabMinGames }}회 이상 기준
+                </span>
+              </div>
+              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+            </div>
+            <div class="sp-inline-hist-wrap">
+              <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
+                <rect
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'b-ib-' + idx"
+                  :x="bar.x"
+                  :y="bar.y"
+                  :width="bar.width"
+                  :height="bar.height"
+                  :fill="
+                    hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                      ? '#f59e0b'
+                      : bar.isCurrent
+                        ? '#3b82f6'
+                        : 'rgba(160,160,160,0.45)'
+                  "
+                  rx="1"
+                />
+                <polygon
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'b-pin-' + idx"
+                  v-show="bar.isCurrent"
+                  :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
+                  fill="#3b82f6"
+                />
+                <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
+                <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                <!-- 레이팅 구간별 평균치 실선 -->
+                <line
+                  v-for="band in inspectedDistribution.ratingBandAverages"
+                  :key="'dr-rband-' + band.key"
+                  v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
+                  :x1="band.x"
+                  y1="1"
+                  :x2="band.x"
+                  y2="45"
+                  :stroke="band.color"
+                  :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
+                  :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
+                  pointer-events="none"
+                />
+                <rect
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'b-ihit-' + idx"
+                  class="sp-bar-hit"
+                  :x="bar.x"
+                  y="0"
+                  :width="Math.max(bar.width, 2.5)"
+                  height="46"
+                  fill="transparent"
+                  @mouseenter="hoveredInlineBar = bar"
+                  @mouseleave="hoveredInlineBar = null"
+                  @click.stop="selectPlayer(bar.playerName)"
+                >
+                  <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
+                </rect>
+              </svg>
+            </div>
+            <div class="sp-inline-hist-footer">
+              <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+              <span class="sp-inline-hover-mid">
+                <template v-if="hoveredInlineBar">
+                  <strong>{{ hoveredInlineBar.playerName }}</strong> ·
+                  {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                </template>
+                <template v-else>
+                  평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
+                </template>
+              </span>
+              <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+            </div>
+            <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
+            <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
+              <span class="sp-rband-lbl">구간별 평균 실선:</span>
+              <button
+                type="button"
+                class="sp-rband-chip"
+                :class="{ active: drawerSelectedBandKey === 'all' }"
+                @click.stop="drawerSelectedBandKey = 'all'"
+              >
+                전체 구간
+              </button>
+              <button
+                v-for="band in inspectedDistribution.ratingBandAverages"
+                :key="'dr-chip-' + band.key"
+                type="button"
+                class="sp-rband-chip"
+                :class="{ active: drawerSelectedBandKey === band.key }"
+                :style="{ '--rb-color': band.color }"
+                @click.stop="toggleDrawerBand(band.key)"
+                :title="`${band.label} 평균 (${band.count}명)`"
+              >
+                <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
+                <strong :style="{ color: band.color }">{{ band.label }}</strong>
+                <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                <span class="muted-mini">({{ band.count }})</span>
+              </button>
             </div>
           </div>
 
@@ -2157,148 +2230,148 @@ onMounted(() => {
           <div class="sp-stat-section-card">
             <div class="sp-card-header">
               <h4>리치 스탯</h4>
-              <span class="sp-card-sub">클릭 시 박스 아래에 히스토그램 펼침</span>
+              <span class="sp-card-sub">스탯 클릭 시 이 박스 아래에 분포 히스토그램이 펼쳐집니다</span>
             </div>
             <div class="sp-metrics-grid">
-              <template v-for="cell in riichiStatCells" :key="cell.key">
-                <button
-                  type="button"
-                  class="sp-metric-tile"
-                  :class="{ inspected: inspectedMetricKey === cell.key }"
-                  @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-                >
-                  <div class="tile-top">
-                    <span class="tile-label">{{ cell.label }}</span>
-                    <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                      {{ cell.topPctText }}
-                    </span>
-                  </div>
-                  <div class="tile-bottom">
-                    <span class="tile-value">{{ cell.displayText }}</span>
-                    <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
-                  </div>
-                </button>
-                <div
-                  v-if="inspectedMetricKey === cell.key && inspectedDistribution && inspectedMetricMeta"
-                  class="sp-tile-hist-drawer"
-                >
-                  <div class="sp-drawer-header">
-                    <div class="sp-dist-title-group">
-                      <strong>{{ inspectedMetricMeta.label }} 분포</strong>
-                      <span
-                        v-if="!inspectedDistribution.isUnrecorded"
-                        class="sp-pct-badge"
-                        :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
-                      >
-                        상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
-                      </span>
-                      <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
-                        총 {{ playerTabMinGames }}회 이상 기준
-                      </span>
-                    </div>
-                    <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
-                  </div>
-                  <div class="sp-inline-hist-wrap">
-                    <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
-                      <rect
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'r-ib-' + idx"
-                        :x="bar.x"
-                        :y="bar.y"
-                        :width="bar.width"
-                        :height="bar.height"
-                        :fill="
-                          hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
-                            ? '#f59e0b'
-                            : bar.isCurrent
-                              ? '#3b82f6'
-                              : 'rgba(160,160,160,0.45)'
-                        "
-                        rx="1"
-                      />
-                      <polygon
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'r-pin-' + idx"
-                        v-show="bar.isCurrent"
-                        :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
-                        fill="#3b82f6"
-                      />
-                      <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
-                      <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <!-- 레이팅 구간별 평균치 실선 -->
-                      <line
-                        v-for="band in inspectedDistribution.ratingBandAverages"
-                        :key="'dr-rband-' + band.key"
-                        v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
-                        :x1="band.x"
-                        y1="1"
-                        :x2="band.x"
-                        y2="45"
-                        :stroke="band.color"
-                        :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
-                        :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
-                        pointer-events="none"
-                      />
-                      <rect
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'r-ihit-' + idx"
-                        class="sp-bar-hit"
-                        :x="bar.x"
-                        y="0"
-                        :width="Math.max(bar.width, 2.5)"
-                        height="46"
-                        fill="transparent"
-                        @mouseenter="hoveredInlineBar = bar"
-                        @mouseleave="hoveredInlineBar = null"
-                        @click.stop="selectPlayer(bar.playerName)"
-                      >
-                        <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
-                      </rect>
-                    </svg>
-                  </div>
-                  <div class="sp-inline-hist-footer">
-                    <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                    <span class="sp-inline-hover-mid">
-                      <template v-if="hoveredInlineBar">
-                        <strong>{{ hoveredInlineBar.playerName }}</strong> ·
-                        {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
-                      </template>
-                      <template v-else>
-                        평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
-                      </template>
-                    </span>
-                    <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                  </div>
-                  <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
-                  <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
-                    <span class="sp-rband-lbl">구간별 평균 실선:</span>
-                    <button
-                      type="button"
-                      class="sp-rband-chip"
-                      :class="{ active: drawerSelectedBandKey === 'all' }"
-                      @click.stop="drawerSelectedBandKey = 'all'"
-                    >
-                      전체 구간
-                    </button>
-                    <button
-                      v-for="band in inspectedDistribution.ratingBandAverages"
-                      :key="'dr-chip-' + band.key"
-                      type="button"
-                      class="sp-rband-chip"
-                      :class="{ active: drawerSelectedBandKey === band.key }"
-                      :style="{ '--rb-color': band.color }"
-                      @click.stop="toggleDrawerBand(band.key)"
-                      :title="`${band.label} 평균 (${band.count}명)`"
-                    >
-                      <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
-                      <strong :style="{ color: band.color }">{{ band.label }}</strong>
-                      <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                      <span class="muted-mini">({{ band.count }})</span>
-                    </button>
-                  </div>
+              <button
+                v-for="cell in riichiStatCells"
+                :key="cell.key"
+                type="button"
+                class="sp-metric-tile"
+                :class="{ inspected: inspectedMetricKey === cell.key }"
+                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+              >
+                <div class="tile-top">
+                  <span class="tile-label">{{ cell.label }}</span>
+                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                    {{ cell.topPctText }}
+                  </span>
                 </div>
-              </template>
+                <div class="tile-bottom">
+                  <span class="tile-value">{{ cell.displayText }}</span>
+                  <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
+                </div>
+              </button>
+            </div>
+          </div>
+          <div
+            v-if="inspectedSection === 'riichi' && inspectedDistribution && inspectedMetricMeta"
+            class="sp-tile-hist-drawer"
+          >
+            <div class="sp-drawer-header">
+              <div class="sp-dist-title-group">
+                <strong>{{ inspectedMetricMeta.label }} 분포</strong>
+                <span
+                  v-if="!inspectedDistribution.isUnrecorded"
+                  class="sp-pct-badge"
+                  :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
+                >
+                  상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
+                </span>
+                <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
+                  총 {{ playerTabMinGames }}회 이상 기준
+                </span>
+              </div>
+              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+            </div>
+            <div class="sp-inline-hist-wrap">
+              <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
+                <rect
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'r-ib-' + idx"
+                  :x="bar.x"
+                  :y="bar.y"
+                  :width="bar.width"
+                  :height="bar.height"
+                  :fill="
+                    hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                      ? '#f59e0b'
+                      : bar.isCurrent
+                        ? '#3b82f6'
+                        : 'rgba(160,160,160,0.45)'
+                  "
+                  rx="1"
+                />
+                <polygon
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'r-pin-' + idx"
+                  v-show="bar.isCurrent"
+                  :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
+                  fill="#3b82f6"
+                />
+                <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
+                <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                <!-- 레이팅 구간별 평균치 실선 -->
+                <line
+                  v-for="band in inspectedDistribution.ratingBandAverages"
+                  :key="'dr-rband-' + band.key"
+                  v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
+                  :x1="band.x"
+                  y1="1"
+                  :x2="band.x"
+                  y2="45"
+                  :stroke="band.color"
+                  :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
+                  :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
+                  pointer-events="none"
+                />
+                <rect
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'r-ihit-' + idx"
+                  class="sp-bar-hit"
+                  :x="bar.x"
+                  y="0"
+                  :width="Math.max(bar.width, 2.5)"
+                  height="46"
+                  fill="transparent"
+                  @mouseenter="hoveredInlineBar = bar"
+                  @mouseleave="hoveredInlineBar = null"
+                  @click.stop="selectPlayer(bar.playerName)"
+                >
+                  <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
+                </rect>
+              </svg>
+            </div>
+            <div class="sp-inline-hist-footer">
+              <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+              <span class="sp-inline-hover-mid">
+                <template v-if="hoveredInlineBar">
+                  <strong>{{ hoveredInlineBar.playerName }}</strong> ·
+                  {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                </template>
+                <template v-else>
+                  평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
+                </template>
+              </span>
+              <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+            </div>
+            <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
+            <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
+              <span class="sp-rband-lbl">구간별 평균 실선:</span>
+              <button
+                type="button"
+                class="sp-rband-chip"
+                :class="{ active: drawerSelectedBandKey === 'all' }"
+                @click.stop="drawerSelectedBandKey = 'all'"
+              >
+                전체 구간
+              </button>
+              <button
+                v-for="band in inspectedDistribution.ratingBandAverages"
+                :key="'dr-chip-' + band.key"
+                type="button"
+                class="sp-rband-chip"
+                :class="{ active: drawerSelectedBandKey === band.key }"
+                :style="{ '--rb-color': band.color }"
+                @click.stop="toggleDrawerBand(band.key)"
+                :title="`${band.label} 평균 (${band.count}명)`"
+              >
+                <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
+                <strong :style="{ color: band.color }">{{ band.label }}</strong>
+                <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                <span class="muted-mini">({{ band.count }})</span>
+              </button>
             </div>
           </div>
 
@@ -2306,148 +2379,232 @@ onMounted(() => {
           <div class="sp-stat-section-card">
             <div class="sp-card-header">
               <h4>기타 스탯</h4>
-              <span class="sp-card-sub">클릭 시 박스 아래에 히스토그램 펼침</span>
+              <span class="sp-card-sub">스탯 클릭 시 이 박스 아래에 분포 히스토그램이 펼쳐집니다</span>
             </div>
             <div class="sp-metrics-grid">
-              <template v-for="cell in otherStatCells" :key="cell.key">
-                <button
-                  type="button"
-                  class="sp-metric-tile"
-                  :class="{ inspected: inspectedMetricKey === cell.key }"
-                  @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-                >
-                  <div class="tile-top">
-                    <span class="tile-label">{{ cell.label }}</span>
-                    <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                      {{ cell.topPctText }}
-                    </span>
-                  </div>
-                  <div class="tile-bottom">
-                    <span class="tile-value">{{ cell.displayText }}</span>
-                    <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
-                  </div>
-                </button>
-                <div
-                  v-if="inspectedMetricKey === cell.key && inspectedDistribution && inspectedMetricMeta"
-                  class="sp-tile-hist-drawer"
-                >
-                  <div class="sp-drawer-header">
-                    <div class="sp-dist-title-group">
-                      <strong>{{ inspectedMetricMeta.label }} 분포</strong>
-                      <span
-                        v-if="!inspectedDistribution.isUnrecorded"
-                        class="sp-pct-badge"
-                        :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
-                      >
-                        상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
-                      </span>
-                      <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
-                        총 {{ playerTabMinGames }}회 이상 기준
-                      </span>
-                    </div>
-                    <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
-                  </div>
-                  <div class="sp-inline-hist-wrap">
-                    <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
-                      <rect
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'o-ib-' + idx"
-                        :x="bar.x"
-                        :y="bar.y"
-                        :width="bar.width"
-                        :height="bar.height"
-                        :fill="
-                          hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
-                            ? '#f59e0b'
-                            : bar.isCurrent
-                              ? '#3b82f6'
-                              : 'rgba(160,160,160,0.45)'
-                        "
-                        rx="1"
-                      />
-                      <polygon
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'o-pin-' + idx"
-                        v-show="bar.isCurrent"
-                        :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
-                        fill="#3b82f6"
-                      />
-                      <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
-                      <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
-                      <!-- 레이팅 구간별 평균치 실선 -->
-                      <line
-                        v-for="band in inspectedDistribution.ratingBandAverages"
-                        :key="'dr-rband-' + band.key"
-                        v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
-                        :x1="band.x"
-                        y1="1"
-                        :x2="band.x"
-                        y2="45"
-                        :stroke="band.color"
-                        :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
-                        :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
-                        pointer-events="none"
-                      />
-                      <rect
-                        v-for="(bar, idx) in inspectedDistribution.bars"
-                        :key="'o-ihit-' + idx"
-                        class="sp-bar-hit"
-                        :x="bar.x"
-                        y="0"
-                        :width="Math.max(bar.width, 2.5)"
-                        height="46"
-                        fill="transparent"
-                        @mouseenter="hoveredInlineBar = bar"
-                        @mouseleave="hoveredInlineBar = null"
-                        @click.stop="selectPlayer(bar.playerName)"
-                      >
-                        <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
-                      </rect>
-                    </svg>
-                  </div>
-                  <div class="sp-inline-hist-footer">
-                    <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                    <span class="sp-inline-hover-mid">
-                      <template v-if="hoveredInlineBar">
-                        <strong>{{ hoveredInlineBar.playerName }}</strong> ·
-                        {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
-                      </template>
-                      <template v-else>
-                        평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
-                      </template>
-                    </span>
-                    <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                  </div>
-                  <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
-                  <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
-                    <span class="sp-rband-lbl">구간별 평균 실선:</span>
-                    <button
-                      type="button"
-                      class="sp-rband-chip"
-                      :class="{ active: drawerSelectedBandKey === 'all' }"
-                      @click.stop="drawerSelectedBandKey = 'all'"
-                    >
-                      전체 구간
-                    </button>
-                    <button
-                      v-for="band in inspectedDistribution.ratingBandAverages"
-                      :key="'dr-chip-' + band.key"
-                      type="button"
-                      class="sp-rband-chip"
-                      :class="{ active: drawerSelectedBandKey === band.key }"
-                      :style="{ '--rb-color': band.color }"
-                      @click.stop="toggleDrawerBand(band.key)"
-                      :title="`${band.label} 평균 (${band.count}명)`"
-                    >
-                      <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
-                      <strong :style="{ color: band.color }">{{ band.label }}</strong>
-                      <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-                      <span class="muted-mini">({{ band.count }})</span>
-                    </button>
-                  </div>
+              <button
+                v-for="cell in otherStatCells"
+                :key="cell.key"
+                type="button"
+                class="sp-metric-tile"
+                :class="{ inspected: inspectedMetricKey === cell.key }"
+                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+              >
+                <div class="tile-top">
+                  <span class="tile-label">{{ cell.label }}</span>
+                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                    {{ cell.topPctText }}
+                  </span>
                 </div>
-              </template>
+                <div class="tile-bottom">
+                  <span class="tile-value">{{ cell.displayText }}</span>
+                  <span class="tile-chevron">{{ inspectedMetricKey === cell.key ? '▴' : '▾' }}</span>
+                </div>
+              </button>
+            </div>
+          </div>
+          <div
+            v-if="inspectedSection === 'other' && inspectedDistribution && inspectedMetricMeta"
+            class="sp-tile-hist-drawer"
+          >
+            <div class="sp-drawer-header">
+              <div class="sp-dist-title-group">
+                <strong>{{ inspectedMetricMeta.label }} 분포</strong>
+                <span
+                  v-if="!inspectedDistribution.isUnrecorded"
+                  class="sp-pct-badge"
+                  :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
+                >
+                  상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
+                </span>
+                <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-drawer-scope">
+                  총 {{ playerTabMinGames }}회 이상 기준
+                </span>
+              </div>
+              <button type="button" class="sp-mini-close" @click.stop="inspectedMetricKey = null">닫기 ✕</button>
+            </div>
+            <div class="sp-inline-hist-wrap">
+              <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
+                <rect
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'o-ib-' + idx"
+                  :x="bar.x"
+                  :y="bar.y"
+                  :width="bar.width"
+                  :height="bar.height"
+                  :fill="
+                    hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                      ? '#f59e0b'
+                      : bar.isCurrent
+                        ? '#3b82f6'
+                        : 'rgba(160,160,160,0.45)'
+                  "
+                  rx="1"
+                />
+                <polygon
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'o-pin-' + idx"
+                  v-show="bar.isCurrent"
+                  :points="`${bar.x + bar.width/2},${Math.max(2, bar.y - 1)} ${bar.x + bar.width/2 - 2.2},${Math.max(0, bar.y - 5)} ${bar.x + bar.width/2 + 2.2},${Math.max(0, bar.y - 5)}`"
+                  fill="#3b82f6"
+                />
+                <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
+                <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                <!-- 레이팅 구간별 평균치 실선 -->
+                <line
+                  v-for="band in inspectedDistribution.ratingBandAverages"
+                  :key="'dr-rband-' + band.key"
+                  v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
+                  :x1="band.x"
+                  y1="1"
+                  :x2="band.x"
+                  y2="45"
+                  :stroke="band.color"
+                  :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
+                  :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
+                  pointer-events="none"
+                />
+                <rect
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'o-ihit-' + idx"
+                  class="sp-bar-hit"
+                  :x="bar.x"
+                  y="0"
+                  :width="Math.max(bar.width, 2.5)"
+                  height="46"
+                  fill="transparent"
+                  @mouseenter="hoveredInlineBar = bar"
+                  @mouseleave="hoveredInlineBar = null"
+                  @click.stop="selectPlayer(bar.playerName)"
+                >
+                  <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
+                </rect>
+              </svg>
+            </div>
+            <div class="sp-inline-hist-footer">
+              <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+              <span class="sp-inline-hover-mid">
+                <template v-if="hoveredInlineBar">
+                  <strong>{{ hoveredInlineBar.playerName }}</strong> ·
+                  {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                </template>
+                <template v-else>
+                  평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
+                </template>
+              </span>
+              <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+            </div>
+            <!-- 레이팅 구간별 평균치 실선 선택 칩 -->
+            <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
+              <span class="sp-rband-lbl">구간별 평균 실선:</span>
+              <button
+                type="button"
+                class="sp-rband-chip"
+                :class="{ active: drawerSelectedBandKey === 'all' }"
+                @click.stop="drawerSelectedBandKey = 'all'"
+              >
+                전체 구간
+              </button>
+              <button
+                v-for="band in inspectedDistribution.ratingBandAverages"
+                :key="'dr-chip-' + band.key"
+                type="button"
+                class="sp-rband-chip"
+                :class="{ active: drawerSelectedBandKey === band.key }"
+                :style="{ '--rb-color': band.color }"
+                @click.stop="toggleDrawerBand(band.key)"
+                :title="`${band.label} 평균 (${band.count}명)`"
+              >
+                <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
+                <strong :style="{ color: band.color }">{{ band.label }}</strong>
+                <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                <span class="muted-mini">({{ band.count }})</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 개인 시작 자리별 순위 (東 · 南 · 西 · 北) -->
+          <div class="sp-card">
+            <div class="sp-card-header">
+              <h4>{{ selectedPlayer.name }}님의 시작 자리별 순위 (東 · 南 · 西 · 北)</h4>
+              <button
+                type="button"
+                class="sp-mini-toggle"
+                @click="openSeatTabForPlayer(selectedPlayer.name)"
+              >
+                자리별 순위 탭에서 기간별 보기 →
+              </button>
+            </div>
+
+            <div v-if="isLoadingPlayerSeatStats" class="sp-loading-box" style="padding: 14px;">
+              시작 자리별 순위를 집계하는 중입니다...
+            </div>
+            <template v-else-if="playerSeatStatsResult && playerSeatStatsResult.totalGames > 0">
+              <div class="sp-table-scroll">
+                <table class="sp-table sp-data-table">
+                  <thead>
+                    <tr>
+                      <th>시작 자리</th>
+                      <th>1위율</th>
+                      <th>2위율</th>
+                      <th>3위율</th>
+                      <th>4위율</th>
+                      <th>연대율</th>
+                      <th>토비율</th>
+                      <th>평균 순위</th>
+                      <th>평균 우마</th>
+                      <th>대국 수</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="s in playerSeatStatsResult.seats" :key="'ps-' + s.seat">
+                      <td class="nowrap"><strong>{{ s.seatLabel }}</strong></td>
+                      <td>
+                        <template v-if="s.totalGames > 0">{{ s.p1.toFixed(1) }}% <span class="muted-mini">({{ s.r1 }})</span></template>
+                        <template v-else>-</template>
+                      </td>
+                      <td>
+                        <template v-if="s.totalGames > 0">{{ s.p2.toFixed(1) }}% <span class="muted-mini">({{ s.r2 }})</span></template>
+                        <template v-else>-</template>
+                      </td>
+                      <td>
+                        <template v-if="s.totalGames > 0">{{ s.p3.toFixed(1) }}% <span class="muted-mini">({{ s.r3 }})</span></template>
+                        <template v-else>-</template>
+                      </td>
+                      <td>
+                        <template v-if="s.totalGames > 0">{{ s.p4.toFixed(1) }}% <span class="muted-mini">({{ s.r4 }})</span></template>
+                        <template v-else>-</template>
+                      </td>
+                      <td><strong>{{ s.totalGames > 0 ? s.top2Rate.toFixed(1) + '%' : '-' }}</strong></td>
+                      <td>{{ s.totalGames > 0 ? s.tobiRate.toFixed(1) + '%' : '-' }}</td>
+                      <td><strong>{{ s.totalGames > 0 ? s.avgRank.toFixed(3) : '-' }}</strong></td>
+                      <td :class="s.totalGames > 0 ? (s.avgUma >= 0 ? 'pos' : 'neg') : ''">
+                        {{ s.totalGames > 0 ? (s.avgUma > 0 ? '+' : '') + s.avgUma.toFixed(2) + 'pt' : '-' }}
+                      </td>
+                      <td>{{ s.totalGames.toLocaleString() }}전</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="sp-seat-bars" style="margin-top: 10px;">
+                <div v-for="s in playerSeatStatsResult.seats" :key="'pbar-' + s.seat" class="sp-seat-bar-row">
+                  <div class="seat-bar-label">{{ s.seat }}</div>
+                  <div v-if="s.totalGames > 0" class="sp-rank-stacked-bar">
+                    <div v-if="s.p1 > 0" class="seg s1" :style="{ width: s.p1 + '%' }"><span>{{ s.p1.toFixed(1) }}%</span></div>
+                    <div v-if="s.p2 > 0" class="seg s2" :style="{ width: s.p2 + '%' }"><span>{{ s.p2.toFixed(1) }}%</span></div>
+                    <div v-if="s.p3 > 0" class="seg s3" :style="{ width: s.p3 + '%' }"><span>{{ s.p3.toFixed(1) }}%</span></div>
+                    <div v-if="s.p4 > 0" class="seg s4" :style="{ width: s.p4 + '%' }"><span>{{ s.p4.toFixed(1) }}%</span></div>
+                  </div>
+                  <div v-else class="sp-rank-stacked-bar empty-seat-bar">
+                    <span class="muted-mini">기록 없음</span>
+                  </div>
+                  <div class="seat-bar-avg">{{ s.totalGames > 0 ? s.avgRank.toFixed(3) + '위' : '-' }}</div>
+                </div>
+              </div>
+            </template>
+            <div v-else class="sp-loading-box" style="padding: 14px;">
+              선택한 기간 내 제9회 이후 시작 자리별 기록이 없습니다.
             </div>
           </div>
 
@@ -2506,11 +2663,11 @@ onMounted(() => {
                   </button>
                 </div>
                 <select v-model.number="playerDealInMinScore" class="sp-select-box compact-sel">
-                  <option :value="8000">8,000점+ (만관)</option>
-                  <option :value="12000">12,000점+ (하네만/오야만관)</option>
-                  <option :value="16000">16,000점+ (배만)</option>
-                  <option :value="24000">24,000점+ (삼배만)</option>
-                  <option :value="32000">32,000점+ (역만)</option>
+                  <option :value="8000">8000+</option>
+                  <option :value="12000">12000+</option>
+                  <option :value="16000">16000+</option>
+                  <option :value="24000">24000+</option>
+                  <option :value="32000">32000+</option>
                 </select>
               </div>
             </div>
@@ -2544,8 +2701,9 @@ onMounted(() => {
                     <tr>
                       <th>회차</th>
                       <th>국</th>
-                      <th>방총자 (쏘인 사람)</th>
                       <th>화료자 (론 화료)</th>
+                      <th>←</th>
+                      <th>방총자 (쏘인 사람)</th>
                       <th>타점</th>
                       <th>비고</th>
                     </tr>
@@ -2558,21 +2716,22 @@ onMounted(() => {
                       <td class="nowrap">{{ d.sessionName }}</td>
                       <td class="nowrap muted">{{ d.roundName || '-' }}</td>
                       <td class="nowrap">
-                        <button type="button" class="table-player-link" @click="selectPlayer(d.loserName)">
-                          {{ d.loserName }}
-                        </button>
-                      </td>
-                      <td class="nowrap">
                         <button type="button" class="table-player-link" @click="selectPlayer(d.winnerName)">
                           {{ d.winnerName }}
+                        </button>
+                      </td>
+                      <td class="muted">←</td>
+                      <td class="nowrap">
+                        <button type="button" class="table-player-link neg-link" @click="selectPlayer(d.loserName)">
+                          {{ d.loserName }}
                         </button>
                       </td>
                       <td class="nowrap">
                         <strong :class="playerDealInTab === 'lost' ? 'neg' : 'pos'">
                           {{ d.score.toLocaleString() }}점
                         </strong>
-                        <span class="dealin-tier-badge" :class="getDealInTierBadge(d.score, d.isOyaWin).cls">
-                          {{ getDealInTierBadge(d.score, d.isOyaWin).text }}
+                        <span class="dealin-tier-badge" :class="getDealInTierBadge(d.score).cls">
+                          {{ getDealInTierBadge(d.score).text }}
                         </span>
                       </td>
                       <td class="nowrap muted-mini">
@@ -3035,6 +3194,30 @@ onMounted(() => {
             <button type="button" class="sp-action-btn primary" @click="loadSeatStats">조회</button>
           </div>
         </div>
+
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">대상 플레이어:</span>
+          <select v-model="seatPlayerFilter" class="sp-select-box compact-sel" @change="loadSeatStats">
+            <option value="">전체 플레이어 (클럽 종합)</option>
+            <option v-for="m in sortedAllMembers" :key="'spf-' + m.name" :value="m.name">{{ m.name }}</option>
+          </select>
+          <button
+            v-if="baseSelectedPlayer && seatPlayerFilter !== baseSelectedPlayer.name"
+            type="button"
+            class="sp-quick-chip"
+            @click="seatPlayerFilter = baseSelectedPlayer.name; loadSeatStats()"
+          >
+            {{ baseSelectedPlayer.name }} 보기
+          </button>
+          <button
+            v-if="seatPlayerFilter"
+            type="button"
+            class="sp-mini-toggle"
+            @click="seatPlayerFilter = ''; loadSeatStats()"
+          >
+            전체 플레이어로 보기
+          </button>
+        </div>
       </div>
 
       <div v-if="isLoadingSeatStats" class="sp-loading-box">시작 자리별 순위 통계를 집계하는 중입니다...</div>
@@ -3042,7 +3225,13 @@ onMounted(() => {
       <template v-else-if="seatStatsResult && seatStatsResult.totalGames > 0">
         <div class="sp-card">
           <div class="sp-card-header">
-            <h4>시작 자리별 순위 통계 (東 · 南 · 西 · 北)</h4>
+            <h4>
+              {{
+                seatPlayerFilter
+                  ? `${seatPlayerFilter}님의 시작 자리별 순위 통계 (東 · 南 · 西 · 北)`
+                  : '시작 자리별 순위 통계 (東 · 南 · 西 · 北)'
+              }}
+            </h4>
             <span class="sp-card-sub">제9회 이후 국별 상세 기록 기준</span>
           </div>
           <div class="sp-table-scroll">
@@ -3064,15 +3253,27 @@ onMounted(() => {
               <tbody>
                 <tr v-for="s in seatStatsResult.seats" :key="s.seat">
                   <td class="nowrap"><strong>{{ s.seatLabel }}</strong></td>
-                  <td>{{ s.p1.toFixed(2) }}% <span class="muted-mini">({{ s.r1 }})</span></td>
-                  <td>{{ s.p2.toFixed(2) }}% <span class="muted-mini">({{ s.r2 }})</span></td>
-                  <td>{{ s.p3.toFixed(2) }}% <span class="muted-mini">({{ s.r3 }})</span></td>
-                  <td>{{ s.p4.toFixed(2) }}% <span class="muted-mini">({{ s.r4 }})</span></td>
-                  <td><strong>{{ s.top2Rate.toFixed(2) }}%</strong></td>
-                  <td>{{ s.tobiRate.toFixed(2) }}%</td>
-                  <td><strong>{{ s.avgRank.toFixed(3) }}</strong></td>
-                  <td :class="s.avgUma >= 0 ? 'pos' : 'neg'">
-                    {{ s.avgUma > 0 ? '+' : '' }}{{ s.avgUma.toFixed(2) }}pt
+                  <td>
+                    <template v-if="s.totalGames > 0">{{ s.p1.toFixed(2) }}% <span class="muted-mini">({{ s.r1 }})</span></template>
+                    <template v-else>-</template>
+                  </td>
+                  <td>
+                    <template v-if="s.totalGames > 0">{{ s.p2.toFixed(2) }}% <span class="muted-mini">({{ s.r2 }})</span></template>
+                    <template v-else>-</template>
+                  </td>
+                  <td>
+                    <template v-if="s.totalGames > 0">{{ s.p3.toFixed(2) }}% <span class="muted-mini">({{ s.r3 }})</span></template>
+                    <template v-else>-</template>
+                  </td>
+                  <td>
+                    <template v-if="s.totalGames > 0">{{ s.p4.toFixed(2) }}% <span class="muted-mini">({{ s.r4 }})</span></template>
+                    <template v-else>-</template>
+                  </td>
+                  <td><strong>{{ s.totalGames > 0 ? s.top2Rate.toFixed(2) + '%' : '-' }}</strong></td>
+                  <td>{{ s.totalGames > 0 ? s.tobiRate.toFixed(2) + '%' : '-' }}</td>
+                  <td><strong>{{ s.totalGames > 0 ? s.avgRank.toFixed(3) : '-' }}</strong></td>
+                  <td :class="s.totalGames > 0 ? (s.avgUma >= 0 ? 'pos' : 'neg') : ''">
+                    {{ s.totalGames > 0 ? (s.avgUma > 0 ? '+' : '') + s.avgUma.toFixed(2) + 'pt' : '-' }}
                   </td>
                   <td>{{ s.totalGames.toLocaleString() }}전</td>
                 </tr>
@@ -3083,18 +3284,21 @@ onMounted(() => {
 
         <div class="sp-card">
           <div class="sp-card-header">
-            <h4>자리별 1~4위 분포 시각화</h4>
+            <h4>{{ seatPlayerFilter ? `${seatPlayerFilter}님의 자리별 1~4위 분포 시각화` : '자리별 1~4위 분포 시각화' }}</h4>
           </div>
           <div class="sp-seat-bars">
             <div v-for="s in seatStatsResult.seats" :key="'bar-' + s.seat" class="sp-seat-bar-row">
               <div class="seat-bar-label">{{ s.seat }}</div>
-              <div class="sp-rank-stacked-bar">
-                <div class="seg s1" :style="{ width: s.p1 + '%' }"><span>{{ s.p1.toFixed(1) }}%</span></div>
-                <div class="seg s2" :style="{ width: s.p2 + '%' }"><span>{{ s.p2.toFixed(1) }}%</span></div>
-                <div class="seg s3" :style="{ width: s.p3 + '%' }"><span>{{ s.p3.toFixed(1) }}%</span></div>
-                <div class="seg s4" :style="{ width: s.p4 + '%' }"><span>{{ s.p4.toFixed(1) }}%</span></div>
+              <div v-if="s.totalGames > 0" class="sp-rank-stacked-bar">
+                <div v-if="s.p1 > 0" class="seg s1" :style="{ width: s.p1 + '%' }"><span>{{ s.p1.toFixed(1) }}%</span></div>
+                <div v-if="s.p2 > 0" class="seg s2" :style="{ width: s.p2 + '%' }"><span>{{ s.p2.toFixed(1) }}%</span></div>
+                <div v-if="s.p3 > 0" class="seg s3" :style="{ width: s.p3 + '%' }"><span>{{ s.p3.toFixed(1) }}%</span></div>
+                <div v-if="s.p4 > 0" class="seg s4" :style="{ width: s.p4 + '%' }"><span>{{ s.p4.toFixed(1) }}%</span></div>
               </div>
-              <div class="seat-bar-avg">{{ s.avgRank.toFixed(3) }}위</div>
+              <div v-else class="sp-rank-stacked-bar empty-seat-bar">
+                <span class="muted-mini">기록 없음</span>
+              </div>
+              <div class="seat-bar-avg">{{ s.totalGames > 0 ? s.avgRank.toFixed(3) + '위' : '-' }}</div>
             </div>
           </div>
         </div>
@@ -3122,7 +3326,7 @@ onMounted(() => {
             :class="{ active: dealInMinScore === ms }"
             @click="dealInMinScore = ms"
           >
-            {{ ms.toLocaleString() }}점+
+            {{ ms }}+
           </button>
         </div>
 
@@ -3211,9 +3415,9 @@ onMounted(() => {
                   <th>회차</th>
                   <th>일자</th>
                   <th>국</th>
-                  <th>방총자 (쏘인 사람)</th>
-                  <th>←</th>
                   <th>화료자 (론 화료)</th>
+                  <th>←</th>
+                  <th>방총자 (쏘인 사람)</th>
                   <th>방총 타점</th>
                   <th>비고</th>
                 </tr>
@@ -3224,20 +3428,20 @@ onMounted(() => {
                   <td class="nowrap muted">{{ d.date || '-' }}</td>
                   <td class="nowrap muted">{{ d.roundName || '-' }}</td>
                   <td class="nowrap">
-                    <button type="button" class="table-player-link neg-link" @click="selectPlayer(d.loserName)">
-                      {{ d.loserName }}
-                    </button>
-                  </td>
-                  <td class="muted">←</td>
-                  <td class="nowrap">
                     <button type="button" class="table-player-link" @click="selectPlayer(d.winnerName)">
                       {{ d.winnerName }}
                     </button>
                   </td>
+                  <td class="muted">←</td>
+                  <td class="nowrap">
+                    <button type="button" class="table-player-link neg-link" @click="selectPlayer(d.loserName)">
+                      {{ d.loserName }}
+                    </button>
+                  </td>
                   <td class="nowrap">
                     <strong class="neg">{{ d.score.toLocaleString() }}점</strong>
-                    <span class="dealin-tier-badge" :class="getDealInTierBadge(d.score, d.isOyaWin).cls">
-                      {{ getDealInTierBadge(d.score, d.isOyaWin).text }}
+                    <span class="dealin-tier-badge" :class="getDealInTierBadge(d.score).cls">
+                      {{ getDealInTierBadge(d.score).text }}
                     </span>
                   </td>
                   <td class="nowrap muted-mini">
@@ -4312,13 +4516,14 @@ onMounted(() => {
   color: var(--sp-text-muted);
 }
 
-/* 스탯 박스 바로 아래 펼쳐지는 풀-폭 히스토그램 드로어 */
+/* 스탯 섹션 박스 바로 아래 펼쳐지는 풀-폭 히스토그램 드로어 */
 .sp-tile-hist-drawer {
-  grid-column: 1 / -1;
   border: 1.5px solid var(--sp-accent);
-  background: var(--sp-sub-bg);
-  border-radius: 10px;
-  padding: 12px 14px;
+  background: var(--sp-card-bg);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-top: -6px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
   animation: spDrawerOpen 0.16s ease-out;
 }
 @keyframes spDrawerOpen {
@@ -4722,6 +4927,13 @@ onMounted(() => {
   font-weight: 800;
   text-align: right;
   color: var(--sp-text);
+}
+.sp-rank-stacked-bar.empty-seat-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sp-sub-bg);
+  border: 1px dashed var(--sp-border-strong);
 }
 
 /* 기록 플레이어 현황 */
