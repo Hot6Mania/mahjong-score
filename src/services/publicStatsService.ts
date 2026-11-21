@@ -9,6 +9,7 @@ import {
   calculateMatchRatings,
   replayAllHistoricalGames,
   normalizeRatingPlayerName,
+  getRatingColor,
   DEFAULT_MU,
   DEFAULT_SIGMA,
   computeOrdinal
@@ -2816,6 +2817,15 @@ export interface HistogramBar {
   playerName: string;
 }
 
+export interface RatingBandAverageMarker {
+  key: string;
+  label: string;
+  color: string;
+  avg: number;
+  count: number;
+  x: number; // SVG 0..160 X좌표
+}
+
 export interface DistributionData {
   metricName: string;
   currentValue: number;
@@ -2830,6 +2840,7 @@ export interface DistributionData {
   bottomPct: number;
   isUpperHalf: boolean;
   bars: HistogramBar[];
+  ratingBandAverages: RatingBandAverageMarker[];
   line30X: number; // 하위 30% X좌표
   line70X: number; // 상위 30% X좌표
   higherIsBetter?: boolean;
@@ -2862,6 +2873,7 @@ export function calculateMetricDistribution(
       bottomPct: 0,
       isUpperHalf: true,
       bars: [],
+      ratingBandAverages: [],
       line30X: 48,
       line70X: 112,
       isUnrecorded,
@@ -2871,7 +2883,11 @@ export function calculateMetricDistribution(
   // 전체 멤버 중 총 대국수가 0인 비활동 멤버는 히스토그램 및 통계 분포에서 제외
   const validMembers = allStats
     .filter(s => (s.totalGames || 0) > 0)
-    .map(s => ({ name: s.name, val: Number(s[metricKey]) }))
+    .map(s => ({
+      name: s.name,
+      val: Number(s[metricKey]),
+      rating: typeof s.rating === 'number' && !isNaN(s.rating) ? s.rating : undefined,
+    }))
     .filter(item => !isNaN(item.val));
 
   if (validMembers.length === 0) {
@@ -2889,6 +2905,7 @@ export function calculateMetricDistribution(
       bottomPct: 0,
       isUpperHalf: true,
       bars: [],
+      ratingBandAverages: [],
       line30X: 48,
       line70X: 112,
       isUnrecorded,
@@ -2963,6 +2980,58 @@ export function calculateMetricDistribution(
     };
   });
 
+  // 레이팅 구간별 평균치 및 SVG X좌표 보간 계산 (100단위 숫자 + 색상만 사용)
+  const bandDefs = [
+    { key: '1700+', label: '1700+', minR: 1700, maxR: 99999, sampleR: 1750 },
+    { key: '1600', label: '1600대', minR: 1600, maxR: 1699, sampleR: 1650 },
+    { key: '1500', label: '1500대', minR: 1500, maxR: 1599, sampleR: 1550 },
+    { key: '1400', label: '1400대', minR: 1400, maxR: 1499, sampleR: 1450 },
+    { key: '1300', label: '1300대', minR: 1300, maxR: 1399, sampleR: 1350 },
+    { key: '1200', label: '1200대', minR: 1200, maxR: 1299, sampleR: 1250 },
+    { key: 'below1200', label: '1200미만', minR: -99999, maxR: 1199, sampleR: 1150 },
+  ];
+
+  const valueToSvgX = (targetVal: number): number => {
+    if (n <= 1) return svgWidth / 2;
+    const centerX = (idx: number) => idx * stepW + stepW / 2;
+    if (targetVal <= sorted[0].val) return parseFloat(centerX(0).toFixed(1));
+    if (targetVal >= sorted[n - 1].val) return parseFloat(centerX(n - 1).toFixed(1));
+    for (let i = 0; i < n - 1; i++) {
+      const v0 = sorted[i].val;
+      const v1 = sorted[i + 1].val;
+      if (targetVal >= v0 && targetVal <= v1) {
+        const t = v1 === v0 ? 0.5 : (targetVal - v0) / (v1 - v0);
+        return parseFloat((centerX(i) + t * (centerX(i + 1) - centerX(i))).toFixed(1));
+      }
+    }
+    return svgWidth / 2;
+  };
+
+  const formatBandAvg = (rawAvg: number): number => {
+    if (metricKey === 'avgRank') return parseFloat(rawAvg.toFixed(3));
+    if (metricKey === 'cheatRate' || metricKey === 'beolbuRate') return parseFloat(rawAvg.toFixed(4));
+    if (unit === '%') return parseFloat(rawAvg.toFixed(2));
+    return parseFloat(rawAvg.toFixed(1));
+  };
+
+  const ratingBandAverages: RatingBandAverageMarker[] = [];
+  for (const bd of bandDefs) {
+    const membersInBand = validMembers.filter(
+      (m) => m.rating !== undefined && Math.round(m.rating) >= bd.minR && Math.round(m.rating) <= bd.maxR
+    );
+    if (membersInBand.length === 0) continue;
+    const bandRawAvg = membersInBand.reduce((acc, cur) => acc + cur.val, 0) / membersInBand.length;
+    const bandAvg = formatBandAvg(bandRawAvg);
+    ratingBandAverages.push({
+      key: bd.key,
+      label: bd.label,
+      color: getRatingColor(bd.sampleR),
+      avg: bandAvg,
+      count: membersInBand.length,
+      x: valueToSvgX(bandRawAvg),
+    });
+  }
+
   return {
     metricName,
     currentValue,
@@ -2979,6 +3048,7 @@ export function calculateMetricDistribution(
     higherIsBetter,
     isUnrecorded,
     bars,
+    ratingBandAverages,
     line30X: parseFloat((svgWidth * 0.3).toFixed(1)), // 하위 30% (48)
     line70X: parseFloat((svgWidth * 0.7).toFixed(1)), // 상위 30% (112)
   };
@@ -4924,5 +4994,188 @@ export async function fetchSeatRankStats(options?: {
     seats,
     totalGames: validGames,
   };
+}
+
+export interface HighScoreDealInRecord {
+  id: string;
+  sessionName: string;
+  sessNum: number;
+  date: string;
+  gameId: string;
+  roundName: string;
+  roundSeq: number;
+  loserName: string;  // 방총자 (쏘인 사람)
+  winnerName: string; // 화료자 (쏜 사람 / 론 화료자)
+  score: number;      // 방총 타점
+  isOyaWin: boolean;
+  isLoserRiichi: boolean;
+  isDoubleRon: boolean;
+}
+
+/**
+ * 전체 국별 기록(제9회~)에서 고타점 방총(기본 8,000점 이상) 이벤트 목록을 최신순으로 추출합니다.
+ * 누가 누구에게 몇 점 쏘였는지(더블론 포함) 정확히 매핑합니다.
+ */
+export async function fetchHighScoreDealIns(options?: {
+  minScore?: number;
+  availableSessions?: string[];
+  allStats?: MemberStatItem[];
+  spreadsheetId?: string;
+  forceRefresh?: boolean;
+}): Promise<HighScoreDealInRecord[]> {
+  const minScore = Math.max(1000, Number(options?.minScore ?? 8000));
+  const allRows = await fetchAllPublicRoundsRows(options?.spreadsheetId, options?.forceRefresh);
+
+  // 대표 닉네임(신시 -> 신시★ 등) 및 회차번호 -> 전체 회차명/일자 매핑
+  const canonicalNameByNorm = new Map<string, string>();
+  for (const s of options?.allStats || []) {
+    if (!s?.name) continue;
+    const norm = normalizeRatingPlayerName(s.name);
+    if (!norm) continue;
+    const prev = canonicalNameByNorm.get(norm);
+    if (!prev || s.name.includes('★')) {
+      canonicalNameByNorm.set(norm, s.name);
+    }
+  }
+  const resolveCanon = (raw: string): string => {
+    const clean = String(raw || '').trim();
+    if (!clean) return '';
+    return canonicalNameByNorm.get(normalizeRatingPlayerName(clean)) || clean;
+  };
+
+  const sessionInfoByNum = new Map<number, { fullLabel: string; isoDate: string }>();
+  for (const s of options?.availableSessions || []) {
+    const num = parseSessionNumber(s);
+    if (num > 0 && !sessionInfoByNum.has(num)) {
+      sessionInfoByNum.set(num, { fullLabel: s, isoDate: extractIsoDateFromRecord(s) });
+    }
+  }
+
+  // (gameId + roundSeq) 단위로 4인 행 그룹화
+  interface RoundRowEntry {
+    player: string;
+    isEast: boolean;
+    delta: number;
+    isRiichi: boolean;
+    isWin: boolean;
+    isLose: boolean;
+    pureScore: number;
+  }
+  const roundMap = new Map<
+    string,
+    {
+      firstIdx: number;
+      gameId: string;
+      gameNum: number;
+      roundSeq: number;
+      roundName: string;
+      endStatus: string;
+      sessionName: string;
+      sessNum: number;
+      date: string;
+      entries: RoundRowEntry[];
+    }
+  >();
+
+  for (let i = 0; i < allRows.length; i++) {
+    const r = allRows[i];
+    if (!r?.c) continue;
+    const gameId = getCellStr(r.c[1]).trim();
+    const rawPlayer = getCellStr(r.c[5]).trim();
+    if (!gameId || !rawPlayer) continue;
+    const roundSeq = getCellNum(r.c[3], 0);
+    const key = `${gameId}__${roundSeq}`;
+
+    let grp = roundMap.get(key);
+    if (!grp) {
+      const rawSess = getCellStr(r.c[15]).trim();
+      const sessNum = parseSessionNumber(rawSess);
+      const sessInfo = sessNum > 0 ? sessionInfoByNum.get(sessNum) : undefined;
+      const isoDate =
+        extractIsoDateFromRecord(rawSess, getCellStr(r.c[0]), gameId) ||
+        sessInfo?.isoDate ||
+        '';
+      grp = {
+        firstIdx: i,
+        gameId,
+        gameNum: Number(gameId) || 0,
+        roundSeq,
+        roundName: getCellStr(r.c[2]).trim(),
+        endStatus: getCellStr(r.c[4]).toLowerCase(),
+        sessionName: sessInfo?.fullLabel || rawSess || (sessNum > 0 ? `제${sessNum}회` : ''),
+        sessNum,
+        date: isoDate,
+        entries: [],
+      };
+      roundMap.set(key, grp);
+    }
+
+    grp.entries.push({
+      player: resolveCanon(rawPlayer),
+      isEast: r.c[6]?.v === true || r.c[6]?.v === 'TRUE' || r.c[6]?.v === 1,
+      delta: getCellNum(r.c[7], 0),
+      isRiichi: r.c[9]?.v === true || r.c[9]?.v === 'TRUE' || r.c[9]?.v === 1,
+      isWin: r.c[10]?.v === true || r.c[10]?.v === 'TRUE' || r.c[10]?.v === 1,
+      isLose: r.c[11]?.v === true || r.c[11]?.v === 'TRUE' || r.c[11]?.v === 1,
+      pureScore: getCellNum(r.c[19], 0),
+    });
+  }
+
+  const results: Array<HighScoreDealInRecord & { _sortSess: number; _sortGame: number; _sortRound: number; _sortIdx: number }> = [];
+
+  for (const grp of roundMap.values()) {
+    const losers = grp.entries.filter((e) => e.isLose);
+    const winners = grp.entries.filter((e) => e.isWin);
+    if (losers.length === 0 || winners.length === 0) continue;
+
+    const isDoubleRon = winners.length >= 2;
+    for (const loser of losers) {
+      for (const winner of winners) {
+        if (loser.player === winner.player) continue;
+        // 순수 타점(pureScore) 우선, 미기재 시 방총자 손실 또는 화료자 득점(단일 론)으로 보완
+        let dealInScore = winner.pureScore > 0 ? winner.pureScore : 0;
+        if (dealInScore <= 0) {
+          if (!isDoubleRon) {
+            const absLoserLoss = Math.abs(loser.delta) - (loser.isRiichi ? 1000 : 0);
+            dealInScore = absLoserLoss > 0 ? absLoserLoss : Math.max(0, winner.delta);
+          } else {
+            dealInScore = Math.max(0, winner.delta);
+          }
+        }
+        dealInScore = Math.round(dealInScore);
+        if (dealInScore < minScore) continue;
+
+        results.push({
+          id: `${grp.gameId}_${grp.roundSeq}_${loser.player}_${winner.player}`,
+          sessionName: grp.sessionName,
+          sessNum: grp.sessNum,
+          date: grp.date,
+          gameId: grp.gameId,
+          roundName: grp.roundName,
+          roundSeq: grp.roundSeq,
+          loserName: loser.player,
+          winnerName: winner.player,
+          score: dealInScore,
+          isOyaWin: winner.isEast,
+          isLoserRiichi: loser.isRiichi,
+          isDoubleRon,
+          _sortSess: grp.sessNum,
+          _sortGame: grp.gameNum,
+          _sortRound: grp.roundSeq,
+          _sortIdx: grp.firstIdx,
+        });
+      }
+    }
+  }
+
+  // 최신순 정렬 (회차 내림차순 -> 대국 내림차순 -> 국 내림차순)
+  results.sort((a, b) => {
+    if (b._sortSess !== a._sortSess) return b._sortSess - a._sortSess;
+    if (b._sortGame !== a._sortGame) return b._sortGame - a._sortGame;
+    if (b._sortRound !== a._sortRound) return b._sortRound - a._sortRound;
+    return b._sortIdx - a._sortIdx;
+  });
+
+  return results.map(({ _sortSess, _sortGame, _sortRound, _sortIdx, ...rec }) => rec);
 }
 

@@ -6,7 +6,7 @@ import {
   type GameRatingHistoryRecord,
   type OpponentHeadToHeadStat,
 } from '@/services/publicStatsService';
-import { getRatingColor, normalizeRatingPlayerName } from '@/utils/ratingEngine';
+import { getRatingColor, normalizeRatingPlayerName, computeStableRating } from '@/utils/ratingEngine';
 
 const props = withDefaults(
   defineProps<{
@@ -275,12 +275,34 @@ const compareSections = computed<CompareSection[]>(() => {
   const detValA = (fn: (d: MemberStatItem) => number): number | null => (hasDetailA.value && dA ? fn(dA) : null);
   const detValB = (fn: (d: MemberStatItem) => number): number | null => (hasDetailB.value && dB ? fn(dB) : null);
 
+  const stableA = computeStableRating({
+    playerName: a.name,
+    avgUma: a.avgUma,
+    totalGames: a.totalGames,
+    historyRecords: props.ratingHistory,
+  });
+  const stableB = computeStableRating({
+    playerName: b.name,
+    avgUma: b.avgUma,
+    totalGames: b.totalGames,
+    historyRecords: props.ratingHistory,
+  });
+
   const coreRows: CompareRow[] = [
     buildRow(
       'rating',
       '레이팅(R)',
       a.rating ?? null,
       b.rating ?? null,
+      true,
+      (v) => `R${Math.round(v)}`,
+      (d) => `${Math.round(d)}`
+    ),
+    buildRow(
+      'stableRating',
+      '안정 레이팅 (수렴)',
+      a.totalGames > 0 ? stableA.stableRating : null,
+      b.totalGames > 0 ? stableB.stableRating : null,
       true,
       (v) => `R${Math.round(v)}`,
       (d) => `${Math.round(d)}`

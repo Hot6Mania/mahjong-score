@@ -109,7 +109,7 @@ import {
 import zoomPlugin from 'chartjs-plugin-zoom';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import { getRatingColor, hexToRgba } from '@/utils/ratingEngine';
+import { getRatingColor, hexToRgba, computeStableRating } from '@/utils/ratingEngine';
 
 ChartJS.register(Title, ChartTooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, zoomPlugin);
 
@@ -2059,7 +2059,28 @@ const activeDist = ref<DistributionData | null>(null);
 const activeDistName = ref('');
 const activeDistUnit = ref('');
 const activeDistScopeNote = ref('');
+const activeDistBandFilter = ref<string>('all');
 const distMinGames = ref<number>(20);
+
+const selectedPlayerStableRating = computed(() => {
+  const p = selectedPlayer.value;
+  if (!p || (p.totalGames || 0) <= 0) return null;
+  const ratedMembers = allStats.value.filter(m => typeof m.rating === 'number' && m.totalGames > 0);
+  const leagueAvgR = ratedMembers.length > 0
+    ? ratedMembers.reduce((sum, m) => sum + (m.rating || 0), 0) / ratedMembers.length
+    : 1500;
+  return computeStableRating({
+    playerName: p.name,
+    avgUma: p.avgUma,
+    totalGames: p.totalGames,
+    historyRecords: allRatingHistoryRecords.value,
+    fallbackAvgOpponentRating: leagueAvgR,
+  });
+});
+
+const toggleDistBandFilter = (bandKey: string) => {
+  activeDistBandFilter.value = activeDistBandFilter.value === bandKey ? 'all' : bandKey;
+};
 const distQualifiedMembersCount = computed(() => {
   const minG = Math.max(0, Math.floor(Number(distMinGames.value) || 0));
   if (minG <= 0) return allStats.value.filter(m => (m.totalGames || 0) > 0).length;
@@ -2214,7 +2235,7 @@ const onHoverMetric = (
     targetList = sourceList;
     targetVal = Number(selectedPlayer.value[key]) || 0;
   } else {
-    targetList = sourceList.map(m => m.detailedStats || m);
+    targetList = sourceList.map(m => (m.detailedStats ? { ...m.detailedStats, rating: m.rating } : m));
     if (!hasDetailed) {
       isUnrecorded = true;
     }
@@ -7665,6 +7686,22 @@ const openGamePopupFromLightbox = async (
             pointer-events="none"
           />
 
+          <!-- 레이팅 구간별 평균치 컬러 점선 -->
+          <line
+            v-for="band in activeDist.ratingBandAverages"
+            :key="'rband-line-' + band.key"
+            v-show="activeDistBandFilter === 'all' || activeDistBandFilter === band.key"
+            :x1="band.x"
+            y1="1"
+            :x2="band.x"
+            y2="43"
+            :stroke="band.color"
+            :stroke-width="activeDistBandFilter === band.key ? 2.1 : 1.3"
+            :stroke-opacity="activeDistBandFilter === band.key ? 1 : 0.85"
+            stroke-dasharray="2.5,2"
+            pointer-events="none"
+          />
+
           <!-- 막대별 전체 높이 투명 클릭/호버 히트영역 (0에 가까운 막대도 쉽게 선택 가능) -->
           <rect
             v-for="(bar, idx) in activeDist.bars"
@@ -7695,6 +7732,32 @@ const openGamePopupFromLightbox = async (
         <span>최소 {{ formatDistValue(activeDist.min) }}</span>
         <span class="dist-avg-val">평균 {{ formatDistValue(activeDist.avg) }}</span>
         <span>최대 {{ formatDistValue(activeDist.max) }}</span>
+      </div>
+
+      <!-- 레이팅 구간별 평균치 점선 범례/선택 칩 -->
+      <div v-if="activeDist.ratingBandAverages && activeDist.ratingBandAverages.length > 0" class="dist-rband-list">
+        <button
+          type="button"
+          class="dist-rband-chip"
+          :class="{ active: activeDistBandFilter === 'all' }"
+          @click.stop="activeDistBandFilter = 'all'; pinDistTooltip()"
+        >
+          전체 구간
+        </button>
+        <button
+          v-for="band in activeDist.ratingBandAverages"
+          :key="'rbc-' + band.key"
+          type="button"
+          class="dist-rband-chip"
+          :class="{ active: activeDistBandFilter === band.key }"
+          :style="{ '--rb-color': band.color }"
+          @click.stop="toggleDistBandFilter(band.key); pinDistTooltip()"
+          :title="`${band.label} 평균 (${band.count}명): ${formatDistValue(band.avg)}`"
+        >
+          <span class="dist-rb-dash" :style="{ borderColor: band.color }"></span>
+          <span :style="{ color: band.color }">{{ band.label }}</span>
+          <span class="dist-rb-val">{{ formatDistValue(band.avg) }}</span>
+        </button>
       </div>
 
       <!-- 막대 호버 시 해당 플레이어 정보 및 이동 안내 -->
@@ -10531,6 +10594,23 @@ const openGamePopupFromLightbox = async (
                   R{{ selectedPlayer.rating }}
                 </span>
               </div>
+              <div
+                v-if="selectedPlayerStableRating"
+                class="stat_row"
+                :title="`평균 상대 R${selectedPlayerStableRating.avgOpponentRating} + 40 × 평균우마(${selectedPlayerStableRating.avgUma > 0 ? '+' : ''}${selectedPlayerStableRating.avgUma.toFixed(1)}pt) 기준 무한 대국 수렴치`"
+              >
+                <span class="stat_label">안정 레이팅</span>
+                <span class="stat_value highlight" :style="{ color: getRatingColor(selectedPlayerStableRating.stableRating) }">
+                  R{{ selectedPlayerStableRating.stableRating }}
+                  <span
+                    v-if="selectedPlayer?.rating"
+                    class="stable-delta-mini"
+                    :class="(selectedPlayerStableRating.stableRating - selectedPlayer.rating) >= 0 ? 'text_positive' : 'text_negative'"
+                  >
+                    ({{ (selectedPlayerStableRating.stableRating - selectedPlayer.rating) >= 0 ? '+' : '' }}{{ selectedPlayerStableRating.stableRating - selectedPlayer.rating }})
+                  </span>
+                </span>
+              </div>
               <div 
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'totalUma', '누적 우마', displayPlayerStats.totalUma, true, 'pt')" 
@@ -11096,6 +11176,16 @@ const openGamePopupFromLightbox = async (
                 <div class="summary_stat_box">
                   <span class="summary_label">레이팅(R)</span>
                   <span class="summary_value highlight" :style="{ color: getRatingColor(modalPlayerRatingSummary.current) }">R{{ modalPlayerRatingSummary.current }}</span>
+                </div>
+                <div
+                  v-if="selectedPlayerStableRating"
+                  class="summary_stat_box"
+                  :title="`평균 상대 R${selectedPlayerStableRating.avgOpponentRating} + 40 × 평균우마(${selectedPlayerStableRating.avgUma > 0 ? '+' : ''}${selectedPlayerStableRating.avgUma.toFixed(1)}pt) 기준 무한 대국 수렴치`"
+                >
+                  <span class="summary_label">안정 레이팅 (수렴)</span>
+                  <span class="summary_value highlight" :style="{ color: getRatingColor(selectedPlayerStableRating.stableRating) }">
+                    R{{ selectedPlayerStableRating.stableRating }}
+                  </span>
                 </div>
                 <div class="summary_stat_box">
                   <span class="summary_label">역대 최고</span>
@@ -14375,6 +14465,60 @@ html.dark .dist-hover-go {
 }
 html.dark .dist-hover-hint {
   color: #94a3b8;
+}
+.dist-rband-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.3);
+}
+.dist-rband-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(148, 163, 184, 0.08);
+  color: #334155;
+  border-radius: 5px;
+  padding: 1.5px 5px;
+  font-size: 9.2px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.25;
+}
+.dist-rband-chip.active {
+  border-color: var(--rb-color, #2563eb);
+  background: rgba(37, 99, 235, 0.12);
+}
+html.dark .dist-rband-chip {
+  color: #e5e5e5;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+html.dark .dist-rband-chip.active {
+  border-color: var(--rb-color, #60a5fa);
+  background: rgba(255, 255, 255, 0.14);
+}
+.dist-rb-dash {
+  display: inline-block;
+  width: 8px;
+  height: 0;
+  border-top: 2px dashed currentColor;
+}
+.dist-rb-val {
+  color: #475569;
+  font-weight: 600;
+}
+html.dark .dist-rb-val {
+  color: #cbd5e1;
+}
+.stable-delta-mini {
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 2px;
 }
 
 /* 플레이어 1:1 VS 비교 버튼 */

@@ -4,6 +4,7 @@ import {
   calculateMetricDistribution,
   computeFrequentOpponentsStats,
   fetchSeatRankStats,
+  fetchHighScoreDealIns,
   queryMemberStatsByFilter,
   parseSessionNumber,
   extractIsoDateFromRecord,
@@ -12,12 +13,13 @@ import {
   type DistributionData,
   type HistogramBar,
   type SeatRankStatsResult,
+  type HighScoreDealInRecord,
   type StatsQueryMode,
   type StatsQueryResult,
 } from '@/services/publicStatsService';
-import { getRatingColor, normalizeRatingPlayerName } from '@/utils/ratingEngine';
+import { getRatingColor, normalizeRatingPlayerName, computeStableRating } from '@/utils/ratingEngine';
 
-type StatsSubTab = 'player' | 'by-rating' | 'by-seat' | 'games' | 'players-count';
+type StatsSubTab = 'player' | 'by-rating' | 'by-seat' | 'deal-ins' | 'games' | 'players-count';
 
 const props = withDefaults(
   defineProps<{
@@ -50,6 +52,17 @@ const sortedSessionsDesc = computed<string[]>(() =>
 );
 
 const sortedSessionsAsc = computed<string[]>(() => [...sortedSessionsDesc.value].reverse());
+
+const maxSessionNumber = computed<number>(() => {
+  const nums = sortedSessionsDesc.value.map((s) => parseSessionNumber(s)).filter((n) => n > 0);
+  return nums.length > 0 ? Math.max(...nums) : 1;
+});
+
+const resolveSessionLabelByNum = (num: number): string => {
+  const clamped = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(num) || 1)));
+  const found = sortedSessionsAsc.value.find((s) => parseSessionNumber(s) === clamped);
+  return found || `제${clamped}회`;
+};
 
 const sessionInfoByNum = computed(() => {
   const map = new Map<number, { fullLabel: string; isoDate: string }>();
@@ -225,6 +238,8 @@ const playerScopeStartDate = ref<string>('');
 const playerScopeEndDate = ref<string>('');
 const playerScopeStartSession = ref<string>('');
 const playerScopeEndSession = ref<string>('');
+const playerScopeStartNum = ref<number>(1);
+const playerScopeEndNum = ref<number>(1);
 const playerScopeResult = ref<StatsQueryResult | null>(null);
 const isLoadingPlayerScope = ref(false);
 let playerScopeReqSeq = 0;
@@ -240,10 +255,30 @@ const initPlayerScopeDefaults = () => {
   const sessions = sortedSessionsDesc.value;
   if (!playerScopeEndSession.value && sessions.length > 0) {
     playerScopeEndSession.value = sessions[0];
+    playerScopeEndNum.value = parseSessionNumber(sessions[0]) || maxSessionNumber.value;
   }
   if (!playerScopeStartSession.value && sessions.length > 0) {
-    playerScopeStartSession.value = sessions[Math.min(4, sessions.length - 1)];
+    const startS = sessions[Math.min(4, sessions.length - 1)];
+    playerScopeStartSession.value = startS;
+    playerScopeStartNum.value = parseSessionNumber(startS) || 1;
   }
+};
+
+const syncPlayerSessionNumsFromLabels = () => {
+  const s = parseSessionNumber(playerScopeStartSession.value);
+  const e = parseSessionNumber(playerScopeEndSession.value);
+  if (s > 0) playerScopeStartNum.value = s;
+  if (e > 0) playerScopeEndNum.value = e;
+};
+
+const applyPlayerSessionNums = () => {
+  const a = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(playerScopeStartNum.value) || 1)));
+  const b = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(playerScopeEndNum.value) || maxSessionNumber.value)));
+  playerScopeStartNum.value = Math.min(a, b);
+  playerScopeEndNum.value = Math.max(a, b);
+  playerScopeStartSession.value = resolveSessionLabelByNum(playerScopeStartNum.value);
+  playerScopeEndSession.value = resolveSessionLabelByNum(playerScopeEndNum.value);
+  runPlayerScopeQuery();
 };
 
 const runPlayerScopeQuery = async () => {
@@ -386,6 +421,28 @@ const selectedRankDist = computed(() => {
 const inspectedMetricKey = ref<keyof MemberStatItem | null>(null);
 const inspectedMetricMeta = ref<{ label: string; higherIsBetter: boolean; unit: string; value: number } | null>(null);
 const hoveredInlineBar = ref<HistogramBar | null>(null);
+const drawerSelectedBandKey = ref<string>('all');
+
+const toggleDrawerBand = (bandKey: string) => {
+  drawerSelectedBandKey.value = drawerSelectedBandKey.value === bandKey ? 'all' : bandKey;
+};
+
+// 선택된 플레이어의 안정 레이팅 (현재 조회 기간/성적 비율 기준 무한 대국 수렴치)
+const selectedPlayerStableRating = computed(() => {
+  const p = selectedPlayer.value;
+  if (!p || (p.totalGames || 0) <= 0) return null;
+  const rated = (props.allStats || []).filter((m) => typeof m.rating === 'number' && m.totalGames > 0);
+  const leagueAvgR = rated.length > 0
+    ? rated.reduce((sum, m) => sum + (m.rating || 0), 0) / rated.length
+    : 1500;
+  return computeStableRating({
+    playerName: p.name,
+    avgUma: p.avgUma,
+    totalGames: p.totalGames,
+    historyRecords: scopedPlayerHistoryGames.value,
+    fallbackAvgOpponentRating: leagueAvgR,
+  });
+});
 
 const formatPenaltyText = (rate: number, totalRounds: number, explicitCount?: number): string => {
   const safeRate = Number.isFinite(rate) ? rate : 0;
@@ -419,7 +476,7 @@ const getMetricDistForSelected = (
   const isOverall = overallKeys.includes(key);
   const targetList = isOverall
     ? activePlayerScopeMembers.value
-    : activePlayerScopeMembers.value.map((m) => m.detailedStats || m);
+    : activePlayerScopeMembers.value.map((m) => (m.detailedStats ? { ...m.detailedStats, rating: m.rating } : m));
   const isUnrecorded = !isOverall && !hasSelectedDetail.value;
   return calculateMetricDistribution(
     targetList,
@@ -664,6 +721,8 @@ const ratingScopeMode = ref<RatingScopeMode>('overall');
 const ratingRecentSessionsCount = ref<number>(5);
 const ratingStartSession = ref<string>('');
 const ratingEndSession = ref<string>('');
+const ratingStartNum = ref<number>(1);
+const ratingEndNum = ref<number>(1);
 const ratingDateStart = ref<string>('');
 const ratingDateEnd = ref<string>('');
 const ratingMinGames = ref<number>(20);
@@ -681,10 +740,30 @@ const initRatingScopeDefaults = () => {
   }
   if (!ratingEndSession.value && sortedSessionsDesc.value.length > 0) {
     ratingEndSession.value = sortedSessionsDesc.value[0];
+    ratingEndNum.value = parseSessionNumber(sortedSessionsDesc.value[0]) || maxSessionNumber.value;
   }
   if (!ratingStartSession.value && sortedSessionsDesc.value.length > 0) {
-    ratingStartSession.value = sortedSessionsDesc.value[Math.min(5, sortedSessionsDesc.value.length - 1)];
+    const startS = sortedSessionsDesc.value[Math.min(5, sortedSessionsDesc.value.length - 1)];
+    ratingStartSession.value = startS;
+    ratingStartNum.value = parseSessionNumber(startS) || 1;
   }
+};
+
+const syncRatingSessionNumsFromLabels = () => {
+  const s = parseSessionNumber(ratingStartSession.value);
+  const e = parseSessionNumber(ratingEndSession.value);
+  if (s > 0) ratingStartNum.value = s;
+  if (e > 0) ratingEndNum.value = e;
+};
+
+const applyRatingSessionNums = () => {
+  const a = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(ratingStartNum.value) || 1)));
+  const b = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(ratingEndNum.value) || maxSessionNumber.value)));
+  ratingStartNum.value = Math.min(a, b);
+  ratingEndNum.value = Math.max(a, b);
+  ratingStartSession.value = resolveSessionLabelByNum(ratingStartNum.value);
+  ratingEndSession.value = resolveSessionLabelByNum(ratingEndNum.value);
+  loadRatingScopedData();
 };
 
 const loadRatingScopedData = async () => {
@@ -875,16 +954,78 @@ const aggregateBand = (
   };
 };
 
+// 선택한 기간/회차 종료 시점의 각 플레이어 최후 레이팅 맵 계산
+const ratingAtEndOfScopeMap = computed<Map<string, number> | null>(() => {
+  if (ratingScopeMode.value === 'overall') return null;
+  const hist = props.ratingHistory || [];
+  if (hist.length === 0) return null;
+
+  let cutoffSessionNum: number | null = null;
+  let cutoffDate: string | null = null;
+
+  if (ratingScopeMode.value === 'date_range') {
+    cutoffDate = (ratingDateEnd.value || '').trim() || null;
+  } else if (ratingScopeMode.value === 'session_range') {
+    const sNum = parseSessionNumber(ratingStartSession.value);
+    const eNum = parseSessionNumber(ratingEndSession.value);
+    const maxN = Math.max(sNum, eNum);
+    if (maxN > 0) cutoffSessionNum = maxN;
+  } else if (ratingScopeMode.value === 'recent_sessions') {
+    const latestSess = sortedSessionsDesc.value[0];
+    const latestNum = parseSessionNumber(latestSess);
+    if (latestNum > 0) cutoffSessionNum = latestNum;
+  }
+
+  const lastOrdByNorm = new Map<string, number>();
+  for (const g of hist) {
+    if (cutoffDate) {
+      const iso = resolveGameIsoDate(g);
+      if (iso && iso > cutoffDate) continue;
+    }
+    if (cutoffSessionNum !== null) {
+      const gSess = parseSessionNumber(g.sessionLabel);
+      if (gSess > 0 && gSess > cutoffSessionNum) continue;
+    }
+    for (const p of g.players || []) {
+      const norm = normalizeRatingPlayerName(p.name);
+      if (!norm) continue;
+      if (typeof p.ordinal === 'number' && !isNaN(p.ordinal) && p.ordinal > 0) {
+        lastOrdByNorm.set(norm, p.ordinal);
+      }
+    }
+  }
+  return lastOrdByNorm;
+});
+
+const ratingBasisDescription = computed<string>(() => {
+  if (ratingScopeMode.value === 'overall') return '현재 최신 레이팅 기준';
+  if (ratingScopeMode.value === 'date_range' && ratingDateEnd.value) {
+    return `${ratingDateEnd.value} 종료 시점 최후 레이팅 기준`;
+  }
+  if (ratingScopeMode.value === 'session_range' && ratingEndSession.value) {
+    return `${ratingEndSession.value} 종료 시점 최후 레이팅 기준`;
+  }
+  return '조회 기간 종료 시점 최후 레이팅 기준';
+});
+
 const ratingSourceMembers = computed<MemberStatItem[]>(() => {
   const base = ratingScopedMembers.value !== null ? ratingScopedMembers.value : props.allStats;
   const minG = Math.max(0, Math.floor(Number(ratingMinGames.value) || 0));
   const minR = Math.max(0, Math.floor(Number(ratingMinRounds.value) || 0));
-  return (base || []).filter(
-    (m) =>
-      typeof m.rating === 'number' &&
-      (m.totalGames || 0) >= minG &&
-      getMemberRounds(m) >= minR
-  );
+  const cutoffMap = ratingAtEndOfScopeMap.value;
+
+  return (base || [])
+    .map((m) => {
+      if (!cutoffMap) return m;
+      const histR = cutoffMap.get(normalizeRatingPlayerName(m.name));
+      return histR !== undefined ? { ...m, rating: histR } : m;
+    })
+    .filter(
+      (m) =>
+        typeof m.rating === 'number' &&
+        (m.totalGames || 0) >= minG &&
+        getMemberRounds(m) >= minR
+    );
 });
 
 const ratingBandRows = computed<RatingBandRow[]>(() => {
@@ -917,6 +1058,8 @@ const seatScopeMode = ref<SeatScopeMode>('all');
 const seatRecentSessionsCount = ref<number>(5);
 const seatStartSession = ref<string>('');
 const seatEndSession = ref<string>('');
+const seatStartNum = ref<number>(9);
+const seatEndNum = ref<number>(1);
 const seatStartDate = ref<string>('');
 const seatEndDate = ref<string>('');
 const seatStatsResult = ref<SeatRankStatsResult | null>(null);
@@ -931,10 +1074,30 @@ const initSeatScopeDefaults = () => {
   }
   if (!seatEndSession.value && sortedSessionsDesc.value.length > 0) {
     seatEndSession.value = sortedSessionsDesc.value[0];
+    seatEndNum.value = parseSessionNumber(sortedSessionsDesc.value[0]) || maxSessionNumber.value;
   }
   if (!seatStartSession.value && sortedSessionsDesc.value.length > 0) {
-    seatStartSession.value = sortedSessionsDesc.value[Math.min(5, sortedSessionsDesc.value.length - 1)];
+    const startS = sortedSessionsDesc.value[Math.min(5, sortedSessionsDesc.value.length - 1)];
+    seatStartSession.value = startS;
+    seatStartNum.value = Math.max(9, parseSessionNumber(startS) || 9);
   }
+};
+
+const syncSeatSessionNumsFromLabels = () => {
+  const s = parseSessionNumber(seatStartSession.value);
+  const e = parseSessionNumber(seatEndSession.value);
+  if (s > 0) seatStartNum.value = s;
+  if (e > 0) seatEndNum.value = e;
+};
+
+const applySeatSessionNums = () => {
+  const a = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(seatStartNum.value) || 9)));
+  const b = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(seatEndNum.value) || maxSessionNumber.value)));
+  seatStartNum.value = Math.min(a, b);
+  seatEndNum.value = Math.max(a, b);
+  seatStartSession.value = resolveSessionLabelByNum(seatStartNum.value);
+  seatEndSession.value = resolveSessionLabelByNum(seatEndNum.value);
+  loadSeatStats();
 };
 
 const loadSeatStats = async () => {
@@ -981,7 +1144,25 @@ const logEndDate = ref<string>('');
 const logRecentSessionsCount = ref<number>(3);
 const logStartSession = ref<string>('');
 const logEndSession = ref<string>('');
+const logStartNum = ref<number>(1);
+const logEndNum = ref<number>(1);
 const selectedLogSession = ref<string>('');
+
+const syncLogSessionNumsFromLabels = () => {
+  const s = parseSessionNumber(logStartSession.value);
+  const e = parseSessionNumber(logEndSession.value);
+  if (s > 0) logStartNum.value = s;
+  if (e > 0) logEndNum.value = e;
+};
+
+const applyLogSessionNums = () => {
+  const a = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(logStartNum.value) || 1)));
+  const b = Math.max(1, Math.min(maxSessionNumber.value, Math.floor(Number(logEndNum.value) || maxSessionNumber.value)));
+  logStartNum.value = Math.min(a, b);
+  logEndNum.value = Math.max(a, b);
+  logStartSession.value = resolveSessionLabelByNum(logStartNum.value);
+  logEndSession.value = resolveSessionLabelByNum(logEndNum.value);
+};
 
 watch(
   availableIsoDates,
@@ -1000,8 +1181,15 @@ watch(
   (sessions) => {
     if (sessions.length > 0) {
       if (!selectedLogSession.value) selectedLogSession.value = sessions[0];
-      if (!logEndSession.value) logEndSession.value = sessions[0];
-      if (!logStartSession.value) logStartSession.value = sessions[Math.min(4, sessions.length - 1)];
+      if (!logEndSession.value) {
+        logEndSession.value = sessions[0];
+        logEndNum.value = parseSessionNumber(sessions[0]) || maxSessionNumber.value;
+      }
+      if (!logStartSession.value) {
+        const startS = sessions[Math.min(4, sessions.length - 1)];
+        logStartSession.value = startS;
+        logStartNum.value = parseSessionNumber(startS) || 1;
+      }
     }
   },
   { immediate: true }
@@ -1147,9 +1335,232 @@ const totalDetailedRoundsAll = computed(() =>
   Math.round(playersCountFilteredMembers.value.reduce((s, m) => s + getMemberRounds(m), 0) / 4)
 );
 
+// ==========================================
+// 6. 최근 고타점 방총 (사람마다 누가 누구에게 쏘였는지)
+// ==========================================
+const allHighScoreDealIns = ref<HighScoreDealInRecord[]>([]);
+const isLoadingDealIns = ref(false);
+const hasLoadedDealIns = ref(false);
+
+const playerDealInTab = ref<'lost' | 'won'>('lost');
+const playerDealInMinScore = ref<number>(8000);
+
+const dealInMinScore = ref<number>(8000);
+const dealInRoleFilter = ref<'all' | 'loser' | 'winner'>('all');
+const dealInPlayerFilter = ref<string>('');
+const dealInScopeMode = ref<'all' | 'recent_sessions' | 'session_range' | 'date_range'>('all');
+const dealInRecentSessions = ref<number>(5);
+const dealInStartNum = ref<number>(9);
+const dealInEndNum = ref<number>(1);
+const dealInStartDate = ref<string>('');
+const dealInEndDate = ref<string>('');
+
+const loadHighScoreDealIns = async (force = false) => {
+  if (hasLoadedDealIns.value && !force) return;
+  isLoadingDealIns.value = true;
+  try {
+    allHighScoreDealIns.value = await fetchHighScoreDealIns({
+      minScore: 8000,
+      availableSessions: props.availableSessions,
+      allStats: props.allStats,
+    });
+    hasLoadedDealIns.value = true;
+  } catch (e) {
+    console.warn('loadHighScoreDealIns failed:', e);
+  } finally {
+    isLoadingDealIns.value = false;
+  }
+};
+
+watch(
+  [activeSubTab, selectedPlayerName],
+  ([tab, pName]) => {
+    if (tab === 'deal-ins' || (tab === 'player' && pName)) {
+      loadHighScoreDealIns();
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  [sortedSessionsDesc, availableIsoDates],
+  () => {
+    if (dealInEndNum.value <= 1 && maxSessionNumber.value > 1) {
+      dealInEndNum.value = maxSessionNumber.value;
+      dealInStartNum.value = Math.max(9, maxSessionNumber.value - 5);
+    }
+    if (!dealInEndDate.value && availableIsoDates.value.length > 0) {
+      dealInEndDate.value = availableIsoDates.value[0];
+      dealInStartDate.value = availableIsoDates.value[Math.min(5, availableIsoDates.value.length - 1)];
+    }
+  },
+  { immediate: true }
+);
+
+const getDealInTierBadge = (score: number, isOyaWin: boolean): { text: string; cls: string } => {
+  if (score >= 32000) return { text: '역만급', cls: 'tier-yakuman' };
+  if (score >= 24000) return { text: '삼배만+', cls: 'tier-sanbaiman' };
+  if (score >= 16000) return { text: '배만+', cls: 'tier-baiman' };
+  if (score >= 12000) return { text: isOyaWin ? '오야만관/하네만' : '하네만+', cls: 'tier-haneman' };
+  return { text: '만관+', cls: 'tier-mangan' };
+};
+
+// 개인 페이지 내 해당 플레이어 고타점 방총 필터링
+const scopedPlayerDealInsBase = computed<HighScoreDealInRecord[]>(() => {
+  if (!baseSelectedPlayer.value) return [];
+  const normMe = normalizeRatingPlayerName(baseSelectedPlayer.value.name);
+  const minS = playerDealInMinScore.value;
+  let list = allHighScoreDealIns.value.filter(
+    (d) =>
+      d.score >= minS &&
+      (normalizeRatingPlayerName(d.loserName) === normMe || normalizeRatingPlayerName(d.winnerName) === normMe)
+  );
+
+  if (playerScopeMode.value === 'recent_sessions') {
+    const n = Math.max(1, Math.floor(Number(playerScopeRecentSessions.value) || 3));
+    const picked = new Set(sortedSessionsDesc.value.slice(0, n).map((s) => parseSessionNumber(s)));
+    list = list.filter((d) => picked.has(d.sessNum));
+  } else if (playerScopeMode.value === 'session_range') {
+    const minN = Math.min(playerScopeStartNum.value, playerScopeEndNum.value);
+    const maxN = Math.max(playerScopeStartNum.value, playerScopeEndNum.value);
+    list = list.filter((d) => d.sessNum >= minN && d.sessNum <= maxN);
+  } else if (playerScopeMode.value === 'date_range') {
+    const sd = (playerScopeStartDate.value || '').trim();
+    const ed = (playerScopeEndDate.value || '').trim();
+    list = list.filter((d) => {
+      if (!d.date) return false;
+      if (sd && d.date < sd) return false;
+      if (ed && d.date > ed) return false;
+      return true;
+    });
+  }
+  return list;
+});
+
+const selectedPlayerLostDealIns = computed(() => {
+  if (!baseSelectedPlayer.value) return [];
+  const normMe = normalizeRatingPlayerName(baseSelectedPlayer.value.name);
+  return scopedPlayerDealInsBase.value.filter((d) => normalizeRatingPlayerName(d.loserName) === normMe);
+});
+
+const selectedPlayerWonDealIns = computed(() => {
+  if (!baseSelectedPlayer.value) return [];
+  const normMe = normalizeRatingPlayerName(baseSelectedPlayer.value.name);
+  return scopedPlayerDealInsBase.value.filter((d) => normalizeRatingPlayerName(d.winnerName) === normMe);
+});
+
+const selectedPlayerDealInSummaryChips = computed(() => {
+  const list = playerDealInTab.value === 'lost' ? selectedPlayerLostDealIns.value : selectedPlayerWonDealIns.value;
+  const counts = new Map<string, { name: string; count: number; totalScore: number }>();
+  for (const d of list) {
+    const other = playerDealInTab.value === 'lost' ? d.winnerName : d.loserName;
+    const prev = counts.get(other) || { name: other, count: 0, totalScore: 0 };
+    prev.count++;
+    prev.totalScore += d.score;
+    counts.set(other, prev);
+  }
+  return Array.from(counts.values())
+    .sort((a, b) => (b.count !== a.count ? b.count - a.count : b.totalScore - a.totalScore))
+    .slice(0, 6);
+});
+
+// 전체 고타점 방총 서브탭 필터링
+const filteredGlobalDealIns = computed<HighScoreDealInRecord[]>(() => {
+  let list = allHighScoreDealIns.value.filter((d) => d.score >= dealInMinScore.value);
+
+  if (dealInScopeMode.value === 'recent_sessions') {
+    const n = Math.max(1, Math.floor(Number(dealInRecentSessions.value) || 5));
+    const picked = new Set(sortedSessionsDesc.value.slice(0, n).map((s) => parseSessionNumber(s)));
+    list = list.filter((d) => picked.has(d.sessNum));
+  } else if (dealInScopeMode.value === 'session_range') {
+    const minN = Math.min(dealInStartNum.value, dealInEndNum.value);
+    const maxN = Math.max(dealInStartNum.value, dealInEndNum.value);
+    list = list.filter((d) => d.sessNum >= minN && d.sessNum <= maxN);
+  } else if (dealInScopeMode.value === 'date_range') {
+    const sd = (dealInStartDate.value || '').trim();
+    const ed = (dealInEndDate.value || '').trim();
+    list = list.filter((d) => {
+      if (!d.date) return false;
+      if (sd && d.date < sd) return false;
+      if (ed && d.date > ed) return false;
+      return true;
+    });
+  }
+
+  const pFilter = dealInPlayerFilter.value.trim();
+  if (pFilter) {
+    const normP = normalizeRatingPlayerName(pFilter);
+    list = list.filter((d) => {
+      const isLoser = normalizeRatingPlayerName(d.loserName) === normP;
+      const isWinner = normalizeRatingPlayerName(d.winnerName) === normP;
+      if (dealInRoleFilter.value === 'loser') return isLoser;
+      if (dealInRoleFilter.value === 'winner') return isWinner;
+      return isLoser || isWinner;
+    });
+  }
+  return list;
+});
+
+const highScoreDealInPlayerSummary = computed(() => {
+  const map = new Map<
+    string,
+    {
+      name: string;
+      lostCount: number;
+      lostSum: number;
+      maxLost: number;
+      wonCount: number;
+      wonSum: number;
+      attackers: Map<string, number>;
+    }
+  >();
+  const ensure = (name: string) => {
+    let e = map.get(name);
+    if (!e) {
+      e = { name, lostCount: 0, lostSum: 0, maxLost: 0, wonCount: 0, wonSum: 0, attackers: new Map() };
+      map.set(name, e);
+    }
+    return e;
+  };
+  for (const d of filteredGlobalDealIns.value) {
+    const l = ensure(d.loserName);
+    l.lostCount++;
+    l.lostSum += d.score;
+    if (d.score > l.maxLost) l.maxLost = d.score;
+    l.attackers.set(d.winnerName, (l.attackers.get(d.winnerName) || 0) + 1);
+
+    const w = ensure(d.winnerName);
+    w.wonCount++;
+    w.wonSum += d.score;
+  }
+  return Array.from(map.values())
+    .map((e) => {
+      let topAttacker = '-';
+      let topAttackerCnt = 0;
+      for (const [att, cnt] of e.attackers.entries()) {
+        if (cnt > topAttackerCnt) {
+          topAttacker = att;
+          topAttackerCnt = cnt;
+        }
+      }
+      return {
+        name: e.name,
+        lostCount: e.lostCount,
+        lostAvg: e.lostCount > 0 ? Math.round(e.lostSum / e.lostCount) : 0,
+        maxLost: e.maxLost,
+        wonCount: e.wonCount,
+        topAttacker,
+        topAttackerCnt,
+      };
+    })
+    .sort((a, b) => (b.lostCount !== a.lostCount ? b.lostCount - a.lostCount : b.maxLost - a.maxLost));
+});
+
 onMounted(() => {
   if (activeSubTab.value === 'by-seat') {
     loadSeatStats();
+  } else if (activeSubTab.value === 'deal-ins') {
+    loadHighScoreDealIns();
   }
 });
 </script>
@@ -1181,6 +1592,14 @@ onMounted(() => {
         @click="activeSubTab = 'by-seat'"
       >
         자리별 순위
+      </button>
+      <button
+        type="button"
+        class="sp-subnav-btn"
+        :class="{ active: activeSubTab === 'deal-ins' }"
+        @click="activeSubTab = 'deal-ins'"
+      >
+        고타점 방총
       </button>
       <button
         type="button"
@@ -1438,14 +1857,20 @@ onMounted(() => {
 
           <div v-else-if="playerScopeMode === 'session_range'" class="sp-scope-controls">
             <div class="sp-scope-inline-input">
-              <select v-model="playerScopeStartSession" class="sp-select-box">
+              <input v-model.number="playerScopeStartNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" @keyup.enter="applyPlayerSessionNums" />
+              <span>회차 ~</span>
+              <input v-model.number="playerScopeEndNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" @keyup.enter="applyPlayerSessionNums" />
+              <span>회차</span>
+              <button type="button" class="sp-action-btn primary" @click="applyPlayerSessionNums">조회</button>
+            </div>
+            <div class="sp-scope-inline-input">
+              <select v-model="playerScopeStartSession" class="sp-select-box" @change="syncPlayerSessionNumsFromLabels(); runPlayerScopeQuery()">
                 <option v-for="s in sortedSessionsAsc" :key="'ps-' + s" :value="s">{{ s }}</option>
               </select>
               <span>~</span>
-              <select v-model="playerScopeEndSession" class="sp-select-box">
+              <select v-model="playerScopeEndSession" class="sp-select-box" @change="syncPlayerSessionNumsFromLabels(); runPlayerScopeQuery()">
                 <option v-for="s in sortedSessionsDesc" :key="'pe-' + s" :value="s">{{ s }}</option>
               </select>
-              <button type="button" class="sp-action-btn primary" @click="runPlayerScopeQuery">조회</button>
             </div>
           </div>
         </div>
@@ -1477,11 +1902,36 @@ onMounted(() => {
                 >
                   R{{ Math.round(selectedPlayer.rating) }}
                 </span>
+                <span
+                  v-if="selectedPlayerStableRating"
+                  class="sp-stable-pill"
+                  :style="{ color: getRatingColor(selectedPlayerStableRating.stableRating), borderColor: getRatingColor(selectedPlayerStableRating.stableRating) }"
+                  :title="`평균 상대 R${selectedPlayerStableRating.avgOpponentRating} + 40 × 평균우마(${selectedPlayerStableRating.avgUma > 0 ? '+' : ''}${selectedPlayerStableRating.avgUma.toFixed(1)}pt) 기준 무한 대국 수렴치`"
+                >
+                  안정 R{{ selectedPlayerStableRating.stableRating }}
+                </span>
                 <span v-if="selectedPlayer.ratingPeak" class="sp-peak-note">
                   최고 R{{ Math.round(selectedPlayer.ratingPeak) }}
                 </span>
               </div>
               <div class="sp-profile-kpi-row">
+                <div
+                  class="sp-kpi"
+                  v-if="selectedPlayerStableRating"
+                  :title="`현재 조회 성적 비율(평균우마 ${selectedPlayerStableRating.avgUma > 0 ? '+' : ''}${selectedPlayerStableRating.avgUma.toFixed(1)}pt, 평균 상대 R${selectedPlayerStableRating.avgOpponentRating})로 무한히 대국 시 수렴하는 안정 레이팅`"
+                >
+                  <span class="kpi-lbl">안정 레이팅</span>
+                  <strong class="kpi-val" :style="{ color: getRatingColor(selectedPlayerStableRating.stableRating) }">
+                    R{{ selectedPlayerStableRating.stableRating }}
+                    <span
+                      v-if="selectedPlayer.rating"
+                      class="delta-mini"
+                      :class="(selectedPlayerStableRating.stableRating - selectedPlayer.rating) >= 0 ? 'pos' : 'neg'"
+                    >
+                      ({{ (selectedPlayerStableRating.stableRating - selectedPlayer.rating) >= 0 ? '+' : '' }}{{ selectedPlayerStableRating.stableRating - Math.round(selectedPlayer.rating) }})
+                    </span>
+                  </strong>
+                </div>
                 <div class="sp-kpi">
                   <span class="kpi-lbl">누적 우마</span>
                   <strong class="kpi-val" :class="selectedPlayer.totalUma >= 0 ? 'pos' : 'neg'">
@@ -1627,6 +2077,21 @@ onMounted(() => {
                       <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
                       <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
                       <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <!-- 레이팅 구간별 평균치 점선 -->
+                      <line
+                        v-for="band in inspectedDistribution.ratingBandAverages"
+                        :key="'dr-rband-' + band.key"
+                        v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
+                        :x1="band.x"
+                        y1="1"
+                        :x2="band.x"
+                        y2="45"
+                        :stroke="band.color"
+                        :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
+                        :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
+                        stroke-dasharray="2.5,2"
+                        pointer-events="none"
+                      />
                       <rect
                         v-for="(bar, idx) in inspectedDistribution.bars"
                         :key="'b-ihit-' + idx"
@@ -1656,6 +2121,33 @@ onMounted(() => {
                       </template>
                     </span>
                     <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                  </div>
+                  <!-- 레이팅 구간별 평균치 점선 선택 칩 -->
+                  <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
+                    <span class="sp-rband-lbl">구간별 평균 점선:</span>
+                    <button
+                      type="button"
+                      class="sp-rband-chip"
+                      :class="{ active: drawerSelectedBandKey === 'all' }"
+                      @click.stop="drawerSelectedBandKey = 'all'"
+                    >
+                      전체 구간
+                    </button>
+                    <button
+                      v-for="band in inspectedDistribution.ratingBandAverages"
+                      :key="'dr-chip-' + band.key"
+                      type="button"
+                      class="sp-rband-chip"
+                      :class="{ active: drawerSelectedBandKey === band.key }"
+                      :style="{ '--rb-color': band.color }"
+                      @click.stop="toggleDrawerBand(band.key)"
+                      :title="`${band.label} 평균 (${band.count}명)`"
+                    >
+                      <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
+                      <strong :style="{ color: band.color }">{{ band.label }}</strong>
+                      <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                      <span class="muted-mini">({{ band.count }})</span>
+                    </button>
                   </div>
                 </div>
               </template>
@@ -1735,6 +2227,21 @@ onMounted(() => {
                       <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
                       <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
                       <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <!-- 레이팅 구간별 평균치 점선 -->
+                      <line
+                        v-for="band in inspectedDistribution.ratingBandAverages"
+                        :key="'dr-rband-' + band.key"
+                        v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
+                        :x1="band.x"
+                        y1="1"
+                        :x2="band.x"
+                        y2="45"
+                        :stroke="band.color"
+                        :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
+                        :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
+                        stroke-dasharray="2.5,2"
+                        pointer-events="none"
+                      />
                       <rect
                         v-for="(bar, idx) in inspectedDistribution.bars"
                         :key="'r-ihit-' + idx"
@@ -1764,6 +2271,33 @@ onMounted(() => {
                       </template>
                     </span>
                     <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                  </div>
+                  <!-- 레이팅 구간별 평균치 점선 선택 칩 -->
+                  <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
+                    <span class="sp-rband-lbl">구간별 평균 점선:</span>
+                    <button
+                      type="button"
+                      class="sp-rband-chip"
+                      :class="{ active: drawerSelectedBandKey === 'all' }"
+                      @click.stop="drawerSelectedBandKey = 'all'"
+                    >
+                      전체 구간
+                    </button>
+                    <button
+                      v-for="band in inspectedDistribution.ratingBandAverages"
+                      :key="'dr-chip-' + band.key"
+                      type="button"
+                      class="sp-rband-chip"
+                      :class="{ active: drawerSelectedBandKey === band.key }"
+                      :style="{ '--rb-color': band.color }"
+                      @click.stop="toggleDrawerBand(band.key)"
+                      :title="`${band.label} 평균 (${band.count}명)`"
+                    >
+                      <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
+                      <strong :style="{ color: band.color }">{{ band.label }}</strong>
+                      <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                      <span class="muted-mini">({{ band.count }})</span>
+                    </button>
                   </div>
                 </div>
               </template>
@@ -1843,6 +2377,21 @@ onMounted(() => {
                       <line :x1="inspectedDistribution.line30X" y1="0" :x2="inspectedDistribution.line30X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
                       <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(200,200,200,0.65)" stroke-width="1.3" stroke-dasharray="3,2" />
                       <line :x1="inspectedDistribution.line70X" y1="0" :x2="inspectedDistribution.line70X" y2="46" stroke="rgba(160,160,160,0.4)" stroke-width="1" stroke-dasharray="2,2" />
+                      <!-- 레이팅 구간별 평균치 점선 -->
+                      <line
+                        v-for="band in inspectedDistribution.ratingBandAverages"
+                        :key="'dr-rband-' + band.key"
+                        v-show="drawerSelectedBandKey === 'all' || drawerSelectedBandKey === band.key"
+                        :x1="band.x"
+                        y1="1"
+                        :x2="band.x"
+                        y2="45"
+                        :stroke="band.color"
+                        :stroke-width="drawerSelectedBandKey === band.key ? 2.2 : 1.35"
+                        :stroke-opacity="drawerSelectedBandKey === band.key ? 1 : 0.85"
+                        stroke-dasharray="2.5,2"
+                        pointer-events="none"
+                      />
                       <rect
                         v-for="(bar, idx) in inspectedDistribution.bars"
                         :key="'o-ihit-' + idx"
@@ -1872,6 +2421,33 @@ onMounted(() => {
                       </template>
                     </span>
                     <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                  </div>
+                  <!-- 레이팅 구간별 평균치 점선 선택 칩 -->
+                  <div v-if="inspectedDistribution.ratingBandAverages && inspectedDistribution.ratingBandAverages.length > 0" class="sp-drawer-rbands">
+                    <span class="sp-rband-lbl">구간별 평균 점선:</span>
+                    <button
+                      type="button"
+                      class="sp-rband-chip"
+                      :class="{ active: drawerSelectedBandKey === 'all' }"
+                      @click.stop="drawerSelectedBandKey = 'all'"
+                    >
+                      전체 구간
+                    </button>
+                    <button
+                      v-for="band in inspectedDistribution.ratingBandAverages"
+                      :key="'dr-chip-' + band.key"
+                      type="button"
+                      class="sp-rband-chip"
+                      :class="{ active: drawerSelectedBandKey === band.key }"
+                      :style="{ '--rb-color': band.color }"
+                      @click.stop="toggleDrawerBand(band.key)"
+                      :title="`${band.label} 평균 (${band.count}명)`"
+                    >
+                      <span class="sp-rb-dash" :style="{ borderColor: band.color }"></span>
+                      <strong :style="{ color: band.color }">{{ band.label }}</strong>
+                      <span>{{ formatMetricVal(band.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+                      <span class="muted-mini">({{ band.count }})</span>
+                    </button>
                   </div>
                 </div>
               </template>
@@ -1907,6 +2483,114 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- 개인 최근 고타점 방총 기록 (누가 누구에게 쏘였는지) -->
+          <div class="sp-card">
+            <div class="sp-card-header">
+              <h4>최근 고타점 방총 기록 (8,000점+)</h4>
+              <div class="sp-dealin-header-controls">
+                <div class="sp-toggle-group">
+                  <button
+                    type="button"
+                    class="sp-toggle-btn"
+                    :class="{ active: playerDealInTab === 'lost' }"
+                    @click="playerDealInTab = 'lost'"
+                  >
+                    내가 쏘인 방총 ({{ selectedPlayerLostDealIns.length }})
+                  </button>
+                  <button
+                    type="button"
+                    class="sp-toggle-btn"
+                    :class="{ active: playerDealInTab === 'won' }"
+                    @click="playerDealInTab = 'won'"
+                  >
+                    내가 론 화료 ({{ selectedPlayerWonDealIns.length }})
+                  </button>
+                </div>
+                <select v-model.number="playerDealInMinScore" class="sp-select-box compact-sel">
+                  <option :value="8000">8,000점+ (만관)</option>
+                  <option :value="12000">12,000점+ (하네만/오야만관)</option>
+                  <option :value="16000">16,000점+ (배만)</option>
+                  <option :value="24000">24,000점+ (삼배만)</option>
+                  <option :value="32000">32,000점+ (역만급)</option>
+                </select>
+              </div>
+            </div>
+
+            <div v-if="isLoadingDealIns" class="sp-loading-box">고타점 방총 기록을 불러오는 중입니다...</div>
+            <template v-else>
+              <div v-if="selectedPlayerDealInSummaryChips.length > 0" class="sp-dealin-summary-chips">
+                <span class="sp-quick-lbl">
+                  {{ playerDealInTab === 'lost' ? '가장 많이 쏘인 상대:' : '가장 많이 론 딴 상대:' }}
+                </span>
+                <button
+                  v-for="chip in selectedPlayerDealInSummaryChips"
+                  :key="'pdc-' + chip.name"
+                  type="button"
+                  class="sp-quick-chip"
+                  @click="selectPlayer(chip.name)"
+                >
+                  {{ chip.name }}
+                  <span class="neg" v-if="playerDealInTab === 'lost'">{{ chip.count }}회</span>
+                  <span class="pos" v-else>{{ chip.count }}회</span>
+                </button>
+              </div>
+
+              <div
+                v-if="(playerDealInTab === 'lost' ? selectedPlayerLostDealIns : selectedPlayerWonDealIns).length > 0"
+                class="sp-table-scroll"
+                style="margin-top: 8px;"
+              >
+                <table class="sp-table">
+                  <thead>
+                    <tr>
+                      <th>회차</th>
+                      <th>국</th>
+                      <th>방총자 (쏘인 사람)</th>
+                      <th>화료자 (론 화료)</th>
+                      <th>타점</th>
+                      <th>비고</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="d in (playerDealInTab === 'lost' ? selectedPlayerLostDealIns : selectedPlayerWonDealIns).slice(0, 20)"
+                      :key="d.id"
+                    >
+                      <td class="nowrap">{{ d.sessionName }}</td>
+                      <td class="nowrap muted">{{ d.roundName || '-' }}</td>
+                      <td class="nowrap">
+                        <button type="button" class="table-player-link" @click="selectPlayer(d.loserName)">
+                          {{ d.loserName }}
+                        </button>
+                      </td>
+                      <td class="nowrap">
+                        <button type="button" class="table-player-link" @click="selectPlayer(d.winnerName)">
+                          {{ d.winnerName }}
+                        </button>
+                      </td>
+                      <td class="nowrap">
+                        <strong :class="playerDealInTab === 'lost' ? 'neg' : 'pos'">
+                          {{ d.score.toLocaleString() }}점
+                        </strong>
+                        <span class="dealin-tier-badge" :class="getDealInTierBadge(d.score, d.isOyaWin).cls">
+                          {{ getDealInTierBadge(d.score, d.isOyaWin).text }}
+                        </span>
+                      </td>
+                      <td class="nowrap muted-mini">
+                        <span v-if="d.isLoserRiichi" class="dealin-meta-tag">리치 중 방총</span>
+                        <span v-if="d.isDoubleRon" class="dealin-meta-tag">더블론</span>
+                        <span v-if="!d.isLoserRiichi && !d.isDoubleRon">-</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-else class="sp-loading-box" style="padding: 14px;">
+                조건에 해당하는 고타점 {{ playerDealInTab === 'lost' ? '방총' : '론 화료' }} 기록이 없습니다.
+              </div>
+            </template>
           </div>
 
           <!-- 개인 최근 대국 기록 -->
@@ -2057,14 +2741,20 @@ onMounted(() => {
 
         <div v-else-if="ratingScopeMode === 'session_range'" class="sp-scope-controls">
           <div class="sp-scope-inline-input">
-            <select v-model="ratingStartSession" class="sp-select-box">
+            <input v-model.number="ratingStartNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" @keyup.enter="applyRatingSessionNums" />
+            <span>회차 ~</span>
+            <input v-model.number="ratingEndNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" @keyup.enter="applyRatingSessionNums" />
+            <span>회차</span>
+            <button type="button" class="sp-action-btn primary" @click="applyRatingSessionNums">조회</button>
+          </div>
+          <div class="sp-scope-inline-input">
+            <select v-model="ratingStartSession" class="sp-select-box" @change="syncRatingSessionNumsFromLabels(); loadRatingScopedData()">
               <option v-for="s in sortedSessionsAsc" :key="'r-ss-' + s" :value="s">{{ s }}</option>
             </select>
             <span>~</span>
-            <select v-model="ratingEndSession" class="sp-select-box">
+            <select v-model="ratingEndSession" class="sp-select-box" @change="syncRatingSessionNumsFromLabels(); loadRatingScopedData()">
               <option v-for="s in sortedSessionsDesc" :key="'r-se-' + s" :value="s">{{ s }}</option>
             </select>
-            <button type="button" class="sp-action-btn primary" @click="loadRatingScopedData">조회</button>
           </div>
         </div>
 
@@ -2121,7 +2811,7 @@ onMounted(() => {
         <div class="sp-card">
           <div class="sp-card-header">
             <h4>레이팅 구간별 순위 · 기본 스탯</h4>
-            <span class="sp-card-sub">구간 행을 클릭하면 소속 플레이어 목록을 볼 수 있습니다</span>
+            <span class="sp-card-sub">{{ ratingBasisDescription }} · 구간 행 클릭 시 소속 플레이어 표시</span>
           </div>
           <div class="sp-table-scroll">
             <table class="sp-table sp-data-table">
@@ -2323,14 +3013,20 @@ onMounted(() => {
 
         <div v-else-if="seatScopeMode === 'session_range'" class="sp-scope-controls">
           <div class="sp-scope-inline-input">
-            <select v-model="seatStartSession" class="sp-select-box">
+            <input v-model.number="seatStartNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" @keyup.enter="applySeatSessionNums" />
+            <span>회차 ~</span>
+            <input v-model.number="seatEndNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" @keyup.enter="applySeatSessionNums" />
+            <span>회차</span>
+            <button type="button" class="sp-action-btn primary" @click="applySeatSessionNums">조회</button>
+          </div>
+          <div class="sp-scope-inline-input">
+            <select v-model="seatStartSession" class="sp-select-box" @change="syncSeatSessionNumsFromLabels(); loadSeatStats()">
               <option v-for="s in sortedSessionsAsc" :key="'s-ss-' + s" :value="s">{{ s }}</option>
             </select>
             <span>~</span>
-            <select v-model="seatEndSession" class="sp-select-box">
+            <select v-model="seatEndSession" class="sp-select-box" @change="syncSeatSessionNumsFromLabels(); loadSeatStats()">
               <option v-for="s in sortedSessionsDesc" :key="'s-se-' + s" :value="s">{{ s }}</option>
             </select>
-            <button type="button" class="sp-action-btn primary" @click="loadSeatStats">조회</button>
           </div>
         </div>
 
@@ -2412,6 +3108,199 @@ onMounted(() => {
       </template>
 
       <div v-else class="sp-loading-box">선택한 조건에 해당하는 자리별 대국 데이터가 없습니다.</div>
+    </div>
+
+    <!-- ===================================================== -->
+    <!-- SUB-TAB 3-5: 고타점 방총 (사람마다 누가 누구에게 쏘였는지) -->
+    <!-- ===================================================== -->
+    <div v-else-if="activeSubTab === 'deal-ins'" class="sp-section">
+      <div class="sp-card sp-filter-panel">
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">최소 타점:</span>
+          <button
+            v-for="ms in [8000, 12000, 16000, 24000, 32000]"
+            :key="'dms-' + ms"
+            type="button"
+            class="sp-chip-filter"
+            :class="{ active: dealInMinScore === ms }"
+            @click="dealInMinScore = ms"
+          >
+            {{ ms.toLocaleString() }}점+
+          </button>
+        </div>
+
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">조회 기간:</span>
+          <div class="sp-toggle-group">
+            <button type="button" class="sp-toggle-btn" :class="{ active: dealInScopeMode === 'all' }" @click="dealInScopeMode = 'all'">
+              전체 (제9회~)
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: dealInScopeMode === 'recent_sessions' }" @click="dealInScopeMode = 'recent_sessions'">
+              최근 N회차
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: dealInScopeMode === 'session_range' }" @click="dealInScopeMode = 'session_range'">
+              회차 구간
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: dealInScopeMode === 'date_range' }" @click="dealInScopeMode = 'date_range'">
+              일자 지정
+            </button>
+          </div>
+        </div>
+
+        <div v-if="dealInScopeMode === 'recent_sessions'" class="sp-scope-controls">
+          <div class="sp-scope-presets">
+            <button
+              v-for="n in [1, 3, 5, 10]"
+              :key="'drs-' + n"
+              type="button"
+              class="sp-quick-chip"
+              :class="{ active: dealInRecentSessions === n }"
+              @click="dealInRecentSessions = n"
+            >
+              최근 {{ n }}회차
+            </button>
+          </div>
+          <div class="sp-scope-inline-input">
+            <span>직접 입력:</span>
+            <input v-model.number="dealInRecentSessions" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" />
+            <span>회차</span>
+          </div>
+        </div>
+
+        <div v-else-if="dealInScopeMode === 'session_range'" class="sp-scope-controls">
+          <div class="sp-scope-inline-input">
+            <input v-model.number="dealInStartNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" />
+            <span>회차 ~</span>
+            <input v-model.number="dealInEndNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" />
+            <span>회차</span>
+          </div>
+        </div>
+
+        <div v-else-if="dealInScopeMode === 'date_range'" class="sp-scope-controls">
+          <div class="sp-scope-inline-input">
+            <input v-model="dealInStartDate" type="date" class="sp-date-input" />
+            <span>~</span>
+            <input v-model="dealInEndDate" type="date" class="sp-date-input" />
+          </div>
+        </div>
+
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">플레이어 필터:</span>
+          <select v-model="dealInPlayerFilter" class="sp-select-box compact-sel">
+            <option value="">전체 플레이어</option>
+            <option v-for="m in sortedAllMembers" :key="'dpf-' + m.name" :value="m.name">{{ m.name }}</option>
+          </select>
+          <div v-if="dealInPlayerFilter" class="sp-toggle-group">
+            <button type="button" class="sp-toggle-btn" :class="{ active: dealInRoleFilter === 'all' }" @click="dealInRoleFilter = 'all'">전체</button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: dealInRoleFilter === 'loser' }" @click="dealInRoleFilter = 'loser'">쏘인 기록</button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: dealInRoleFilter === 'winner' }" @click="dealInRoleFilter = 'winner'">론 화료</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="isLoadingDealIns" class="sp-loading-box">고타점 방총 기록을 집계하는 중입니다...</div>
+
+      <template v-else>
+        <!-- 최근 고타점 방총 타임라인 -->
+        <div class="sp-card">
+          <div class="sp-card-header">
+            <h4>최근 고타점 방총 내역 ({{ filteredGlobalDealIns.length }}건)</h4>
+            <span class="sp-card-sub">누가 누구에게 몇 점 쏘였는지 최신순으로 표시 · 이름 클릭 시 개인 스탯 이동</span>
+          </div>
+          <div class="sp-table-scroll" v-if="filteredGlobalDealIns.length > 0">
+            <table class="sp-table">
+              <thead>
+                <tr>
+                  <th>회차</th>
+                  <th>일자</th>
+                  <th>국</th>
+                  <th>방총자 (쏘인 사람)</th>
+                  <th>→</th>
+                  <th>화료자 (론 화료)</th>
+                  <th>방총 타점</th>
+                  <th>비고</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="d in filteredGlobalDealIns.slice(0, 80)" :key="d.id">
+                  <td class="nowrap">{{ d.sessionName }}</td>
+                  <td class="nowrap muted">{{ d.date || '-' }}</td>
+                  <td class="nowrap muted">{{ d.roundName || '-' }}</td>
+                  <td class="nowrap">
+                    <button type="button" class="table-player-link neg-link" @click="selectPlayer(d.loserName)">
+                      {{ d.loserName }}
+                    </button>
+                  </td>
+                  <td class="muted">→</td>
+                  <td class="nowrap">
+                    <button type="button" class="table-player-link" @click="selectPlayer(d.winnerName)">
+                      {{ d.winnerName }}
+                    </button>
+                  </td>
+                  <td class="nowrap">
+                    <strong class="neg">{{ d.score.toLocaleString() }}점</strong>
+                    <span class="dealin-tier-badge" :class="getDealInTierBadge(d.score, d.isOyaWin).cls">
+                      {{ getDealInTierBadge(d.score, d.isOyaWin).text }}
+                    </span>
+                  </td>
+                  <td class="nowrap muted-mini">
+                    <span v-if="d.isLoserRiichi" class="dealin-meta-tag">리치 중</span>
+                    <span v-if="d.isDoubleRon" class="dealin-meta-tag">더블론</span>
+                    <span v-if="!d.isLoserRiichi && !d.isDoubleRon">-</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="sp-loading-box">선택한 조건에 해당하는 고타점 방총 기록이 없습니다.</div>
+        </div>
+
+        <!-- 플레이어별 고타점 방총 요약 -->
+        <div class="sp-card" v-if="highScoreDealInPlayerSummary.length > 0">
+          <div class="sp-card-header">
+            <h4>플레이어별 고타점 방총 요약</h4>
+            <span class="sp-card-sub">행 클릭 시 해당 플레이어 필터링</span>
+          </div>
+          <div class="sp-table-scroll">
+            <table class="sp-table sp-data-table">
+              <thead>
+                <tr>
+                  <th>플레이어</th>
+                  <th>고타점 방총(피격)</th>
+                  <th>평균 방총 타점</th>
+                  <th>최대 방총 타점</th>
+                  <th>가장 많이 쏘인 상대</th>
+                  <th>고타점 론 화료</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in highScoreDealInPlayerSummary"
+                  :key="'dsum-' + row.name"
+                  class="clickable-row"
+                  @click="dealInPlayerFilter = row.name; dealInRoleFilter = 'loser'"
+                >
+                  <td class="nowrap">
+                    <button type="button" class="table-player-link" @click.stop="selectPlayer(row.name)">
+                      {{ row.name }}
+                    </button>
+                  </td>
+                  <td class="neg">{{ row.lostCount }}회</td>
+                  <td>{{ row.lostAvg > 0 ? row.lostAvg.toLocaleString() + '점' : '-' }}</td>
+                  <td><strong>{{ row.maxLost > 0 ? row.maxLost.toLocaleString() + '점' : '-' }}</strong></td>
+                  <td class="nowrap">
+                    <template v-if="row.topAttackerCnt > 0">
+                      {{ row.topAttacker }} <span class="muted-mini">({{ row.topAttackerCnt }}회)</span>
+                    </template>
+                    <template v-else>-</template>
+                  </td>
+                  <td class="pos">{{ row.wonCount }}회</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
     </div>
 
     <!-- ===================================================== -->
@@ -2502,14 +3391,23 @@ onMounted(() => {
 
         <!-- 회차 구간 -->
         <div v-else-if="gamesLogMode === 'session_range'" class="sp-log-subpanel">
-          <div class="sp-scope-inline-input">
-            <select v-model="logStartSession" class="sp-select-box">
-              <option v-for="s in sortedSessionsAsc" :key="'l-ss-' + s" :value="s">{{ s }}</option>
-            </select>
-            <span>~</span>
-            <select v-model="logEndSession" class="sp-select-box">
-              <option v-for="s in sortedSessionsDesc" :key="'l-se-' + s" :value="s">{{ s }}</option>
-            </select>
+          <div class="sp-scope-controls" style="border-top: none; padding-top: 0;">
+            <div class="sp-scope-inline-input">
+              <input v-model.number="logStartNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" @change="applyLogSessionNums" @keyup.enter="applyLogSessionNums" />
+              <span>회차 ~</span>
+              <input v-model.number="logEndNum" type="number" min="1" :max="maxSessionNumber" class="sp-num-input compact" @change="applyLogSessionNums" @keyup.enter="applyLogSessionNums" />
+              <span>회차</span>
+              <button type="button" class="sp-action-btn primary" @click="applyLogSessionNums">적용</button>
+            </div>
+            <div class="sp-scope-inline-input">
+              <select v-model="logStartSession" class="sp-select-box" @change="syncLogSessionNumsFromLabels">
+                <option v-for="s in sortedSessionsAsc" :key="'l-ss-' + s" :value="s">{{ s }}</option>
+              </select>
+              <span>~</span>
+              <select v-model="logEndSession" class="sp-select-box" @change="syncLogSessionNumsFromLabels">
+                <option v-for="s in sortedSessionsDesc" :key="'l-se-' + s" :value="s">{{ s }}</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -3449,6 +4347,116 @@ onMounted(() => {
   font-size: 11px;
   color: var(--sp-text-muted);
   font-weight: 600;
+}
+.sp-drawer-rbands {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--sp-border-strong);
+}
+.sp-rband-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--sp-text-muted);
+  margin-right: 2px;
+}
+.sp-rband-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-card-bg);
+  color: var(--sp-text-secondary);
+  border-radius: 6px;
+  padding: 2.5px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.sp-rband-chip.active {
+  border-color: var(--rb-color, var(--sp-accent));
+  box-shadow: 0 0 0 1px var(--rb-color, var(--sp-accent));
+}
+.sp-rb-dash {
+  display: inline-block;
+  width: 10px;
+  height: 0;
+  border-top: 2px dashed currentColor;
+}
+.sp-stable-pill {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 7px;
+  border: 1.5px dashed currentColor;
+  background: var(--sp-rating-pill-bg);
+}
+
+/* 고타점 방총 배지 및 컨트롤 */
+.sp-dealin-header-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.compact-sel {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.sp-dealin-summary-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.dealin-tier-badge {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.dealin-tier-badge.tier-mangan {
+  background: rgba(245, 158, 11, 0.16);
+  color: #d97706;
+}
+.dealin-tier-badge.tier-haneman {
+  background: rgba(249, 115, 22, 0.18);
+  color: #ea580c;
+}
+.dealin-tier-badge.tier-baiman {
+  background: rgba(239, 68, 68, 0.18);
+  color: #dc2626;
+}
+.dealin-tier-badge.tier-sanbaiman {
+  background: rgba(225, 29, 72, 0.22);
+  color: #e11d48;
+}
+.dealin-tier-badge.tier-yakuman {
+  background: rgba(234, 179, 8, 0.28);
+  color: #eab308;
+}
+.stat-page-root.dark .dealin-tier-badge.tier-mangan { color: #fbbf24; }
+.stat-page-root.dark .dealin-tier-badge.tier-haneman { color: #fb923c; }
+.stat-page-root.dark .dealin-tier-badge.tier-baiman { color: #f87171; }
+.stat-page-root.dark .dealin-tier-badge.tier-sanbaiman { color: #fb7185; }
+.stat-page-root.dark .dealin-tier-badge.tier-yakuman { color: #fde047; }
+.dealin-meta-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.18);
+  font-size: 10.5px;
+  margin: 0 2px;
+}
+.neg-link {
+  color: var(--sp-neg) !important;
 }
 
 /* 자주 만난 상대 */

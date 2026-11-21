@@ -453,3 +453,76 @@ export function sortRatingsDesc(ratingsMap: Record<string, PlayerRating>): Playe
     return b.games - a.games;
   });
 }
+
+export interface StableRatingResult {
+  stableRating: number;
+  avgOpponentRating: number;
+  avgUma: number;
+  gamesUsed: number;
+  isLowSample: boolean;
+}
+
+/**
+ * 안정 레이팅(수렴 레이팅) 계산
+ *
+ * 현재 레이팅 갱신 수식:
+ *   avgTableRating = (R + 3 * R_opp) / 4
+ *   oppDiff = (avgTableRating - R) / 30 = (R_opp - R) / 40
+ *   dMu = scale * (rawUma + oppDiff)
+ *
+ * 동일 성적 비율(평균 우마)로 무한히 대국이 진행될 때 E[dMu] = 0 이 되는 수렴점:
+ *   R* = avgOpponentRating + 40 * avgUma
+ */
+export function computeStableRating(params: {
+  playerName: string;
+  avgUma: number;
+  totalGames: number;
+  historyRecords?: GameRatingHistoryRecord[];
+  fallbackAvgOpponentRating?: number;
+}): StableRatingResult {
+  const {
+    playerName,
+    avgUma,
+    totalGames,
+    historyRecords = [],
+    fallbackAvgOpponentRating = DEFAULT_MU,
+  } = params;
+
+  const normTarget = normalizeRatingPlayerName(playerName);
+  let oppRatingSum = 0;
+  let oppSamples = 0;
+  let matchedGames = 0;
+
+  if (normTarget && Array.isArray(historyRecords) && historyRecords.length > 0) {
+    for (const g of historyRecords) {
+      if (!Array.isArray(g.players) || g.players.length < 2) continue;
+      const hasMe = g.players.some((p) => normalizeRatingPlayerName(p.name) === normTarget);
+      if (!hasMe) continue;
+      matchedGames++;
+      for (const p of g.players) {
+        if (normalizeRatingPlayerName(p.name) === normTarget) continue;
+        const preGameOrd =
+          typeof p.ordinal === 'number' && !isNaN(p.ordinal)
+            ? p.ordinal - (typeof p.delta === 'number' && !isNaN(p.delta) ? p.delta : 0)
+            : NaN;
+        if (!isNaN(preGameOrd) && preGameOrd > 0) {
+          oppRatingSum += preGameOrd;
+          oppSamples++;
+        }
+      }
+    }
+  }
+
+  const avgOpponentRating =
+    oppSamples > 0 ? oppRatingSum / oppSamples : fallbackAvgOpponentRating;
+  const safeAvgUma = Number.isFinite(avgUma) ? avgUma : 0;
+  const stableRating = Math.round(avgOpponentRating + 40 * safeAvgUma);
+
+  return {
+    stableRating,
+    avgOpponentRating: Math.round(avgOpponentRating),
+    avgUma: safeAvgUma,
+    gamesUsed: matchedGames || totalGames || 0,
+    isLowSample: (totalGames || matchedGames || 0) < 10,
+  };
+}
