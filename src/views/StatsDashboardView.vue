@@ -9492,18 +9492,13 @@ const openGamePopupFromLightbox = async (
               <div class="modal-header-actions">
                 <button
                   type="button"
-                  class="btn-vs-compare compact mh-action-btn"
+                  class="btn-vs-compare compact mh-action-btn mh-vs-btn"
                   @click="openPlayerCompareModal(selectedPlayer.name)"
                   title="이 플레이어와 다른 상대의 스탯 비교"
                   aria-label="VS 비교"
                 >
-                  <svg class="mh-icon mh-mobile-only-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="m8 7-4 4 4 4"></path>
-                    <path d="M4 11h11"></path>
-                    <path d="m16 17 4-4-4-4"></path>
-                    <path d="M20 13H9"></path>
-                  </svg>
                   <span class="vs-pill-mark mh-desktop-only">VS</span>
+                  <span class="mh-mobile-vs-text">VS</span>
                   <span class="mh-btn-text">비교</span>
                 </button>
                 <button
@@ -14563,32 +14558,38 @@ html.dark .dist-rb-val {
 .btn-vs-compare {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   padding: 6px 11px;
-  border-radius: 7px;
-  border: 1px solid rgba(37, 99, 235, 0.35);
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(225, 29, 72, 0.08));
-  color: #1e293b;
+  border-radius: 6px;
+  border: 1px solid rgba(124, 58, 237, 0.32);
+  background: rgba(124, 58, 237, 0.08);
+  color: #5b21b6;
   font-size: 12.5px;
   font-weight: 700;
   font-family: inherit;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   white-space: nowrap;
 }
 .btn-vs-compare:hover {
-  border-color: #2563eb;
-  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.18);
-  transform: translateY(-1px);
+  border-color: #7c3aed;
+  background: rgba(124, 58, 237, 0.15);
 }
 .btn-vs-compare.compact {
-  padding: 4px 9px;
+  padding: 5px 10px;
   font-size: 0.78rem;
+  height: 32px;
+  box-sizing: border-box;
 }
 html.dark .btn-vs-compare {
-  color: #f1f5f9;
-  border-color: rgba(96, 165, 250, 0.38);
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.22), rgba(225, 29, 72, 0.18));
+  color: #ddd6fe;
+  border-color: rgba(167, 139, 250, 0.36);
+  background: rgba(139, 92, 246, 0.16);
+}
+html.dark .btn-vs-compare:hover {
+  border-color: #a78bfa;
+  background: rgba(139, 92, 246, 0.26);
 }
 .vs-pill-mark {
   display: inline-flex;
@@ -14596,11 +14597,15 @@ html.dark .btn-vs-compare {
   justify-content: center;
   padding: 1px 5px;
   border-radius: 4px;
-  background: linear-gradient(135deg, #2563eb, #e11d48);
+  background: #7c3aed;
   color: #ffffff;
   font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.03em;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+html.dark .vs-pill-mark {
+  background: #8b5cf6;
+  color: #ffffff;
 }
 
 /* 헤더 */
@@ -15704,8 +15709,12 @@ html.dark .modal-header {
   flex-shrink: 0;
   display: inline-block;
 }
-.mh-mobile-only-icon {
+.mh-mobile-vs-text {
   display: none;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 .mh-close-btn {
   display: inline-flex;
@@ -15811,7 +15820,7 @@ html.dark .notice_close_btn:hover {
   .mh-desktop-only {
     display: none !important;
   }
-  .mh-mobile-only-icon {
+  .mh-mobile-vs-text {
     display: inline-block !important;
   }
   .mh-action-btn,

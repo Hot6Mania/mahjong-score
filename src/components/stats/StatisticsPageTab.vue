@@ -2037,7 +2037,7 @@ onMounted(() => {
             </div>
 
             <div class="sp-profile-actions">
-              <button type="button" class="sp-action-btn primary" @click="emit('open-compare', selectedPlayer.name)">
+              <button type="button" class="sp-action-btn vs-purple" @click="emit('open-compare', selectedPlayer.name)">
                 VS 비교
               </button>
               <button type="button" class="sp-action-btn" @click="emit('open-popup', selectedPlayer.name)">
@@ -4700,14 +4700,46 @@ onMounted(() => {
   text-decoration: underline;
 }
 .opp-vs-mini {
-  border: none;
+  border: 1px solid rgba(124, 58, 237, 0.35);
   border-radius: 5px;
   padding: 2px 6px;
   font-size: 10px;
-  font-weight: 900;
-  color: #ffffff;
-  background: linear-gradient(135deg, #2563eb, #e11d48);
+  font-weight: 800;
+  color: #6d28d9;
+  background: rgba(124, 58, 237, 0.1);
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.opp-vs-mini:hover {
+  border-color: #7c3aed;
+  background: rgba(124, 58, 237, 0.18);
+}
+.stat-page-root.dark .opp-vs-mini {
+  color: #ddd6fe;
+  border-color: rgba(167, 139, 250, 0.38);
+  background: rgba(139, 92, 246, 0.18);
+}
+.stat-page-root.dark .opp-vs-mini:hover {
+  border-color: #a78bfa;
+  background: rgba(139, 92, 246, 0.28);
+}
+.sp-action-btn.vs-purple {
+  background: rgba(124, 58, 237, 0.1);
+  border-color: rgba(124, 58, 237, 0.36);
+  color: #5b21b6;
+}
+.sp-action-btn.vs-purple:hover {
+  background: rgba(124, 58, 237, 0.18);
+  border-color: #7c3aed;
+}
+.stat-page-root.dark .sp-action-btn.vs-purple {
+  background: rgba(139, 92, 246, 0.18);
+  border-color: rgba(167, 139, 250, 0.38);
+  color: #ddd6fe;
+}
+.stat-page-root.dark .sp-action-btn.vs-purple:hover {
+  background: rgba(139, 92, 246, 0.28);
+  border-color: #a78bfa;
 }
 
 /* 토글 / 필터 컨트롤 */
