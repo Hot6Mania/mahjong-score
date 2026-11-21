@@ -8,7 +8,7 @@ import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
 import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, hasPendingOAuthRedirectParams, startGoogleRedirectLogin, consumeGoogleRedirectCallback, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
-import { calculateMatchRatings, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
+import { calculateMatchRatings, normalizeRatingPlayerName, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
@@ -95,11 +95,24 @@ try {
   }
 } catch (e) {}
 
+const findRatingEntry = (map: Record<string, PlayerRating>, name: string): PlayerRating | undefined => {
+  if (!name) return undefined;
+  if (map[name]) return map[name];
+  const norm = normalizeRatingPlayerName(name);
+  if (!norm) return undefined;
+  if (map[norm]) return map[norm];
+  for (const [k, val] of Object.entries(map)) {
+    if (normalizeRatingPlayerName(k) === norm) return val;
+  }
+  return undefined;
+};
+
 // 플레이어 이름 변경 시 레이팅 실시간 동기화
 watch(() => players.map(p => p.name), (names) => {
   names.forEach((name, idx) => {
-    if (ratingsMap.value[name]) {
-      players[idx].rating = ratingsMap.value[name].ordinal;
+    const found = findRatingEntry(ratingsMap.value, name);
+    if (found) {
+      players[idx].rating = found.ordinal;
     } else {
       delete players[idx].rating;
     }
@@ -125,7 +138,7 @@ const loadRatings = async () => {
   }
 
   if (googleInfo.isLoggedIn && googleInfo.spreadsheetId) {
-    const migKey = `mahjong_rating_formula_v30_${googleInfo.spreadsheetId}`;
+    const migKey = `mahjong_rating_formula_v31_star_norm_${googleInfo.spreadsheetId}`;
     if (!localStorage.getItem(migKey)) {
       recalculateAndSyncAllRatings(googleInfo.spreadsheetId)
         .then((res) => {
@@ -134,14 +147,15 @@ const loadRatings = async () => {
             localStorage.setItem("mahjong_ratings", JSON.stringify(res.ratings));
             localStorage.setItem(migKey, "true");
             players.forEach(p => {
-              if (res.ratings[p.name]) {
-                p.rating = res.ratings[p.name].ordinal;
+              const found = findRatingEntry(res.ratings, p.name);
+              if (found) {
+                p.rating = found.ordinal;
               }
             });
           }
         })
         .catch((err) => {
-          console.warn("백그라운드 /30 레이팅 시트 자동 마이그레이션 실패:", err);
+          console.warn("백그라운드 별표 통합 레이팅 시트 자동 마이그레이션 실패:", err);
         });
     } else {
       try {
@@ -157,8 +171,9 @@ const loadRatings = async () => {
   }
 
   players.forEach(p => {
-    if (ratingsMap.value[p.name]) {
-      p.rating = ratingsMap.value[p.name].ordinal;
+    const found = findRatingEntry(ratingsMap.value, p.name);
+    if (found) {
+      p.rating = found.ordinal;
     }
   });
 };

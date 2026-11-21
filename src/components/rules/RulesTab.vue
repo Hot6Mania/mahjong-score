@@ -224,9 +224,12 @@
             <span class="rule-label">복합 역만</span>
             <span class="rule-badge on">있음</span>
           </div>
-          <div class="rule-row">
-            <span class="rule-label">책임지불</span>
-            <span class="rule-badge on">있음</span>
+          <div class="rule-row rule-row-multiline">
+            <div class="rule-row-top">
+              <span class="rule-label">책임지불</span>
+              <span class="rule-badge on">있음</span>
+            </div>
+            <div class="rule-subnote">대삼원, 대사희</div>
           </div>
           <div class="rule-row rule-row-multiline rule-col-span-full">
             <div class="rule-row-top">

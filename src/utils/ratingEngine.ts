@@ -140,6 +140,14 @@ export function createInitialRating(name: string): PlayerRating {
 }
 
 /**
+ * 선수 이름 정규화 (별표 '★' 및 앞뒤 공백 제거)
+ * 예: '신시'와 '신시★'를 동일 인물로 통합 집계하기 위한 정규화 키
+ */
+export function normalizeRatingPlayerName(name: string | undefined | null): string {
+  return String(name || '').replace(/★/g, '').trim();
+}
+
+/**
  * 단일 대국 결과(4인)를 바탕으로 순수 우마(Uma) 직접 반영 및 베이지안 불확실도 감쇄 레이팅 계산
  */
 export function calculateMatchRatings(
@@ -153,9 +161,21 @@ export function calculateMatchRatings(
   const updatedRatings: Record<string, PlayerRating> = {};
   const matchDeltas: Record<string, MatchDeltaResult> = {};
 
+  // 별표(★) 유무 차이로 동일 선수가 분리되지 않도록 정규화 이름 맵 구축
+  const normalizedLookup = new Map<string, PlayerRating>();
+  for (const [k, val] of Object.entries(currentRatings || {})) {
+    const norm = normalizeRatingPlayerName(k);
+    if (!norm || !val) continue;
+    const existing = normalizedLookup.get(norm);
+    if (!existing || (val.games || 0) > (existing.games || 0)) {
+      normalizedLookup.set(norm, val);
+    }
+  }
+
   // 1. 4명의 기존 레이팅 객체 확보 및 테이블 평균 레이팅 계산
   const playerStates = matchPlayers.map(p => {
-    const prev = currentRatings[p.name] || createInitialRating(p.name);
+    const norm = normalizeRatingPlayerName(p.name);
+    const prev = currentRatings[p.name] || (norm ? normalizedLookup.get(norm) : undefined) || createInitialRating(p.name);
     return { input: p, prev };
   });
 
@@ -222,6 +242,7 @@ export function calculateMatchRatings(
 
     updatedRatings[p.name] = {
       ...prev,
+      name: p.name,
       mu: newMu,
       sigma: newSigma,
       ordinal: newOrdinal,
@@ -239,8 +260,9 @@ export function calculateMatchRatings(
 }
 
 /**
- * 1~8회차(레거시 107대국) 및 9~15회차 raw 대국 전체를 시간순으로 리플레이하여
+ * 1~8회차(레거시 107대국) 및 9회차 이후 raw 대국 전체를 시간순으로 리플레이하여
  * 최종 선수별 레이팅 맵 및 대국별 타임라인을 도출합니다.
+ * (별표 '★' 유무 차이로 동일 선수가 분리되지 않도록 최신 표기명으로 자동 통합)
  */
 export function replayAllHistoricalGames(
   legacyRawText: string,
@@ -253,6 +275,51 @@ export function replayAllHistoricalGames(
   const ratings: Record<string, PlayerRating> = {};
   const matchHistory: GameRatingHistoryRecord[] = [];
   let totalReplayedGames = 0;
+
+  // 회차 목록을 숫자 오름차순으로 정렬
+  const sortedSessions = [...sessionRawGamesList].sort((a, b) => {
+    const numA = parseInt(a.sessionName.match(/제\s*(\d+)\s*회/)?.[1] || '0', 10);
+    const numB = parseInt(b.sessionName.match(/제\s*(\d+)\s*회/)?.[1] || '0', 10);
+    return numA - numB;
+  });
+
+  // 0. 별표(★) 변형 표기 통합용 최신 대표 표기명 맵 사전 수집 (예: 제3회 '신시' + 제25회 '신시★' -> '신시★')
+  const canonicalDisplayByNorm = new Map<string, string>();
+  const registerDisplayName = (rawName: string) => {
+    const trimmed = String(rawName || '').trim();
+    const norm = normalizeRatingPlayerName(trimmed);
+    if (!norm) return;
+    canonicalDisplayByNorm.set(norm, trimmed);
+  };
+
+  if (legacyRawText) {
+    const preLines = legacyRawText
+      .replace(/\\t/g, '\t')
+      .replace(/\\\\t/g, '\t')
+      .trim()
+      .split('\n');
+    for (const line of preLines) {
+      const parts = line.split('\t');
+      if (parts.length < 14) continue;
+      registerDisplayName(parts[2]);
+      registerDisplayName(parts[5]);
+      registerDisplayName(parts[8]);
+      registerDisplayName(parts[11]);
+    }
+  }
+  for (const session of sortedSessions) {
+    for (const g of session.games || []) {
+      for (const p of g.players || []) {
+        registerDisplayName(p.name);
+      }
+    }
+  }
+
+  const resolveCanonicalName = (rawName: string): string => {
+    const trimmed = String(rawName || '').trim();
+    const norm = normalizeRatingPlayerName(trimmed);
+    return (norm && canonicalDisplayByNorm.get(norm)) || trimmed;
+  };
 
   function ensurePlayer(name: string): PlayerRating {
     if (!ratings[name]) {
@@ -275,10 +342,10 @@ export function replayAllHistoricalGames(
       const sessLabel = parts[0].trim();
       const roundLabel = parts[1].trim();
 
-      const p1Name = parts[2].trim();
-      const p2Name = parts[5].trim();
-      const p3Name = parts[8].trim();
-      const p4Name = parts[11].trim();
+      const p1Name = resolveCanonicalName(parts[2]);
+      const p2Name = resolveCanonicalName(parts[5]);
+      const p3Name = resolveCanonicalName(parts[8]);
+      const p4Name = resolveCanonicalName(parts[11]);
       if (!p1Name || !p2Name || !p3Name || !p4Name) continue;
 
       [p1Name, p2Name, p3Name, p4Name].forEach(ensurePlayer);
@@ -318,14 +385,7 @@ export function replayAllHistoricalGames(
     }
   }
 
-  // B. 9~15회차 raw 대국 순차 스트리밍 (회차 번호 오름차순: 제9회 -> 제15회)
-  // 회차 목록을 숫자 오름차순으로 정렬
-  const sortedSessions = [...sessionRawGamesList].sort((a, b) => {
-    const numA = parseInt(a.sessionName.match(/제\s*(\d+)\s*회/)?.[1] || '0', 10);
-    const numB = parseInt(b.sessionName.match(/제\s*(\d+)\s*회/)?.[1] || '0', 10);
-    return numA - numB;
-  });
-
+  // B. 9회차 이후 raw 대국 순차 스트리밍 (회차 번호 오름차순)
   for (const session of sortedSessions) {
     const sessMatch = session.sessionName.match(/제\s*(\d+)\s*회/);
     const cleanSessionName = sessMatch ? `제${sessMatch[1]}회` : session.sessionName;
@@ -334,14 +394,16 @@ export function replayAllHistoricalGames(
       if (!g.players || g.players.length !== 4) continue;
       totalReplayedGames++;
 
-      g.players.forEach(p => ensurePlayer(p.name));
-
-      const matchPlayers: MatchPlayerInput[] = g.players.map(p => ({
-        name: p.name,
-        rank: p.rank || 1,
-        score: p.score,
-        uma: p.uma
-      }));
+      const matchPlayers: MatchPlayerInput[] = g.players.map(p => {
+        const canonName = resolveCanonicalName(p.name);
+        ensurePlayer(canonName);
+        return {
+          name: canonName,
+          rank: p.rank || 1,
+          score: p.score,
+          uma: p.uma
+        };
+      });
 
       // rank 순 정렬 보장
       matchPlayers.sort((a, b) => a.rank - b.rank);

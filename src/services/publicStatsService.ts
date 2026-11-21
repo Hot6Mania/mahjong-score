@@ -8,6 +8,7 @@ import {
   type GameRatingHistoryRecord,
   calculateMatchRatings,
   replayAllHistoricalGames,
+  normalizeRatingPlayerName,
   DEFAULT_MU,
   DEFAULT_SIGMA,
   computeOrdinal
@@ -1432,9 +1433,18 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
     // OpenSkill 레이팅 데이터 주입
     try {
       const ratingsMap = await fetchPublicRatings(sId, forceRefresh);
+      const ratingsByNorm = new Map<string, PlayerRating>();
+      Object.entries(ratingsMap).forEach(([k, val]) => {
+        const norm = normalizeRatingPlayerName(k);
+        if (!norm || !val) return;
+        const prev = ratingsByNorm.get(norm);
+        if (!prev || (val.games || 0) >= (prev.games || 0)) {
+          ratingsByNorm.set(norm, val);
+        }
+      });
       items.forEach(item => {
-        const cleanName = item.name.replace(/★/g, '').trim();
-        const r = ratingsMap[item.name] || ratingsMap[cleanName];
+        const cleanName = normalizeRatingPlayerName(item.name);
+        const r = ratingsMap[item.name] || ratingsMap[cleanName] || (cleanName ? ratingsByNorm.get(cleanName) : undefined);
         if (r) {
           item.rating = r.ordinal;
           item.ratingMu = r.mu;
@@ -1568,15 +1578,55 @@ export async function fetchPublicRatings(spreadsheetId?: string, forceRefresh: b
   }
 
   if (Object.keys(sheetMap).length > 0) {
-    const merged: Record<string, PlayerRating> = { ...(cachedRatings || {}) };
-    Object.entries(sheetMap).forEach(([name, sheetRating]) => {
-      const timelineRating = merged[name];
-      merged[name] = {
-        ...sheetRating,
-        lowestOrdinal: timelineRating?.lowestOrdinal ?? sheetRating.lowestOrdinal,
-        history: timelineRating?.history || sheetRating.history || []
-      };
+    // 1) 시트 행 중 별표(★) 변형으로 동일 인물이 2명 이상 분리된 경우(예: '신시' + '신시★') 감지
+    const sheetNormCount = new Map<string, number>();
+    Object.keys(sheetMap).forEach((name) => {
+      const norm = normalizeRatingPlayerName(name);
+      if (norm) sheetNormCount.set(norm, (sheetNormCount.get(norm) || 0) + 1);
     });
+
+    const replayedMap = cachedRatings || {};
+    const replayedByNorm = new Map<string, { key: string; rating: PlayerRating }>();
+    Object.entries(replayedMap).forEach(([k, r]) => {
+      const norm = normalizeRatingPlayerName(k);
+      if (!norm || !r) return;
+      const prev = replayedByNorm.get(norm);
+      if (!prev || (r.games || 0) >= (prev.rating.games || 0)) {
+        replayedByNorm.set(norm, { key: k, rating: r });
+      }
+    });
+
+    const merged: Record<string, PlayerRating> = {};
+    // 타임라인 리플레이 결과(별표 통합 완료)를 우선 적재
+    for (const entry of replayedByNorm.values()) {
+      merged[entry.key] = { ...entry.rating };
+    }
+
+    // 시트에만 존재하거나, 분리 오염이 없고 대국수가 더 최신인 항목만 보완 병합
+    Object.entries(sheetMap).forEach(([name, sheetRating]) => {
+      const norm = normalizeRatingPlayerName(name);
+      const isDuplicateSplitInSheet = norm ? (sheetNormCount.get(norm) || 0) > 1 : false;
+      const replayedEntry = norm ? replayedByNorm.get(norm) : undefined;
+
+      if (replayedEntry) {
+        // 시트에 별표 분리 중복이 있거나 리플레이 대국수가 크거나 같으면 통합 리플레이 결과를 유지
+        if (isDuplicateSplitInSheet || (replayedEntry.rating.games || 0) >= (sheetRating.games || 0)) {
+          return;
+        }
+        // 시트가 더 최신 대국을 포함한 단일 정상 항목인 경우에만 시트 값 반영 (기존 별표 키 정리)
+        if (replayedEntry.key !== name) {
+          delete merged[replayedEntry.key];
+        }
+        merged[name] = {
+          ...sheetRating,
+          lowestOrdinal: replayedEntry.rating.lowestOrdinal ?? sheetRating.lowestOrdinal,
+          history: replayedEntry.rating.history || sheetRating.history || []
+        };
+      } else {
+        merged[name] = { ...sheetRating, history: sheetRating.history || [] };
+      }
+    });
+
     cachedRatings = merged;
     return merged;
   }
@@ -2580,6 +2630,23 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
         });
 
         if (isHistorySheet || isHistoryRow0) {
+          // 0) 별표(★) 변형 표기(예: 제3회 '신시' + 제25회 '신시★')를 최신 표기명으로 사전 통합
+          const canonicalNameByNorm = new Map<string, string>();
+          table.rows.forEach((r: any) => {
+            if (!r.c) return;
+            const sessLabel = getCellStr(r.c[1]).trim();
+            if (!sessLabel || sessLabel === '회차') return;
+            const is5Col = r.c.length >= 23 || (r.c[5] && typeof r.c[5].v === 'number' && Math.abs(Number(r.c[5].v)) <= 150 && r.c[6] && Number(r.c[6].v) > 800);
+            const stride = is5Col ? 5 : 4;
+            for (let i = 0; i < 4; i++) {
+              const pName = getCellStr(r.c[3 + i * stride]).trim();
+              const norm = normalizeRatingPlayerName(pName);
+              if (pName && norm) {
+                canonicalNameByNorm.set(norm, pName);
+              }
+            }
+          });
+
           let runningRatings: Record<string, PlayerRating> = {};
           const historyRecords: GameRatingHistoryRecord[] = [];
 
@@ -2597,8 +2664,10 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
             const matchPlayers: { name: string; rank: number; score: number; uma?: number }[] = [];
             for (let i = 0; i < 4; i++) {
               const baseCol = 3 + i * stride;
-              const pName = getCellStr(r.c[baseCol]).trim();
-              if (pName) {
+              const rawName = getCellStr(r.c[baseCol]).trim();
+              if (rawName) {
+                const norm = normalizeRatingPlayerName(rawName);
+                const pName = (norm && canonicalNameByNorm.get(norm)) || rawName;
                 const pScore = Number(getCellNum(r.c[baseCol + 1])) || 0;
                 let pUma: number | undefined = undefined;
                 if (is5Col) {
@@ -2651,7 +2720,7 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
 
           if (historyRecords.length >= 107) {
             cachedRatingHistoryRecords = historyRecords;
-            cachedRatings = { ...(cachedRatings || {}), ...runningRatings };
+            cachedRatings = runningRatings;
             const traj = calculateAllPlayersRatingTrajectory(historyRecords);
             cachedRatingTrajectory = traj;
             return traj;
@@ -2697,21 +2766,22 @@ export function attachRatingToSessionGames(
   });
 
   games.forEach((game, gameIdx) => {
-    const gamePlayerNames = new Set(game.players.map(p => p.name));
+    const gamePlayerNorms = new Set(game.players.map(p => normalizeRatingPlayerName(p.name)));
     let matchedRecord = sessionRecords.find(r => {
-      return r.players.length === 4 && r.players.filter(p => gamePlayerNames.has(p.name)).length === 4;
+      return r.players.length === 4 && r.players.filter(p => gamePlayerNorms.has(normalizeRatingPlayerName(p.name))).length === 4;
     });
 
     if (!matchedRecord && sessionRecords[gameIdx]) {
       matchedRecord = sessionRecords[gameIdx];
     } else if (matchedRecord) {
       const candidateRecords = sessionRecords.filter(r => {
-        return r.players.length === 4 && r.players.filter(p => gamePlayerNames.has(p.name)).length === 4;
+        return r.players.length === 4 && r.players.filter(p => gamePlayerNorms.has(normalizeRatingPlayerName(p.name))).length === 4;
       });
       if (candidateRecords.length > 1) {
         const scoreMatched = candidateRecords.find(r => {
           return r.players.every(hp => {
-            const gp = game.players.find(p => p.name === hp.name);
+            const hpNorm = normalizeRatingPlayerName(hp.name);
+            const gp = game.players.find(p => normalizeRatingPlayerName(p.name) === hpNorm);
             return gp && gp.score === hp.score;
           });
         });
@@ -2721,7 +2791,8 @@ export function attachRatingToSessionGames(
 
     if (matchedRecord) {
       game.players.forEach(p => {
-        const hp = matchedRecord!.players.find(hp => hp.name === p.name);
+        const pNorm = normalizeRatingPlayerName(p.name);
+        const hp = matchedRecord!.players.find(hp => hp.name === p.name || normalizeRatingPlayerName(hp.name) === pNorm);
         if (hp) {
           p.ratingAfter = hp.ordinal;
           p.ratingDelta = hp.delta;
@@ -3612,6 +3683,848 @@ export function computeFrequentOpponentsStats(
   return {
     totalPlayerGames,
     opponents,
+  };
+}
+
+// ==========================================
+// 조건별 성적 DB 조회 엔진 (최근 N국 / 최근 N회차 / 기간 지정 / 회차 구간)
+// ==========================================
+
+export type StatsQueryMode = 'all' | 'recent_rounds' | 'recent_sessions' | 'date_range' | 'session_range';
+
+export interface StatsQueryFilter {
+  mode: StatsQueryMode;
+  recentRounds?: number;
+  recentSessions?: number;
+  startDate?: string; // 'YYYY-MM-DD'
+  endDate?: string;   // 'YYYY-MM-DD'
+  startSession?: string;
+  endSession?: string;
+  minGames?: number;
+}
+
+export interface StatsQueryResult {
+  members: MemberStatItem[];
+  matchedSessions: string[];
+  totalMatchedGames: number;
+  totalMatchedRounds: number;
+  hasLegacyOnlyGames: boolean;
+  queryElapsedMs: number;
+  summaryLabel: string;
+}
+
+let pendingAllRoundsRowsPromise: Promise<any[]> | null = null;
+
+export function parseSessionNumber(sessionLabel?: string): number {
+  if (!sessionLabel) return 0;
+  const m = String(sessionLabel).match(/제\s*(\d+)\s*회/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+export function extractIsoDateFromRecord(
+  sessionLabel?: string,
+  rawDate?: string,
+  gameId?: string
+): string {
+  // 1) 회차명 내 YYMMDD 토큰 우선 (예: "제15회 260926" -> "2026-09-26")
+  const sLabel = String(sessionLabel || '');
+  const yymmdd = sLabel.match(/(?:^|\D)(\d{2})(\d{2})(\d{2})(?:\D|$)/);
+  if (yymmdd) {
+    const yy = parseInt(yymmdd[1], 10);
+    const mm = parseInt(yymmdd[2], 10);
+    const dd = parseInt(yymmdd[3], 10);
+    if (yy >= 20 && yy <= 40 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      return `20${String(yy).padStart(2, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+    }
+  }
+
+  // 2) rawDate 문자열 파싱 (엑셀 일련번호, YYYY-MM-DD, YYYY. M. D., YYMMDD 등)
+  const formatted = formatSheetDateValue(String(rawDate || ''));
+  if (formatted) {
+    const isoMatch = formatted.match(/(\d{4})[-./]\s*(\d{1,2})[-./]\s*(\d{1,2})/);
+    if (isoMatch) {
+      return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+    }
+    const shortMatch = formatted.match(/^(\d{2})(\d{2})(\d{2})$/);
+    if (shortMatch) {
+      return `20${shortMatch[1]}-${shortMatch[2]}-${shortMatch[3]}`;
+    }
+  }
+
+  // 3) gameId (13자리 Unix ms 타임스탬프 -> KST 날짜 변환)
+  const cleanGameId = String(gameId || '').trim();
+  if (/^\d{13}$/.test(cleanGameId)) {
+    const ms = Number(cleanGameId);
+    if (!isNaN(ms) && ms > 1500000000000) {
+      const kstDate = new Date(ms + 9 * 3600 * 1000);
+      if (!isNaN(kstDate.getTime())) {
+        const y = kstDate.getUTCFullYear();
+        const m = String(kstDate.getUTCMonth() + 1).padStart(2, '0');
+        const d = String(kstDate.getUTCDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+    }
+  }
+
+  return '';
+}
+
+/**
+ * 전체 국별기록 (데이터) 전체 행을 1회 로드 및 메모리 캐싱합니다.
+ */
+export async function fetchAllPublicRoundsRows(
+  spreadsheetId?: string,
+  forceRefresh: boolean = false
+): Promise<any[]> {
+  if (!forceRefresh && cachedAllRoundsTable && Array.isArray(cachedAllRoundsTable.rows) && cachedAllRoundsTable.rows.length > 0) {
+    return cachedAllRoundsTable.rows;
+  }
+
+  if (!forceRefresh && pendingAllRoundsRowsPromise) {
+    return pendingAllRoundsRowsPromise;
+  }
+
+  const promise = (async () => {
+    try {
+      const workerUrl = getWorkerUrl();
+      if (workerUrl) {
+        try {
+          const refreshParam = forceRefresh ? `?refresh=1&_t=${Date.now()}` : '';
+          const res = await fetchWithTimeout(`${workerUrl}/api/public/rounds${refreshParam}`, { cache: 'no-store' }, 15000);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.table && Array.isArray(data.table.rows)) {
+              cachedAllRoundsTable = data.table;
+              indexAllRoundsBySession(data.table.rows);
+              return data.table.rows;
+            }
+          }
+        } catch (e) {
+          console.warn('Worker all-rounds fetch failed:', e);
+        }
+      }
+
+      const sId = spreadsheetId || await resolveSpreadsheetId();
+      if (sId) {
+        const sheetParam = encodeURIComponent('전체 국별기록 (데이터)');
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json&sheet=${sheetParam}`;
+        const res = await fetchWithTimeout(gvizUrl, {}, 15000);
+        if (res.ok) {
+          const text = await res.text();
+          const json = parseGVizResponse(text);
+          if (json && json.table && Array.isArray(json.table.rows)) {
+            cachedAllRoundsTable = json.table;
+            indexAllRoundsBySession(json.table.rows);
+            return json.table.rows;
+          }
+        }
+      }
+
+      return cachedAllRoundsTable?.rows || [];
+    } finally {
+      pendingAllRoundsRowsPromise = null;
+    }
+  })();
+
+  pendingAllRoundsRowsPromise = promise;
+  return promise;
+}
+
+/**
+ * 임의의 국별 기록 행 배열을 선수별 MemberStatItem 맵으로 집계합니다.
+ */
+function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberStatItem> {
+  const rawAgg: Record<string, {
+    name: string;
+    gameIds: Set<string>;
+    ranks: Record<number, number>;
+    totalUmaSum: number;
+    rankSum: number;
+    totalRounds: number;
+    winCount: number;
+    loseCount: number;
+    riichiCount: number;
+    tenpaiCount: number;
+    tsumoWinCount: number;
+    drawCount: number;
+    drawTenpaiCount: number;
+    totalWinScore: number;
+    totalLoseScore: number;
+    roundSujiSum: number;
+    riichiWinCount: number;
+    riichiLoseCount: number;
+    riichiDrawCount: number;
+    riichiDeltaSum: number;
+    riichiWinScoreSum: number;
+    riichiLoseScoreSum: number;
+    firstRiichiCount: number;
+    chaseRiichiCount: number;
+    chasedRiichiCount: number;
+    loseWithRiichiCount: number;
+    oyaTsumoSufferedCount: number;
+    oyaManganSufferedCount: number;
+    oyaManganLossSum: number;
+    tobiGameIds: Set<string>;
+    tobiCount: number;
+    cheatCount: number;
+    beolbuCount: number;
+  }> = {};
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r?.c) continue;
+    const player = getCellStr(r.c[5]).trim();
+    if (!player) continue;
+
+    if (!rawAgg[player]) {
+      rawAgg[player] = {
+        name: player,
+        gameIds: new Set<string>(),
+        ranks: { 1: 0, 2: 0, 3: 0, 4: 0 },
+        totalUmaSum: 0,
+        rankSum: 0,
+        totalRounds: 0,
+        winCount: 0,
+        loseCount: 0,
+        riichiCount: 0,
+        tenpaiCount: 0,
+        tsumoWinCount: 0,
+        drawCount: 0,
+        drawTenpaiCount: 0,
+        totalWinScore: 0,
+        totalLoseScore: 0,
+        roundSujiSum: 0,
+        riichiWinCount: 0,
+        riichiLoseCount: 0,
+        riichiDrawCount: 0,
+        riichiDeltaSum: 0,
+        riichiWinScoreSum: 0,
+        riichiLoseScoreSum: 0,
+        firstRiichiCount: 0,
+        chaseRiichiCount: 0,
+        chasedRiichiCount: 0,
+        loseWithRiichiCount: 0,
+        oyaTsumoSufferedCount: 0,
+        oyaManganSufferedCount: 0,
+        oyaManganLossSum: 0,
+        tobiGameIds: new Set<string>(),
+        tobiCount: 0,
+        cheatCount: 0,
+        beolbuCount: 0,
+      };
+    }
+
+    const p = rawAgg[player];
+    p.totalRounds++;
+
+    const gameId = getCellStr(r.c[1]).trim();
+    const rank = getCellNum(r.c[13]);
+    const uma = getCellNum(r.c[14]);
+    const finalScore = getCellNum(r.c[8]);
+
+    if (gameId && !p.gameIds.has(gameId)) {
+      p.gameIds.add(gameId);
+      if (rank >= 1 && rank <= 4) {
+        p.ranks[rank]++;
+        p.rankSum += rank;
+      }
+      p.totalUmaSum += uma;
+    }
+
+    if (gameId && finalScore < 0 && !p.tobiGameIds.has(gameId)) {
+      p.tobiGameIds.add(gameId);
+      p.tobiCount++;
+    }
+
+    const endStatus = getCellStr(r.c[4]).toLowerCase();
+    const isEast = r.c[6]?.v === true || r.c[6]?.v === 'TRUE' || r.c[6]?.v === 1;
+    const delta = getCellNum(r.c[7]);
+    const isRiichi = r.c[9]?.v === true || r.c[9]?.v === 'TRUE' || r.c[9]?.v === 1;
+    const isWin = r.c[10]?.v === true || r.c[10]?.v === 'TRUE' || r.c[10]?.v === 1;
+    const isLose = r.c[11]?.v === true || r.c[11]?.v === 'TRUE' || r.c[11]?.v === 1;
+    const isTenpai = r.c[12]?.v === true || r.c[12]?.v === 'TRUE' || r.c[12]?.v === 1;
+    const isFirst = r.c[16]?.v === true || r.c[16]?.v === 'TRUE' || r.c[16]?.v === 1;
+    const isChase = r.c[17]?.v === true || r.c[17]?.v === 'TRUE' || r.c[17]?.v === 1;
+    const isChased = r.c[18]?.v === true || r.c[18]?.v === 'TRUE' || r.c[18]?.v === 1;
+    const pureScore = getCellNum(r.c[19]);
+    const uVal = r.c[20]?.v;
+    const isCheat = uVal === true || uVal === 'TRUE' || uVal === 1 || (uVal === undefined && endStatus === 'cheat' && delta < 0);
+    const beolbuCnt = getCellNum(r.c[21], 0);
+
+    if (isCheat) p.cheatCount++;
+    if (beolbuCnt > 0) p.beolbuCount += beolbuCnt;
+
+    p.roundSujiSum += delta;
+
+    if (isWin) {
+      p.winCount++;
+      const scoreToAdd = pureScore > 0 ? pureScore : delta;
+      p.totalWinScore += scoreToAdd;
+      if (endStatus === 'tsumo') p.tsumoWinCount++;
+    }
+
+    if (isLose) {
+      p.loseCount++;
+      p.totalLoseScore += (isRiichi ? Math.abs(delta) - 1000 : Math.abs(delta));
+    }
+
+    if (isRiichi) {
+      p.riichiCount++;
+      p.riichiDeltaSum += delta;
+      if (isWin) {
+        p.riichiWinCount++;
+        p.riichiWinScoreSum += delta;
+      }
+      if (isLose) {
+        p.riichiLoseCount++;
+        p.riichiLoseScoreSum += Math.abs(delta);
+      }
+      if (endStatus.includes('draw')) p.riichiDrawCount++;
+      if (isFirst) p.firstRiichiCount++;
+      if (isChase) p.chaseRiichiCount++;
+      if (isChased) p.chasedRiichiCount++;
+    }
+
+    if (isTenpai) p.tenpaiCount++;
+
+    if (endStatus.includes('draw')) {
+      p.drawCount++;
+      if (isTenpai) p.drawTenpaiCount++;
+    }
+
+    if (isLose && isRiichi) {
+      p.loseWithRiichiCount++;
+    }
+
+    if (endStatus === 'tsumo' && !isWin) {
+      if (isEast) {
+        p.oyaTsumoSufferedCount++;
+        const limit = isRiichi ? -5000 : -4000;
+        if (delta <= limit) {
+          p.oyaManganSufferedCount++;
+          p.oyaManganLossSum += (pureScore > 0 ? pureScore : Math.abs(delta));
+        }
+      }
+    }
+  }
+
+  const resultMap: Record<string, MemberStatItem> = {};
+  for (const [name, p] of Object.entries(rawAgg)) {
+    const totalGames = p.gameIds.size;
+    const totalRounds = p.totalRounds;
+    if (totalRounds === 0) continue;
+
+    const winRate = parseFloat(((p.winCount / totalRounds) * 100).toFixed(2));
+    const dealInRate = parseFloat(((p.loseCount / totalRounds) * 100).toFixed(2));
+    const riichiRate = parseFloat(((p.riichiCount / totalRounds) * 100).toFixed(2));
+    const tenpaiRate = parseFloat(((p.tenpaiCount / totalRounds) * 100).toFixed(2));
+    const avgWinScore = p.winCount > 0 ? Math.round(p.totalWinScore / p.winCount) : 0;
+    const avgDealInScore = p.loseCount > 0 ? Math.round(p.totalLoseScore / p.loseCount) : 0;
+    const handEV = Math.round(p.roundSujiSum / totalRounds);
+    const winEfficiency = Math.round((winRate / 100) * avgWinScore);
+    const dealInLoss = Math.round((dealInRate / 100) * avgDealInScore);
+    const netWinEfficiency = winEfficiency - dealInLoss;
+    const tsumoRate = p.winCount > 0 ? parseFloat(((p.tsumoWinCount / p.winCount) * 100).toFixed(2)) : 0;
+    const drawRate = parseFloat(((p.drawCount / totalRounds) * 100).toFixed(2));
+    const drawTenpaiRate = p.drawCount > 0 ? parseFloat(((p.drawTenpaiCount / p.drawCount) * 100).toFixed(2)) : 0;
+    const tobiRate = totalGames > 0 ? parseFloat(((p.tobiCount / totalGames) * 100).toFixed(2)) : 0;
+
+    const riichiWinRate = p.riichiCount > 0 ? parseFloat(((p.riichiWinCount / p.riichiCount) * 100).toFixed(2)) : 0;
+    const riichiDealInRate = p.riichiCount > 0 ? parseFloat(((p.riichiLoseCount / p.riichiCount) * 100).toFixed(2)) : 0;
+    const riichiDrawRate = p.riichiCount > 0 ? parseFloat(((p.riichiDrawCount / p.riichiCount) * 100).toFixed(2)) : 0;
+    const riichiEV = p.riichiCount > 0 ? Math.round(p.riichiDeltaSum / p.riichiCount) : 0;
+    const riichiIncomeAvg = p.riichiWinCount > 0 ? Math.round(p.riichiWinScoreSum / p.riichiWinCount) : 0;
+    const riichiExpenseAvg = p.riichiLoseCount > 0 ? Math.round(p.riichiLoseScoreSum / p.riichiLoseCount) : 0;
+    const firstRiichiRate = p.riichiCount > 0 ? parseFloat(((p.firstRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
+    const chaseRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chaseRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
+    const chasedRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chasedRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
+    const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(2)) : 0;
+    const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
+    const dealInRiichiRate = p.loseCount > 0 ? parseFloat(((p.loseWithRiichiCount / p.loseCount) * 100).toFixed(2)) : 0;
+    const cheatRate = parseFloat(((p.cheatCount / totalRounds) * 100).toFixed(4));
+    const beolbuRate = parseFloat(((p.beolbuCount / totalRounds) * 100).toFixed(4));
+
+    const r1 = p.ranks[1] || 0;
+    const r2 = p.ranks[2] || 0;
+    const r3 = p.ranks[3] || 0;
+    const r4 = p.ranks[4] || 0;
+    const top2Rate = totalGames > 0 ? parseFloat((((r1 + r2) / totalGames) * 100).toFixed(2)) : 0;
+    const avgRank = totalGames > 0 ? parseFloat((p.rankSum / totalGames).toFixed(3)) : 0;
+    const totalUma = parseFloat(p.totalUmaSum.toFixed(1));
+    const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
+
+    resultMap[name] = {
+      name,
+      totalUma,
+      avgUma,
+      avgRank,
+      totalGames,
+      rank1Count: r1,
+      rank2Count: r2,
+      rank3Count: r3,
+      rank4Count: r4,
+      top2Rate,
+      totalRounds,
+      winRate,
+      dealInRate,
+      riichiRate,
+      tenpaiRate,
+      avgWinScore,
+      avgDealInScore,
+      handEV,
+      winEfficiency,
+      dealInLoss,
+      netWinEfficiency,
+      tsumoRate,
+      drawRate,
+      drawTenpaiRate,
+      tobiRate,
+      riichiWinRate,
+      riichiDealInRate,
+      riichiDrawRate,
+      riichiEV,
+      riichiIncomeAvg,
+      riichiExpenseAvg,
+      firstRiichiRate,
+      chaseRiichiRate,
+      chasedRiichiRate,
+      oyaKaburiRate,
+      oyaKaburiAvg,
+      dealInRiichiRate,
+      cheatRate,
+      beolbuRate,
+      cheatCount: p.cheatCount,
+      beolbuCount: p.beolbuCount,
+      totalScore: p.roundSujiSum,
+    };
+  }
+
+  return resultMap;
+}
+
+function attachRatingMetadata(
+  member: MemberStatItem,
+  allStatsMap: Map<string, MemberStatItem>,
+  normalizedAllStatsMap?: Map<string, MemberStatItem>
+): MemberStatItem {
+  const base =
+    allStatsMap.get(member.name) ||
+    normalizedAllStatsMap?.get(normalizeRatingPlayerName(member.name));
+  if (!base) return member;
+  return {
+    ...member,
+    rating: base.rating,
+    ratingMu: base.ratingMu,
+    ratingSigma: base.ratingSigma,
+    ratingPeak: base.ratingPeak,
+    ratingLowest: base.ratingLowest,
+    ratingDelta: base.ratingDelta,
+    ratingHistory: base.ratingHistory,
+  };
+}
+
+function createZeroDetailedStatItem(
+  name: string,
+  gamesStats: {
+    totalUma: number;
+    totalGames: number;
+    rank1Count: number;
+    rank2Count: number;
+    rank3Count: number;
+    rank4Count: number;
+    rankSum: number;
+    totalScore: number;
+  }
+): MemberStatItem {
+  const totalGames = gamesStats.totalGames;
+  const totalUma = parseFloat(gamesStats.totalUma.toFixed(1));
+  const avgUma = totalGames > 0 ? parseFloat((totalUma / totalGames).toFixed(1)) : 0;
+  const avgRank = totalGames > 0 ? parseFloat((gamesStats.rankSum / totalGames).toFixed(3)) : 0;
+  const top2Rate = totalGames > 0
+    ? parseFloat((((gamesStats.rank1Count + gamesStats.rank2Count) / totalGames) * 100).toFixed(2))
+    : 0;
+
+  return {
+    name,
+    totalUma,
+    avgUma,
+    avgRank,
+    totalGames,
+    totalRounds: 0,
+    winRate: 0,
+    dealInRate: 0,
+    riichiRate: 0,
+    tenpaiRate: 0,
+    avgWinScore: 0,
+    avgDealInScore: 0,
+    handEV: 0,
+    winEfficiency: 0,
+    dealInLoss: 0,
+    netWinEfficiency: 0,
+    tsumoRate: 0,
+    drawRate: 0,
+    drawTenpaiRate: 0,
+    tobiRate: 0,
+    riichiWinRate: 0,
+    riichiDealInRate: 0,
+    riichiDrawRate: 0,
+    riichiEV: 0,
+    riichiIncomeAvg: 0,
+    riichiExpenseAvg: 0,
+    firstRiichiRate: 0,
+    chaseRiichiRate: 0,
+    chasedRiichiRate: 0,
+    oyaKaburiRate: 0,
+    oyaKaburiAvg: 0,
+    dealInRiichiRate: 0,
+    cheatRate: 0,
+    beolbuRate: 0,
+    cheatCount: 0,
+    beolbuCount: 0,
+    totalScore: gamesStats.totalScore,
+    rank1Count: gamesStats.rank1Count,
+    rank2Count: gamesStats.rank2Count,
+    rank3Count: gamesStats.rank3Count,
+    rank4Count: gamesStats.rank4Count,
+    top2Rate,
+  };
+}
+
+/**
+ * 조건(최근 N국 / 최근 N회차 / 날짜 기간 / 회차 구간)에 따라 성적을 실시간 집계합니다.
+ */
+export async function queryMemberStatsByFilter(
+  filter: StatsQueryFilter,
+  options: {
+    allStats: MemberStatItem[];
+    availableSessions: string[];
+    spreadsheetId?: string;
+    forceRefresh?: boolean;
+  }
+): Promise<StatsQueryResult> {
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const allStatsMap = new Map<string, MemberStatItem>();
+  const normalizedAllStatsMap = new Map<string, MemberStatItem>();
+  const canonicalNameByNorm = new Map<string, string>();
+  for (const s of options.allStats || []) {
+    if (s?.name) {
+      allStatsMap.set(s.name, s);
+      const norm = normalizeRatingPlayerName(s.name);
+      if (norm) {
+        const existing = normalizedAllStatsMap.get(norm);
+        if (!existing || (s.totalGames || 0) >= (existing.totalGames || 0)) {
+          normalizedAllStatsMap.set(norm, s);
+        }
+        // '★' 표기가 있는 최신 닉네임을 우선 대표명으로 사용
+        const prevCanon = canonicalNameByNorm.get(norm);
+        if (!prevCanon || s.name.includes('★')) {
+          canonicalNameByNorm.set(norm, s.name);
+        }
+      }
+    }
+  }
+  const resolveCanonicalName = (rawName: string): string => {
+    const trimmed = String(rawName || '').trim();
+    if (!trimmed) return '';
+    const norm = normalizeRatingPlayerName(trimmed);
+    return canonicalNameByNorm.get(norm) || trimmed;
+  };
+
+  const minGames = Math.max(0, Number(filter.minGames || 0));
+
+  if (filter.mode === 'all') {
+    const members = (options.allStats || []).filter((m) => m.totalGames >= minGames);
+    const totalGames = Math.round(members.reduce((sum, m) => sum + (m.totalGames || 0), 0) / 4);
+    const totalRounds = Math.round(members.reduce((sum, m) => sum + (m.totalRounds || 0), 0) / 4);
+    const elapsed = Math.max(1, Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0));
+    return {
+      members,
+      matchedSessions: options.availableSessions || [],
+      totalMatchedGames: totalGames,
+      totalMatchedRounds: totalRounds,
+      hasLegacyOnlyGames: true,
+      queryElapsedMs: elapsed,
+      summaryLabel: '전체 기간',
+    };
+  }
+
+  // 1) 최근 N국 (플레이어별 최신 N국 기준)
+  if (filter.mode === 'recent_rounds') {
+    const limitN = Math.max(1, Math.min(10000, Math.floor(Number(filter.recentRounds) || 100)));
+    const allRows = await fetchAllPublicRoundsRows(options.spreadsheetId, options.forceRefresh);
+
+    const byPlayer = new Map<string, { row: any; sessNum: number; gameNum: number; roundSeq: number; idx: number }[]>();
+    for (let i = 0; i < allRows.length; i++) {
+      const r = allRows[i];
+      if (!r?.c) continue;
+      const rawPlayer = getCellStr(r.c[5]).trim();
+      const player = resolveCanonicalName(rawPlayer);
+      if (!player) continue;
+      const sessNum = parseSessionNumber(getCellStr(r.c[15]));
+      const gameNum = Number(getCellStr(r.c[1]).trim()) || 0;
+      const roundSeq = getCellNum(r.c[3], i);
+      let list = byPlayer.get(player);
+      if (!list) {
+        list = [];
+        byPlayer.set(player, list);
+      }
+      list.push({ row: r, sessNum, gameNum, roundSeq, idx: i });
+    }
+
+    const selectedRows: any[] = [];
+    const matchedSessionSet = new Set<string>();
+    const uniqueGameSet = new Set<string>();
+
+    for (const entries of byPlayer.values()) {
+      entries.sort((a, b) => {
+        if (a.sessNum !== b.sessNum) return a.sessNum - b.sessNum;
+        if (a.gameNum !== b.gameNum) return a.gameNum - b.gameNum;
+        if (a.roundSeq !== b.roundSeq) return a.roundSeq - b.roundSeq;
+        return a.idx - b.idx;
+      });
+      const sliced = entries.slice(-limitN);
+      for (const e of sliced) {
+        selectedRows.push(e.row);
+        const sName = getCellStr(e.row.c[15]).trim();
+        if (sName) matchedSessionSet.add(sName);
+        const gId = getCellStr(e.row.c[1]).trim();
+        if (gId) uniqueGameSet.add(gId);
+      }
+    }
+
+    const statsMap = aggregateRoundsRowsToMemberStats(selectedRows);
+    const members = Object.values(statsMap)
+      .filter((m) => m.totalGames >= minGames)
+      .map((m) => attachRatingMetadata(m, allStatsMap, normalizedAllStatsMap))
+      .sort((a, b) => b.totalUma - a.totalUma);
+
+    const elapsed = Math.max(1, Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0));
+    return {
+      members,
+      matchedSessions: Array.from(matchedSessionSet).sort((a, b) => parseSessionNumber(b) - parseSessionNumber(a)),
+      totalMatchedGames: uniqueGameSet.size,
+      totalMatchedRounds: selectedRows.length,
+      hasLegacyOnlyGames: false,
+      queryElapsedMs: elapsed,
+      summaryLabel: `플레이어별 최근 ${limitN}국`,
+    };
+  }
+
+  // 2) 최근 N회차 / 기간 지정 / 회차 구간 공통: 전체 국별기록 + 역대 전체 대국 이력 병렬 확보
+  const [allRows, allGames] = await Promise.all([
+    fetchAllPublicRoundsRows(options.spreadsheetId, options.forceRefresh),
+    fetchPublicRatingHistoryRecords(options.spreadsheetId, options.forceRefresh),
+  ]);
+
+  const sortedSessionsDesc = [...(options.availableSessions || [])].sort(
+    (a, b) => parseSessionNumber(b) - parseSessionNumber(a)
+  );
+
+  let targetSessionNums: Set<number> | null = null;
+  let matchedSessionNames: string[] = [];
+  let summaryLabel = '';
+  const startDate = (filter.startDate || '').trim();
+  const endDate = (filter.endDate || '').trim();
+
+  if (filter.mode === 'recent_sessions') {
+    const n = Math.max(1, Math.floor(Number(filter.recentSessions) || 3));
+    const picked = sortedSessionsDesc.slice(0, n);
+    targetSessionNums = new Set(picked.map((s) => parseSessionNumber(s)).filter((num) => num > 0));
+    matchedSessionNames = picked;
+    const oldest = picked[picked.length - 1];
+    const newest = picked[0];
+    summaryLabel = picked.length > 1
+      ? `최근 ${picked.length}회차 (${oldest} ~ ${newest})`
+      : picked.length === 1
+        ? `최근 1회차 (${newest})`
+        : `최근 ${n}회차`;
+  } else if (filter.mode === 'session_range') {
+    const sNum = parseSessionNumber(filter.startSession);
+    const eNum = parseSessionNumber(filter.endSession);
+    const minNum = sNum > 0 && eNum > 0 ? Math.min(sNum, eNum) : Math.max(sNum, eNum);
+    const maxNum = sNum > 0 && eNum > 0 ? Math.max(sNum, eNum) : Math.max(sNum, eNum);
+    const picked = sortedSessionsDesc.filter((s) => {
+      const num = parseSessionNumber(s);
+      return num >= minNum && num <= maxNum;
+    });
+    targetSessionNums = new Set(picked.map((s) => parseSessionNumber(s)).filter((num) => num > 0));
+    matchedSessionNames = picked;
+    const oldest = picked[picked.length - 1] || filter.startSession || '';
+    const newest = picked[0] || filter.endSession || '';
+    summaryLabel = oldest && newest && oldest !== newest ? `${oldest} ~ ${newest}` : (oldest || newest || '회차 구간');
+  } else if (filter.mode === 'date_range') {
+    matchedSessionNames = sortedSessionsDesc.filter((s) => {
+      const iso = extractIsoDateFromRecord(s);
+      if (!iso) return false;
+      if (startDate && iso < startDate) return false;
+      if (endDate && iso > endDate) return false;
+      return true;
+    });
+    summaryLabel = startDate && endDate
+      ? `${startDate} ~ ${endDate}`
+      : startDate
+        ? `${startDate} 이후`
+        : endDate
+          ? `${endDate} 이전`
+          : '기간 지정';
+  }
+
+  // 국별 상세 행 필터링 (제9회~)
+  const filteredRoundRows: any[] = [];
+  const roundGameIdSet = new Set<string>();
+  const roundSessionNumSet = new Set<number>();
+
+  for (let i = 0; i < allRows.length; i++) {
+    const r = allRows[i];
+    if (!r?.c) continue;
+    const rowSess = getCellStr(r.c[15]).trim();
+    const sessNum = parseSessionNumber(rowSess);
+    if (filter.mode === 'date_range') {
+      const iso = extractIsoDateFromRecord(rowSess, getCellStr(r.c[0]), getCellStr(r.c[1]));
+      if (!iso) continue;
+      if (startDate && iso < startDate) continue;
+      if (endDate && iso > endDate) continue;
+    } else if (targetSessionNums) {
+      if (!targetSessionNums.has(sessNum)) continue;
+    }
+    filteredRoundRows.push(r);
+    const gId = getCellStr(r.c[1]).trim();
+    if (gId) roundGameIdSet.add(gId);
+    if (sessNum > 0) roundSessionNumSet.add(sessNum);
+  }
+
+  const detailedMap = aggregateRoundsRowsToMemberStats(filteredRoundRows);
+
+  // 역대 전체 대국 이력 필터링 (제1~8회 레거시 포함 전체 회차 대국/우마/순위 집계)
+  const matchedGames = allGames.filter((g) => {
+    const sessNum = parseSessionNumber(g.sessionLabel);
+    if (filter.mode === 'date_range') {
+      const iso = extractIsoDateFromRecord(g.sessionLabel, g.date);
+      if (!iso) return false;
+      if (startDate && iso < startDate) return false;
+      if (endDate && iso > endDate) return false;
+      return true;
+    }
+    if (targetSessionNums) {
+      return targetSessionNums.has(sessNum);
+    }
+    return false;
+  });
+
+  const hasLegacyOnlyGames = matchedGames.some((g) => {
+    const num = parseSessionNumber(g.sessionLabel);
+    return num > 0 && num < 9;
+  });
+
+  // 게임 단위 전체 우마/순위 집계 (제1~8회 레거시가 포함된 경우 전체 합산용)
+  const gameAggMap: Record<string, {
+    totalUma: number;
+    totalGames: number;
+    rank1Count: number;
+    rank2Count: number;
+    rank3Count: number;
+    rank4Count: number;
+    rankSum: number;
+    totalScore: number;
+  }> = {};
+
+  for (const g of matchedGames) {
+    for (const p of g.players || []) {
+      const canonName = resolveCanonicalName(p.name);
+      if (!canonName) continue;
+      if (!gameAggMap[canonName]) {
+        gameAggMap[canonName] = {
+          totalUma: 0,
+          totalGames: 0,
+          rank1Count: 0,
+          rank2Count: 0,
+          rank3Count: 0,
+          rank4Count: 0,
+          rankSum: 0,
+          totalScore: 0,
+        };
+      }
+      const acc = gameAggMap[canonName];
+      acc.totalGames++;
+      acc.totalUma += Number(p.uma || 0);
+      acc.rankSum += Number(p.rank || 0);
+      acc.totalScore += Number(p.score || 0);
+      if (p.rank === 1) acc.rank1Count++;
+      else if (p.rank === 2) acc.rank2Count++;
+      else if (p.rank === 3) acc.rank3Count++;
+      else if (p.rank === 4) acc.rank4Count++;
+    }
+  }
+
+  // detailedMap 키도 대표명(신시 / 신시★ 통합)으로 정규화
+  const normalizedDetailedMap: Record<string, MemberStatItem> = {};
+  for (const [rawKey, item] of Object.entries(detailedMap)) {
+    const canon = resolveCanonicalName(rawKey);
+    if (!normalizedDetailedMap[canon] || item.totalRounds > normalizedDetailedMap[canon].totalRounds) {
+      normalizedDetailedMap[canon] = { ...item, name: canon };
+    }
+  }
+
+  // 최종 멤버 목록 병합
+  const allPlayerNames = new Set<string>([
+    ...Object.keys(normalizedDetailedMap),
+    ...Object.keys(gameAggMap),
+  ]);
+
+  const members: MemberStatItem[] = [];
+  for (const name of allPlayerNames) {
+    const det = normalizedDetailedMap[name];
+    const gAgg = gameAggMap[name];
+
+    let merged: MemberStatItem;
+    if (hasLegacyOnlyGames && gAgg) {
+      // 레거시(제1~8회)가 포함된 구간: 게임/우마/순위는 전체 구간 합산, 상세 국별 스탯은 제9회~ 상세 집계 유지
+      const overallBase = createZeroDetailedStatItem(name, gAgg);
+      if (det) {
+        merged = {
+          ...det,
+          totalUma: overallBase.totalUma,
+          avgUma: overallBase.avgUma,
+          avgRank: overallBase.avgRank,
+          totalGames: overallBase.totalGames,
+          rank1Count: overallBase.rank1Count,
+          rank2Count: overallBase.rank2Count,
+          rank3Count: overallBase.rank3Count,
+          rank4Count: overallBase.rank4Count,
+          top2Rate: overallBase.top2Rate,
+        };
+      } else {
+        merged = overallBase;
+      }
+    } else if (det) {
+      merged = det;
+    } else if (gAgg) {
+      merged = createZeroDetailedStatItem(name, gAgg);
+    } else {
+      continue;
+    }
+
+    if (merged.totalGames >= minGames) {
+      members.push(attachRatingMetadata(merged, allStatsMap, normalizedAllStatsMap));
+    }
+  }
+
+  members.sort((a, b) => b.totalUma - a.totalUma);
+
+  const totalMatchedGames = hasLegacyOnlyGames
+    ? matchedGames.length
+    : (roundGameIdSet.size || matchedGames.length);
+  const totalMatchedRounds = Math.round(filteredRoundRows.length / 4);
+  const elapsed = Math.max(1, Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0));
+
+  return {
+    members,
+    matchedSessions: matchedSessionNames,
+    totalMatchedGames,
+    totalMatchedRounds,
+    hasLegacyOnlyGames,
+    queryElapsedMs: elapsed,
+    summaryLabel,
   };
 }
 

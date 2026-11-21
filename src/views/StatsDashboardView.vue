@@ -3,6 +3,8 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import ScheduleTab from '@/components/schedule/ScheduleTab.vue';
 import RulesTab from '@/components/rules/RulesTab.vue';
+import FeedbackTab from '@/components/feedback/FeedbackTab.vue';
+import PlayerCompareModal from '@/components/stats/PlayerCompareModal.vue';
 import {
   Chart as ChartJS,
   Title,
@@ -32,6 +34,11 @@ import {
   buildSessionDetailFromRatingHistory,
   getExpectedSessionGameCount,
   computeFrequentOpponentsStats,
+  queryMemberStatsByFilter,
+  parseSessionNumber,
+  extractIsoDateFromRecord,
+  type StatsQueryMode,
+  type StatsQueryResult,
   type AllPlayersRatingTrajectory,
   type GameRatingHistoryRecord,
   type OpponentHeadToHeadStat,
@@ -43,7 +50,8 @@ import {
   type GameRoundMovement,
   type StatsMatrixData,
   type StatsMatrixRow,
-  type DistributionData
+  type DistributionData,
+  type HistogramBar
 } from '@/services/publicStatsService';
 import {
   YAKUMAN_DEFINITIONS,
@@ -111,8 +119,8 @@ const router = useRouter();
 const route = useRoute();
 
 // 탭 상태 타입 및 유효 탭 목록
-type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'gallery' | 'schedule' | 'rules';
-const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'gallery', 'schedule', 'rules'];
+type DashboardTab = 'ranking' | 'rating' | 'matrix' | 'sessions' | 'gallery' | 'schedule' | 'rules' | 'feedback';
+const VALID_TABS: DashboardTab[] = ['ranking', 'rating', 'matrix', 'sessions', 'gallery', 'schedule', 'rules', 'feedback'];
 
 // URL 쿼리(?photo=), 경로(/dashboard/gallery/:photoId) 및 해시에서 사진 ID 추출
 const parsePhotoIdFromLocation = (): string => {
@@ -478,6 +486,7 @@ const DASHBOARD_TAB_TITLES: Record<DashboardTab, string> = {
   schedule: '일정',
   rules: '룰',
   gallery: '갤러리',
+  feedback: '피드백',
 };
 
 // 현재 보고 있는 대시보드 탭 / 회차 상세 / 플레이어 개인 통계에 맞춰 브라우저 탭 이름(document.title) 실시간 반영
@@ -862,9 +871,188 @@ const compareRankDist = (a: MemberStatItem, b: MemberStatItem, primaryRank: 1 | 
   return a.totalGames > b.totalGames ? 1 : -1;
 };
 
+// ==========================================
+// 성적 조건 조회 (DB Query: 최근 N국 / 최근 N회차 / 기간 지정 / 회차 구간)
+// ==========================================
+const statsQueryMode = ref<StatsQueryMode>('all');
+const queryRecentRounds = ref<number>(100);
+const queryRecentSessions = ref<number>(3);
+const queryStartDate = ref<string>('');
+const queryEndDate = ref<string>('');
+const queryStartSession = ref<string>('');
+const queryEndSession = ref<string>('');
+const queryMinGames = ref<number>(0);
+const isStatsQueryLoading = ref<boolean>(false);
+const statsQueryError = ref<string>('');
+const statsQueryResult = ref<StatsQueryResult | null>(null);
+let statsQueryRequestSeq = 0;
+
+const sessionsChronologicalAsc = computed<string[]>(() => {
+  return [...availableSessions.value].sort((a, b) => parseSessionNumber(a) - parseSessionNumber(b));
+});
+
+const isStatsQueryActive = computed<boolean>(() => {
+  return statsQueryMode.value !== 'all' || queryMinGames.value > 0;
+});
+
+const initDefaultStatsQueryParams = () => {
+  const asc = sessionsChronologicalAsc.value;
+  if (asc.length === 0) return;
+
+  const latestSess = asc[asc.length - 1];
+  const firstDetailedSess = asc.find((s) => parseSessionNumber(s) >= 9) || asc[0];
+
+  if (!queryStartSession.value || !asc.includes(queryStartSession.value)) {
+    queryStartSession.value = firstDetailedSess;
+  }
+  if (!queryEndSession.value || !asc.includes(queryEndSession.value)) {
+    queryEndSession.value = latestSess;
+  }
+  if (!queryEndDate.value) {
+    const latestIso = extractIsoDateFromRecord(latestSess);
+    if (latestIso) {
+      queryEndDate.value = latestIso;
+    } else {
+      const now = new Date();
+      queryEndDate.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    }
+  }
+  if (!queryStartDate.value && queryEndDate.value) {
+    const endD = new Date(`${queryEndDate.value}T00:00:00`);
+    if (!isNaN(endD.getTime())) {
+      endD.setDate(endD.getDate() - 30);
+      queryStartDate.value = `${endD.getFullYear()}-${String(endD.getMonth() + 1).padStart(2, '0')}-${String(endD.getDate()).padStart(2, '0')}`;
+    }
+  }
+};
+
+const executeStatsDbQuery = async (forceRefresh: boolean = false) => {
+  const reqId = ++statsQueryRequestSeq;
+  statsQueryError.value = '';
+
+  if (statsQueryMode.value === 'all' && queryMinGames.value <= 0) {
+    statsQueryResult.value = null;
+    isStatsQueryLoading.value = false;
+    return;
+  }
+
+  initDefaultStatsQueryParams();
+  isStatsQueryLoading.value = true;
+  try {
+    const res = await queryMemberStatsByFilter(
+      {
+        mode: statsQueryMode.value,
+        recentRounds: queryRecentRounds.value,
+        recentSessions: queryRecentSessions.value,
+        startDate: queryStartDate.value,
+        endDate: queryEndDate.value,
+        startSession: queryStartSession.value,
+        endSession: queryEndSession.value,
+        minGames: queryMinGames.value,
+      },
+      {
+        allStats: allStats.value,
+        availableSessions: availableSessions.value,
+        forceRefresh,
+      }
+    );
+    if (reqId !== statsQueryRequestSeq) return;
+    statsQueryResult.value = res;
+  } catch (err: any) {
+    if (reqId !== statsQueryRequestSeq) return;
+    console.error('DB stats query failed:', err);
+    statsQueryError.value = err?.message || '성적 조건 조회 중 오류가 발생했습니다.';
+  } finally {
+    if (reqId === statsQueryRequestSeq) {
+      isStatsQueryLoading.value = false;
+    }
+  }
+};
+
+const selectStatsQueryMode = (mode: StatsQueryMode) => {
+  statsQueryMode.value = mode;
+  initDefaultStatsQueryParams();
+  if (mode === 'all' && queryMinGames.value <= 0) {
+    statsQueryResult.value = null;
+    statsQueryError.value = '';
+    return;
+  }
+  executeStatsDbQuery();
+};
+
+const applyRecentRoundsPreset = (n: number) => {
+  statsQueryMode.value = 'recent_rounds';
+  queryRecentRounds.value = n;
+  executeStatsDbQuery();
+};
+
+const applyRecentSessionsPreset = (n: number) => {
+  statsQueryMode.value = 'recent_sessions';
+  queryRecentSessions.value = n;
+  executeStatsDbQuery();
+};
+
+const applyDateRangePreset = (preset: '30d' | '90d' | '180d' | 'year' | 'all_dates') => {
+  statsQueryMode.value = 'date_range';
+  const asc = sessionsChronologicalAsc.value;
+  const latestIso = (asc.length > 0 ? extractIsoDateFromRecord(asc[asc.length - 1]) : '') ||
+    (() => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    })();
+  const earliestIso = asc.length > 0 ? extractIsoDateFromRecord(asc[0]) : '';
+
+  queryEndDate.value = latestIso;
+  if (preset === 'all_dates' && earliestIso) {
+    queryStartDate.value = earliestIso;
+  } else if (preset === 'year') {
+    queryStartDate.value = `${latestIso.slice(0, 4)}-01-01`;
+  } else {
+    const days = preset === '30d' ? 30 : preset === '90d' ? 90 : 180;
+    const d = new Date(`${latestIso}T00:00:00`);
+    if (!isNaN(d.getTime())) {
+      d.setDate(d.getDate() - days);
+      queryStartDate.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+  }
+  executeStatsDbQuery();
+};
+
+const applyDetailedSessionRangePreset = () => {
+  const asc = sessionsChronologicalAsc.value;
+  if (asc.length === 0) return;
+  statsQueryMode.value = 'session_range';
+  queryStartSession.value = asc.find((s) => parseSessionNumber(s) >= 9) || asc[0];
+  queryEndSession.value = asc[asc.length - 1];
+  executeStatsDbQuery();
+};
+
+const setQueryMinGames = (minG: number) => {
+  queryMinGames.value = minG;
+  executeStatsDbQuery();
+};
+
+const resetStatsDbQuery = () => {
+  statsQueryMode.value = 'all';
+  queryMinGames.value = 0;
+  statsQueryResult.value = null;
+  statsQueryError.value = '';
+  isStatsQueryLoading.value = false;
+};
+
+const activeRankingStats = computed<MemberStatItem[]>(() => {
+  if (isStatsQueryActive.value && statsQueryResult.value) {
+    return statsQueryResult.value.members;
+  }
+  if (queryMinGames.value > 0) {
+    return allStats.value.filter((m) => m.totalGames >= queryMinGames.value);
+  }
+  return allStats.value;
+});
+
 const filteredStats = computed(() => {
   // 1) 전체 리스트를 현재 정렬 기준에 따라 정렬
-  const sorted = [...allStats.value].sort((a, b) => {
+  const sorted = [...activeRankingStats.value].sort((a, b) => {
     if (sortKey.value === 'rating') {
       const rA = a.rating ?? 0;
       const rB = b.rating ?? 0;
@@ -916,7 +1104,9 @@ const filteredStats = computed(() => {
 });
 
 const podiumTop3 = computed(() => {
-  return allStats.value.slice(0, 3);
+  return [...activeRankingStats.value]
+    .sort((a, b) => b.totalUma - a.totalUma)
+    .slice(0, 3);
 });
 
 const handleSort = (key: SortKey) => {
@@ -1125,6 +1315,9 @@ const isKnownPlayerName = (name?: string): boolean => {
 };
 
 const availableSessions = ref<string[]>([]);
+watch(availableSessions, () => {
+  initDefaultStatsQueryParams();
+}, { immediate: true });
 
 const resolveMatchedSessionName = (rawSessionName?: string): string => {
   const raw = (rawSessionName || '').trim();
@@ -1156,7 +1349,9 @@ const openPlayerByName = async (
     }
   }
 
-  let match = findMemberStatByName(clean);
+  let match = (!fromSession && isStatsQueryActive.value)
+    ? (activeRankingStats.value.find(m => m.name === clean || m.name.replace(/★/g, '').trim() === clean.replace(/★/g, '').trim()) || findMemberStatByName(clean))
+    : findMemberStatByName(clean);
   if (!match && allStats.value.length === 0) {
     try {
       const loaded = await fetchPublicAllStats();
@@ -1537,7 +1732,7 @@ const currentSessionRankStats = computed(() => {
   };
 });
 
-// 회차 세부 스탯 호버 툴팁 백분위 카드
+// 회차 세부 스탯 호버/클릭 툴팁 백분위 카드
 const onHoverSessionMetric = (
   event: MouseEvent,
   metricKey: keyof MemberStatItem,
@@ -1547,6 +1742,24 @@ const onHoverSessionMetric = (
   unit: string = ''
 ) => {
   if (!currentSessionPlayerStats.value) return;
+  const isClickEvent = event.type === 'click';
+  if (!isClickEvent && isDistTooltipPinned.value) return;
+
+  cancelDistHideTimer();
+
+  if (isClickEvent) {
+    if (
+      isDistTooltipPinned.value &&
+      activeDistFromSession.value &&
+      activeDistName.value === metricName
+    ) {
+      closePinnedDistTooltip();
+      return;
+    }
+    isDistTooltipPinned.value = true;
+    hoveredDistBar.value = null;
+  }
+
   const sessionMembers = Object.values(currentSessionDetailedStatsMap.value);
   if (sessionMembers.length === 0) return;
 
@@ -1562,24 +1775,28 @@ const onHoverSessionMetric = (
   activeDist.value = dist;
   activeDistName.value = metricName;
   activeDistUnit.value = unit;
+  activeDistFromSession.value = true;
+  if (!isClickEvent) {
+    hoveredDistBar.value = null;
+  }
 
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
   const screenW = typeof window !== 'undefined' ? window.innerWidth : 360;
   const rawX = rect.left + rect.width / 2;
-  const clampedX = Math.max(115, Math.min(screenW - 115, rawX));
+  const clampedX = Math.max(126, Math.min(screenW - 126, rawX));
 
-  if (rect.top < 180) {
+  if (rect.top < 200) {
     isTooltipBelow.value = true;
     tooltipPos.value = {
       x: clampedX,
-      y: rect.bottom + 10,
+      y: rect.bottom + 8,
       visible: true,
     };
   } else {
     isTooltipBelow.value = false;
     tooltipPos.value = {
       x: clampedX,
-      y: rect.top - 10,
+      y: rect.top - 8,
       visible: true,
     };
   }
@@ -1832,13 +2049,96 @@ const gameChartOptions = computed<ChartOptions<'line'>>(() => {
 });
 
 // ==========================================
-// 4. 개인 스탯 연속 히스토그램 팝오버 상태
+// 4. 개인 스탯 연속 히스토그램 팝오버 상태 (호버 + 클릭 고정 + 막대 클릭 이동)
 // ==========================================
 const activeDist = ref<DistributionData | null>(null);
 const activeDistName = ref('');
 const activeDistUnit = ref('');
 const tooltipPos = ref({ x: 0, y: 0, visible: false });
 const isTooltipBelow = ref(false);
+const isDistTooltipPinned = ref(false);
+const activeDistFromSession = ref(false);
+const hoveredDistBar = ref<HistogramBar | null>(null);
+let distHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+const cancelDistHideTimer = () => {
+  if (distHideTimer) {
+    clearTimeout(distHideTimer);
+    distHideTimer = null;
+  }
+};
+
+const closePinnedDistTooltip = () => {
+  cancelDistHideTimer();
+  isDistTooltipPinned.value = false;
+  hoveredDistBar.value = null;
+  tooltipPos.value.visible = false;
+  activeDist.value = null;
+};
+
+const onEnterDistTooltip = () => {
+  cancelDistHideTimer();
+};
+
+const onLeaveDistTooltip = () => {
+  hoveredDistBar.value = null;
+  if (isDistTooltipPinned.value) return;
+  cancelDistHideTimer();
+  distHideTimer = setTimeout(() => {
+    if (!isDistTooltipPinned.value) {
+      tooltipPos.value.visible = false;
+      activeDist.value = null;
+    }
+  }, 120);
+};
+
+const pinDistTooltip = () => {
+  cancelDistHideTimer();
+  isDistTooltipPinned.value = true;
+};
+
+const formatDistValue = (val: number): string => {
+  if (!Number.isFinite(val)) return '-';
+  if (activeDistName.value === '평균 순위') return `${val.toFixed(3)}${activeDistUnit.value}`;
+  if (activeDistName.value === '촌보율' || activeDistName.value === '벌부율') {
+    return `${val.toFixed(4)}${activeDistUnit.value}`;
+  }
+  if (activeDistUnit.value === '%') return `${val.toFixed(2)}${activeDistUnit.value}`;
+  return `${val.toLocaleString()}${activeDistUnit.value}`;
+};
+
+const handleDistBarClick = (bar: HistogramBar) => {
+  if (!bar?.playerName) return;
+  const targetName = bar.playerName;
+  const fromSess = activeDistFromSession.value;
+  closePinnedDistTooltip();
+  openPlayerByName(targetName, fromSess, true, true);
+};
+
+const handleDocumentClickForDistTooltip = () => {
+  if (isDistTooltipPinned.value) {
+    closePinnedDistTooltip();
+  }
+};
+
+// ==========================================
+// 4-1. 플레이어 1:1 스탯 비교 모달 상태
+// ==========================================
+const isCompareModalOpen = ref(false);
+const compareInitialPlayerA = ref('');
+const compareInitialPlayerB = ref('');
+
+const openPlayerCompareModal = (playerAName = '', playerBName = '') => {
+  closePinnedDistTooltip();
+  compareInitialPlayerA.value = playerAName;
+  compareInitialPlayerB.value = playerBName;
+  isCompareModalOpen.value = true;
+};
+
+const handleOpenPlayerFromCompare = (name: string) => {
+  isCompareModalOpen.value = false;
+  openPlayerByName(name, false, false, false);
+};
 
 const onHoverMetric = (
   e: MouseEvent,
@@ -1848,7 +2148,28 @@ const onHoverMetric = (
   higherIsBetter = true,
   unit = ''
 ) => {
-  if (!allStats.value || allStats.value.length === 0) return;
+  const isClickEvent = e.type === 'click';
+  if (!isClickEvent && isDistTooltipPinned.value) return;
+
+  cancelDistHideTimer();
+
+  if (isClickEvent) {
+    if (
+      isDistTooltipPinned.value &&
+      !activeDistFromSession.value &&
+      activeDistName.value === name
+    ) {
+      closePinnedDistTooltip();
+      return;
+    }
+    isDistTooltipPinned.value = true;
+    hoveredDistBar.value = null;
+  }
+
+  const sourceList = (!isModalFromSession.value && isStatsQueryActive.value && activeRankingStats.value.length > 0)
+    ? activeRankingStats.value
+    : allStats.value;
+  if (!sourceList || sourceList.length === 0) return;
   const overallKeys: (keyof MemberStatItem)[] = ['totalGames', 'totalUma', 'avgUma', 'avgRank', 'top2Rate'];
   const hasDetailed = (displayPlayerStats.value?.totalRounds || 0) > 0 && (displayPlayerStats.value?.totalGames || 0) > 0;
   const isOverallKey = overallKeys.includes(key);
@@ -1858,10 +2179,10 @@ const onHoverMetric = (
   let isUnrecorded = false;
 
   if (!hasDetailed && isOverallKey && selectedPlayer.value) {
-    targetList = allStats.value;
+    targetList = sourceList;
     targetVal = Number(selectedPlayer.value[key]) || 0;
   } else {
-    targetList = allStats.value.map(m => m.detailedStats || m);
+    targetList = sourceList.map(m => m.detailedStats || m);
     if (!hasDetailed) {
       isUnrecorded = true;
     }
@@ -1880,32 +2201,43 @@ const onHoverMetric = (
   activeDist.value = dist;
   activeDistName.value = name;
   activeDistUnit.value = unit;
+  activeDistFromSession.value = false;
+  if (!isClickEvent) {
+    hoveredDistBar.value = null;
+  }
 
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   const screenW = typeof window !== 'undefined' ? window.innerWidth : 360;
   const rawX = rect.left + rect.width / 2;
-  const clampedX = Math.max(115, Math.min(screenW - 115, rawX));
+  const clampedX = Math.max(126, Math.min(screenW - 126, rawX));
 
-  if (rect.top < 180) {
+  if (rect.top < 200) {
     isTooltipBelow.value = true;
     tooltipPos.value = {
       x: clampedX,
-      y: rect.bottom + 10,
+      y: rect.bottom + 8,
       visible: true,
     };
   } else {
     isTooltipBelow.value = false;
     tooltipPos.value = {
       x: clampedX,
-      y: rect.top - 10,
+      y: rect.top - 8,
       visible: true,
     };
   }
 };
 
 const onLeaveMetric = () => {
-  tooltipPos.value.visible = false;
-  activeDist.value = null;
+  if (isDistTooltipPinned.value) return;
+  cancelDistHideTimer();
+  distHideTimer = setTimeout(() => {
+    if (!isDistTooltipPinned.value) {
+      tooltipPos.value.visible = false;
+      activeDist.value = null;
+      hoveredDistBar.value = null;
+    }
+  }, 160);
 };
 
 // 딥링크(?photo=...) 진입 시 라이트박스 메인 사진이 로드될 때까지 배경 갤러리 썸네일 및 무거운 통계 요청을 지연
@@ -6880,13 +7212,16 @@ const scrollActiveModalTabIntoView = (smooth = true) => {
 };
 
 watch([selectedPlayer, modalScopeTab, modalActiveTab, sessionModalActiveTab], () => {
+  closePinnedDistTooltip();
   scrollActiveModalTabIntoView(true);
 });
 
 onMounted(() => {
   window.addEventListener('resize', updateModalTabScrollIndicator);
+  document.addEventListener('click', handleDocumentClickForDistTooltip);
 });
 onUnmounted(() => {
+  cancelDistHideTimer();
   if (modalTabResizeObserver) {
     modalTabResizeObserver.disconnect();
     modalTabResizeObserver = null;
@@ -6894,6 +7229,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateModalTabScrollIndicator);
   window.removeEventListener('mousemove', onModalTabWindowMouseMove);
   window.removeEventListener('mouseup', onModalTabWindowMouseUp);
+  document.removeEventListener('click', handleDocumentClickForDistTooltip);
 });
 
 // ==========================================
@@ -7124,21 +7460,38 @@ const openGamePopupFromLightbox = async (
       </table>
     </div>
 
-    <!-- 인터랙티브 연속 히스토그램 팝오버 툴팁 (폭 축소 및 50% 절반 구분선 적용) -->
+    <!-- 인터랙티브 연속 히스토그램 팝오버 툴팁 (클릭 시 고정 + 막대 클릭 시 해당 플레이어 이동) -->
     <div 
       v-if="tooltipPos.visible && activeDist" 
       class="dist-tooltip-popup"
-      :class="{ below: isTooltipBelow }"
+      :class="{ below: isTooltipBelow, pinned: isDistTooltipPinned }"
       :style="{ left: tooltipPos.x + 'px', top: tooltipPos.y + 'px' }"
+      @mouseenter="onEnterDistTooltip"
+      @mouseleave="onLeaveDistTooltip"
+      @click.stop="pinDistTooltip"
     >
       <div class="dist-tooltip-header">
-        <span class="dist-title">{{ activeDistName }} 전체 분포</span>
-        <span v-if="activeDist.isUnrecorded" class="dist-rank-chip unrecorded">
-          집계 기록 없음
+        <span class="dist-title">
+          {{ activeDistName }} 분포
+          <span v-if="isDistTooltipPinned" class="dist-pin-badge">고정됨</span>
         </span>
-        <span v-else class="dist-rank-chip" :class="activeDist.isUpperHalf ? 'pos' : 'neg'">
-          상위 {{ activeDist.topPct.toFixed(2) }}%
-        </span>
+        <div class="dist-header-right">
+          <span v-if="activeDist.isUnrecorded" class="dist-rank-chip unrecorded">
+            집계 기록 없음
+          </span>
+          <span v-else class="dist-rank-chip" :class="activeDist.isUpperHalf ? 'pos' : 'neg'">
+            상위 {{ activeDist.topPct.toFixed(2) }}%
+          </span>
+          <button
+            v-if="isDistTooltipPinned"
+            type="button"
+            class="dist-pin-close-btn"
+            title="고정 해제"
+            @click.stop="closePinnedDistTooltip"
+          >
+            ✕
+          </button>
+        </div>
       </div>
       <div class="dist-sub-rank">
         <template v-if="activeDist.isUnrecorded">
@@ -7151,15 +7504,12 @@ const openGamePopupFromLightbox = async (
       <div class="dist-my-val">
         내 수치: <strong>
           <template v-if="activeDist.isUnrecorded">- (집계 외)</template>
-          <template v-else-if="activeDistName === '평균 순위'">{{ activeDist.currentValue.toFixed(3) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.currentValue.toFixed(4) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistUnit === '%'">{{ activeDist.currentValue.toFixed(2) }}{{ activeDistUnit }}</template>
-          <template v-else>{{ activeDist.currentValue.toLocaleString() }}{{ activeDistUnit }}</template>
+          <template v-else>{{ formatDistValue(activeDist.currentValue) }}</template>
         </strong>
       </div>
 
       <!-- SVG 1인 1막대 계단형 히스토그램 & 하위 30%/50%/상위 30% 구분선 -->
-      <div class="dist-chart-box">
+      <div class="dist-chart-box" @click.stop="pinDistTooltip">
         <svg viewBox="0 0 160 44" class="dist-svg" preserveAspectRatio="none">
           <!-- 1인 1막대 계단형 바 (대국수 > 0인 실활동 멤버만 렌더링) -->
           <rect
@@ -7169,9 +7519,21 @@ const openGamePopupFromLightbox = async (
             :y="bar.y"
             :width="bar.width"
             :height="bar.height"
-            :fill="bar.isCurrent ? '#3b82f6' : (isDark ? 'rgba(148, 163, 184, 0.45)' : 'rgba(100, 116, 139, 0.35)')"
-            :stroke="bar.isCurrent ? '#60a5fa' : 'none'"
-            :stroke-width="bar.isCurrent ? 1 : 0"
+            :fill="
+              hoveredDistBar && hoveredDistBar.playerName === bar.playerName
+                ? '#f59e0b'
+                : bar.isCurrent
+                  ? '#3b82f6'
+                  : (isDark ? 'rgba(148, 163, 184, 0.45)' : 'rgba(100, 116, 139, 0.35)')
+            "
+            :stroke="
+              hoveredDistBar && hoveredDistBar.playerName === bar.playerName
+                ? '#fbbf24'
+                : bar.isCurrent
+                  ? '#60a5fa'
+                  : 'none'
+            "
+            :stroke-width="bar.isCurrent || (hoveredDistBar && hoveredDistBar.playerName === bar.playerName) ? 1 : 0"
             rx="1"
           />
           <!-- 현재 플레이어 위치 상단 하이라이트 핀/삼각형 마커 -->
@@ -7192,6 +7554,7 @@ const openGamePopupFromLightbox = async (
             :stroke="isDark ? 'rgba(156, 163, 175, 0.65)' : 'rgba(100, 116, 139, 0.45)'" 
             stroke-width="1.2" 
             stroke-dasharray="2,2" 
+            pointer-events="none"
           />
 
           <!-- 중앙 50% 구분선 (더 두꺼운 구분 점선) -->
@@ -7203,6 +7566,7 @@ const openGamePopupFromLightbox = async (
             :stroke="isDark ? 'rgba(255, 255, 255, 0.65)' : 'rgba(15, 23, 42, 0.5)'" 
             stroke-width="2.0" 
             stroke-dasharray="3,2" 
+            pointer-events="none"
           />
 
           <!-- 상위 30% 구분선 (연한 회색 점선) -->
@@ -7214,7 +7578,25 @@ const openGamePopupFromLightbox = async (
             :stroke="isDark ? 'rgba(156, 163, 175, 0.65)' : 'rgba(100, 116, 139, 0.45)'" 
             stroke-width="1.2" 
             stroke-dasharray="2,2" 
+            pointer-events="none"
           />
+
+          <!-- 막대별 전체 높이 투명 클릭/호버 히트영역 (0에 가까운 막대도 쉽게 선택 가능) -->
+          <rect
+            v-for="(bar, idx) in activeDist.bars"
+            :key="'hit-' + idx"
+            class="dist-bar-hit"
+            :x="bar.x"
+            y="0"
+            :width="Math.max(bar.width, 2.5)"
+            height="44"
+            fill="transparent"
+            @mouseenter="hoveredDistBar = bar"
+            @mouseleave="hoveredDistBar = null"
+            @click.stop="handleDistBarClick(bar)"
+          >
+            <title>{{ bar.playerName }}: {{ formatDistValue(bar.value) }} (클릭하여 스탯 보기)</title>
+          </rect>
         </svg>
 
         <!-- 폰트 왜곡 방지용 HTML 레이블 오버레이 (비율 찌그러짐 원천 차단) -->
@@ -7226,24 +7608,24 @@ const openGamePopupFromLightbox = async (
       </div>
 
       <div class="dist-labels-row">
-        <span>최소 
-          <template v-if="activeDistName === '평균 순위'">{{ activeDist.min.toFixed(3) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.min.toFixed(4) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistUnit === '%'">{{ activeDist.min.toFixed(2) }}{{ activeDistUnit }}</template>
-          <template v-else>{{ activeDist.min.toLocaleString() }}{{ activeDistUnit }}</template>
-        </span>
-        <span class="dist-avg-val">평균 
-          <template v-if="activeDistName === '평균 순위'">{{ activeDist.avg.toFixed(3) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.avg.toFixed(4) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistUnit === '%'">{{ activeDist.avg.toFixed(2) }}{{ activeDistUnit }}</template>
-          <template v-else>{{ activeDist.avg.toLocaleString() }}{{ activeDistUnit }}</template>
-        </span>
-        <span>최대 
-          <template v-if="activeDistName === '평균 순위'">{{ activeDist.max.toFixed(3) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistName === '촌보율' || activeDistName === '벌부율'">{{ activeDist.max.toFixed(4) }}{{ activeDistUnit }}</template>
-          <template v-else-if="activeDistUnit === '%'">{{ activeDist.max.toFixed(2) }}{{ activeDistUnit }}</template>
-          <template v-else>{{ activeDist.max.toLocaleString() }}{{ activeDistUnit }}</template>
-        </span>
+        <span>최소 {{ formatDistValue(activeDist.min) }}</span>
+        <span class="dist-avg-val">평균 {{ formatDistValue(activeDist.avg) }}</span>
+        <span>최대 {{ formatDistValue(activeDist.max) }}</span>
+      </div>
+
+      <!-- 막대 호버 시 해당 플레이어 정보 및 이동 안내 -->
+      <div class="dist-bar-hover-info" :class="{ active: Boolean(hoveredDistBar) }">
+        <template v-if="hoveredDistBar">
+          <span class="dist-hover-name">{{ hoveredDistBar.playerName }}</span>
+          <span class="dist-hover-val">{{ formatDistValue(hoveredDistBar.value) }}</span>
+          <span class="dist-hover-go">클릭 이동 ↗</span>
+        </template>
+        <template v-else-if="isDistTooltipPinned">
+          <span class="dist-hover-hint">막대 클릭 시 해당 플레이어 스탯창으로 이동</span>
+        </template>
+        <template v-else>
+          <span class="dist-hover-hint">클릭 시 팝업 고정 · 막대 클릭 시 스탯 이동</span>
+        </template>
       </div>
     </div>
 
@@ -7254,6 +7636,28 @@ const openGamePopupFromLightbox = async (
       </div>
 
       <div class="header-actions">
+        <a
+          href="https://kml.or.kr/stat255/ranking.php"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="btn-action btn-kml-link"
+          title="김케이 하우스 KML 공식 랭킹 페이지 열기"
+        >
+          <svg class="kml-icon-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+            <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+            <path d="M4 22h16"></path>
+            <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path>
+            <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path>
+            <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>
+          </svg>
+          <span>KML</span>
+          <svg class="kml-ext-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+        </a>
         <button class="btn-action" @click="copyDashboardLink" title="대시보드 링크 복사">
           <span>링크 복사</span>
         </button>
@@ -7350,6 +7754,13 @@ const openGamePopupFromLightbox = async (
         >
           갤러리
         </button>
+        <button 
+          class="tab-btn" 
+          :class="{ active: activeTab === 'feedback' }" 
+          @click="switchTab('feedback')"
+        >
+          피드백
+        </button>
       </nav>
       <div
         v-show="tabsNavScrollIndicator.visible"
@@ -7369,7 +7780,7 @@ const openGamePopupFromLightbox = async (
 
     <!-- 로딩 상태 -->
     <div
-      v-if="isLoading && activeTab !== 'rules' && activeTab !== 'schedule' && !(activeTab === 'gallery' && highlightsList.length > 0)"
+      v-if="isLoading && activeTab !== 'rules' && activeTab !== 'schedule' && activeTab !== 'feedback' && !(activeTab === 'gallery' && highlightsList.length > 0)"
       class="loading-state"
     >
       <div class="spinner"></div>
@@ -7377,7 +7788,7 @@ const openGamePopupFromLightbox = async (
     </div>
 
     <!-- 에러 상태 -->
-    <div v-else-if="errorMessage && activeTab !== 'rules' && activeTab !== 'schedule'" class="error-state">
+    <div v-else-if="errorMessage && activeTab !== 'rules' && activeTab !== 'schedule' && activeTab !== 'feedback'" class="error-state">
       <p class="error-title">데이터를 불러오지 못했습니다</p>
       <p class="error-detail">{{ errorMessage }}</p>
       <button class="btn-retry" @click="loadAllData(true)">다시 시도</button>
@@ -7389,6 +7800,194 @@ const openGamePopupFromLightbox = async (
       <!-- TAB 1: 종합 랭킹 & 스탯                        -->
       <!-- ============================================== -->
       <section v-if="activeTab === 'ranking'" class="tab-ranking">
+        <!-- 성적 조건 DB 조회 패널 (최근 N국 / 최근 N회차 / 기간 지정 / 회차 구간) -->
+        <div class="stats-db-query-card" :class="{ 'is-filtered': isStatsQueryActive }">
+          <div class="db-query-top">
+            <div class="db-query-title-row">
+              <svg class="db-query-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+              </svg>
+              <span class="db-query-title">성적 조건 조회</span>
+              <span v-if="isStatsQueryLoading" class="db-telemetry-pill loading">
+                <span class="db-mini-spinner"></span>
+                DB 조회 중...
+              </span>
+              <span v-else-if="isStatsQueryActive && statsQueryResult" class="db-telemetry-pill active">
+                {{ statsQueryResult.members.length }}명 · {{ statsQueryResult.totalMatchedGames }}전<template v-if="statsQueryResult.totalMatchedRounds > 0"> · {{ statsQueryResult.totalMatchedRounds.toLocaleString() }}국</template> · {{ statsQueryResult.queryElapsedMs }}ms
+              </span>
+            </div>
+
+            <div class="db-query-modes">
+              <button
+                type="button"
+                class="db-mode-btn"
+                :class="{ active: statsQueryMode === 'all' }"
+                @click="selectStatsQueryMode('all')"
+              >전체 기간</button>
+              <button
+                type="button"
+                class="db-mode-btn"
+                :class="{ active: statsQueryMode === 'recent_rounds' }"
+                @click="selectStatsQueryMode('recent_rounds')"
+              >최근 N국</button>
+              <button
+                type="button"
+                class="db-mode-btn"
+                :class="{ active: statsQueryMode === 'recent_sessions' }"
+                @click="selectStatsQueryMode('recent_sessions')"
+              >최근 N회차</button>
+              <button
+                type="button"
+                class="db-mode-btn"
+                :class="{ active: statsQueryMode === 'date_range' }"
+                @click="selectStatsQueryMode('date_range')"
+              >기간 지정</button>
+              <button
+                type="button"
+                class="db-mode-btn"
+                :class="{ active: statsQueryMode === 'session_range' }"
+                @click="selectStatsQueryMode('session_range')"
+              >회차 구간</button>
+              <button
+                v-if="isStatsQueryActive"
+                type="button"
+                class="db-reset-btn"
+                @click="resetStatsDbQuery"
+                title="전체 기간으로 초기화"
+              >초기화</button>
+            </div>
+          </div>
+
+          <!-- 모드별 세부 조회 컨트롤 -->
+          <div v-if="statsQueryMode !== 'all'" class="db-query-controls">
+            <!-- 1) 최근 N국 -->
+            <template v-if="statsQueryMode === 'recent_rounds'">
+              <div class="db-preset-group">
+                <button
+                  v-for="n in [30, 50, 100, 200, 500]"
+                  :key="`rr-${n}`"
+                  type="button"
+                  class="db-preset-chip"
+                  :class="{ active: queryRecentRounds === n }"
+                  @click="applyRecentRoundsPreset(n)"
+                >{{ n }}국</button>
+              </div>
+              <div class="db-input-group">
+                <span class="db-field-label">직접 입력</span>
+                <input
+                  v-model.number="queryRecentRounds"
+                  type="number"
+                  min="1"
+                  max="10000"
+                  class="db-num-input"
+                  @keyup.enter="executeStatsDbQuery()"
+                />
+                <span class="db-unit-txt">국</span>
+                <button type="button" class="db-exec-btn" :disabled="isStatsQueryLoading" @click="executeStatsDbQuery()">조회</button>
+              </div>
+            </template>
+
+            <!-- 2) 최근 N회차 -->
+            <template v-else-if="statsQueryMode === 'recent_sessions'">
+              <div class="db-preset-group">
+                <button
+                  v-for="n in [1, 3, 5, 10]"
+                  :key="`rs-${n}`"
+                  type="button"
+                  class="db-preset-chip"
+                  :class="{ active: queryRecentSessions === n }"
+                  @click="applyRecentSessionsPreset(n)"
+                >최근 {{ n }}회차</button>
+              </div>
+              <div class="db-input-group">
+                <span class="db-field-label">직접 입력</span>
+                <input
+                  v-model.number="queryRecentSessions"
+                  type="number"
+                  min="1"
+                  :max="Math.max(1, availableSessions.length)"
+                  class="db-num-input"
+                  @keyup.enter="executeStatsDbQuery()"
+                />
+                <span class="db-unit-txt">회차</span>
+                <button type="button" class="db-exec-btn" :disabled="isStatsQueryLoading" @click="executeStatsDbQuery()">조회</button>
+              </div>
+            </template>
+
+            <!-- 3) 기간 지정 (날짜 범위) -->
+            <template v-else-if="statsQueryMode === 'date_range'">
+              <div class="db-preset-group">
+                <button type="button" class="db-preset-chip" @click="applyDateRangePreset('30d')">최근 30일</button>
+                <button type="button" class="db-preset-chip" @click="applyDateRangePreset('90d')">최근 90일</button>
+                <button type="button" class="db-preset-chip" @click="applyDateRangePreset('180d')">최근 6개월</button>
+                <button type="button" class="db-preset-chip" @click="applyDateRangePreset('year')">올해</button>
+                <button type="button" class="db-preset-chip" @click="applyDateRangePreset('all_dates')">전체 날짜</button>
+              </div>
+              <div class="db-input-group db-date-group">
+                <input
+                  v-model="queryStartDate"
+                  type="date"
+                  class="db-date-input"
+                  @change="executeStatsDbQuery()"
+                />
+                <span class="db-range-sep">~</span>
+                <input
+                  v-model="queryEndDate"
+                  type="date"
+                  class="db-date-input"
+                  @change="executeStatsDbQuery()"
+                />
+                <button type="button" class="db-exec-btn" :disabled="isStatsQueryLoading" @click="executeStatsDbQuery()">조회</button>
+              </div>
+            </template>
+
+            <!-- 4) 회차 구간 -->
+            <template v-else-if="statsQueryMode === 'session_range'">
+              <div class="db-preset-group">
+                <button type="button" class="db-preset-chip" @click="applyDetailedSessionRangePreset">상세 기록 전체 (제9회~)</button>
+              </div>
+              <div class="db-input-group db-session-range-group">
+                <select v-model="queryStartSession" class="db-select-input" @change="executeStatsDbQuery()">
+                  <option v-for="s in sessionsChronologicalAsc" :key="`qs-${s}`" :value="s">{{ s }}</option>
+                </select>
+                <span class="db-range-sep">~</span>
+                <select v-model="queryEndSession" class="db-select-input" @change="executeStatsDbQuery()">
+                  <option v-for="s in sessionsChronologicalAsc" :key="`qe-${s}`" :value="s">{{ s }}</option>
+                </select>
+                <button type="button" class="db-exec-btn" :disabled="isStatsQueryLoading" @click="executeStatsDbQuery()">조회</button>
+              </div>
+            </template>
+
+            <!-- 공통 최소 대국 필터 -->
+            <div class="db-mingames-group">
+              <span class="db-field-label">최소 대국</span>
+              <button
+                v-for="mg in [0, 3, 5, 10]"
+                :key="`mg-${mg}`"
+                type="button"
+                class="db-preset-chip subtle"
+                :class="{ active: queryMinGames === mg }"
+                @click="setQueryMinGames(mg)"
+              >{{ mg === 0 ? '전체' : `${mg}전+` }}</button>
+            </div>
+          </div>
+
+          <!-- 활성 조회 조건 요약 스트립 -->
+          <div v-if="statsQueryError" class="db-query-error">
+            {{ statsQueryError }}
+          </div>
+          <div v-else-if="isStatsQueryActive && statsQueryResult" class="db-query-summary-bar">
+            <span class="db-summary-cond">
+              <strong>조회 조건:</strong> {{ statsQueryResult.summaryLabel }}<template v-if="queryMinGames > 0"> · 최소 {{ queryMinGames }}전 이상</template>
+            </span>
+            <span v-if="statsQueryResult.hasLegacyOnlyGames" class="db-summary-legacy-note">
+              ※ 제1~8회차는 우마/순위 레거시 기록 포함 (국별 세부 스탯은 제9회~ 기준)
+            </span>
+          </div>
+        </div>
+
         <!-- 포디움 (Top 3 하이라이트) -->
         <div v-if="podiumTop3.length >= 3 && !searchQuery" class="podium-section">
           <!-- 2위 (은) -->
@@ -7478,17 +8077,28 @@ const openGamePopupFromLightbox = async (
               class="search-input"
             />
           </div>
-          <div class="sort-selector">
-            <label>정렬:</label>
-            <select v-model="sortKey" @change="sortOrder = (sortKey === 'avgRank') ? 'asc' : 'desc'" class="sort-dropdown">
-              <option value="totalUma">누적 우마순</option>
-              <option value="rating">레이팅순</option>
-              <option value="avgUma">평균 우마순</option>
-              <option value="avgRank">평균 순위순</option>
-              <option value="totalGames">대국수순</option>
-              <option value="top2Rate">연대율순</option>
-              <option value="rankDist">순위 비율순 (1>2>3>4)</option>
-            </select>
+          <div class="table-controls-right">
+            <button
+              type="button"
+              class="btn-vs-compare"
+              @click="openPlayerCompareModal()"
+              title="두 플레이어의 스탯을 1:1로 비교합니다"
+            >
+              <span class="vs-pill-mark">VS</span>
+              <span>스탯 비교</span>
+            </button>
+            <div class="sort-selector">
+              <label>정렬:</label>
+              <select v-model="sortKey" @change="sortOrder = (sortKey === 'avgRank') ? 'asc' : 'desc'" class="sort-dropdown">
+                <option value="totalUma">누적 우마순</option>
+                <option value="rating">레이팅순</option>
+                <option value="avgUma">평균 우마순</option>
+                <option value="avgRank">평균 순위순</option>
+                <option value="totalGames">대국수순</option>
+                <option value="top2Rate">연대율순</option>
+                <option value="rankDist">순위 비율순 (1>2>3>4)</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -7571,7 +8181,10 @@ const openGamePopupFromLightbox = async (
                 <td class="col-avg-uma" :class="member.avgUma >= 0 ? 'pos' : 'neg'">
                   {{ member.avgUma > 0 ? '+' : '' }}{{ member.avgUma.toFixed(1) }}
                 </td>
-                <td class="col-games">{{ member.totalGames }}전</td>
+                <td class="col-games">
+                  <span>{{ member.totalGames }}전</span>
+                  <span v-if="isStatsQueryActive && member.totalRounds > 0" class="col-games-rounds">{{ member.totalRounds }}국</span>
+                </td>
                 <td class="col-top2">{{ formatPct(member.top2Rate) }}</td>
                 <td class="col-avg-rank">{{ member.avgRank.toFixed(3) }}위</td>
                 <!-- 1등, 2등, 3등, 4등 독립 열 -->
@@ -7598,6 +8211,11 @@ const openGamePopupFromLightbox = async (
                     <span class="dist-cnt">{{ member.rank4Count }}</span>
                     <span class="dist-pct">({{ getDistPct(member.rank4Count, member.totalGames) }}%)</span>
                   </div>
+                </td>
+              </tr>
+              <tr v-if="filteredStats.length === 0">
+                <td colspan="12" class="db-empty-table-cell">
+                  {{ isStatsQueryLoading ? '조건에 맞는 데이터를 조회하는 중입니다...' : '해당 조회 조건에 일치하는 성적 데이터가 없습니다.' }}
                 </td>
               </tr>
             </tbody>
@@ -8668,6 +9286,11 @@ const openGamePopupFromLightbox = async (
       <section v-else-if="activeTab === 'rules'" class="tab-rules">
         <RulesTab />
       </section>
+
+      <!-- 피드백 탭 -->
+      <section v-else-if="activeTab === 'feedback'" class="tab-feedback">
+        <FeedbackTab />
+      </section>
     </main>
 
     <!-- ============================================== -->
@@ -8692,17 +9315,33 @@ const openGamePopupFromLightbox = async (
                   @change="openPlayerByName(($event.target as HTMLSelectElement).value, isModalFromSession, true)"
                   class="player_select"
                 >
-                  <option v-for="m in allStats" :key="m.name" :value="m.name">
+                  <option v-for="m in (!isModalFromSession && isStatsQueryActive ? activeRankingStats : allStats)" :key="m.name" :value="m.name">
                     {{ m.name }} ({{ m.totalUma > 0 ? '+' : '' }}{{ m.totalUma }}pt)
                   </option>
                 </select>
               </div>
               <div style="display: flex; align-items: center; gap: 6px;">
+                <button
+                  type="button"
+                  class="btn-vs-compare compact"
+                  @click="openPlayerCompareModal(selectedPlayer.name)"
+                  title="이 플레이어와 다른 상대의 스탯 비교"
+                >
+                  <span class="vs-pill-mark">VS</span>
+                  <span>비교</span>
+                </button>
                 <button class="btn-action" @click="copyDashboardLink" title="현재 플레이어 통계 링크 복사" style="padding: 5px 10px; font-size: 0.78rem;">
                   <span>링크 복사</span>
                 </button>
                 <button class="btn-close" @click="closePlayerModal()" title="닫기">✕</button>
               </div>
+            </div>
+
+            <!-- 활성 DB 조회 조건 배지 (조건 조회 결과에서 열었을 때) -->
+            <div v-if="!isModalFromSession && isStatsQueryActive && statsQueryResult" class="modal-query-scope-badge">
+              <span class="mqs-dot"></span>
+              <span>DB 조건 조회 적용 중: <strong>{{ statsQueryResult.summaryLabel }}</strong></span>
+              <span v-if="displayPlayerStats.totalRounds > 0" class="mqs-sub">({{ displayPlayerStats.totalGames }}전 · {{ displayPlayerStats.totalRounds }}국)</span>
             </div>
 
             <!-- 모달 스코프 탭 (회차 상세에서 진입했을 때만 노출) -->
@@ -8829,6 +9468,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'totalGames', '기록 대국 수', currentSessionPlayerStats.totalGames, true, '전')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'totalGames', '기록 대국 수', currentSessionPlayerStats.totalGames, true, '전')"
                         >
                           <span class="stat_label">기록 대국 수</span>
                           <span class="stat_value">{{ formatDualMetric(sessionMember?.totalGames, currentSessionPlayerStats.totalGames) }}전</span>
@@ -8837,6 +9477,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'totalUma', '누적 우마', currentSessionPlayerStats.totalUma, true, 'pt')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'totalUma', '누적 우마', currentSessionPlayerStats.totalUma, true, 'pt')"
                         >
                           <span class="stat_label">누적 우마</span>
                           <span class="stat_value" :class="currentSessionPlayerStats.totalUma >= 0 ? 'text_positive' : 'text_negative'">
@@ -8847,6 +9488,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'avgUma', '평균 우마', currentSessionPlayerStats.avgUma, true, 'pt')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'avgUma', '평균 우마', currentSessionPlayerStats.avgUma, true, 'pt')"
                         >
                           <span class="stat_label">평균 우마</span>
                           <span class="stat_value" :class="currentSessionPlayerStats.avgUma >= 0 ? 'text_positive' : 'text_negative'">
@@ -8857,6 +9499,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'avgRank', '평균 순위', currentSessionPlayerStats.avgRank, false, '위')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'avgRank', '평균 순위', currentSessionPlayerStats.avgRank, false, '위')"
                         >
                           <span class="stat_label">평균 순위</span>
                           <span class="stat_value highlight">{{ formatDualMetric(sessionMember?.avgRank, currentSessionPlayerStats.avgRank, 3) }}위</span>
@@ -8865,6 +9508,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'top2Rate', '연대율', currentSessionPlayerStats.top2Rate, true, '%')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'top2Rate', '연대율', currentSessionPlayerStats.top2Rate, true, '%')"
                         >
                           <span class="stat_label">연대율 (1·2위)</span>
                           <span class="stat_value">{{ formatDualMetric(sessionMember?.top2Rate, currentSessionPlayerStats.top2Rate, 2) }}%</span>
@@ -8873,6 +9517,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'winRate', '화료율', currentSessionPlayerStats.winRate, true, '%')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'winRate', '화료율', currentSessionPlayerStats.winRate, true, '%')"
                         >
                           <span class="stat_label">화료율</span>
                           <span class="stat_value">{{ formatPct(currentSessionPlayerStats.winRate) }}</span>
@@ -8881,6 +9526,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'dealInRate', '방총률', currentSessionPlayerStats.dealInRate, false, '%')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'dealInRate', '방총률', currentSessionPlayerStats.dealInRate, false, '%')"
                         >
                           <span class="stat_label">방총률</span>
                           <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.dealInRate) }}</span>
@@ -8889,6 +9535,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'tsumoRate', '쯔모율', currentSessionPlayerStats.tsumoRate, true, '%')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'tsumoRate', '쯔모율', currentSessionPlayerStats.tsumoRate, true, '%')"
                         >
                           <span class="stat_label">쯔모율</span>
                           <span class="stat_value">{{ formatPct(currentSessionPlayerStats.tsumoRate) }}</span>
@@ -8897,6 +9544,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'riichiRate', '리치율', currentSessionPlayerStats.riichiRate, true, '%')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'riichiRate', '리치율', currentSessionPlayerStats.riichiRate, true, '%')"
                         >
                           <span class="stat_label">리치율</span>
                           <span class="stat_value">{{ formatPct(currentSessionPlayerStats.riichiRate) }}</span>
@@ -8923,6 +9571,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'avgWinScore', '평균 화료 점수', currentSessionPlayerStats.avgWinScore, true, '점')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'avgWinScore', '평균 화료 점수', currentSessionPlayerStats.avgWinScore, true, '점')"
                         >
                           <span class="stat_label">평균 화료 점수</span>
                           <span class="stat_value text_positive">{{ currentSessionPlayerStats.avgWinScore.toLocaleString() }}점</span>
@@ -8931,6 +9580,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'avgDealInScore', '평균 방총 점수', currentSessionPlayerStats.avgDealInScore, false, '점')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'avgDealInScore', '평균 방총 점수', currentSessionPlayerStats.avgDealInScore, false, '점')"
                         >
                           <span class="stat_label">평균 방총 점수</span>
                           <span class="stat_value text_negative">{{ currentSessionPlayerStats.avgDealInScore.toLocaleString() }}점</span>
@@ -8939,6 +9589,7 @@ const openGamePopupFromLightbox = async (
                           class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'tobiRate', '토비율', currentSessionPlayerStats.tobiRate, false, '%')" 
                           @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'tobiRate', '토비율', currentSessionPlayerStats.tobiRate, false, '%')"
                         >
                           <span class="stat_label">토비율 (들통)</span>
                           <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.tobiRate) }}</span>
@@ -8996,47 +9647,47 @@ const openGamePopupFromLightbox = async (
                         </div>
                         <div 
                           class="stat_row hoverable" 
-                          @mouseenter="onHoverSessionMetric($event, 'riichiIncomeAvg', '리치 시 평균 수입', currentSessionPlayerStats.riichiIncomeAvg, true, '점')" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiIncomeAvg', '리치 수입 평균', currentSessionPlayerStats.riichiIncomeAvg, true, '점')" 
                           @mouseleave="onLeaveMetric"
-                          @click.stop="onHoverSessionMetric($event, 'riichiIncomeAvg', '리치 시 평균 수입', currentSessionPlayerStats.riichiIncomeAvg, true, '점')"
+                          @click.stop="onHoverSessionMetric($event, 'riichiIncomeAvg', '리치 수입 평균', currentSessionPlayerStats.riichiIncomeAvg, true, '점')"
                         >
-                          <span class="stat_label">리치 시 평균 수입</span>
+                          <span class="stat_label">리치 수입 평균</span>
                           <span class="stat_value text_positive">{{ currentSessionPlayerStats.riichiIncomeAvg.toLocaleString() }}점</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
-                          @mouseenter="onHoverSessionMetric($event, 'riichiExpenseAvg', '리치 방총 시 평균 지출', currentSessionPlayerStats.riichiExpenseAvg, false, '점')" 
+                          @mouseenter="onHoverSessionMetric($event, 'riichiExpenseAvg', '리치 지출 평균', currentSessionPlayerStats.riichiExpenseAvg, false, '점')" 
                           @mouseleave="onLeaveMetric"
-                          @click.stop="onHoverSessionMetric($event, 'riichiExpenseAvg', '리치 방총 시 평균 지출', currentSessionPlayerStats.riichiExpenseAvg, false, '점')"
+                          @click.stop="onHoverSessionMetric($event, 'riichiExpenseAvg', '리치 지출 평균', currentSessionPlayerStats.riichiExpenseAvg, false, '점')"
                         >
-                          <span class="stat_label">리치 방총 시 평균 지출</span>
+                          <span class="stat_label">리치 지출 평균</span>
                           <span class="stat_value text_negative">{{ currentSessionPlayerStats.riichiExpenseAvg.toLocaleString() }}점</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
-                          @mouseenter="onHoverSessionMetric($event, 'firstRiichiRate', '선제 리치율', currentSessionPlayerStats.firstRiichiRate, true, '%')" 
+                          @mouseenter="onHoverSessionMetric($event, 'firstRiichiRate', '선제율', currentSessionPlayerStats.firstRiichiRate, true, '%')" 
                           @mouseleave="onLeaveMetric"
-                          @click.stop="onHoverSessionMetric($event, 'firstRiichiRate', '선제 리치율', currentSessionPlayerStats.firstRiichiRate, true, '%')"
+                          @click.stop="onHoverSessionMetric($event, 'firstRiichiRate', '선제율', currentSessionPlayerStats.firstRiichiRate, true, '%')"
                         >
-                          <span class="stat_label">선제 리치율</span>
+                          <span class="stat_label">선제율</span>
                           <span class="stat_value text_positive">{{ formatPct(currentSessionPlayerStats.firstRiichiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
-                          @mouseenter="onHoverSessionMetric($event, 'chaseRiichiRate', '추격 리치율', currentSessionPlayerStats.chaseRiichiRate, true, '%')" 
+                          @mouseenter="onHoverSessionMetric($event, 'chaseRiichiRate', '추격률', currentSessionPlayerStats.chaseRiichiRate, true, '%')" 
                           @mouseleave="onLeaveMetric"
-                          @click.stop="onHoverSessionMetric($event, 'chaseRiichiRate', '추격 리치율', currentSessionPlayerStats.chaseRiichiRate, true, '%')"
+                          @click.stop="onHoverSessionMetric($event, 'chaseRiichiRate', '추격률', currentSessionPlayerStats.chaseRiichiRate, true, '%')"
                         >
-                          <span class="stat_label">추격 리치율</span>
+                          <span class="stat_label">추격률</span>
                           <span class="stat_value">{{ formatPct(currentSessionPlayerStats.chaseRiichiRate) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
-                          @mouseenter="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격 리치율', currentSessionPlayerStats.chasedRiichiRate, false, '%')" 
+                          @mouseenter="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격률', currentSessionPlayerStats.chasedRiichiRate, false, '%')" 
                           @mouseleave="onLeaveMetric"
-                          @click.stop="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격 리치율', currentSessionPlayerStats.chasedRiichiRate, false, '%')"
+                          @click.stop="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격률', currentSessionPlayerStats.chasedRiichiRate, false, '%')"
                         >
-                          <span class="stat_label">피추격 리치율</span>
+                          <span class="stat_label">피추격률</span>
                           <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.chasedRiichiRate) }}</span>
                         </div>
                       </div>
@@ -9727,6 +10378,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'totalGames', '기록 대국 수', displayPlayerStats.totalGames, true, '전')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'totalGames', '기록 대국 수', displayPlayerStats.totalGames, true, '전')"
               >
                 <span class="stat_label">기록 대국 수</span>
                 <span class="stat_value">{{ formatDualMetric(selectedPlayer?.totalGames, displayPlayerStats.totalGames) }}전</span>
@@ -9741,6 +10393,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'totalUma', '누적 우마', displayPlayerStats.totalUma, true, 'pt')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'totalUma', '누적 우마', displayPlayerStats.totalUma, true, 'pt')"
               >
                 <span class="stat_label">누적 우마</span>
                 <span class="stat_value" :class="(selectedPlayer?.totalUma || 0) >= 0 ? 'text_positive' : 'text_negative'">
@@ -9751,6 +10404,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'avgUma', '평균 우마', displayPlayerStats.avgUma, true, 'pt')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'avgUma', '평균 우마', displayPlayerStats.avgUma, true, 'pt')"
               >
                 <span class="stat_label">평균 우마</span>
                 <span class="stat_value" :class="(selectedPlayer?.avgUma || 0) >= 0 ? 'text_positive' : 'text_negative'">
@@ -9761,6 +10415,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'avgRank', '평균 순위', displayPlayerStats.avgRank, false, '위')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'avgRank', '평균 순위', displayPlayerStats.avgRank, false, '위')"
               >
                 <span class="stat_label">평균 순위</span>
                 <span class="stat_value highlight">{{ formatDualMetric(selectedPlayer?.avgRank, displayPlayerStats.avgRank, 3) }}위</span>
@@ -9769,6 +10424,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'winRate', '화료율', displayPlayerStats.winRate, true, '%')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'winRate', '화료율', displayPlayerStats.winRate, true, '%')"
               >
                 <span class="stat_label">화료율</span>
                 <span class="stat_value">{{ formatPct(displayPlayerStats.winRate) }}</span>
@@ -9777,6 +10433,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'dealInRate', '방총률', displayPlayerStats.dealInRate, false, '%')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'dealInRate', '방총률', displayPlayerStats.dealInRate, false, '%')"
               >
                 <span class="stat_label">방총률</span>
                 <span class="stat_value text_negative">{{ formatPct(displayPlayerStats.dealInRate) }}</span>
@@ -9785,6 +10442,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'tsumoRate', '쯔모율', displayPlayerStats.tsumoRate, true, '%')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'tsumoRate', '쯔모율', displayPlayerStats.tsumoRate, true, '%')"
               >
                 <span class="stat_label">쯔모율</span>
                 <span class="stat_value">{{ formatPct(displayPlayerStats.tsumoRate) }}</span>
@@ -9793,6 +10451,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'riichiRate', '리치율', displayPlayerStats.riichiRate, true, '%')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'riichiRate', '리치율', displayPlayerStats.riichiRate, true, '%')"
               >
                 <span class="stat_label">리치율</span>
                 <span class="stat_value">{{ formatPct(displayPlayerStats.riichiRate) }}</span>
@@ -9819,6 +10478,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'avgWinScore', '평균 화료 점수', displayPlayerStats.avgWinScore, true, '점')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'avgWinScore', '평균 화료 점수', displayPlayerStats.avgWinScore, true, '점')"
               >
                 <span class="stat_label">평균 화료 점수</span>
                 <span class="stat_value text_positive">{{ displayPlayerStats.avgWinScore.toLocaleString() }}점</span>
@@ -9827,6 +10487,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'avgDealInScore', '평균 방총 점수', displayPlayerStats.avgDealInScore, false, '점')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'avgDealInScore', '평균 방총 점수', displayPlayerStats.avgDealInScore, false, '점')"
               >
                 <span class="stat_label">평균 방총 점수</span>
                 <span class="stat_value text_negative">{{ displayPlayerStats.avgDealInScore.toLocaleString() }}점</span>
@@ -9835,6 +10496,7 @@ const openGamePopupFromLightbox = async (
                 class="stat_row hoverable" 
                 @mouseenter="onHoverMetric($event, 'tobiRate', '토비율', displayPlayerStats.tobiRate, false, '%')" 
                 @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'tobiRate', '토비율', displayPlayerStats.tobiRate, false, '%')"
               >
                 <span class="stat_label">토비율 (들통)</span>
                 <span class="stat_value text_negative">{{ formatPct(displayPlayerStats.tobiRate) }}</span>
@@ -13130,6 +13792,19 @@ const openGamePopupFromLightbox = async (
         </div>
       </div>
     </Transition>
+
+    <!-- 플레이어 1:1 스탯 비교 모달 -->
+    <PlayerCompareModal
+      v-if="isCompareModalOpen"
+      :players="isStatsQueryActive && activeRankingStats.length > 0 ? activeRankingStats : allStats"
+      :initial-player-a="compareInitialPlayerA"
+      :initial-player-b="compareInitialPlayerB"
+      :rating-history="allRatingHistoryRecords"
+      :scope-label="isStatsQueryActive && statsQueryResult ? statsQueryResult.summaryLabel : '전체 기간'"
+      :is-dark="isDark"
+      @close="isCompareModalOpen = false"
+      @open-player="handleOpenPlayerFromCompare"
+    />
   </div>
 </template>
 
@@ -13198,28 +13873,36 @@ const openGamePopupFromLightbox = async (
   transform: translate(-50%, 10px);
 }
 
-/* 연속 히스토그램 팝오버 툴팁 (폭 215px 축소 및 50% 절반 구분선 적용) */
+/* 연속 히스토그램 팝오버 툴팁 (클릭 고정 + 막대 클릭 이동 지원) */
 .dist-tooltip-popup {
   position: fixed;
   transform: translate(-50%, -100%);
-  pointer-events: none;
+  pointer-events: auto;
   z-index: 2880;
-  width: 215px;
+  width: 240px;
   background: rgba(255, 255, 255, 0.98);
   color: #0f172a;
   backdrop-filter: blur(8px);
   border: 1px solid #cbd5e1;
   border-radius: 10px;
   padding: 10px 12px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.14);
   font-family: inherit;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 html.dark .dist-tooltip-popup {
   background: rgba(15, 23, 42, 0.97);
   color: #f8fafc;
-  border-color: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.16);
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+}
+.dist-tooltip-popup.pinned {
+  border-color: #3b82f6;
+  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.24);
+}
+html.dark .dist-tooltip-popup.pinned {
+  border-color: #60a5fa;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
 }
 .dist-tooltip-popup.below {
   transform: translate(-50%, 0);
@@ -13228,12 +13911,63 @@ html.dark .dist-tooltip-popup {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 6px;
   font-size: 11px;
   margin-bottom: 2px;
+}
+.dist-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 .dist-title {
   font-weight: bold;
   color: #334155;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.dist-pin-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.12);
+  padding: 1px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+html.dark .dist-pin-badge {
+  color: #93c5fd;
+  background: rgba(96, 165, 250, 0.2);
+}
+.dist-pin-close-btn {
+  border: none;
+  background: rgba(100, 116, 139, 0.14);
+  color: #475569;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.dist-pin-close-btn:hover {
+  background: rgba(239, 68, 68, 0.16);
+  color: #dc2626;
+}
+html.dark .dist-pin-close-btn {
+  background: rgba(148, 163, 184, 0.2);
+  color: #e2e8f0;
+}
+html.dark .dist-pin-close-btn:hover {
+  background: rgba(248, 113, 113, 0.25);
+  color: #fca5a5;
 }
 html.dark .dist-title {
   color: #cbd5e1;
@@ -13351,6 +14085,109 @@ html.dark .dist-labels-row {
 }
 html.dark .dist-avg-val {
   color: #38bdf8;
+}
+.dist-bar-hit {
+  cursor: pointer;
+}
+.dist-bar-hover-info {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 10px;
+  min-height: 16px;
+}
+.dist-bar-hover-info.active {
+  color: #0f172a;
+}
+html.dark .dist-bar-hover-info.active {
+  color: #f8fafc;
+}
+.dist-hover-name {
+  font-weight: 800;
+  color: #d97706;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 82px;
+}
+html.dark .dist-hover-name {
+  color: #fbbf24;
+}
+.dist-hover-val {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.dist-hover-go {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #2563eb;
+  white-space: nowrap;
+}
+html.dark .dist-hover-go {
+  color: #60a5fa;
+}
+.dist-hover-hint {
+  width: 100%;
+  text-align: center;
+  font-size: 9.5px;
+  color: #64748b;
+}
+html.dark .dist-hover-hint {
+  color: #94a3b8;
+}
+
+/* 플레이어 1:1 VS 비교 버튼 */
+.table-controls-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.btn-vs-compare {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: 7px;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(225, 29, 72, 0.08));
+  color: #1e293b;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+.btn-vs-compare:hover {
+  border-color: #2563eb;
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.18);
+  transform: translateY(-1px);
+}
+.btn-vs-compare.compact {
+  padding: 4px 9px;
+  font-size: 0.78rem;
+}
+html.dark .btn-vs-compare {
+  color: #f1f5f9;
+  border-color: rgba(96, 165, 250, 0.38);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.22), rgba(225, 29, 72, 0.18));
+}
+.vs-pill-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #2563eb, #e11d48);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
 }
 
 /* 헤더 */
@@ -21844,6 +22681,373 @@ html.dark .upload-multi-preview-item {
     width: 36px;
     height: 36px;
     font-size: 22px;
+  }
+}
+
+/* ========================================== */
+/* KML 공식 랭킹 페이지 아이콘 버튼             */
+/* ========================================== */
+.btn-kml-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(59, 130, 246, 0.12));
+  border-color: rgba(16, 185, 129, 0.4) !important;
+  color: #059669 !important;
+  font-weight: 800 !important;
+}
+.btn-kml-link:hover {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(59, 130, 246, 0.2));
+  border-color: rgba(16, 185, 129, 0.65) !important;
+}
+html.dark .btn-kml-link {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(59, 130, 246, 0.18));
+  border-color: rgba(52, 211, 153, 0.4) !important;
+  color: #34d399 !important;
+}
+html.dark .btn-kml-link:hover {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(59, 130, 246, 0.28));
+}
+.kml-icon-svg {
+  flex-shrink: 0;
+}
+.kml-ext-svg {
+  opacity: 0.72;
+  flex-shrink: 0;
+}
+
+/* ========================================== */
+/* 성적 조건 DB 조회 패널                       */
+/* ========================================== */
+.stats-db-query-card {
+  background: var(--card-bg-color, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.035);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.stats-db-query-card.is-filtered {
+  border-color: rgba(37, 99, 235, 0.45);
+  box-shadow: 0 3px 12px rgba(37, 99, 235, 0.08);
+}
+html.dark .stats-db-query-card {
+  background: #18181b;
+  border-color: #27272a;
+}
+html.dark .stats-db-query-card.is-filtered {
+  border-color: rgba(96, 165, 250, 0.45);
+}
+.db-query-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.db-query-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.db-query-icon {
+  color: #2563eb;
+  flex-shrink: 0;
+}
+html.dark .db-query-icon {
+  color: #60a5fa;
+}
+.db-query-title {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--text-color, #0f172a);
+}
+.db-telemetry-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.db-telemetry-pill.active {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+html.dark .db-telemetry-pill.active {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+}
+.db-telemetry-pill.loading {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+html.dark .db-telemetry-pill.loading {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+.db-mini-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}
+.db-query-modes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.db-mode-btn {
+  padding: 5px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-card, #f8fafc);
+  color: var(--text-dimmed, #64748b);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+html.dark .db-mode-btn {
+  background: #27272a;
+  border-color: #3f3f46;
+  color: #a1a1aa;
+}
+.db-mode-btn:hover {
+  border-color: #3b82f6;
+  color: #2563eb;
+}
+html.dark .db-mode-btn:hover {
+  color: #93c5fd;
+}
+.db-mode-btn.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+.db-reset-btn {
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+html.dark .db-reset-btn {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+}
+.db-query-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color, #e2e8f0);
+}
+html.dark .db-query-controls {
+  border-color: #27272a;
+}
+.db-preset-group,
+.db-input-group,
+.db-mingames-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.db-preset-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: transparent;
+  color: var(--text-color, #334155);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+html.dark .db-preset-chip {
+  border-color: #3f3f46;
+  color: #d4d4d8;
+}
+.db-preset-chip:hover {
+  border-color: #3b82f6;
+  color: #2563eb;
+}
+.db-preset-chip.active {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: #2563eb;
+  color: #2563eb;
+  font-weight: 700;
+}
+html.dark .db-preset-chip.active {
+  background: rgba(59, 130, 246, 0.22);
+  color: #93c5fd;
+}
+.db-field-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-dimmed, #64748b);
+  margin-right: 2px;
+}
+.db-num-input {
+  width: 68px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-card, #f8fafc);
+  color: var(--text-color, #0f172a);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: center;
+}
+.db-date-input,
+.db-select-input {
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #cbd5e1);
+  background: var(--bg-card, #f8fafc);
+  color: var(--text-color, #0f172a);
+  font-size: 12px;
+  font-weight: 600;
+}
+html.dark .db-num-input,
+html.dark .db-date-input,
+html.dark .db-select-input {
+  background: #27272a;
+  border-color: #3f3f46;
+  color: #f4f4f5;
+}
+.db-unit-txt,
+.db-range-sep {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dimmed, #64748b);
+}
+.db-exec-btn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: none;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.db-exec-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+.db-exec-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.db-query-summary-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.06);
+  font-size: 12px;
+  color: var(--text-color, #1e293b);
+}
+html.dark .db-query-summary-bar {
+  background: rgba(59, 130, 246, 0.12);
+  color: #e4e4e7;
+}
+.db-summary-legacy-note {
+  font-size: 11px;
+  color: var(--text-dimmed, #64748b);
+}
+.db-query-error {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
+}
+.col-games-rounds {
+  display: block;
+  font-size: 10.5px;
+  color: var(--text-dimmed, #64748b);
+  font-weight: 600;
+  line-height: 1.1;
+  margin-top: 1px;
+}
+.db-empty-table-cell {
+  text-align: center;
+  padding: 32px 12px !important;
+  color: var(--text-dimmed, #64748b);
+  font-size: 13px;
+}
+.modal-query-scope-badge {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 2px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  font-size: 12px;
+  color: var(--text-color, #1e293b);
+}
+html.dark .modal-query-scope-badge {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(96, 165, 250, 0.35);
+  color: #e4e4e7;
+}
+.mqs-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2563eb;
+  flex-shrink: 0;
+}
+.mqs-sub {
+  font-size: 11.5px;
+  color: var(--text-dimmed, #64748b);
+}
+
+@media (max-width: 640px) {
+  .stats-db-query-card {
+    padding: 10px 10px;
+  }
+  .db-query-modes {
+    width: 100%;
+  }
+  .db-mode-btn {
+    padding: 5px 8px;
+    font-size: 11.5px;
+  }
+  .db-date-group,
+  .db-session-range-group {
+    width: 100%;
+  }
+  .db-date-input,
+  .db-select-input {
+    flex: 1;
+    min-width: 0;
   }
 }
 </style>

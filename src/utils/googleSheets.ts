@@ -4,7 +4,8 @@ import {
   type GameRatingHistoryRecord,
   calculateMatchRatings,
   sortRatingsDesc,
-  replayAllHistoricalGames
+  replayAllHistoricalGames,
+  normalizeRatingPlayerName
 } from './ratingEngine';
 import { LEGACY_CONSOLIDATED_RAW, clearPublicStatsCache } from '@/services/publicStatsService';
 import { getKSTNowParts, getKSTTodayString, formatKSTTimestamp } from '@/utils/kstTime';
@@ -3089,8 +3090,19 @@ export const updateMatchRatingsInSheet = async (
     gameIndex
   });
 
-  // 3. 기존 맵에 4명의 갱신 결과 병합
-  const mergedMap: Record<string, PlayerRating> = { ...currentRatings, ...updatedRatings };
+  // 3. 기존 맵에 4명의 갱신 결과 병합 (별표 '★' 변형 중복 키 자동 정리)
+  const mergedMap: Record<string, PlayerRating> = { ...currentRatings };
+  for (const [updatedName, updatedVal] of Object.entries(updatedRatings)) {
+    const updatedNorm = normalizeRatingPlayerName(updatedName);
+    if (updatedNorm) {
+      for (const existingKey of Object.keys(mergedMap)) {
+        if (existingKey !== updatedName && normalizeRatingPlayerName(existingKey) === updatedNorm) {
+          delete mergedMap[existingKey];
+        }
+      }
+    }
+    mergedMap[updatedName] = updatedVal;
+  }
 
   // 4. 전원 순위 재정렬 후 시트에 일괄 갱신
   await batchSaveAllRatingsToSheet(spreadsheetId, mergedMap);
