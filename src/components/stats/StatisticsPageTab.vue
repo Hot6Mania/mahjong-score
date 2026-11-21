@@ -142,6 +142,45 @@ const qualifiedMembersForSearch = computed<MemberStatItem[]>(() => {
   return sortedAllMembers.value.filter((m) => getMemberRounds(m) >= minR);
 });
 
+// 빠른 선택 칩: 대국수 적은 인원은 제외하고 성적 상위 + 대국수 상위 인원을 중복 없이 조합
+const quickSelectPlayers = computed<MemberStatItem[]>(() => {
+  const base = qualifiedMembersForSearch.value;
+  const targetMinGames = Math.max(10, Math.floor(Number(playerTabMinGames.value) || 0));
+  let pool = base.filter((m) => (m.totalGames || 0) >= targetMinGames);
+  if (pool.length < 4 && targetMinGames > 10) {
+    pool = base.filter((m) => (m.totalGames || 0) >= 10);
+  }
+  if (pool.length === 0) {
+    pool = [...base].sort((a, b) => (b.totalGames || 0) - (a.totalGames || 0)).slice(0, 12);
+  }
+
+  const byPerformance = [...pool]
+    .sort((a, b) => {
+      if (b.totalUma !== a.totalUma) return b.totalUma - a.totalUma;
+      const rDiff = (b.rating || 0) - (a.rating || 0);
+      if (rDiff !== 0) return rDiff;
+      return (b.totalGames || 0) - (a.totalGames || 0);
+    })
+    .slice(0, 8);
+
+  const byGames = [...pool]
+    .sort((a, b) => {
+      if ((b.totalGames || 0) !== (a.totalGames || 0)) return (b.totalGames || 0) - (a.totalGames || 0);
+      return b.totalUma - a.totalUma;
+    })
+    .slice(0, 10);
+
+  const merged: MemberStatItem[] = [];
+  const seen = new Set<string>();
+  for (const m of [...byPerformance, ...byGames]) {
+    if (seen.has(m.name)) continue;
+    seen.add(m.name);
+    merged.push(m);
+    if (merged.length >= 14) break;
+  }
+  return merged;
+});
+
 const qualifiedMembersForDistCount = computed(() => activePlayerScopeMembers.value.length);
 
 const findMemberByName = (name: string): MemberStatItem | null => {
@@ -1805,11 +1844,11 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 빠른 선택 칩 -->
+        <!-- 빠른 선택 칩 (성적 상위 + 다전 플레이어) -->
         <div class="sp-quick-players">
-          <span class="sp-quick-lbl">빠른 선택:</span>
+          <span class="sp-quick-lbl">빠른 선택 (성적·다전):</span>
           <button
-            v-for="m in qualifiedMembersForSearch.slice(0, 12)"
+            v-for="m in quickSelectPlayers"
             :key="'q-' + m.name"
             type="button"
             class="sp-quick-chip"
@@ -1820,6 +1859,7 @@ onMounted(() => {
             <span v-if="m.rating" class="sp-chip-r" :style="{ color: selectedPlayerName === m.name ? '#fff' : getRatingColor(m.rating) }">
               R{{ Math.round(m.rating) }}
             </span>
+            <span class="sp-chip-games">{{ m.totalGames }}전</span>
           </button>
         </div>
       </div>
@@ -4128,6 +4168,14 @@ onMounted(() => {
 .sp-chip-r {
   font-size: 10.5px;
   font-weight: 800;
+}
+.sp-chip-games {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--sp-text-muted);
+}
+.sp-quick-chip.active .sp-chip-games {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 /* 개인별 기간/구간 필터 카드 */
