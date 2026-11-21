@@ -9471,7 +9471,13 @@ const openGamePopupFromLightbox = async (
             <!-- 모달 헤더: 플레이어 셀렉터 및 닫기 버튼 -->
             <div class="modal-header">
               <div class="player_selector_container">
-                <label for="modalPlayerSelect" class="selector_label">대상 플레이어:</label>
+                <label for="modalPlayerSelect" class="selector_label" title="대상 플레이어">
+                  <svg class="mh-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                  <span class="mh-label-text">대상 플레이어:</span>
+                </label>
                 <select 
                   id="modalPlayerSelect" 
                   :value="selectedPlayer.name" 
@@ -9483,29 +9489,56 @@ const openGamePopupFromLightbox = async (
                   </option>
                 </select>
               </div>
-              <div style="display: flex; align-items: center; gap: 6px;">
+              <div class="modal-header-actions">
                 <button
                   type="button"
-                  class="btn-vs-compare compact"
+                  class="btn-vs-compare compact mh-action-btn"
                   @click="openPlayerCompareModal(selectedPlayer.name)"
                   title="이 플레이어와 다른 상대의 스탯 비교"
+                  aria-label="VS 비교"
                 >
-                  <span class="vs-pill-mark">VS</span>
-                  <span>비교</span>
+                  <svg class="mh-icon mh-mobile-only-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m8 7-4 4 4 4"></path>
+                    <path d="M4 11h11"></path>
+                    <path d="m16 17 4-4-4-4"></path>
+                    <path d="M20 13H9"></path>
+                  </svg>
+                  <span class="vs-pill-mark mh-desktop-only">VS</span>
+                  <span class="mh-btn-text">비교</span>
                 </button>
                 <button
                   type="button"
-                  class="btn-action"
+                  class="btn-action mh-action-btn"
                   @click="openPlayerInStatsPage(selectedPlayer.name)"
                   title="통계 스탯 전체 페이지 형식으로 보기"
-                  style="padding: 5px 10px; font-size: 0.78rem;"
+                  aria-label="페이지로 보기"
                 >
-                  <span>페이지로 보기</span>
+                  <svg class="mh-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M15 3h6v6"></path>
+                    <path d="M10 14 21 3"></path>
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                  </svg>
+                  <span class="mh-btn-text">페이지로 보기</span>
                 </button>
-                <button class="btn-action" @click="copyDashboardLink" title="현재 플레이어 통계 링크 복사" style="padding: 5px 10px; font-size: 0.78rem;">
-                  <span>링크 복사</span>
+                <button
+                  type="button"
+                  class="btn-action mh-action-btn"
+                  @click="copyDashboardLink"
+                  title="현재 플레이어 통계 링크 복사"
+                  aria-label="링크 복사"
+                >
+                  <svg class="mh-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                  </svg>
+                  <span class="mh-btn-text">링크 복사</span>
                 </button>
-                <button class="btn-close" @click="closePlayerModal()" title="닫기">✕</button>
+                <button type="button" class="btn-close mh-close-btn" @click="closePlayerModal()" title="닫기" aria-label="닫기">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
               </div>
             </div>
 
@@ -15640,6 +15673,7 @@ html.dark .container_stats_modal {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin-bottom: 8px;
   background-color: var(--bg-card, #f8fafc);
   padding: 6px 12px;
@@ -15649,6 +15683,36 @@ html.dark .container_stats_modal {
 html.dark .modal-header {
   background-color: var(--bg-card, #2a2a2a);
   border-color: var(--border-color, #334155);
+}
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.mh-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.mh-icon {
+  flex-shrink: 0;
+  display: inline-block;
+}
+.mh-mobile-only-icon {
+  display: none;
+}
+.mh-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 4px 6px;
 }
 .modal_notice_text {
   position: relative;
@@ -15697,13 +15761,19 @@ html.dark .notice_close_btn:hover {
 .player_selector_container {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 1;
+  gap: 7px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .selector_label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 13px;
   font-weight: bold;
   opacity: 0.85;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .player_select {
   padding: 4px 10px;
@@ -15715,6 +15785,48 @@ html.dark .notice_close_btn:hover {
   color: var(--text-color, #0f172a);
   font-family: inherit;
   cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+@media (max-width: 720px) {
+  .modal-header {
+    gap: 6px;
+    padding: 6px 8px;
+  }
+  .player_selector_container {
+    gap: 5px;
+  }
+  .player_select {
+    flex: 1 1 auto;
+    width: 100%;
+    padding: 5px 6px;
+    font-size: 12.5px;
+  }
+  .modal-header-actions {
+    gap: 4px;
+  }
+  .mh-label-text,
+  .mh-btn-text,
+  .mh-desktop-only {
+    display: none !important;
+  }
+  .mh-mobile-only-icon {
+    display: inline-block !important;
+  }
+  .mh-action-btn,
+  .btn-vs-compare.compact.mh-action-btn {
+    width: 30px;
+    height: 30px;
+    padding: 0 !important;
+    border-radius: 7px;
+    gap: 0;
+  }
+  .mh-close-btn {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+  }
 }
 .player_select option {
   background: #ffffff !important;

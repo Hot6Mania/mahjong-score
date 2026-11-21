@@ -4350,7 +4350,9 @@ onMounted(() => {
   overflow: hidden;
 }
 .seg.s1, .dot.s1 { background: #16a34a; }
-.seg.s2, .dot.s2 { background: #2563eb; }
+.seg.s2, .dot.s2 { background: #7dd3fc; color: #0c4a6e; }
+.stat-page-root.dark .seg.s2,
+.stat-page-root.dark .dot.s2 { background: #67b7dc; color: #082f49; }
 .seg.s3, .dot.s3 { background: #d97706; }
 .seg.s4, .dot.s4 { background: #dc2626; }
 
@@ -4877,7 +4879,8 @@ onMounted(() => {
   color: #ffffff;
 }
 .rank-chip.r1 { background: #16a34a; }
-.rank-chip.r2 { background: #2563eb; }
+.rank-chip.r2 { background: #7dd3fc; color: #0c4a6e; }
+.stat-page-root.dark .rank-chip.r2 { background: #67b7dc; color: #082f49; }
 .rank-chip.r3 { background: #d97706; }
 .rank-chip.r4 { background: #dc2626; }
 
