@@ -1778,6 +1778,7 @@ const onHoverSessionMetric = (
   activeDist.value = dist;
   activeDistName.value = metricName;
   activeDistUnit.value = unit;
+  activeDistScopeNote.value = '이번 회차 참가자 기준';
   activeDistFromSession.value = true;
   if (!isClickEvent) {
     hoveredDistBar.value = null;
@@ -2057,6 +2058,13 @@ const gameChartOptions = computed<ChartOptions<'line'>>(() => {
 const activeDist = ref<DistributionData | null>(null);
 const activeDistName = ref('');
 const activeDistUnit = ref('');
+const activeDistScopeNote = ref('');
+const distMinGames = ref<number>(20);
+const distQualifiedMembersCount = computed(() => {
+  const minG = Math.max(0, Math.floor(Number(distMinGames.value) || 0));
+  if (minG <= 0) return allStats.value.filter(m => (m.totalGames || 0) > 0).length;
+  return allStats.value.filter(m => (m.totalGames || 0) >= minG).length;
+});
 const tooltipPos = ref({ x: 0, y: 0, visible: false });
 const isTooltipBelow = ref(false);
 const isDistTooltipPinned = ref(false);
@@ -2178,10 +2186,22 @@ const onHoverMetric = (
     hoveredDistBar.value = null;
   }
 
-  const sourceList = (!isModalFromSession.value && isStatsQueryActive.value && activeRankingStats.value.length > 0)
+  const rawSourceList = (!isModalFromSession.value && isStatsQueryActive.value && activeRankingStats.value.length > 0)
     ? activeRankingStats.value
     : allStats.value;
-  if (!sourceList || sourceList.length === 0) return;
+  if (!rawSourceList || rawSourceList.length === 0) return;
+
+  const useMinGamesFilter = !isStatsQueryActive.value;
+  const minG = useMinGamesFilter ? Math.max(0, Math.floor(Number(distMinGames.value) || 0)) : 0;
+  const filteredByGames = minG > 0 ? rawSourceList.filter(m => (m.totalGames || 0) >= minG) : rawSourceList;
+  const sourceList = filteredByGames.length > 0 ? filteredByGames : rawSourceList;
+  activeDistScopeNote.value =
+    minG > 0 && filteredByGames.length > 0
+      ? `총 대국수 ${minG}회 이상 (${filteredByGames.length}명) 기준`
+      : isStatsQueryActive.value && statsQueryResult.value
+        ? `${statsQueryResult.value.summaryLabel} 기준`
+        : '전체 멤버 기준';
+
   const overallKeys: (keyof MemberStatItem)[] = ['totalGames', 'totalUma', 'avgUma', 'avgRank', 'top2Rate'];
   const hasDetailed = (displayPlayerStats.value?.totalRounds || 0) > 0 && (displayPlayerStats.value?.totalGames || 0) > 0;
   const isOverallKey = overallKeys.includes(key);
@@ -7562,6 +7582,9 @@ const openGamePopupFromLightbox = async (
           {{ activeDist.percentileText }} ({{ activeDist.rank }}위 / {{ activeDist.totalCount }}명)
         </template>
       </div>
+      <div v-if="activeDistScopeNote" class="dist-scope-note">
+        {{ activeDistScopeNote }}
+      </div>
       <div class="dist-my-val">
         내 수치: <strong>
           <template v-if="activeDist.isUnrecorded">- (집계 외)</template>
@@ -9456,6 +9479,38 @@ const openGamePopupFromLightbox = async (
                 ※ 일부 스탯들은 '종합 대국 통계(세부 스탯이 집계된 대국 통계)' 형식으로 표기됩니다.
               </div>
               <button class="notice_close_btn" @click="dismissNotice" title="닫기">✕</button>
+            </div>
+
+            <!-- 전체 기간 분포(상위 %) 기준 대국수 필터 (기본 20회 이상) -->
+            <div
+              v-if="!(isModalFromSession && modalScopeTab === 'session') && !isStatsQueryActive"
+              class="modal-dist-min-games-bar"
+            >
+              <span class="mdmg-label">분포 기준 (총 대국수):</span>
+              <div class="mdmg-presets">
+                <button
+                  v-for="mg in [0, 10, 20, 30, 50]"
+                  :key="'mdmg-' + mg"
+                  type="button"
+                  class="mdmg-chip"
+                  :class="{ active: distMinGames === mg }"
+                  @click="distMinGames = mg; closePinnedDistTooltip()"
+                >
+                  {{ mg === 0 ? '전체' : `${mg}회+` }}
+                </button>
+              </div>
+              <div class="mdmg-custom">
+                <input
+                  v-model.number="distMinGames"
+                  type="number"
+                  min="0"
+                  max="500"
+                  class="mdmg-input"
+                  aria-label="분포 기준 최소 대국수"
+                  @change="closePinnedDistTooltip()"
+                />
+                <span>회 이상 ({{ distQualifiedMembersCount }}명)</span>
+              </div>
             </div>
 
             <!-- 1) 이번 회차 스탯 뷰 -->
@@ -14092,10 +14147,105 @@ html.dark .dist-rank-chip.unrecorded {
 .dist-sub-rank {
   font-size: 10px;
   color: #64748b;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 html.dark .dist-sub-rank {
   color: #94a3b8;
+}
+.dist-scope-note {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #2563eb;
+  margin-bottom: 4px;
+}
+html.dark .dist-scope-note {
+  color: #60a5fa;
+}
+
+/* 스탯 모달 내 분포 기준 최소 대국수 바 */
+.modal-dist-min-games-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px 10px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.035);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  font-size: 11.5px;
+}
+html.dark .modal-dist-min-games-bar {
+  background: #242424;
+  border-color: #3a3a3a;
+  color: #e5e5e5;
+}
+.mdmg-label {
+  font-weight: 700;
+  color: #475569;
+  white-space: nowrap;
+}
+html.dark .mdmg-label {
+  color: #b0b7c3;
+}
+.mdmg-presets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mdmg-chip {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mdmg-chip.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+html.dark .mdmg-chip {
+  background: #1a1a1a;
+  border-color: #444444;
+  color: #e5e5e5;
+}
+html.dark .mdmg-chip.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+.mdmg-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 11px;
+  color: #64748b;
+}
+html.dark .mdmg-custom {
+  color: #b0b7c3;
+}
+.mdmg-input {
+  width: 48px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-align: center;
+  font-family: inherit;
+}
+html.dark .mdmg-input {
+  background: #141414;
+  border-color: #4a4a4a;
+  color: #f5f5f5;
 }
 .dist-my-val {
   font-size: 11px;

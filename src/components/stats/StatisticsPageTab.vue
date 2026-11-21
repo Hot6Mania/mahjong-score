@@ -43,7 +43,68 @@ const emit = defineEmits<{
 const activeSubTab = ref<StatsSubTab>(props.initialSubTab || 'player');
 
 // ==========================================
-// 1. 플레이어 검색 (페이지형 개인 스탯)
+// 0. 회차 번호 -> 전체 회차명 / ISO 일자 매핑 (제9회~최신회차 일자 누락 해결)
+// ==========================================
+const sortedSessionsDesc = computed<string[]>(() =>
+  [...(props.availableSessions || [])].sort((a, b) => parseSessionNumber(b) - parseSessionNumber(a))
+);
+
+const sortedSessionsAsc = computed<string[]>(() => [...sortedSessionsDesc.value].reverse());
+
+const sessionInfoByNum = computed(() => {
+  const map = new Map<number, { fullLabel: string; isoDate: string }>();
+  for (const s of sortedSessionsDesc.value) {
+    const num = parseSessionNumber(s);
+    if (num > 0 && !map.has(num)) {
+      map.set(num, {
+        fullLabel: s,
+        isoDate: extractIsoDateFromRecord(s),
+      });
+    }
+  }
+  return map;
+});
+
+const resolveGameSessionLabel = (g: { sessionLabel?: string }): string => {
+  const raw = String(g.sessionLabel || '').trim();
+  const num = parseSessionNumber(raw);
+  if (num > 0) {
+    const info = sessionInfoByNum.value.get(num);
+    if (info?.fullLabel) return info.fullLabel;
+    return `제${num}회`;
+  }
+  return raw || '기타';
+};
+
+const resolveGameIsoDate = (g: { sessionLabel?: string; date?: string }): string => {
+  const direct = extractIsoDateFromRecord(g.sessionLabel, g.date);
+  if (direct) return direct;
+  const num = parseSessionNumber(g.sessionLabel);
+  if (num > 0) {
+    return sessionInfoByNum.value.get(num)?.isoDate || '';
+  }
+  return '';
+};
+
+const availableIsoDates = computed<string[]>(() => {
+  const dateSet = new Set<string>();
+  for (const s of sortedSessionsDesc.value) {
+    const iso = extractIsoDateFromRecord(s);
+    if (iso) dateSet.add(iso);
+  }
+  for (const g of props.ratingHistory || []) {
+    const iso = resolveGameIsoDate(g);
+    if (iso) dateSet.add(iso);
+  }
+  return Array.from(dateSet).sort((a, b) => b.localeCompare(a));
+});
+
+const getMemberRounds = (m: MemberStatItem): number => {
+  return (m.detailedStats?.totalRounds ?? m.totalRounds ?? 0) || 0;
+};
+
+// ==========================================
+// 1. 플레이어 검색 (페이지형 개인 스탯 + N국 이상 필터)
 // ==========================================
 const searchInput = ref('');
 const isDropdownOpen = ref(false);
@@ -51,12 +112,24 @@ const highlightedIdx = ref(0);
 const selectedPlayerName = ref('');
 const showAllPlayerGames = ref(false);
 
+// 통계 스탯 분포(상위 %) 기준 최소 총 대국수 (기본 20회 이상) + 별도 최소 국 수 옵션
+const playerTabMinGames = ref<number>(20);
+const playerTabMinRounds = ref<number>(0);
+
 const sortedAllMembers = computed<MemberStatItem[]>(() => {
   return [...(props.allStats || [])].sort((a, b) => {
     if (b.totalUma !== a.totalUma) return b.totalUma - a.totalUma;
     return b.totalGames - a.totalGames;
   });
 });
+
+const qualifiedMembersForSearch = computed<MemberStatItem[]>(() => {
+  const minR = Math.max(0, Math.floor(Number(playerTabMinRounds.value) || 0));
+  if (minR <= 0) return sortedAllMembers.value;
+  return sortedAllMembers.value.filter((m) => getMemberRounds(m) >= minR);
+});
+
+const qualifiedMembersForDistCount = computed(() => activePlayerScopeMembers.value.length);
 
 const findMemberByName = (name: string): MemberStatItem | null => {
   const clean = (name || '').trim();
@@ -92,10 +165,9 @@ watch(
 
 const autocompleteCandidates = computed<MemberStatItem[]>(() => {
   const q = searchInput.value.trim().toLowerCase();
-  if (!q) return sortedAllMembers.value.slice(0, 12);
-  return sortedAllMembers.value
-    .filter((m) => m.name.toLowerCase().includes(q))
-    .slice(0, 14);
+  const pool = qualifiedMembersForSearch.value;
+  if (!q) return pool.slice(0, 14);
+  return pool.filter((m) => m.name.toLowerCase().includes(q)).slice(0, 16);
 });
 
 const selectPlayer = (name: string) => {
@@ -143,7 +215,7 @@ const onSearchKeydown = (e: KeyboardEvent) => {
 };
 
 // ==========================================
-// 1-1. 개인별 기간 / 구간 스탯 필터 (전체 / 최근 N전 / 최근 N회차 / 일자 기간 / 회차 구간)
+// 1-1. 개인별 기간 / 구간 스탯 필터
 // ==========================================
 type PlayerScopeMode = 'all' | 'recent_games' | 'recent_sessions' | 'date_range' | 'session_range';
 const playerScopeMode = ref<PlayerScopeMode>('all');
@@ -238,10 +310,17 @@ const resetPlayerScope = () => {
 const isPlayerScopeActive = computed(() => playerScopeMode.value !== 'all' && playerScopeResult.value !== null);
 
 const activePlayerScopeMembers = computed<MemberStatItem[]>(() => {
-  if (isPlayerScopeActive.value && playerScopeResult.value) {
-    return playerScopeResult.value.members;
-  }
-  return props.allStats || [];
+  const raw = isPlayerScopeActive.value && playerScopeResult.value
+    ? playerScopeResult.value.members
+    : (props.allStats || []);
+  const minG = !isPlayerScopeActive.value
+    ? Math.max(0, Math.floor(Number(playerTabMinGames.value) || 0))
+    : 0;
+  const minR = Math.max(0, Math.floor(Number(playerTabMinRounds.value) || 0));
+  const filtered = raw.filter(
+    (m) => (m.totalGames || 0) >= minG && getMemberRounds(m) >= minR
+  );
+  return filtered.length > 0 ? filtered : raw;
 });
 
 const baseSelectedPlayer = computed<MemberStatItem | null>(() => findMemberByName(selectedPlayerName.value));
@@ -269,12 +348,16 @@ const hasSelectedDetail = computed(() => (selectedDetail.value?.totalRounds || 0
 
 const selectedOverallRank = computed(() => {
   if (!selectedPlayer.value) return 0;
-  const list = [...activePlayerScopeMembers.value].sort((a, b) => {
+  const pool = [...activePlayerScopeMembers.value];
+  const norm = normalizeRatingPlayerName(selectedPlayer.value.name);
+  if (!pool.some((m) => normalizeRatingPlayerName(m.name) === norm)) {
+    pool.push(selectedPlayer.value);
+  }
+  pool.sort((a, b) => {
     if (b.totalUma !== a.totalUma) return b.totalUma - a.totalUma;
     return b.totalGames - a.totalGames;
   });
-  const norm = normalizeRatingPlayerName(selectedPlayer.value.name);
-  return list.findIndex((m) => m.name === selectedPlayer.value!.name || normalizeRatingPlayerName(m.name) === norm) + 1;
+  return pool.findIndex((m) => normalizeRatingPlayerName(m.name) === norm) + 1;
 });
 
 const selectedRankDist = computed(() => {
@@ -483,7 +566,6 @@ const otherStatCells = computed<PageStatCell[]>(() => {
   ]);
 });
 
-// 현재 선택된 개인 필터(전체/최근N전/최근N회차/일자기간/회차구간)에 해당하는 대국 기록 목록
 const scopedPlayerHistoryGames = computed<GameRatingHistoryRecord[]>(() => {
   if (!baseSelectedPlayer.value || !props.ratingHistory.length) return [];
   const normTarget = normalizeRatingPlayerName(baseSelectedPlayer.value.name);
@@ -521,7 +603,7 @@ const scopedPlayerHistoryGames = computed<GameRatingHistoryRecord[]>(() => {
     const sd = (playerScopeStartDate.value || '').trim();
     const ed = (playerScopeEndDate.value || '').trim();
     return playerGames.filter((g) => {
-      const iso = extractIsoDateFromRecord(g.sessionLabel, g.date);
+      const iso = resolveGameIsoDate(g);
       if (!iso) return false;
       if (sd && iso < sd) return false;
       if (ed && iso > ed) return false;
@@ -545,8 +627,9 @@ const selectedPlayerGames = computed(() => {
       const me = g.players.find((p) => normalizeRatingPlayerName(p.name) === normTarget)!;
       return {
         gameIndex: g.gameIndex,
-        sessionLabel: g.sessionLabel,
-        date: g.date || extractIsoDateFromRecord(g.sessionLabel),
+        sessionLabel: resolveGameSessionLabel(g),
+        rawSessionLabel: g.sessionLabel,
+        date: resolveGameIsoDate(g),
         myRank: me.rank,
         myScore: me.score,
         myUma: me.uma,
@@ -561,30 +644,62 @@ const selectedPlayerGames = computed(() => {
 
 const selectedPlayerTotalGamesCount = computed(() => scopedPlayerHistoryGames.value.length);
 
+// 홈 화면 최근 대국 기록 미리보기 (항상 최신 회차 기준 12판)
+const latestHomeGames = computed(() =>
+  (props.ratingHistory || [])
+    .slice(-12)
+    .reverse()
+    .map((g) => ({
+      ...g,
+      displaySession: resolveGameSessionLabel(g),
+      displayDate: resolveGameIsoDate(g),
+    }))
+);
+
 // ==========================================
-// 2. 레이팅 구간별 데이터 (작혼 통계 '단위별 데이터' 형식)
+// 2. 레이팅 구간별 데이터 (최근 N회 지정 / 회차 구간 / 일자 지정 + 최소 대국 / 최소 국 수)
 // ==========================================
-type RatingScopeMode = 'overall' | 'recent5' | 'recent10' | 'date';
+type RatingScopeMode = 'overall' | 'recent_sessions' | 'session_range' | 'date_range';
 const ratingScopeMode = ref<RatingScopeMode>('overall');
-const ratingMinGames = ref<number>(0);
-const ratingDateStart = ref('');
-const ratingDateEnd = ref('');
+const ratingRecentSessionsCount = ref<number>(5);
+const ratingStartSession = ref<string>('');
+const ratingEndSession = ref<string>('');
+const ratingDateStart = ref<string>('');
+const ratingDateEnd = ref<string>('');
+const ratingMinGames = ref<number>(20);
+const ratingMinRounds = ref<number>(0);
 const ratingScopedMembers = ref<MemberStatItem[] | null>(null);
 const isLoadingRatingScope = ref(false);
 const expandedBandKey = ref<string | null>(null);
+
+const initRatingScopeDefaults = () => {
+  if (!ratingDateEnd.value && availableIsoDates.value.length > 0) {
+    ratingDateEnd.value = availableIsoDates.value[0];
+  }
+  if (!ratingDateStart.value && availableIsoDates.value.length > 0) {
+    ratingDateStart.value = availableIsoDates.value[Math.min(5, availableIsoDates.value.length - 1)];
+  }
+  if (!ratingEndSession.value && sortedSessionsDesc.value.length > 0) {
+    ratingEndSession.value = sortedSessionsDesc.value[0];
+  }
+  if (!ratingStartSession.value && sortedSessionsDesc.value.length > 0) {
+    ratingStartSession.value = sortedSessionsDesc.value[Math.min(5, sortedSessionsDesc.value.length - 1)];
+  }
+};
 
 const loadRatingScopedData = async () => {
   if (ratingScopeMode.value === 'overall') {
     ratingScopedMembers.value = null;
     return;
   }
+  initRatingScopeDefaults();
   isLoadingRatingScope.value = true;
   try {
     const res = await queryMemberStatsByFilter(
-      ratingScopeMode.value === 'recent5'
-        ? { mode: 'recent_sessions', recentSessions: 5, minGames: 0 }
-        : ratingScopeMode.value === 'recent10'
-          ? { mode: 'recent_sessions', recentSessions: 10, minGames: 0 }
+      ratingScopeMode.value === 'recent_sessions'
+        ? { mode: 'recent_sessions', recentSessions: Math.max(1, Math.floor(Number(ratingRecentSessionsCount.value) || 5)), minGames: 0 }
+        : ratingScopeMode.value === 'session_range'
+          ? { mode: 'session_range', startSession: ratingStartSession.value, endSession: ratingEndSession.value, minGames: 0 }
           : { mode: 'date_range', startDate: ratingDateStart.value, endDate: ratingDateEnd.value, minGames: 0 },
       {
         allStats: props.allStats,
@@ -600,13 +715,17 @@ const loadRatingScopedData = async () => {
   }
 };
 
-watch(ratingScopeMode, () => {
-  if (ratingScopeMode.value === 'date' && !ratingDateStart.value && availableIsoDates.value.length > 0) {
-    ratingDateEnd.value = availableIsoDates.value[0];
-    ratingDateStart.value = availableIsoDates.value[Math.min(5, availableIsoDates.value.length - 1)];
+const setRatingScopeMode = (mode: RatingScopeMode) => {
+  ratingScopeMode.value = mode;
+  // 단기 기간/회차 구간 조회 전환 시 20전 필터로 비어 보이지 않도록 자동 완화, 전체 기간 복귀 시 기본 20회
+  if (mode === 'overall') {
+    if (ratingMinGames.value === 0) ratingMinGames.value = 20;
+  } else if (ratingMinGames.value >= 20) {
+    ratingMinGames.value = 0;
   }
+  initRatingScopeDefaults();
   loadRatingScopedData();
-});
+};
 
 interface RatingBandRow {
   key: string;
@@ -758,7 +877,14 @@ const aggregateBand = (
 
 const ratingSourceMembers = computed<MemberStatItem[]>(() => {
   const base = ratingScopedMembers.value !== null ? ratingScopedMembers.value : props.allStats;
-  return (base || []).filter((m) => (m.totalGames || 0) >= ratingMinGames.value && typeof m.rating === 'number');
+  const minG = Math.max(0, Math.floor(Number(ratingMinGames.value) || 0));
+  const minR = Math.max(0, Math.floor(Number(ratingMinRounds.value) || 0));
+  return (base || []).filter(
+    (m) =>
+      typeof m.rating === 'number' &&
+      (m.totalGames || 0) >= minG &&
+      getMemberRounds(m) >= minR
+  );
 });
 
 const ratingBandRows = computed<RatingBandRow[]>(() => {
@@ -776,7 +902,7 @@ const ratingBandRows = computed<RatingBandRow[]>(() => {
 });
 
 const ratingOverallSummaryRow = computed<RatingBandRow>(() =>
-  aggregateBand('all', '전체 평균', '#475569', -99999, 99999, ratingSourceMembers.value)
+  aggregateBand('all', '전체 평균', '#64748b', -99999, 99999, ratingSourceMembers.value)
 );
 
 const totalBandRecordedGames = computed(() =>
@@ -784,17 +910,46 @@ const totalBandRecordedGames = computed(() =>
 );
 
 // ==========================================
-// 3. 자리별 순위 (東 / 南 / 西 / 北)
+// 3. 자리별 순위 (東 / 南 / 西 / 北 - 최근 N회 지정 / 회차 구간 / 일자 지정)
 // ==========================================
-const seatScopeRecentSessions = ref<number>(0); // 0 = 전체 (제9회~)
+type SeatScopeMode = 'all' | 'recent_sessions' | 'session_range' | 'date_range';
+const seatScopeMode = ref<SeatScopeMode>('all');
+const seatRecentSessionsCount = ref<number>(5);
+const seatStartSession = ref<string>('');
+const seatEndSession = ref<string>('');
+const seatStartDate = ref<string>('');
+const seatEndDate = ref<string>('');
 const seatStatsResult = ref<SeatRankStatsResult | null>(null);
 const isLoadingSeatStats = ref(false);
 
+const initSeatScopeDefaults = () => {
+  if (!seatEndDate.value && availableIsoDates.value.length > 0) {
+    seatEndDate.value = availableIsoDates.value[0];
+  }
+  if (!seatStartDate.value && availableIsoDates.value.length > 0) {
+    seatStartDate.value = availableIsoDates.value[Math.min(5, availableIsoDates.value.length - 1)];
+  }
+  if (!seatEndSession.value && sortedSessionsDesc.value.length > 0) {
+    seatEndSession.value = sortedSessionsDesc.value[0];
+  }
+  if (!seatStartSession.value && sortedSessionsDesc.value.length > 0) {
+    seatStartSession.value = sortedSessionsDesc.value[Math.min(5, sortedSessionsDesc.value.length - 1)];
+  }
+};
+
 const loadSeatStats = async () => {
+  initSeatScopeDefaults();
   isLoadingSeatStats.value = true;
   try {
     seatStatsResult.value = await fetchSeatRankStats({
-      recentSessions: seatScopeRecentSessions.value || undefined,
+      recentSessions:
+        seatScopeMode.value === 'recent_sessions'
+          ? Math.max(1, Math.floor(Number(seatRecentSessionsCount.value) || 5))
+          : undefined,
+      startSession: seatScopeMode.value === 'session_range' ? seatStartSession.value : undefined,
+      endSession: seatScopeMode.value === 'session_range' ? seatEndSession.value : undefined,
+      startDate: seatScopeMode.value === 'date_range' ? seatStartDate.value : undefined,
+      endDate: seatScopeMode.value === 'date_range' ? seatEndDate.value : undefined,
       availableSessions: props.availableSessions,
     });
   } catch (e) {
@@ -804,86 +959,161 @@ const loadSeatStats = async () => {
   }
 };
 
-watch([activeSubTab, seatScopeRecentSessions], ([tab]) => {
+const setSeatScopeMode = (mode: SeatScopeMode) => {
+  seatScopeMode.value = mode;
+  loadSeatStats();
+};
+
+watch(activeSubTab, (tab) => {
   if (tab === 'by-seat') {
     loadSeatStats();
   }
 });
 
 // ==========================================
-// 4. 대국 기록 (일자 / 회차별)
+// 4. 대국 기록 (최신 / 일자 선택 / 일자 기간 / 최근 N회차 / 회차 구간 / 특정 회차)
 // ==========================================
-const availableIsoDates = computed<string[]>(() => {
-  const dateSet = new Set<string>();
-  for (const g of props.ratingHistory || []) {
-    const iso = extractIsoDateFromRecord(g.sessionLabel, g.date);
-    if (iso) dateSet.add(iso);
-  }
-  return Array.from(dateSet).sort((a, b) => b.localeCompare(a));
-});
-
+type GamesLogFilterMode = 'latest' | 'date' | 'date_range' | 'recent_sessions' | 'session_range' | 'session';
+const gamesLogMode = ref<GamesLogFilterMode>('latest');
 const selectedLogDate = ref<string>('');
+const logStartDate = ref<string>('');
+const logEndDate = ref<string>('');
+const logRecentSessionsCount = ref<number>(3);
+const logStartSession = ref<string>('');
+const logEndSession = ref<string>('');
 const selectedLogSession = ref<string>('');
 
 watch(
   availableIsoDates,
   (dates) => {
-    if (!selectedLogDate.value && dates.length > 0) {
-      selectedLogDate.value = dates[0];
+    if (dates.length > 0) {
+      if (!selectedLogDate.value) selectedLogDate.value = dates[0];
+      if (!logEndDate.value) logEndDate.value = dates[0];
+      if (!logStartDate.value) logStartDate.value = dates[Math.min(4, dates.length - 1)];
     }
   },
   { immediate: true }
 );
 
-const sortedSessionsDesc = computed(() =>
-  [...(props.availableSessions || [])].sort((a, b) => parseSessionNumber(b) - parseSessionNumber(a))
+watch(
+  sortedSessionsDesc,
+  (sessions) => {
+    if (sessions.length > 0) {
+      if (!selectedLogSession.value) selectedLogSession.value = sessions[0];
+      if (!logEndSession.value) logEndSession.value = sessions[0];
+      if (!logStartSession.value) logStartSession.value = sessions[Math.min(4, sessions.length - 1)];
+    }
+  },
+  { immediate: true }
 );
 
 const filteredLogGames = computed(() => {
-  const list = props.ratingHistory || [];
-  if (selectedLogSession.value) {
-    const targetNum = parseSessionNumber(selectedLogSession.value);
+  const list = (props.ratingHistory || []).map((g) => ({
+    ...g,
+    displaySession: resolveGameSessionLabel(g),
+    displayDate: resolveGameIsoDate(g),
+    sessNum: parseSessionNumber(g.sessionLabel),
+  }));
+
+  if (gamesLogMode.value === 'latest') {
+    return list.slice(-40).reverse();
+  }
+
+  if (gamesLogMode.value === 'date') {
+    if (!selectedLogDate.value) return list.slice(-40).reverse();
+    return list.filter((g) => g.displayDate === selectedLogDate.value).reverse();
+  }
+
+  if (gamesLogMode.value === 'date_range') {
+    const sd = (logStartDate.value || '').trim();
+    const ed = (logEndDate.value || '').trim();
     return list
       .filter((g) => {
-        if (targetNum > 0) return parseSessionNumber(g.sessionLabel) === targetNum;
-        return g.sessionLabel === selectedLogSession.value;
+        if (!g.displayDate) return false;
+        if (sd && g.displayDate < sd) return false;
+        if (ed && g.displayDate > ed) return false;
+        return true;
       })
-      .slice()
       .reverse();
   }
-  if (selectedLogDate.value) {
+
+  if (gamesLogMode.value === 'recent_sessions') {
+    const n = Math.max(1, Math.floor(Number(logRecentSessionsCount.value) || 3));
+    const pickedNums = new Set(
+      sortedSessionsDesc.value.slice(0, n).map((s) => parseSessionNumber(s)).filter((num) => num > 0)
+    );
+    return list.filter((g) => pickedNums.has(g.sessNum)).reverse();
+  }
+
+  if (gamesLogMode.value === 'session_range') {
+    const sNum = parseSessionNumber(logStartSession.value);
+    const eNum = parseSessionNumber(logEndSession.value);
+    const minN = sNum > 0 && eNum > 0 ? Math.min(sNum, eNum) : Math.max(sNum, eNum);
+    const maxN = sNum > 0 && eNum > 0 ? Math.max(sNum, eNum) : Math.max(sNum, eNum);
+    return list.filter((g) => g.sessNum >= minN && g.sessNum <= maxN).reverse();
+  }
+
+  if (gamesLogMode.value === 'session') {
+    const targetNum = parseSessionNumber(selectedLogSession.value);
     return list
-      .filter((g) => extractIsoDateFromRecord(g.sessionLabel, g.date) === selectedLogDate.value)
-      .slice()
+      .filter((g) => (targetNum > 0 ? g.sessNum === targetNum : g.displaySession === selectedLogSession.value))
       .reverse();
   }
-  return list.slice(-30).reverse();
+
+  return list.slice(-40).reverse();
 });
 
-const onSelectLogDate = (iso: string) => {
-  selectedLogDate.value = iso;
-  selectedLogSession.value = '';
+const openSessionInGamesLog = (sessionLabel: string) => {
+  selectedLogSession.value = sessionLabel;
+  gamesLogMode.value = 'session';
+  activeSubTab.value = 'games';
 };
 
-const onSelectLogSession = () => {
-  if (selectedLogSession.value) {
-    selectedLogDate.value = '';
+// ==========================================
+// 5. 기록 플레이어 수 (회차 단위로 정확히 묶어서 표기 + 최소 국 수 옵션)
+// ==========================================
+const playersCountMinRounds = ref<number>(0);
+
+const playersCountFilteredMembers = computed<MemberStatItem[]>(() => {
+  const minR = Math.max(0, Math.floor(Number(playersCountMinRounds.value) || 0));
+  if (minR <= 0) return props.allStats || [];
+  return (props.allStats || []).filter((m) => getMemberRounds(m) >= minR);
+});
+
+const playersCountBandRows = computed<RatingBandRow[]>(() => {
+  const rated = playersCountFilteredMembers.value.filter((m) => typeof m.rating === 'number');
+  const rows: RatingBandRow[] = [];
+  for (const b of RATING_BANDS) {
+    const matched = rated.filter((m) => {
+      const r = Math.round(m.rating || 0);
+      return r >= b.minR && r <= b.maxR;
+    });
+    if (matched.length > 0) {
+      rows.push(aggregateBand(b.key, b.label, getRatingColor(b.sampleR), b.minR, b.maxR, matched));
+    }
   }
-};
+  return rows;
+});
 
-// ==========================================
-// 5. 기록 플레이어 현황
-// ==========================================
+const maxPlayersCountBand = computed(() =>
+  Math.max(1, ...playersCountBandRows.value.map((b) => b.playerCount))
+);
+
+// 회차 번호(sessNum) 단위로 그룹화 ("제26회 1회전"~"제26회 8회전" -> "제26회 261121" 1행으로 통합!)
 const sessionParticipationRows = computed(() => {
-  const map = new Map<string, { sessionLabel: string; sessNum: number; date: string; gameCount: number; players: Set<string> }>();
+  const map = new Map<
+    string,
+    { sessionLabel: string; sessNum: number; date: string; gameCount: number; players: Set<string> }
+  >();
   for (const g of props.ratingHistory || []) {
-    const key = g.sessionLabel || '기타';
+    const sessNum = parseSessionNumber(g.sessionLabel);
+    const key = sessNum > 0 ? `sess_${sessNum}` : resolveGameSessionLabel(g);
     let entry = map.get(key);
     if (!entry) {
       entry = {
-        sessionLabel: key,
-        sessNum: parseSessionNumber(key),
-        date: extractIsoDateFromRecord(key, g.date),
+        sessionLabel: resolveGameSessionLabel(g),
+        sessNum,
+        date: resolveGameIsoDate(g),
         gameCount: 0,
         players: new Set<string>(),
       };
@@ -891,7 +1121,7 @@ const sessionParticipationRows = computed(() => {
     }
     entry.gameCount++;
     for (const p of g.players || []) {
-      if (p.name) entry.players.add(p.name);
+      if (p.name) entry.players.add(normalizeRatingPlayerName(p.name));
     }
   }
   return Array.from(map.values())
@@ -906,17 +1136,15 @@ const sessionParticipationRows = computed(() => {
 });
 
 const averageLeagueRating = computed(() => {
-  const rated = (props.allStats || []).filter((m) => typeof m.rating === 'number' && m.totalGames > 0);
+  const rated = playersCountFilteredMembers.value.filter(
+    (m) => typeof m.rating === 'number' && m.totalGames > 0
+  );
   if (rated.length === 0) return 0;
   return Math.round(rated.reduce((s, m) => s + (m.rating || 0), 0) / rated.length);
 });
 
 const totalDetailedRoundsAll = computed(() =>
-  Math.round((props.allStats || []).reduce((s, m) => s + ((m.detailedStats || m).totalRounds || 0), 0) / 4)
-);
-
-const maxBandPlayerCount = computed(() =>
-  Math.max(1, ...ratingBandRows.value.map((b) => b.playerCount))
+  Math.round(playersCountFilteredMembers.value.reduce((s, m) => s + getMemberRounds(m), 0) / 4)
 );
 
 onMounted(() => {
@@ -928,7 +1156,7 @@ onMounted(() => {
 
 <template>
   <div class="stat-page-root" :class="{ dark: isDark }">
-    <!-- 상단 서브 내비게이션 (작혼 통계 /statistics 스타일) -->
+    <!-- 상단 서브 내비게이션 -->
     <div class="sp-subnav">
       <button
         type="button"
@@ -976,7 +1204,6 @@ onMounted(() => {
     <!-- SUB-TAB 1: 플레이어 검색 (페이지 형식 개인 스탯)       -->
     <!-- ===================================================== -->
     <div v-if="activeSubTab === 'player'" class="sp-section">
-      <!-- 검색 카드 (작혼 통계 홈 스타일) -->
       <div class="sp-search-card">
         <div class="sp-search-header">
           <h3 class="sp-heading">플레이어 검색</h3>
@@ -1028,9 +1255,61 @@ onMounted(() => {
                 <span :class="m.totalUma >= 0 ? 'pos' : 'neg'">
                   {{ m.totalUma > 0 ? '+' : '' }}{{ m.totalUma.toFixed(1) }}pt
                 </span>
-                <span>{{ m.totalGames }}전</span>
+                <span>{{ m.totalGames }}전 · {{ getMemberRounds(m) }}국</span>
               </span>
             </button>
+          </div>
+        </div>
+
+        <!-- 분포 기준 총 대국수 N회 이상 (기본 20회) -->
+        <div class="sp-min-rounds-row">
+          <span class="sp-quick-lbl">분포 기준 (총 대국수):</span>
+          <button
+            v-for="mg in [0, 10, 20, 30, 50]"
+            :key="'pmg-' + mg"
+            type="button"
+            class="sp-chip-filter"
+            :class="{ active: playerTabMinGames === mg }"
+            @click="playerTabMinGames = mg"
+          >
+            {{ mg === 0 ? '전체' : `${mg}회 이상` }}
+          </button>
+          <div class="sp-inline-num-wrap">
+            <input
+              v-model.number="playerTabMinGames"
+              type="number"
+              min="0"
+              max="500"
+              class="sp-num-input compact"
+              aria-label="분포 기준 최소 총 대국수 직접 입력"
+            />
+            <span class="sp-unit-lbl">회 이상 (비교 대상 {{ qualifiedMembersForDistCount }}명)</span>
+          </div>
+        </div>
+
+        <!-- N국 이상 필터 옵션 (별도 옵션) -->
+        <div class="sp-min-rounds-row">
+          <span class="sp-quick-lbl">최소 국 수 필터:</span>
+          <button
+            v-for="mr in [0, 50, 100, 200, 300]"
+            :key="'pmr-' + mr"
+            type="button"
+            class="sp-chip-filter"
+            :class="{ active: playerTabMinRounds === mr }"
+            @click="playerTabMinRounds = mr"
+          >
+            {{ mr === 0 ? '전체' : `${mr}국 이상` }}
+          </button>
+          <div class="sp-inline-num-wrap">
+            <input
+              v-model.number="playerTabMinRounds"
+              type="number"
+              min="0"
+              step="10"
+              class="sp-num-input compact"
+              aria-label="최소 국 수 직접 입력"
+            />
+            <span class="sp-unit-lbl">국 이상 ({{ qualifiedMembersForSearch.length }}명)</span>
           </div>
         </div>
 
@@ -1038,7 +1317,7 @@ onMounted(() => {
         <div class="sp-quick-players">
           <span class="sp-quick-lbl">빠른 선택:</span>
           <button
-            v-for="m in sortedAllMembers.slice(0, 10)"
+            v-for="m in qualifiedMembersForSearch.slice(0, 12)"
             :key="'q-' + m.name"
             type="button"
             class="sp-quick-chip"
@@ -1066,6 +1345,12 @@ onMounted(() => {
                   ({{ selectedPlayer.totalGames }}전<template v-if="selectedDetail && selectedDetail.totalRounds > 0"> · {{ selectedDetail.totalRounds.toLocaleString() }}국</template>)
                 </template>
               </span>
+              <span v-if="!isPlayerScopeActive && playerTabMinGames > 0" class="sp-scope-sub-pill">
+                분포 비교 기준: 총 {{ playerTabMinGames }}회 이상 ({{ activePlayerScopeMembers.length }}명)
+              </span>
+              <span v-if="playerTabMinRounds > 0" class="sp-scope-sub-pill">
+                {{ playerTabMinRounds }}국 이상 ({{ activePlayerScopeMembers.length }}명)
+              </span>
             </div>
             <button
               v-if="playerScopeMode !== 'all'"
@@ -1078,49 +1363,23 @@ onMounted(() => {
           </div>
 
           <div class="sp-scope-modes">
-            <button
-              type="button"
-              class="sp-chip-filter"
-              :class="{ active: playerScopeMode === 'all' }"
-              @click="setPlayerScopeMode('all')"
-            >
+            <button type="button" class="sp-chip-filter" :class="{ active: playerScopeMode === 'all' }" @click="setPlayerScopeMode('all')">
               전체 기간
             </button>
-            <button
-              type="button"
-              class="sp-chip-filter"
-              :class="{ active: playerScopeMode === 'recent_games' }"
-              @click="setPlayerScopeMode('recent_games')"
-            >
+            <button type="button" class="sp-chip-filter" :class="{ active: playerScopeMode === 'recent_games' }" @click="setPlayerScopeMode('recent_games')">
               최근 N전
             </button>
-            <button
-              type="button"
-              class="sp-chip-filter"
-              :class="{ active: playerScopeMode === 'recent_sessions' }"
-              @click="setPlayerScopeMode('recent_sessions')"
-            >
+            <button type="button" class="sp-chip-filter" :class="{ active: playerScopeMode === 'recent_sessions' }" @click="setPlayerScopeMode('recent_sessions')">
               최근 N회차
             </button>
-            <button
-              type="button"
-              class="sp-chip-filter"
-              :class="{ active: playerScopeMode === 'date_range' }"
-              @click="setPlayerScopeMode('date_range')"
-            >
+            <button type="button" class="sp-chip-filter" :class="{ active: playerScopeMode === 'date_range' }" @click="setPlayerScopeMode('date_range')">
               일자 기간
             </button>
-            <button
-              type="button"
-              class="sp-chip-filter"
-              :class="{ active: playerScopeMode === 'session_range' }"
-              @click="setPlayerScopeMode('session_range')"
-            >
+            <button type="button" class="sp-chip-filter" :class="{ active: playerScopeMode === 'session_range' }" @click="setPlayerScopeMode('session_range')">
               회차 구간
             </button>
           </div>
 
-          <!-- 최근 N전 컨트롤 -->
           <div v-if="playerScopeMode === 'recent_games'" class="sp-scope-controls">
             <div class="sp-scope-presets">
               <button
@@ -1136,20 +1395,12 @@ onMounted(() => {
             </div>
             <div class="sp-scope-inline-input">
               <span>직접 입력:</span>
-              <input
-                v-model.number="playerScopeRecentGames"
-                type="number"
-                min="1"
-                max="500"
-                class="sp-num-input"
-                @keyup.enter="runPlayerScopeQuery"
-              />
+              <input v-model.number="playerScopeRecentGames" type="number" min="1" max="500" class="sp-num-input" @keyup.enter="runPlayerScopeQuery" />
               <span>전</span>
               <button type="button" class="sp-action-btn primary" @click="runPlayerScopeQuery">조회</button>
             </div>
           </div>
 
-          <!-- 최근 N회차 컨트롤 -->
           <div v-else-if="playerScopeMode === 'recent_sessions'" class="sp-scope-controls">
             <div class="sp-scope-presets">
               <button
@@ -1165,20 +1416,12 @@ onMounted(() => {
             </div>
             <div class="sp-scope-inline-input">
               <span>직접 입력:</span>
-              <input
-                v-model.number="playerScopeRecentSessions"
-                type="number"
-                min="1"
-                :max="Math.max(1, sortedSessionsDesc.length)"
-                class="sp-num-input"
-                @keyup.enter="runPlayerScopeQuery"
-              />
+              <input v-model.number="playerScopeRecentSessions" type="number" min="1" :max="Math.max(1, sortedSessionsDesc.length)" class="sp-num-input" @keyup.enter="runPlayerScopeQuery" />
               <span>회차</span>
               <button type="button" class="sp-action-btn primary" @click="runPlayerScopeQuery">조회</button>
             </div>
           </div>
 
-          <!-- 일자 기간 컨트롤 -->
           <div v-else-if="playerScopeMode === 'date_range'" class="sp-scope-controls">
             <div class="sp-scope-presets">
               <button type="button" class="sp-quick-chip" @click="setPlayerScopeDatePresetDays(30)">최근 30일</button>
@@ -1193,11 +1436,10 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- 회차 구간 컨트롤 -->
           <div v-else-if="playerScopeMode === 'session_range'" class="sp-scope-controls">
             <div class="sp-scope-inline-input">
               <select v-model="playerScopeStartSession" class="sp-select-box">
-                <option v-for="s in [...sortedSessionsDesc].reverse()" :key="'ps-' + s" :value="s">{{ s }}</option>
+                <option v-for="s in sortedSessionsAsc" :key="'ps-' + s" :value="s">{{ s }}</option>
               </select>
               <span>~</span>
               <select v-model="playerScopeEndSession" class="sp-select-box">
@@ -1222,352 +1464,347 @@ onMounted(() => {
         </div>
 
         <template v-else-if="selectedPlayer && selectedDetail">
-        <!-- 프로필 요약 배너 -->
-        <div class="sp-profile-banner">
-          <div class="sp-profile-left">
-            <div class="sp-profile-title-row">
-              <span class="sp-rank-pill">#{{ selectedOverallRank }}</span>
-              <h2 class="sp-player-name">{{ selectedPlayer.name }}</h2>
-              <span
-                v-if="selectedPlayer.rating"
-                class="sp-rating-pill"
-                :style="{ color: getRatingColor(selectedPlayer.rating), borderColor: getRatingColor(selectedPlayer.rating) }"
-              >
-                R{{ Math.round(selectedPlayer.rating) }}
-              </span>
-              <span v-if="selectedPlayer.ratingPeak" class="sp-peak-note">
-                최고 R{{ Math.round(selectedPlayer.ratingPeak) }}
-              </span>
-            </div>
-            <div class="sp-profile-kpi-row">
-              <div class="sp-kpi">
-                <span class="kpi-lbl">누적 우마</span>
-                <strong class="kpi-val" :class="selectedPlayer.totalUma >= 0 ? 'pos' : 'neg'">
-                  {{ selectedPlayer.totalUma > 0 ? '+' : '' }}{{ selectedPlayer.totalUma.toFixed(1) }}pt
-                </strong>
-              </div>
-              <div class="sp-kpi">
-                <span class="kpi-lbl">평균 우마</span>
-                <strong class="kpi-val" :class="selectedPlayer.avgUma >= 0 ? 'pos' : 'neg'">
-                  {{ selectedPlayer.avgUma > 0 ? '+' : '' }}{{ selectedPlayer.avgUma.toFixed(1) }}pt
-                </strong>
-              </div>
-              <div class="sp-kpi">
-                <span class="kpi-lbl">평균 순위</span>
-                <strong class="kpi-val">{{ selectedPlayer.avgRank.toFixed(3) }}위</strong>
-              </div>
-              <div class="sp-kpi">
-                <span class="kpi-lbl">대국 수</span>
-                <strong class="kpi-val">{{ selectedPlayer.totalGames }}전</strong>
-              </div>
-              <div class="sp-kpi">
-                <span class="kpi-lbl">연대율</span>
-                <strong class="kpi-val">{{ selectedPlayer.top2Rate.toFixed(2) }}%</strong>
-              </div>
-              <div class="sp-kpi" v-if="selectedRankDist.total > 0">
-                <span class="kpi-lbl">라스 회피율</span>
-                <strong class="kpi-val">{{ (100 - selectedRankDist.p4).toFixed(2) }}%</strong>
-              </div>
-            </div>
-          </div>
-
-          <div class="sp-profile-actions">
-            <button
-              type="button"
-              class="sp-action-btn primary"
-              @click="emit('open-compare', selectedPlayer.name)"
-            >
-              VS 비교
-            </button>
-            <button
-              type="button"
-              class="sp-action-btn"
-              @click="emit('open-popup', selectedPlayer.name)"
-            >
-              팝업으로 보기
-            </button>
-          </div>
-        </div>
-
-        <!-- 1~4위 순위 분포 바 -->
-        <div class="sp-card" v-if="selectedRankDist.total > 0">
-          <div class="sp-card-header">
-            <h4>순위 분포 ({{ selectedRankDist.total }}전)</h4>
-          </div>
-          <div class="sp-rank-stacked-bar">
-            <div class="seg s1" :style="{ width: selectedRankDist.p1 + '%' }" v-if="selectedRankDist.p1 > 0">
-              <span v-if="selectedRankDist.p1 >= 10">1위 {{ selectedRankDist.p1.toFixed(1) }}%</span>
-            </div>
-            <div class="seg s2" :style="{ width: selectedRankDist.p2 + '%' }" v-if="selectedRankDist.p2 > 0">
-              <span v-if="selectedRankDist.p2 >= 10">2위 {{ selectedRankDist.p2.toFixed(1) }}%</span>
-            </div>
-            <div class="seg s3" :style="{ width: selectedRankDist.p3 + '%' }" v-if="selectedRankDist.p3 > 0">
-              <span v-if="selectedRankDist.p3 >= 10">3위 {{ selectedRankDist.p3.toFixed(1) }}%</span>
-            </div>
-            <div class="seg s4" :style="{ width: selectedRankDist.p4 + '%' }" v-if="selectedRankDist.p4 > 0">
-              <span v-if="selectedRankDist.p4 >= 10">4위 {{ selectedRankDist.p4.toFixed(1) }}%</span>
-            </div>
-          </div>
-          <div class="sp-rank-legend">
-            <span><i class="dot s1"></i> 1위 {{ selectedRankDist.p1.toFixed(2) }}% ({{ selectedRankDist.r1 }}회)</span>
-            <span><i class="dot s2"></i> 2위 {{ selectedRankDist.p2.toFixed(2) }}% ({{ selectedRankDist.r2 }}회)</span>
-            <span><i class="dot s3"></i> 3위 {{ selectedRankDist.p3.toFixed(2) }}% ({{ selectedRankDist.r3 }}회)</span>
-            <span><i class="dot s4"></i> 4위 {{ selectedRankDist.p4.toFixed(2) }}% ({{ selectedRankDist.r4 }}회)</span>
-          </div>
-        </div>
-
-        <!-- 클릭한 지표의 인라인 분포 히스토그램 인스펙터 -->
-        <div v-if="inspectedDistribution && inspectedMetricMeta" class="sp-card sp-dist-inline-card">
-          <div class="sp-card-header">
-            <div class="sp-dist-title-group">
-              <h4>{{ inspectedMetricMeta.label }} 전체 분포</h4>
-              <span
-                v-if="!inspectedDistribution.isUnrecorded"
-                class="sp-pct-badge"
-                :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
-              >
-                상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
-              </span>
-            </div>
-            <button type="button" class="sp-mini-close" @click="inspectedMetricKey = null">닫기 ✕</button>
-          </div>
-          <div class="sp-inline-hist-wrap">
-            <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
-              <rect
-                v-for="(bar, idx) in inspectedDistribution.bars"
-                :key="'ib-' + idx"
-                :x="bar.x"
-                :y="bar.y"
-                :width="bar.width"
-                :height="bar.height"
-                :fill="
-                  hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
-                    ? '#f59e0b'
-                    : bar.isCurrent
-                      ? '#3b82f6'
-                      : (isDark ? 'rgba(148,163,184,0.45)' : 'rgba(100,116,139,0.35)')
-                "
-                rx="1"
-              />
-              <line x1="80" y1="0" x2="80" y2="46" :stroke="isDark ? 'rgba(255,255,255,0.5)' : 'rgba(15,23,42,0.4)'" stroke-width="1.2" stroke-dasharray="3,2" />
-              <rect
-                v-for="(bar, idx) in inspectedDistribution.bars"
-                :key="'ihit-' + idx"
-                class="sp-bar-hit"
-                :x="bar.x"
-                y="0"
-                :width="Math.max(bar.width, 2.5)"
-                height="46"
-                fill="transparent"
-                @mouseenter="hoveredInlineBar = bar"
-                @mouseleave="hoveredInlineBar = null"
-                @click="selectPlayer(bar.playerName)"
-              >
-                <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
-              </rect>
-            </svg>
-          </div>
-          <div class="sp-inline-hist-footer">
-            <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-            <span class="sp-inline-hover-mid">
-              <template v-if="hoveredInlineBar">
-                <strong>{{ hoveredInlineBar.playerName }}</strong> ·
-                {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
-              </template>
-              <template v-else>
-                평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
-              </template>
-            </span>
-            <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
-          </div>
-        </div>
-
-        <!-- 세부 스탯 3섹션 카드 그리드 -->
-        <div class="sp-stat-notice" v-if="!hasSelectedDetail">
-          ※ 제9회 이후 국별 세부 기록이 없는 플레이어입니다. 종합 대국 기록(우마·순위·레이팅)만 집계됩니다.
-        </div>
-
-        <div class="sp-stat-section-card">
-          <div class="sp-card-header">
-            <h4>기본 · 공격 / 수비 스탯</h4>
-            <span class="sp-card-sub">각 항목 클릭 시 전체 분포 히스토그램 표시</span>
-          </div>
-          <div class="sp-metrics-grid">
-            <button
-              v-for="cell in basicStatCells"
-              :key="cell.key"
-              type="button"
-              class="sp-metric-tile"
-              :class="{ inspected: inspectedMetricKey === cell.key }"
-              @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-            >
-              <div class="tile-top">
-                <span class="tile-label">{{ cell.label }}</span>
-                <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                  {{ cell.topPctText }}
-                </span>
-              </div>
-              <div class="tile-value">{{ cell.displayText }}</div>
-            </button>
-          </div>
-        </div>
-
-        <div class="sp-stat-section-card">
-          <div class="sp-card-header">
-            <h4>리치 스탯</h4>
-          </div>
-          <div class="sp-metrics-grid">
-            <button
-              v-for="cell in riichiStatCells"
-              :key="cell.key"
-              type="button"
-              class="sp-metric-tile"
-              :class="{ inspected: inspectedMetricKey === cell.key }"
-              @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-            >
-              <div class="tile-top">
-                <span class="tile-label">{{ cell.label }}</span>
-                <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                  {{ cell.topPctText }}
-                </span>
-              </div>
-              <div class="tile-value">{{ cell.displayText }}</div>
-            </button>
-          </div>
-        </div>
-
-        <div class="sp-stat-section-card">
-          <div class="sp-card-header">
-            <h4>기타 · 제재 스탯</h4>
-          </div>
-          <div class="sp-metrics-grid">
-            <button
-              v-for="cell in otherStatCells"
-              :key="cell.key"
-              type="button"
-              class="sp-metric-tile"
-              :class="{ inspected: inspectedMetricKey === cell.key }"
-              @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
-            >
-              <div class="tile-top">
-                <span class="tile-label">{{ cell.label }}</span>
-                <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
-                  {{ cell.topPctText }}
-                </span>
-              </div>
-              <div class="tile-value">{{ cell.displayText }}</div>
-            </button>
-          </div>
-        </div>
-
-        <!-- 자주 만난 상대 -->
-        <div class="sp-card" v-if="selectedPlayerOpponents.length > 0">
-          <div class="sp-card-header">
-            <h4>자주 만난 상대 (동탁 전적 TOP {{ selectedPlayerOpponents.length }})</h4>
-          </div>
-          <div class="sp-opponents-grid">
-            <div v-for="opp in selectedPlayerOpponents" :key="opp.opponentName" class="sp-opp-card">
-              <div class="opp-top">
-                <button type="button" class="opp-name-btn" @click="selectPlayer(opp.opponentName)">
-                  {{ opp.opponentName }} ↗
-                </button>
-                <button
-                  type="button"
-                  class="opp-vs-mini"
-                  @click="emit('open-compare', selectedPlayer.name, opp.opponentName)"
-                  title="1:1 상세 비교"
+          <!-- 프로필 요약 배너 -->
+          <div class="sp-profile-banner">
+            <div class="sp-profile-left">
+              <div class="sp-profile-title-row">
+                <span class="sp-rank-pill">#{{ selectedOverallRank }}</span>
+                <h2 class="sp-player-name">{{ selectedPlayer.name }}</h2>
+                <span
+                  v-if="selectedPlayer.rating"
+                  class="sp-rating-pill"
+                  :style="{ color: getRatingColor(selectedPlayer.rating), borderColor: getRatingColor(selectedPlayer.rating) }"
                 >
-                  VS
-                </button>
+                  R{{ Math.round(selectedPlayer.rating) }}
+                </span>
+                <span v-if="selectedPlayer.ratingPeak" class="sp-peak-note">
+                  최고 R{{ Math.round(selectedPlayer.ratingPeak) }}
+                </span>
               </div>
-              <div class="opp-sub">
-                동탁 <strong>{{ opp.encounterCount }}전</strong> ({{ opp.encounterRate.toFixed(1) }}%)
+              <div class="sp-profile-kpi-row">
+                <div class="sp-kpi">
+                  <span class="kpi-lbl">누적 우마</span>
+                  <strong class="kpi-val" :class="selectedPlayer.totalUma >= 0 ? 'pos' : 'neg'">
+                    {{ selectedPlayer.totalUma > 0 ? '+' : '' }}{{ selectedPlayer.totalUma.toFixed(1) }}pt
+                  </strong>
+                </div>
+                <div class="sp-kpi">
+                  <span class="kpi-lbl">평균 우마</span>
+                  <strong class="kpi-val" :class="selectedPlayer.avgUma >= 0 ? 'pos' : 'neg'">
+                    {{ selectedPlayer.avgUma > 0 ? '+' : '' }}{{ selectedPlayer.avgUma.toFixed(1) }}pt
+                  </strong>
+                </div>
+                <div class="sp-kpi">
+                  <span class="kpi-lbl">평균 순위</span>
+                  <strong class="kpi-val">{{ selectedPlayer.avgRank.toFixed(3) }}위</strong>
+                </div>
+                <div class="sp-kpi">
+                  <span class="kpi-lbl">대국 수</span>
+                  <strong class="kpi-val">{{ selectedPlayer.totalGames }}전</strong>
+                </div>
+                <div class="sp-kpi">
+                  <span class="kpi-lbl">연대율</span>
+                  <strong class="kpi-val">{{ selectedPlayer.top2Rate.toFixed(2) }}%</strong>
+                </div>
+                <div class="sp-kpi" v-if="selectedRankDist.total > 0">
+                  <span class="kpi-lbl">라스 회피율</span>
+                  <strong class="kpi-val">{{ (100 - selectedRankDist.p4).toFixed(2) }}%</strong>
+                </div>
               </div>
-              <div class="opp-winrate">
-                맞대결 승률 <strong :class="opp.winRate >= 50 ? 'pos' : 'neg'">{{ opp.winRate.toFixed(1) }}%</strong>
-                ({{ opp.winCount }}승 {{ opp.encounterCount - opp.winCount }}패)
+            </div>
+
+            <div class="sp-profile-actions">
+              <button type="button" class="sp-action-btn primary" @click="emit('open-compare', selectedPlayer.name)">
+                VS 비교
+              </button>
+              <button type="button" class="sp-action-btn" @click="emit('open-popup', selectedPlayer.name)">
+                팝업으로 보기
+              </button>
+            </div>
+          </div>
+
+          <!-- 1~4위 순위 분포 바 -->
+          <div class="sp-card" v-if="selectedRankDist.total > 0">
+            <div class="sp-card-header">
+              <h4>순위 분포 ({{ selectedRankDist.total }}전)</h4>
+            </div>
+            <div class="sp-rank-stacked-bar">
+              <div class="seg s1" :style="{ width: selectedRankDist.p1 + '%' }" v-if="selectedRankDist.p1 > 0">
+                <span v-if="selectedRankDist.p1 >= 10">1위 {{ selectedRankDist.p1.toFixed(1) }}%</span>
+              </div>
+              <div class="seg s2" :style="{ width: selectedRankDist.p2 + '%' }" v-if="selectedRankDist.p2 > 0">
+                <span v-if="selectedRankDist.p2 >= 10">2위 {{ selectedRankDist.p2.toFixed(1) }}%</span>
+              </div>
+              <div class="seg s3" :style="{ width: selectedRankDist.p3 + '%' }" v-if="selectedRankDist.p3 > 0">
+                <span v-if="selectedRankDist.p3 >= 10">3위 {{ selectedRankDist.p3.toFixed(1) }}%</span>
+              </div>
+              <div class="seg s4" :style="{ width: selectedRankDist.p4 + '%' }" v-if="selectedRankDist.p4 > 0">
+                <span v-if="selectedRankDist.p4 >= 10">4위 {{ selectedRankDist.p4.toFixed(1) }}%</span>
+              </div>
+            </div>
+            <div class="sp-rank-legend">
+              <span><i class="dot s1"></i> 1위 {{ selectedRankDist.p1.toFixed(2) }}% ({{ selectedRankDist.r1 }}회)</span>
+              <span><i class="dot s2"></i> 2위 {{ selectedRankDist.p2.toFixed(2) }}% ({{ selectedRankDist.r2 }}회)</span>
+              <span><i class="dot s3"></i> 3위 {{ selectedRankDist.p3.toFixed(2) }}% ({{ selectedRankDist.r3 }}회)</span>
+              <span><i class="dot s4"></i> 4위 {{ selectedRankDist.p4.toFixed(2) }}% ({{ selectedRankDist.r4 }}회)</span>
+            </div>
+          </div>
+
+          <!-- 클릭한 지표의 인라인 분포 히스토그램 인스펙터 -->
+          <div v-if="inspectedDistribution && inspectedMetricMeta" class="sp-card sp-dist-inline-card">
+            <div class="sp-card-header">
+              <div class="sp-dist-title-group">
+                <h4>{{ inspectedMetricMeta.label }} 전체 분포</h4>
+                <span
+                  v-if="!inspectedDistribution.isUnrecorded"
+                  class="sp-pct-badge"
+                  :class="inspectedDistribution.isUpperHalf ? 'pos' : 'neg'"
+                >
+                  상위 {{ inspectedDistribution.topPct.toFixed(2) }}% ({{ inspectedDistribution.rank }}위 / {{ inspectedDistribution.totalCount }}명)
+                </span>
+              </div>
+              <button type="button" class="sp-mini-close" @click="inspectedMetricKey = null">닫기 ✕</button>
+            </div>
+            <div class="sp-inline-hist-wrap">
+              <svg viewBox="0 0 160 46" class="sp-inline-svg" preserveAspectRatio="none">
+                <rect
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'ib-' + idx"
+                  :x="bar.x"
+                  :y="bar.y"
+                  :width="bar.width"
+                  :height="bar.height"
+                  :fill="
+                    hoveredInlineBar && hoveredInlineBar.playerName === bar.playerName
+                      ? '#f59e0b'
+                      : bar.isCurrent
+                        ? '#3b82f6'
+                        : 'rgba(148,163,184,0.45)'
+                  "
+                  rx="1"
+                />
+                <line x1="80" y1="0" x2="80" y2="46" stroke="rgba(148,163,184,0.65)" stroke-width="1.2" stroke-dasharray="3,2" />
+                <rect
+                  v-for="(bar, idx) in inspectedDistribution.bars"
+                  :key="'ihit-' + idx"
+                  class="sp-bar-hit"
+                  :x="bar.x"
+                  y="0"
+                  :width="Math.max(bar.width, 2.5)"
+                  height="46"
+                  fill="transparent"
+                  @mouseenter="hoveredInlineBar = bar"
+                  @mouseleave="hoveredInlineBar = null"
+                  @click="selectPlayer(bar.playerName)"
+                >
+                  <title>{{ bar.playerName }}: {{ formatMetricVal(bar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</title>
+                </rect>
+              </svg>
+            </div>
+            <div class="sp-inline-hist-footer">
+              <span>최소 {{ formatMetricVal(inspectedDistribution.min, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+              <span class="sp-inline-hover-mid">
+                <template v-if="hoveredInlineBar">
+                  <strong>{{ hoveredInlineBar.playerName }}</strong> ·
+                  {{ formatMetricVal(hoveredInlineBar.value, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} (클릭하여 이동 ↗)
+                </template>
+                <template v-else>
+                  평균 {{ formatMetricVal(inspectedDistribution.avg, inspectedMetricMeta.label, inspectedMetricMeta.unit) }} · 막대 클릭 시 해당 플레이어로 이동
+                </template>
+              </span>
+              <span>최대 {{ formatMetricVal(inspectedDistribution.max, inspectedMetricMeta.label, inspectedMetricMeta.unit) }}</span>
+            </div>
+          </div>
+
+          <div class="sp-stat-notice" v-if="!hasSelectedDetail">
+            ※ 제9회 이후 국별 세부 기록이 없는 플레이어(또는 구간)입니다. 종합 대국 기록(우마·순위·레이팅)만 집계됩니다.
+          </div>
+
+          <!-- 1. 기본 스탯 -->
+          <div class="sp-stat-section-card">
+            <div class="sp-card-header">
+              <h4>기본 · 공격 / 수비 스탯</h4>
+              <span class="sp-card-sub">각 항목 클릭 시 분포 히스토그램 표시</span>
+            </div>
+            <div class="sp-metrics-grid">
+              <button
+                v-for="cell in basicStatCells"
+                :key="cell.key"
+                type="button"
+                class="sp-metric-tile"
+                :class="{ inspected: inspectedMetricKey === cell.key }"
+                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+              >
+                <div class="tile-top">
+                  <span class="tile-label">{{ cell.label }}</span>
+                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                    {{ cell.topPctText }}
+                  </span>
+                </div>
+                <div class="tile-value">{{ cell.displayText }}</div>
+              </button>
+            </div>
+          </div>
+
+          <!-- 2. 리치 스탯 -->
+          <div class="sp-stat-section-card">
+            <div class="sp-card-header">
+              <h4>리치 스탯</h4>
+            </div>
+            <div class="sp-metrics-grid">
+              <button
+                v-for="cell in riichiStatCells"
+                :key="cell.key"
+                type="button"
+                class="sp-metric-tile"
+                :class="{ inspected: inspectedMetricKey === cell.key }"
+                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+              >
+                <div class="tile-top">
+                  <span class="tile-label">{{ cell.label }}</span>
+                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                    {{ cell.topPctText }}
+                  </span>
+                </div>
+                <div class="tile-value">{{ cell.displayText }}</div>
+              </button>
+            </div>
+          </div>
+
+          <!-- 3. 기타 스탯 -->
+          <div class="sp-stat-section-card">
+            <div class="sp-card-header">
+              <h4>기타 스탯</h4>
+            </div>
+            <div class="sp-metrics-grid">
+              <button
+                v-for="cell in otherStatCells"
+                :key="cell.key"
+                type="button"
+                class="sp-metric-tile"
+                :class="{ inspected: inspectedMetricKey === cell.key }"
+                @click="toggleInspectMetric(cell.key, cell.label, cell.value, cell.higherIsBetter, cell.unit)"
+              >
+                <div class="tile-top">
+                  <span class="tile-label">{{ cell.label }}</span>
+                  <span v-if="!cell.isUnrecorded && cell.topPctText !== '-'" class="tile-pct" :class="cell.isUpperHalf ? 'pos' : 'neg'">
+                    {{ cell.topPctText }}
+                  </span>
+                </div>
+                <div class="tile-value">{{ cell.displayText }}</div>
+              </button>
+            </div>
+          </div>
+
+          <!-- 자주 만난 상대 -->
+          <div class="sp-card" v-if="selectedPlayerOpponents.length > 0">
+            <div class="sp-card-header">
+              <h4>자주 만난 상대 (동탁 전적 TOP {{ selectedPlayerOpponents.length }})</h4>
+            </div>
+            <div class="sp-opponents-grid">
+              <div v-for="opp in selectedPlayerOpponents" :key="opp.opponentName" class="sp-opp-card">
+                <div class="opp-top">
+                  <button type="button" class="opp-name-btn" @click="selectPlayer(opp.opponentName)">
+                    {{ opp.opponentName }} ↗
+                  </button>
+                  <button
+                    type="button"
+                    class="opp-vs-mini"
+                    @click="emit('open-compare', selectedPlayer.name, opp.opponentName)"
+                    title="1:1 상세 비교"
+                  >
+                    VS
+                  </button>
+                </div>
+                <div class="opp-sub">
+                  동탁 <strong>{{ opp.encounterCount }}전</strong> ({{ opp.encounterRate.toFixed(1) }}%)
+                </div>
+                <div class="opp-winrate">
+                  맞대결 승률 <strong :class="opp.winRate >= 50 ? 'pos' : 'neg'">{{ opp.winRate.toFixed(1) }}%</strong>
+                  ({{ opp.winCount }}승 {{ opp.encounterCount - opp.winCount }}패)
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 개인 최근 대국 기록 -->
-        <div class="sp-card" v-if="selectedPlayerGames.length > 0">
+          <!-- 개인 최근 대국 기록 -->
+          <div class="sp-card" v-if="selectedPlayerGames.length > 0">
+            <div class="sp-card-header">
+              <h4>대국 기록 ({{ selectedPlayerGames.length }} / {{ selectedPlayerTotalGamesCount }}전)</h4>
+              <button
+                v-if="selectedPlayerTotalGamesCount > 15"
+                type="button"
+                class="sp-mini-toggle"
+                @click="showAllPlayerGames = !showAllPlayerGames"
+              >
+                {{ showAllPlayerGames ? '최근 15전만 보기' : `전체 ${selectedPlayerTotalGamesCount}전 보기` }}
+              </button>
+            </div>
+            <div class="sp-table-scroll">
+              <table class="sp-table">
+                <thead>
+                  <tr>
+                    <th>회차</th>
+                    <th>일자</th>
+                    <th>순위</th>
+                    <th>점수</th>
+                    <th>우마</th>
+                    <th>R 변동</th>
+                    <th>동탁 결과 (1~4위)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="g in selectedPlayerGames" :key="'pg-' + g.gameIndex">
+                    <td class="nowrap">{{ g.sessionLabel }}</td>
+                    <td class="nowrap muted">{{ g.date || '-' }}</td>
+                    <td>
+                      <span class="rank-chip" :class="'r' + g.myRank">{{ g.myRank }}위</span>
+                    </td>
+                    <td class="nowrap">{{ g.myScore.toLocaleString() }}</td>
+                    <td class="nowrap" :class="g.myUma >= 0 ? 'pos' : 'neg'">
+                      {{ g.myUma > 0 ? '+' : '' }}{{ g.myUma.toFixed(1) }}
+                    </td>
+                    <td class="nowrap">
+                      <span :style="{ color: getRatingColor(g.myOrdinal) }">R{{ Math.round(g.myOrdinal) }}</span>
+                      <span class="delta-mini" :class="g.myDelta >= 0 ? 'pos' : 'neg'">
+                        ({{ g.myDelta >= 0 ? '+' : '' }}{{ Math.round(g.myDelta) }})
+                      </span>
+                    </td>
+                    <td class="players-inline-cell">
+                      <button
+                        v-for="pl in g.players"
+                        :key="pl.name + pl.rank"
+                        type="button"
+                        class="inline-pl-chip"
+                        :class="{ isme: normalizeRatingPlayerName(pl.name) === normalizeRatingPlayerName(selectedPlayer.name) }"
+                        @click="selectPlayer(pl.name)"
+                      >
+                        {{ pl.rank }}.{{ pl.name }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 플레이어 미선택 시: 홈 미리보기 (항상 최신 회차 대국 기록 노출) -->
+      <div v-else class="sp-empty-home">
+        <div class="sp-card">
           <div class="sp-card-header">
-            <h4>대국 기록 ({{ selectedPlayerGames.length }} / {{ selectedPlayerTotalGamesCount }}전)</h4>
-            <button
-              v-if="selectedPlayerTotalGamesCount > 15"
-              type="button"
-              class="sp-mini-toggle"
-              @click="showAllPlayerGames = !showAllPlayerGames"
-            >
-              {{ showAllPlayerGames ? '최근 15전만 보기' : `전체 ${selectedPlayerTotalGamesCount}전 보기` }}
+            <h4>최근 대국 기록 (최신 {{ latestHomeGames.length }}전)</h4>
+            <button type="button" class="sp-mini-toggle" @click="activeSubTab = 'games'">
+              일자·회차별 전체 대국 기록 →
             </button>
           </div>
-          <div class="sp-table-scroll">
+          <div class="sp-table-scroll" v-if="latestHomeGames.length > 0">
             <table class="sp-table">
               <thead>
                 <tr>
                   <th>회차</th>
                   <th>일자</th>
-                  <th>순위</th>
-                  <th>점수</th>
-                  <th>우마</th>
-                  <th>R 변동</th>
-                  <th>동탁 결과 (1~4위)</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="g in selectedPlayerGames" :key="'pg-' + g.gameIndex">
-                  <td class="nowrap">{{ g.sessionLabel }}</td>
-                  <td class="nowrap muted">{{ g.date || '-' }}</td>
-                  <td>
-                    <span class="rank-chip" :class="'r' + g.myRank">{{ g.myRank }}위</span>
-                  </td>
-                  <td class="nowrap">{{ g.myScore.toLocaleString() }}</td>
-                  <td class="nowrap" :class="g.myUma >= 0 ? 'pos' : 'neg'">
-                    {{ g.myUma > 0 ? '+' : '' }}{{ g.myUma.toFixed(1) }}
-                  </td>
-                  <td class="nowrap">
-                    <span :style="{ color: getRatingColor(g.myOrdinal) }">R{{ Math.round(g.myOrdinal) }}</span>
-                    <span class="delta-mini" :class="g.myDelta >= 0 ? 'pos' : 'neg'">
-                      ({{ g.myDelta >= 0 ? '+' : '' }}{{ Math.round(g.myDelta) }})
-                    </span>
-                  </td>
-                  <td class="players-inline-cell">
-                    <button
-                      v-for="pl in g.players"
-                      :key="pl.name + pl.rank"
-                      type="button"
-                      class="inline-pl-chip"
-                      :class="{ isme: normalizeRatingPlayerName(pl.name) === normalizeRatingPlayerName(selectedPlayer.name) }"
-                      @click="selectPlayer(pl.name)"
-                    >
-                      {{ pl.rank }}.{{ pl.name }}
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-        </template>
-      </div>
-
-      <!-- 플레이어 미선택 시: 홈 미리보기 (작혼 통계 홈 스타일 대국 기록 바로가기) -->
-      <div v-else class="sp-empty-home">
-        <div class="sp-home-games-box">
-          <div class="sp-card-header">
-            <h4>최근 대국 기록 ({{ selectedLogDate || '최신' }})</h4>
-            <button type="button" class="sp-mini-toggle" @click="activeSubTab = 'games'">
-              일자별 전체 대국 기록 →
-            </button>
-          </div>
-          <div class="sp-table-scroll" v-if="filteredLogGames.length > 0">
-            <table class="sp-table">
-              <thead>
-                <tr>
-                  <th>회차</th>
                   <th>1위</th>
                   <th>2위</th>
                   <th>3위</th>
@@ -1575,8 +1812,9 @@ onMounted(() => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="g in filteredLogGames.slice(0, 10)" :key="'home-g-' + g.gameIndex">
-                  <td class="nowrap muted">{{ g.sessionLabel }}</td>
+                <tr v-for="g in latestHomeGames" :key="'home-g-' + g.gameIndex">
+                  <td class="nowrap">{{ g.displaySession }}</td>
+                  <td class="nowrap muted">{{ g.displayDate || '-' }}</td>
                   <td v-for="pl in g.players" :key="pl.rank + pl.name" class="nowrap">
                     <button type="button" class="table-player-link" @click="selectPlayer(pl.name)">
                       {{ pl.name }}
@@ -1592,50 +1830,76 @@ onMounted(() => {
     </div>
 
     <!-- ===================================================== -->
-    <!-- SUB-TAB 2: 레이팅 구간별 데이터 (작혼 단위별 데이터)    -->
+    <!-- SUB-TAB 2: 레이팅 구간별 데이터                        -->
     <!-- ===================================================== -->
     <div v-else-if="activeSubTab === 'by-rating'" class="sp-section">
-      <div class="sp-filter-toolbar">
-        <div class="sp-toggle-group">
-          <button
-            type="button"
-            class="sp-toggle-btn"
-            :class="{ active: ratingScopeMode === 'overall' }"
-            @click="ratingScopeMode = 'overall'"
-          >
-            전체
-          </button>
-          <button
-            type="button"
-            class="sp-toggle-btn"
-            :class="{ active: ratingScopeMode === 'recent5' }"
-            @click="ratingScopeMode = 'recent5'"
-          >
-            최근 5회차
-          </button>
-          <button
-            type="button"
-            class="sp-toggle-btn"
-            :class="{ active: ratingScopeMode === 'recent10' }"
-            @click="ratingScopeMode = 'recent10'"
-          >
-            최근 10회차
-          </button>
-          <button
-            type="button"
-            class="sp-toggle-btn"
-            :class="{ active: ratingScopeMode === 'date' }"
-            @click="ratingScopeMode = 'date'"
-          >
-            일자 지정
-          </button>
+      <div class="sp-card sp-filter-panel">
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">조회 기간:</span>
+          <div class="sp-toggle-group">
+            <button type="button" class="sp-toggle-btn" :class="{ active: ratingScopeMode === 'overall' }" @click="setRatingScopeMode('overall')">
+              전체
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: ratingScopeMode === 'recent_sessions' }" @click="setRatingScopeMode('recent_sessions')">
+              최근 N회차
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: ratingScopeMode === 'session_range' }" @click="setRatingScopeMode('session_range')">
+              회차 구간
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: ratingScopeMode === 'date_range' }" @click="setRatingScopeMode('date_range')">
+              일자 지정
+            </button>
+          </div>
         </div>
 
-        <div class="sp-min-games-group">
-          <span class="sp-filter-lbl">최소 대국:</span>
+        <div v-if="ratingScopeMode === 'recent_sessions'" class="sp-scope-controls">
+          <div class="sp-scope-presets">
+            <button
+              v-for="n in [1, 3, 5, 10, 15]"
+              :key="'rrs-' + n"
+              type="button"
+              class="sp-quick-chip"
+              :class="{ active: ratingRecentSessionsCount === n }"
+              @click="ratingRecentSessionsCount = n; loadRatingScopedData()"
+            >
+              최근 {{ n }}회차
+            </button>
+          </div>
+          <div class="sp-scope-inline-input">
+            <span>직접 입력:</span>
+            <input v-model.number="ratingRecentSessionsCount" type="number" min="1" :max="Math.max(1, sortedSessionsDesc.length)" class="sp-num-input" @keyup.enter="loadRatingScopedData" />
+            <span>회차</span>
+            <button type="button" class="sp-action-btn primary" @click="loadRatingScopedData">조회</button>
+          </div>
+        </div>
+
+        <div v-else-if="ratingScopeMode === 'session_range'" class="sp-scope-controls">
+          <div class="sp-scope-inline-input">
+            <select v-model="ratingStartSession" class="sp-select-box">
+              <option v-for="s in sortedSessionsAsc" :key="'r-ss-' + s" :value="s">{{ s }}</option>
+            </select>
+            <span>~</span>
+            <select v-model="ratingEndSession" class="sp-select-box">
+              <option v-for="s in sortedSessionsDesc" :key="'r-se-' + s" :value="s">{{ s }}</option>
+            </select>
+            <button type="button" class="sp-action-btn primary" @click="loadRatingScopedData">조회</button>
+          </div>
+        </div>
+
+        <div v-else-if="ratingScopeMode === 'date_range'" class="sp-scope-controls">
+          <div class="sp-scope-inline-input">
+            <input v-model="ratingDateStart" type="date" class="sp-date-input" />
+            <span>~</span>
+            <input v-model="ratingDateEnd" type="date" class="sp-date-input" />
+            <button type="button" class="sp-action-btn primary" @click="loadRatingScopedData">조회</button>
+          </div>
+        </div>
+
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">최소 대국 수:</span>
           <button
             v-for="mg in [0, 5, 10, 20, 30]"
-            :key="mg"
+            :key="'mg-' + mg"
             type="button"
             class="sp-chip-filter"
             :class="{ active: ratingMinGames === mg }"
@@ -1643,20 +1907,35 @@ onMounted(() => {
           >
             {{ mg === 0 ? '전체' : `${mg}전+` }}
           </button>
+          <div class="sp-inline-num-wrap">
+            <input v-model.number="ratingMinGames" type="number" min="0" class="sp-num-input compact" />
+            <span class="sp-unit-lbl">전 이상</span>
+          </div>
         </div>
-      </div>
 
-      <div v-if="ratingScopeMode === 'date'" class="sp-date-range-bar">
-        <input v-model="ratingDateStart" type="date" class="sp-date-input" />
-        <span>~</span>
-        <input v-model="ratingDateEnd" type="date" class="sp-date-input" />
-        <button type="button" class="sp-action-btn primary" @click="loadRatingScopedData">조회</button>
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">최소 국 수:</span>
+          <button
+            v-for="mr in [0, 50, 100, 200, 300]"
+            :key="'mr-' + mr"
+            type="button"
+            class="sp-chip-filter"
+            :class="{ active: ratingMinRounds === mr }"
+            @click="ratingMinRounds = mr"
+          >
+            {{ mr === 0 ? '전체' : `${mr}국+` }}
+          </button>
+          <div class="sp-inline-num-wrap">
+            <input v-model.number="ratingMinRounds" type="number" min="0" step="10" class="sp-num-input compact" />
+            <span class="sp-unit-lbl">국 이상</span>
+          </div>
+        </div>
       </div>
 
       <div v-if="isLoadingRatingScope" class="sp-loading-box">레이팅 구간별 데이터를 집계하는 중입니다...</div>
 
       <template v-else>
-        <!-- Table 1: 순위 · 기본 스탯 -->
+        <!-- Table 1 -->
         <div class="sp-card">
           <div class="sp-card-header">
             <h4>레이팅 구간별 순위 · 기본 스탯</h4>
@@ -1721,7 +2000,7 @@ onMounted(() => {
                         >
                           {{ pl.name }}
                           <span :style="{ color: band.color }">R{{ Math.round(pl.rating || 0) }}</span>
-                          <span class="muted-mini">({{ pl.totalGames }}전)</span>
+                          <span class="muted-mini">({{ pl.totalGames }}전 · {{ getMemberRounds(pl) }}국)</span>
                         </button>
                       </div>
                     </td>
@@ -1749,7 +2028,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Table 2: 점수 · 효율 · 리치 스탯 (작혼 단위별 데이터 2번째 테이블 형식) -->
+        <!-- Table 2 -->
         <div class="sp-card">
           <div class="sp-card-header">
             <h4>레이팅 구간별 점수 · 효율 · 리치 스탯</h4>
@@ -1820,32 +2099,66 @@ onMounted(() => {
     <!-- SUB-TAB 3: 자리별 순위 (東 / 南 / 西 / 北)              -->
     <!-- ===================================================== -->
     <div v-else-if="activeSubTab === 'by-seat'" class="sp-section">
-      <div class="sp-filter-toolbar">
-        <div class="sp-toggle-group">
-          <button
-            type="button"
-            class="sp-toggle-btn"
-            :class="{ active: seatScopeRecentSessions === 0 }"
-            @click="seatScopeRecentSessions = 0"
-          >
-            전체 (제9회~)
-          </button>
-          <button
-            type="button"
-            class="sp-toggle-btn"
-            :class="{ active: seatScopeRecentSessions === 5 }"
-            @click="seatScopeRecentSessions = 5"
-          >
-            최근 5회차
-          </button>
-          <button
-            type="button"
-            class="sp-toggle-btn"
-            :class="{ active: seatScopeRecentSessions === 10 }"
-            @click="seatScopeRecentSessions = 10"
-          >
-            최근 10회차
-          </button>
+      <div class="sp-card sp-filter-panel">
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">조회 기간:</span>
+          <div class="sp-toggle-group">
+            <button type="button" class="sp-toggle-btn" :class="{ active: seatScopeMode === 'all' }" @click="setSeatScopeMode('all')">
+              전체 (제9회~)
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: seatScopeMode === 'recent_sessions' }" @click="setSeatScopeMode('recent_sessions')">
+              최근 N회차
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: seatScopeMode === 'session_range' }" @click="setSeatScopeMode('session_range')">
+              회차 구간
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: seatScopeMode === 'date_range' }" @click="setSeatScopeMode('date_range')">
+              일자 지정
+            </button>
+          </div>
+        </div>
+
+        <div v-if="seatScopeMode === 'recent_sessions'" class="sp-scope-controls">
+          <div class="sp-scope-presets">
+            <button
+              v-for="n in [1, 3, 5, 10, 15]"
+              :key="'srs-' + n"
+              type="button"
+              class="sp-quick-chip"
+              :class="{ active: seatRecentSessionsCount === n }"
+              @click="seatRecentSessionsCount = n; loadSeatStats()"
+            >
+              최근 {{ n }}회차
+            </button>
+          </div>
+          <div class="sp-scope-inline-input">
+            <span>직접 입력:</span>
+            <input v-model.number="seatRecentSessionsCount" type="number" min="1" :max="Math.max(1, sortedSessionsDesc.length)" class="sp-num-input" @keyup.enter="loadSeatStats" />
+            <span>회차</span>
+            <button type="button" class="sp-action-btn primary" @click="loadSeatStats">조회</button>
+          </div>
+        </div>
+
+        <div v-else-if="seatScopeMode === 'session_range'" class="sp-scope-controls">
+          <div class="sp-scope-inline-input">
+            <select v-model="seatStartSession" class="sp-select-box">
+              <option v-for="s in sortedSessionsAsc" :key="'s-ss-' + s" :value="s">{{ s }}</option>
+            </select>
+            <span>~</span>
+            <select v-model="seatEndSession" class="sp-select-box">
+              <option v-for="s in sortedSessionsDesc" :key="'s-se-' + s" :value="s">{{ s }}</option>
+            </select>
+            <button type="button" class="sp-action-btn primary" @click="loadSeatStats">조회</button>
+          </div>
+        </div>
+
+        <div v-else-if="seatScopeMode === 'date_range'" class="sp-scope-controls">
+          <div class="sp-scope-inline-input">
+            <input v-model="seatStartDate" type="date" class="sp-date-input" />
+            <span>~</span>
+            <input v-model="seatEndDate" type="date" class="sp-date-input" />
+            <button type="button" class="sp-action-btn primary" @click="loadSeatStats">조회</button>
+          </div>
         </div>
       </div>
 
@@ -1916,59 +2229,125 @@ onMounted(() => {
         </p>
       </template>
 
-      <div v-else class="sp-loading-box">집계할 자리별 대국 데이터가 없습니다.</div>
+      <div v-else class="sp-loading-box">선택한 조건에 해당하는 자리별 대국 데이터가 없습니다.</div>
     </div>
 
     <!-- ===================================================== -->
-    <!-- SUB-TAB 4: 대국 기록 (일자 / 회차별 검색)               -->
+    <!-- SUB-TAB 4: 대국 기록 (최신 / 일자 / 기간 / 최근N회 / 회차구간) -->
     <!-- ===================================================== -->
     <div v-else-if="activeSubTab === 'games'" class="sp-section">
       <div class="sp-card">
         <div class="sp-card-header">
-          <h4>대국 기록 조회</h4>
-          <span class="sp-card-sub">일자 또는 회차를 선택해 대국 결과를 조회하고, 플레이어 클릭 시 개인 스탯 페이지로 이동합니다</span>
+          <h4>대국 기록 조회 ({{ filteredLogGames.length }}전)</h4>
+          <span class="sp-card-sub">플레이어 클릭 시 개인 스탯 페이지로 바로 이동합니다</span>
         </div>
 
-        <div class="sp-games-filter-bar">
-          <div class="sp-field-group">
-            <label class="sp-field-label">일자</label>
-            <input
-              :value="selectedLogDate"
-              type="date"
-              class="sp-date-input"
-              @input="onSelectLogDate(($event.target as HTMLInputElement).value)"
-            />
+        <div class="sp-filter-row" style="margin-bottom: 10px;">
+          <div class="sp-toggle-group">
+            <button type="button" class="sp-toggle-btn" :class="{ active: gamesLogMode === 'latest' }" @click="gamesLogMode = 'latest'">
+              최신 40전
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: gamesLogMode === 'date' }" @click="gamesLogMode = 'date'">
+              일자 선택
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: gamesLogMode === 'date_range' }" @click="gamesLogMode = 'date_range'">
+              일자 기간
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: gamesLogMode === 'recent_sessions' }" @click="gamesLogMode = 'recent_sessions'">
+              최근 N회차
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: gamesLogMode === 'session_range' }" @click="gamesLogMode = 'session_range'">
+              회차 구간
+            </button>
+            <button type="button" class="sp-toggle-btn" :class="{ active: gamesLogMode === 'session' }" @click="gamesLogMode = 'session'">
+              특정 회차
+            </button>
           </div>
+        </div>
 
-          <div class="sp-field-group">
-            <label class="sp-field-label">회차 선택</label>
-            <select v-model="selectedLogSession" class="sp-select-box" @change="onSelectLogSession">
-              <option value="">일자 기준 보기</option>
-              <option v-for="s in sortedSessionsDesc" :key="s" :value="s">{{ s }}</option>
+        <!-- 일자 선택 -->
+        <div v-if="gamesLogMode === 'date'" class="sp-log-subpanel">
+          <div class="sp-scope-inline-input">
+            <label class="sp-field-label">일자:</label>
+            <input v-model="selectedLogDate" type="date" class="sp-date-input" />
+          </div>
+          <div class="sp-date-chips" v-if="availableIsoDates.length > 0">
+            <span class="sp-quick-lbl">최근 모임 일자:</span>
+            <button
+              v-for="d in availableIsoDates.slice(0, 12)"
+              :key="d"
+              type="button"
+              class="sp-quick-chip"
+              :class="{ active: selectedLogDate === d }"
+              @click="selectedLogDate = d"
+            >
+              {{ d }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 일자 기간 -->
+        <div v-else-if="gamesLogMode === 'date_range'" class="sp-log-subpanel">
+          <div class="sp-scope-inline-input">
+            <input v-model="logStartDate" type="date" class="sp-date-input" />
+            <span>~</span>
+            <input v-model="logEndDate" type="date" class="sp-date-input" />
+          </div>
+        </div>
+
+        <!-- 최근 N회차 -->
+        <div v-else-if="gamesLogMode === 'recent_sessions'" class="sp-log-subpanel">
+          <div class="sp-scope-controls" style="border-top: none; padding-top: 0;">
+            <div class="sp-scope-presets">
+              <button
+                v-for="n in [1, 3, 5, 10, 15]"
+                :key="'lrs-' + n"
+                type="button"
+                class="sp-quick-chip"
+                :class="{ active: logRecentSessionsCount === n }"
+                @click="logRecentSessionsCount = n"
+              >
+                최근 {{ n }}회차
+              </button>
+            </div>
+            <div class="sp-scope-inline-input">
+              <span>직접 입력:</span>
+              <input v-model.number="logRecentSessionsCount" type="number" min="1" :max="Math.max(1, sortedSessionsDesc.length)" class="sp-num-input" />
+              <span>회차</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 회차 구간 -->
+        <div v-else-if="gamesLogMode === 'session_range'" class="sp-log-subpanel">
+          <div class="sp-scope-inline-input">
+            <select v-model="logStartSession" class="sp-select-box">
+              <option v-for="s in sortedSessionsAsc" :key="'l-ss-' + s" :value="s">{{ s }}</option>
+            </select>
+            <span>~</span>
+            <select v-model="logEndSession" class="sp-select-box">
+              <option v-for="s in sortedSessionsDesc" :key="'l-se-' + s" :value="s">{{ s }}</option>
             </select>
           </div>
         </div>
 
-        <div class="sp-date-chips" v-if="availableIsoDates.length > 0">
-          <span class="sp-quick-lbl">최근 모임 일자:</span>
-          <button
-            v-for="d in availableIsoDates.slice(0, 10)"
-            :key="d"
-            type="button"
-            class="sp-quick-chip"
-            :class="{ active: selectedLogDate === d && !selectedLogSession }"
-            @click="onSelectLogDate(d)"
-          >
-            {{ d }}
-          </button>
+        <!-- 특정 회차 -->
+        <div v-else-if="gamesLogMode === 'session'" class="sp-log-subpanel">
+          <div class="sp-scope-inline-input">
+            <label class="sp-field-label">회차 선택:</label>
+            <select v-model="selectedLogSession" class="sp-select-box">
+              <option v-for="s in sortedSessionsDesc" :key="'l-s-' + s" :value="s">{{ s }}</option>
+            </select>
+          </div>
         </div>
 
-        <div class="sp-table-scroll" v-if="filteredLogGames.length > 0">
+        <div class="sp-table-scroll" style="margin-top: 10px;" v-if="filteredLogGames.length > 0">
           <table class="sp-table">
             <thead>
               <tr>
                 <th>#</th>
                 <th>회차</th>
+                <th>일자</th>
                 <th>1위</th>
                 <th>2위</th>
                 <th>3위</th>
@@ -1978,7 +2357,8 @@ onMounted(() => {
             <tbody>
               <tr v-for="(g, idx) in filteredLogGames" :key="'log-' + g.gameIndex + '-' + idx">
                 <td class="muted nowrap">{{ filteredLogGames.length - idx }}</td>
-                <td class="nowrap">{{ g.sessionLabel }}</td>
+                <td class="nowrap">{{ g.displaySession }}</td>
+                <td class="nowrap muted">{{ g.displayDate || '-' }}</td>
                 <td v-for="pl in g.players" :key="pl.rank + pl.name" class="nowrap">
                   <button type="button" class="table-player-link" @click="selectPlayer(pl.name)">
                     {{ pl.name }}
@@ -1999,13 +2379,33 @@ onMounted(() => {
     </div>
 
     <!-- ===================================================== -->
-    <!-- SUB-TAB 5: 기록 플레이어 수                             -->
+    <!-- SUB-TAB 5: 기록 플레이어 수 (회차별 통합 + N국 이상)     -->
     <!-- ===================================================== -->
     <div v-else-if="activeSubTab === 'players-count'" class="sp-section">
+      <div class="sp-card sp-filter-panel">
+        <div class="sp-filter-row">
+          <span class="sp-filter-lbl">최소 국 수 필터:</span>
+          <button
+            v-for="mr in [0, 50, 100, 200, 300]"
+            :key="'pcmr-' + mr"
+            type="button"
+            class="sp-chip-filter"
+            :class="{ active: playersCountMinRounds === mr }"
+            @click="playersCountMinRounds = mr"
+          >
+            {{ mr === 0 ? '전체' : `${mr}국 이상` }}
+          </button>
+          <div class="sp-inline-num-wrap">
+            <input v-model.number="playersCountMinRounds" type="number" min="0" step="10" class="sp-num-input compact" />
+            <span class="sp-unit-lbl">국 이상</span>
+          </div>
+        </div>
+      </div>
+
       <div class="sp-kpi-cards-grid">
         <div class="sp-summary-kpi-card">
-          <span class="sk-label">총 기록 플레이어</span>
-          <strong class="sk-value">{{ allStats.length }}명</strong>
+          <span class="sk-label">기록 플레이어 수</span>
+          <strong class="sk-value">{{ playersCountFilteredMembers.length }}명</strong>
         </div>
         <div class="sp-summary-kpi-card">
           <span class="sk-label">누적 총 대국 수</span>
@@ -2016,7 +2416,7 @@ onMounted(() => {
           <strong class="sk-value">{{ totalDetailedRoundsAll.toLocaleString() }}국</strong>
         </div>
         <div class="sp-summary-kpi-card">
-          <span class="sk-label">전체 평균 레이팅</span>
+          <span class="sk-label">평균 레이팅</span>
           <strong class="sk-value" :style="{ color: getRatingColor(averageLeagueRating) }">
             R{{ averageLeagueRating }}
           </strong>
@@ -2028,13 +2428,13 @@ onMounted(() => {
           <h4>레이팅 구간별 기록 플레이어 분포</h4>
         </div>
         <div class="sp-dist-bars">
-          <div v-for="band in ratingBandRows" :key="'pc-' + band.key" class="sp-dist-bar-row">
+          <div v-for="band in playersCountBandRows" :key="'pc-' + band.key" class="sp-dist-bar-row">
             <span class="db-label" :style="{ color: band.color }">{{ band.label }}</span>
             <div class="db-track">
               <div
                 class="db-fill"
                 :style="{
-                  width: (band.playerCount / maxBandPlayerCount) * 100 + '%',
+                  width: (band.playerCount / maxPlayersCountBand) * 100 + '%',
                   backgroundColor: band.color,
                 }"
               ></div>
@@ -2046,7 +2446,8 @@ onMounted(() => {
 
       <div class="sp-card">
         <div class="sp-card-header">
-          <h4>회차별 참여 인원 및 대국 수</h4>
+          <h4>회차별 참여 인원 및 대국 수 (총 {{ sessionParticipationRows.length }}회차)</h4>
+          <span class="sp-card-sub">회차 행 클릭 시 해당 회차의 대국 기록으로 이동합니다</span>
         </div>
         <div class="sp-table-scroll">
           <table class="sp-table sp-data-table">
@@ -2059,7 +2460,12 @@ onMounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in sessionParticipationRows" :key="row.sessionLabel">
+              <tr
+                v-for="row in sessionParticipationRows"
+                :key="row.sessionLabel"
+                class="clickable-row"
+                @click="openSessionInGamesLog(row.sessionLabel)"
+              >
                 <td class="nowrap"><strong>{{ row.sessionLabel }}</strong></td>
                 <td class="nowrap muted">{{ row.date || '-' }}</td>
                 <td>{{ row.playerCount }}명</td>
@@ -2074,36 +2480,82 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 라이트 / 다크 테마 CSS 변수 통합 정의 (props.isDark + html.dark 동시 지원) */
 .stat-page-root {
+  --sp-card-bg: #ffffff;
+  --sp-sub-bg: #f8fafc;
+  --sp-nav-bg: #f1f5f9;
+  --sp-input-bg: #ffffff;
+  --sp-th-bg: #f8fafc;
+  --sp-border: #e2e8f0;
+  --sp-border-strong: #cbd5e1;
+  --sp-text: #0f172a;
+  --sp-text-secondary: #334155;
+  --sp-text-muted: #64748b;
+  --sp-accent: #0284c7;
+  --sp-hover-bg: rgba(2, 132, 199, 0.08);
+  --sp-summary-bg: rgba(15, 23, 42, 0.04);
+  --sp-row-divider: rgba(226, 232, 240, 0.8);
+  --sp-pos: #16a34a;
+  --sp-neg: #dc2626;
+  --sp-banner-bg: linear-gradient(135deg, rgba(2, 132, 199, 0.08), rgba(37, 99, 235, 0.04));
+  --sp-banner-border: rgba(2, 132, 199, 0.28);
+  --sp-rating-pill-bg: rgba(255, 255, 255, 0.8);
+  --sp-rank-pill-bg: #0f172a;
+  --sp-rank-pill-text: #ffffff;
+  --sp-chip-active-bg: #0f172a;
+  --sp-chip-active-text: #ffffff;
+
   display: flex;
   flex-direction: column;
   gap: 14px;
-  color: #0f172a;
-}
-.stat-page-root.dark {
-  color: #f1f5f9;
+  color: var(--sp-text);
 }
 
-/* 상단 서브탭 (작혼 통계 스타일) */
+.stat-page-root.dark,
+:global(html.dark) .stat-page-root {
+  --sp-card-bg: #1e1e1e;
+  --sp-sub-bg: #262626;
+  --sp-nav-bg: #1a1a1a;
+  --sp-input-bg: #141414;
+  --sp-th-bg: #252525;
+  --sp-border: #363636;
+  --sp-border-strong: #4a4a4a;
+  --sp-text: #f5f5f5;
+  --sp-text-secondary: #e5e5e5;
+  --sp-text-muted: #b0b7c3;
+  --sp-accent: #60a5fa;
+  --sp-hover-bg: rgba(96, 165, 250, 0.14);
+  --sp-summary-bg: #2a2a2a;
+  --sp-row-divider: #2e2e2e;
+  --sp-pos: #4ade80;
+  --sp-neg: #f87171;
+  --sp-banner-bg: #222222;
+  --sp-banner-border: #3d3d3d;
+  --sp-rating-pill-bg: #141414;
+  --sp-rank-pill-bg: #3b82f6;
+  --sp-rank-pill-text: #ffffff;
+  --sp-chip-active-bg: #3b82f6;
+  --sp-chip-active-text: #ffffff;
+  color-scheme: dark;
+}
+
+/* 상단 서브탭 */
 .sp-subnav {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   padding: 6px;
   border-radius: 10px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-}
-.stat-page-root.dark .sp-subnav {
-  background: #1e293b;
-  border-color: rgba(148, 163, 184, 0.2);
+  background: var(--sp-nav-bg);
+  border: 1px solid var(--sp-border);
 }
 .sp-subnav-btn {
   padding: 7px 14px;
   border-radius: 7px;
   border: none;
   background: transparent;
-  color: #475569;
+  color: var(--sp-text-secondary);
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
@@ -2111,24 +2563,13 @@ onMounted(() => {
   transition: background 0.15s ease, color 0.15s ease;
 }
 .sp-subnav-btn:hover {
-  background: rgba(59, 130, 246, 0.1);
-  color: #1d4ed8;
+  background: var(--sp-hover-bg);
+  color: var(--sp-accent);
 }
 .sp-subnav-btn.active {
   background: #0284c7;
   color: #ffffff;
-  box-shadow: 0 2px 6px rgba(2, 132, 199, 0.28);
-}
-.stat-page-root.dark .sp-subnav-btn {
-  color: #cbd5e1;
-}
-.stat-page-root.dark .sp-subnav-btn:hover {
-  background: rgba(56, 189, 248, 0.14);
-  color: #7dd3fc;
-}
-.stat-page-root.dark .sp-subnav-btn.active {
-  background: #0284c7;
-  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(2, 132, 199, 0.3);
 }
 
 .sp-section {
@@ -2140,18 +2581,27 @@ onMounted(() => {
 /* 카드 공통 */
 .sp-card,
 .sp-search-card,
-.sp-stat-section-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+.sp-stat-section-card,
+.sp-player-scope-card {
+  background: var(--sp-card-bg);
+  border: 1px solid var(--sp-border);
   border-radius: 12px;
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+  color: var(--sp-text);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
 }
-.stat-page-root.dark .sp-card,
-.stat-page-root.dark .sp-search-card,
-.stat-page-root.dark .sp-stat-section-card {
-  background: #162032;
-  border-color: rgba(148, 163, 184, 0.2);
+
+.sp-filter-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 15px;
+}
+.sp-filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
 .sp-card-header {
@@ -2166,13 +2616,11 @@ onMounted(() => {
   margin: 0;
   font-size: 14.5px;
   font-weight: 800;
+  color: var(--sp-text);
 }
 .sp-card-sub {
   font-size: 11.5px;
-  color: #64748b;
-}
-.stat-page-root.dark .sp-card-sub {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
 }
 
 /* 검색 카드 */
@@ -2188,13 +2636,11 @@ onMounted(() => {
   margin: 0;
   font-size: 17px;
   font-weight: 800;
+  color: var(--sp-text);
 }
 .sp-sub-hint {
   font-size: 12px;
-  color: #64748b;
-}
-.stat-page-root.dark .sp-sub-hint {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
 }
 
 .sp-autocomplete-wrap {
@@ -2204,37 +2650,36 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1.5px solid #cbd5e1;
+  border: 1.5px solid var(--sp-border-strong);
   border-radius: 10px;
   padding: 9px 12px;
-  background: #ffffff;
+  background: var(--sp-input-bg);
   transition: border-color 0.15s ease;
 }
 .sp-input-box:focus-within {
-  border-color: #0284c7;
-  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.12);
-}
-.stat-page-root.dark .sp-input-box {
-  background: #0f172a;
-  border-color: rgba(148, 163, 184, 0.3);
+  border-color: var(--sp-accent);
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.16);
 }
 .sp-search-svg {
-  color: #64748b;
+  color: var(--sp-text-muted);
   flex-shrink: 0;
 }
 .sp-search-input {
   flex: 1;
   border: none;
   background: transparent;
-  color: inherit;
+  color: var(--sp-text);
   font-size: 14.5px;
   font-family: inherit;
   outline: none;
 }
+.sp-search-input::placeholder {
+  color: var(--sp-text-muted);
+}
 .sp-clear-btn {
   border: none;
-  background: rgba(100, 116, 139, 0.14);
-  color: inherit;
+  background: rgba(148, 163, 184, 0.22);
+  color: var(--sp-text);
   width: 22px;
   height: 22px;
   border-radius: 50%;
@@ -2250,22 +2695,17 @@ onMounted(() => {
   z-index: 50;
   max-height: 280px;
   overflow-y: auto;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
+  background: var(--sp-input-bg);
+  border: 1px solid var(--sp-border-strong);
   border-radius: 10px;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
   padding: 4px;
-}
-.stat-page-root.dark .sp-dropdown {
-  background: #0f172a;
-  border-color: rgba(148, 163, 184, 0.3);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
 }
 .sp-dropdown-item {
   width: 100%;
   border: none;
   background: transparent;
-  color: inherit;
+  color: var(--sp-text);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2277,28 +2717,27 @@ onMounted(() => {
 }
 .sp-dropdown-item.highlighted,
 .sp-dropdown-item:hover {
-  background: rgba(2, 132, 199, 0.1);
+  background: var(--sp-hover-bg);
 }
 .sp-dropdown-item.selected {
   font-weight: 800;
 }
 .sp-dd-name {
   font-weight: 700;
+  color: var(--sp-text);
 }
 .sp-dd-meta {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: #64748b;
-}
-.stat-page-root.dark .sp-dd-meta {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
 }
 .sp-dd-rating {
   font-weight: 800;
 }
 
+.sp-min-rounds-row,
 .sp-quick-players,
 .sp-date-chips {
   display: flex;
@@ -2307,16 +2746,28 @@ onMounted(() => {
   gap: 6px;
   margin-top: 10px;
 }
-.sp-quick-lbl {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: #64748b;
-  margin-right: 2px;
+.sp-inline-num-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
+.sp-unit-lbl {
+  font-size: 12px;
+  color: var(--sp-text-muted);
+}
+.sp-quick-lbl,
+.sp-filter-lbl,
+.sp-field-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sp-text-muted);
+  white-space: nowrap;
+}
+
 .sp-quick-chip {
-  border: 1px solid #cbd5e1;
-  background: #f8fafc;
-  color: #334155;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-sub-bg);
+  color: var(--sp-text-secondary);
   border-radius: 999px;
   padding: 4px 10px;
   font-size: 12px;
@@ -2328,20 +2779,10 @@ onMounted(() => {
   gap: 4px;
 }
 .sp-quick-chip:hover {
-  border-color: #0284c7;
-  color: #0284c7;
+  border-color: var(--sp-accent);
+  color: var(--sp-accent);
 }
 .sp-quick-chip.active {
-  background: #0284c7;
-  border-color: #0284c7;
-  color: #ffffff;
-}
-.stat-page-root.dark .sp-quick-chip {
-  background: #1e293b;
-  border-color: rgba(148, 163, 184, 0.25);
-  color: #cbd5e1;
-}
-.stat-page-root.dark .sp-quick-chip.active {
   background: #0284c7;
   border-color: #0284c7;
   color: #ffffff;
@@ -2351,19 +2792,12 @@ onMounted(() => {
   font-weight: 800;
 }
 
-/* 개인별 기간/구간 스탯 필터 카드 */
+/* 개인별 기간/구간 필터 카드 */
 .sp-player-scope-card {
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
-  border-radius: 12px;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 9px;
-}
-.stat-page-root.dark .sp-player-scope-card {
-  background: #162032;
-  border-color: rgba(148, 163, 184, 0.24);
 }
 .sp-scope-top-row {
   display: flex;
@@ -2381,18 +2815,24 @@ onMounted(() => {
 .sp-scope-badge {
   font-size: 11.5px;
   font-weight: 800;
-  color: #0284c7;
-  background: rgba(2, 132, 199, 0.12);
+  color: var(--sp-accent);
+  background: var(--sp-hover-bg);
   padding: 2px 8px;
   border-radius: 999px;
-}
-.stat-page-root.dark .sp-scope-badge {
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.16);
 }
 .sp-scope-active-label {
   font-size: 12.5px;
   font-weight: 700;
+  color: var(--sp-text);
+}
+.sp-scope-sub-pill {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sp-text-muted);
+  background: var(--sp-sub-bg);
+  border: 1px solid var(--sp-border);
+  padding: 2px 7px;
+  border-radius: 999px;
 }
 .sp-scope-modes {
   display: flex;
@@ -2406,7 +2846,7 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 8px;
   padding-top: 8px;
-  border-top: 1px dashed rgba(148, 163, 184, 0.3);
+  border-top: 1px dashed var(--sp-border-strong);
 }
 .sp-scope-presets {
   display: flex;
@@ -2419,22 +2859,24 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 6px;
   font-size: 12.5px;
+  color: var(--sp-text-secondary);
 }
 .sp-num-input {
   width: 68px;
   padding: 6px 8px;
   border-radius: 7px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: inherit;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-input-bg);
+  color: var(--sp-text);
   font-size: 13px;
   font-weight: 700;
   text-align: center;
   font-family: inherit;
 }
-.stat-page-root.dark .sp-num-input {
-  background: #0f172a;
-  border-color: rgba(148, 163, 184, 0.3);
+.sp-num-input.compact {
+  width: 62px;
+  padding: 4px 6px;
+  font-size: 12px;
 }
 .sp-empty-scope-box {
   text-align: center;
@@ -2456,8 +2898,8 @@ onMounted(() => {
   gap: 14px;
 }
 .sp-profile-banner {
-  background: linear-gradient(135deg, rgba(2, 132, 199, 0.08), rgba(37, 99, 235, 0.04));
-  border: 1.5px solid rgba(2, 132, 199, 0.28);
+  background: var(--sp-banner-bg);
+  border: 1.5px solid var(--sp-banner-border);
   border-radius: 14px;
   padding: 16px 18px;
   display: flex;
@@ -2465,10 +2907,6 @@ onMounted(() => {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-}
-.stat-page-root.dark .sp-profile-banner {
-  background: linear-gradient(135deg, rgba(2, 132, 199, 0.18), rgba(30, 41, 59, 0.85));
-  border-color: rgba(56, 189, 248, 0.32);
 }
 .sp-profile-title-row {
   display: flex;
@@ -2478,21 +2916,18 @@ onMounted(() => {
   margin-bottom: 10px;
 }
 .sp-rank-pill {
-  background: #0f172a;
-  color: #ffffff;
+  background: var(--sp-rank-pill-bg);
+  color: var(--sp-rank-pill-text);
   font-size: 12px;
   font-weight: 800;
   padding: 2px 8px;
   border-radius: 999px;
 }
-.stat-page-root.dark .sp-rank-pill {
-  background: #38bdf8;
-  color: #0f172a;
-}
 .sp-player-name {
   margin: 0;
   font-size: 22px;
   font-weight: 900;
+  color: var(--sp-text);
 }
 .sp-rating-pill {
   font-size: 13px;
@@ -2500,18 +2935,12 @@ onMounted(() => {
   padding: 2px 9px;
   border-radius: 7px;
   border: 1.5px solid currentColor;
-  background: rgba(255, 255, 255, 0.75);
-}
-.stat-page-root.dark .sp-rating-pill {
-  background: rgba(15, 23, 42, 0.65);
+  background: var(--sp-rating-pill-bg);
 }
 .sp-peak-note {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--sp-text-muted);
   font-weight: 600;
-}
-.stat-page-root.dark .sp-peak-note {
-  color: #94a3b8;
 }
 
 .sp-profile-kpi-row {
@@ -2526,14 +2955,12 @@ onMounted(() => {
 }
 .sp-kpi .kpi-lbl {
   font-size: 11px;
-  color: #64748b;
-}
-.stat-page-root.dark .sp-kpi .kpi-lbl {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
 }
 .sp-kpi .kpi-val {
   font-size: 15px;
   font-weight: 800;
+  color: var(--sp-text);
 }
 
 .sp-profile-actions {
@@ -2544,23 +2971,25 @@ onMounted(() => {
 .sp-action-btn {
   padding: 7px 12px;
   border-radius: 8px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #1e293b;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-sub-bg);
+  color: var(--sp-text);
   font-size: 12.5px;
   font-weight: 700;
   cursor: pointer;
   font-family: inherit;
 }
+.sp-action-btn:hover {
+  border-color: var(--sp-accent);
+}
 .sp-action-btn.primary {
-  background: linear-gradient(135deg, #2563eb, #e11d48);
-  border-color: transparent;
+  background: #2563eb;
+  border-color: #2563eb;
   color: #ffffff;
 }
-.stat-page-root.dark .sp-action-btn {
-  background: #1e293b;
-  color: #f1f5f9;
-  border-color: rgba(148, 163, 184, 0.3);
+.sp-action-btn.primary:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
 }
 
 /* 순위 분포 스택 바 */
@@ -2570,7 +2999,7 @@ onMounted(() => {
   border-radius: 8px;
   overflow: hidden;
   width: 100%;
-  background: rgba(148, 163, 184, 0.16);
+  background: rgba(148, 163, 184, 0.2);
 }
 .sp-rank-stacked-bar .seg {
   display: flex;
@@ -2593,10 +3022,7 @@ onMounted(() => {
   gap: 12px;
   margin-top: 8px;
   font-size: 12px;
-  color: #475569;
-}
-.stat-page-root.dark .sp-rank-legend {
-  color: #cbd5e1;
+  color: var(--sp-text-secondary);
 }
 .sp-rank-legend .dot {
   display: inline-block;
@@ -2606,9 +3032,9 @@ onMounted(() => {
   margin-right: 4px;
 }
 
-/* 인라인 히스토그램 인스펙터 */
+/* 인라인 히스토그램 */
 .sp-dist-inline-card {
-  border-color: #3b82f6;
+  border-color: var(--sp-accent);
 }
 .sp-dist-title-group {
   display: flex;
@@ -2623,24 +3049,18 @@ onMounted(() => {
   border-radius: 999px;
 }
 .sp-pct-badge.pos {
-  background: rgba(22, 163, 74, 0.14);
-  color: #15803d;
+  background: rgba(22, 163, 74, 0.16);
+  color: var(--sp-pos);
 }
 .sp-pct-badge.neg {
-  background: rgba(220, 38, 38, 0.14);
-  color: #dc2626;
-}
-.stat-page-root.dark .sp-pct-badge.pos {
-  color: #4ade80;
-}
-.stat-page-root.dark .sp-pct-badge.neg {
-  color: #f87171;
+  background: rgba(220, 38, 38, 0.16);
+  color: var(--sp-neg);
 }
 .sp-mini-close,
 .sp-mini-toggle {
-  border: 1px solid #cbd5e1;
-  background: transparent;
-  color: inherit;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-sub-bg);
+  color: var(--sp-text);
   border-radius: 6px;
   padding: 4px 9px;
   font-size: 11.5px;
@@ -2648,10 +3068,15 @@ onMounted(() => {
   cursor: pointer;
   font-family: inherit;
 }
+.sp-mini-toggle:hover,
+.sp-mini-close:hover {
+  border-color: var(--sp-accent);
+  color: var(--sp-accent);
+}
 .sp-inline-hist-wrap {
   height: 76px;
   border-radius: 8px;
-  background: rgba(148, 163, 184, 0.1);
+  background: var(--sp-sub-bg);
   overflow: hidden;
   padding: 4px;
 }
@@ -2671,19 +3096,19 @@ onMounted(() => {
   gap: 6px;
   margin-top: 6px;
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--sp-text-muted);
 }
 .sp-inline-hover-mid {
-  color: #0284c7;
+  color: var(--sp-accent);
   font-weight: 600;
 }
 
 /* 스탯 타일 그리드 */
 .sp-stat-notice {
   font-size: 12px;
-  color: #b45309;
-  background: rgba(245, 158, 11, 0.1);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.34);
   border-radius: 8px;
   padding: 8px 12px;
 }
@@ -2694,9 +3119,9 @@ onMounted(() => {
 }
 .sp-metric-tile {
   text-align: left;
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  color: inherit;
+  border: 1px solid var(--sp-border);
+  background: var(--sp-sub-bg);
+  color: var(--sp-text);
   border-radius: 10px;
   padding: 10px 12px;
   cursor: pointer;
@@ -2704,16 +3129,12 @@ onMounted(() => {
   transition: border-color 0.15s ease, transform 0.12s ease;
 }
 .sp-metric-tile:hover {
-  border-color: #0284c7;
+  border-color: var(--sp-accent);
   transform: translateY(-1px);
 }
 .sp-metric-tile.inspected {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
-}
-.stat-page-root.dark .sp-metric-tile {
-  background: #1e293b;
-  border-color: rgba(148, 163, 184, 0.2);
+  border-color: var(--sp-accent);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
 }
 .tile-top {
   display: flex;
@@ -2724,11 +3145,8 @@ onMounted(() => {
 }
 .tile-label {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--sp-text-muted);
   font-weight: 600;
-}
-.stat-page-root.dark .tile-label {
-  color: #94a3b8;
 }
 .tile-pct {
   font-size: 10px;
@@ -2737,18 +3155,17 @@ onMounted(() => {
   border-radius: 4px;
 }
 .tile-pct.pos {
-  background: rgba(22, 163, 74, 0.12);
-  color: #15803d;
+  background: rgba(22, 163, 74, 0.15);
+  color: var(--sp-pos);
 }
 .tile-pct.neg {
-  background: rgba(220, 38, 38, 0.12);
-  color: #dc2626;
+  background: rgba(220, 38, 38, 0.15);
+  color: var(--sp-neg);
 }
-.stat-page-root.dark .tile-pct.pos { color: #4ade80; }
-.stat-page-root.dark .tile-pct.neg { color: #f87171; }
 .tile-value {
   font-size: 15px;
   font-weight: 800;
+  color: var(--sp-text);
 }
 
 /* 자주 만난 상대 */
@@ -2758,18 +3175,15 @@ onMounted(() => {
   gap: 9px;
 }
 .sp-opp-card {
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border: 1px solid var(--sp-border);
+  background: var(--sp-sub-bg);
+  color: var(--sp-text-secondary);
   border-radius: 10px;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
-}
-.stat-page-root.dark .sp-opp-card {
-  background: #1e293b;
-  border-color: rgba(148, 163, 184, 0.2);
 }
 .opp-top {
   display: flex;
@@ -2780,14 +3194,14 @@ onMounted(() => {
   border: none;
   background: transparent;
   padding: 0;
-  color: inherit;
+  color: var(--sp-text);
   font-size: 13.5px;
   font-weight: 800;
   cursor: pointer;
   font-family: inherit;
 }
 .opp-name-btn:hover {
-  color: #0284c7;
+  color: var(--sp-accent);
   text-decoration: underline;
 }
 .opp-vs-mini {
@@ -2801,30 +3215,20 @@ onMounted(() => {
   cursor: pointer;
 }
 
-/* 필터 바 & 토글 */
-.sp-filter-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-}
+/* 토글 / 필터 컨트롤 */
 .sp-toggle-group {
   display: inline-flex;
-  border: 1px solid #cbd5e1;
+  flex-wrap: wrap;
+  border: 1px solid var(--sp-border-strong);
   border-radius: 8px;
   overflow: hidden;
-  background: #ffffff;
-}
-.stat-page-root.dark .sp-toggle-group {
-  background: #1e293b;
-  border-color: rgba(148, 163, 184, 0.25);
+  background: var(--sp-sub-bg);
 }
 .sp-toggle-btn {
   border: none;
-  border-right: 1px solid #e2e8f0;
+  border-right: 1px solid var(--sp-border);
   background: transparent;
-  color: inherit;
+  color: var(--sp-text-secondary);
   padding: 6px 12px;
   font-size: 12.5px;
   font-weight: 700;
@@ -2838,25 +3242,11 @@ onMounted(() => {
   background: #0284c7;
   color: #ffffff;
 }
-.stat-page-root.dark .sp-toggle-btn {
-  border-right-color: rgba(148, 163, 184, 0.2);
-}
 
-.sp-min-games-group {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-.sp-filter-lbl {
-  font-size: 12px;
-  font-weight: 700;
-  color: #64748b;
-}
 .sp-chip-filter {
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: inherit;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-sub-bg);
+  color: var(--sp-text-secondary);
   border-radius: 6px;
   padding: 4px 9px;
   font-size: 12px;
@@ -2864,89 +3254,59 @@ onMounted(() => {
   cursor: pointer;
   font-family: inherit;
 }
+.sp-chip-filter:hover {
+  border-color: var(--sp-accent);
+  color: var(--sp-accent);
+}
 .sp-chip-filter.active {
-  background: #0f172a;
-  border-color: #0f172a;
-  color: #ffffff;
-}
-.stat-page-root.dark .sp-chip-filter {
-  background: #1e293b;
-  border-color: rgba(148, 163, 184, 0.25);
-}
-.stat-page-root.dark .sp-chip-filter.active {
-  background: #38bdf8;
-  border-color: #38bdf8;
-  color: #0f172a;
+  background: var(--sp-chip-active-bg);
+  border-color: var(--sp-chip-active-bg);
+  color: var(--sp-chip-active-text);
 }
 
-.sp-date-range-bar,
-.sp-games-filter-bar {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 10px;
+.sp-log-subpanel {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--sp-sub-bg);
+  border: 1px solid var(--sp-border);
 }
-.sp-field-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.sp-field-label {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: #64748b;
-}
+
 .sp-date-input,
 .sp-select-box {
   padding: 7px 10px;
   border-radius: 8px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: inherit;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-input-bg);
+  color: var(--sp-text);
   font-size: 13px;
   font-family: inherit;
 }
-.stat-page-root.dark .sp-date-input,
-.stat-page-root.dark .sp-select-box {
-  background: #0f172a;
-  border-color: rgba(148, 163, 184, 0.3);
-}
 
-/* 테이블 공통 (작혼 통계 테이블 스타일) */
+/* 테이블 공통 */
 .sp-table-scroll {
   overflow-x: auto;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-}
-.stat-page-root.dark .sp-table-scroll {
-  border-color: rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--sp-border);
 }
 .sp-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12.5px;
   text-align: center;
+  color: var(--sp-text);
 }
 .sp-table th {
-  background: #f8fafc;
-  color: #334155;
+  background: var(--sp-th-bg);
+  color: var(--sp-text-secondary);
   padding: 9px 10px;
   font-weight: 800;
-  border-bottom: 1.5px solid #e2e8f0;
+  border-bottom: 1.5px solid var(--sp-border);
   white-space: nowrap;
-}
-.stat-page-root.dark .sp-table th {
-  background: #1e293b;
-  color: #e2e8f0;
-  border-bottom-color: rgba(148, 163, 184, 0.22);
 }
 .sp-table td {
   padding: 8px 10px;
-  border-bottom: 1px solid rgba(226, 232, 240, 0.7);
-}
-.stat-page-root.dark .sp-table td {
-  border-bottom-color: rgba(148, 163, 184, 0.12);
+  color: var(--sp-text);
+  border-bottom: 1px solid var(--sp-row-divider);
 }
 .sp-table tbody tr:last-child td {
   border-bottom: none;
@@ -2955,15 +3315,11 @@ onMounted(() => {
   cursor: pointer;
 }
 .sp-table tbody tr.clickable-row:hover {
-  background: rgba(2, 132, 199, 0.06);
+  background: var(--sp-hover-bg);
 }
 .sp-table tbody tr.summary-row {
-  background: rgba(15, 23, 42, 0.04);
-  border-top: 1.5px solid #cbd5e1;
-}
-.stat-page-root.dark .sp-table tbody tr.summary-row {
-  background: rgba(255, 255, 255, 0.05);
-  border-top-color: rgba(148, 163, 184, 0.3);
+  background: var(--sp-summary-bg);
+  border-top: 1.5px solid var(--sp-border-strong);
 }
 
 .band-color-dot {
@@ -2975,7 +3331,7 @@ onMounted(() => {
   vertical-align: middle;
 }
 .band-expand-row td {
-  background: rgba(2, 132, 199, 0.04);
+  background: var(--sp-sub-bg);
   text-align: left;
   padding: 10px 12px;
 }
@@ -2985,9 +3341,9 @@ onMounted(() => {
   gap: 6px;
 }
 .band-player-chip {
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: inherit;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-card-bg);
+  color: var(--sp-text);
   border-radius: 999px;
   padding: 3px 9px;
   font-size: 12px;
@@ -2998,18 +3354,14 @@ onMounted(() => {
   gap: 4px;
 }
 .band-player-chip:hover {
-  border-color: #0284c7;
-}
-.stat-page-root.dark .band-player-chip {
-  background: #0f172a;
-  border-color: rgba(148, 163, 184, 0.25);
+  border-color: var(--sp-accent);
 }
 
 .table-player-link {
   border: none;
   background: transparent;
   padding: 0;
-  color: #0284c7;
+  color: var(--sp-accent);
   font-weight: 700;
   font-size: 12.5px;
   cursor: pointer;
@@ -3018,12 +3370,9 @@ onMounted(() => {
 .table-player-link:hover {
   text-decoration: underline;
 }
-.stat-page-root.dark .table-player-link {
-  color: #38bdf8;
-}
 .log-cell-sub {
   font-size: 11px;
-  color: #64748b;
+  color: var(--sp-text-muted);
 }
 
 .rank-chip {
@@ -3046,9 +3395,9 @@ onMounted(() => {
   justify-content: center;
 }
 .inline-pl-chip {
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--sp-border-strong);
   background: transparent;
-  color: inherit;
+  color: var(--sp-text-secondary);
   border-radius: 5px;
   padding: 1px 6px;
   font-size: 11px;
@@ -3056,8 +3405,9 @@ onMounted(() => {
   font-family: inherit;
 }
 .inline-pl-chip.isme {
-  background: rgba(2, 132, 199, 0.14);
-  border-color: #0284c7;
+  background: var(--sp-hover-bg);
+  border-color: var(--sp-accent);
+  color: var(--sp-text);
   font-weight: 800;
 }
 
@@ -3077,40 +3427,39 @@ onMounted(() => {
   font-size: 15px;
   font-weight: 900;
   text-align: center;
+  color: var(--sp-text);
 }
 .seat-bar-avg {
   font-size: 12.5px;
   font-weight: 800;
   text-align: right;
+  color: var(--sp-text);
 }
 
-/* 기록 플레이어 현황 KPI & 분포 */
+/* 기록 플레이어 현황 */
 .sp-kpi-cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
 }
 .sp-summary-kpi-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--sp-card-bg);
+  border: 1px solid var(--sp-border);
   border-radius: 12px;
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.stat-page-root.dark .sp-summary-kpi-card {
-  background: #162032;
-  border-color: rgba(148, 163, 184, 0.2);
-}
 .sk-label {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--sp-text-muted);
   font-weight: 600;
 }
 .sk-value {
   font-size: 20px;
   font-weight: 900;
+  color: var(--sp-text);
 }
 
 .sp-dist-bars {
@@ -3132,7 +3481,7 @@ onMounted(() => {
 .db-track {
   height: 14px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.16);
+  background: rgba(148, 163, 184, 0.2);
   overflow: hidden;
 }
 .db-fill {
@@ -3142,28 +3491,27 @@ onMounted(() => {
 }
 .db-count {
   font-weight: 700;
+  color: var(--sp-text);
 }
 
 .sp-footer-count {
   margin: 0;
   font-size: 12.5px;
-  color: #64748b;
+  color: var(--sp-text-muted);
 }
 .sp-loading-box {
   text-align: center;
   padding: 28px 14px;
   font-size: 13px;
-  color: #64748b;
+  color: var(--sp-text-muted);
 }
 
 .nowrap { white-space: nowrap; }
-.muted { color: #64748b; }
-.muted-mini { font-size: 11px; color: #64748b; }
+.muted { color: var(--sp-text-muted); }
+.muted-mini { font-size: 11px; color: var(--sp-text-muted); }
 .delta-mini { font-size: 11px; margin-left: 2px; }
-.pos { color: #16a34a; font-weight: 700; }
-.neg { color: #dc2626; font-weight: 700; }
-.stat-page-root.dark .pos { color: #4ade80; }
-.stat-page-root.dark .neg { color: #f87171; }
+.pos { color: var(--sp-pos); font-weight: 700; }
+.neg { color: var(--sp-neg); font-weight: 700; }
 
 @media (max-width: 640px) {
   .sp-card,

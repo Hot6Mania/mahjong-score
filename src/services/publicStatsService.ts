@@ -2935,13 +2935,12 @@ export function calculateMetricDistribution(
   const stepW = svgWidth / Math.max(n, 1);
   const barWidth = Math.max(1.8, stepW - 0.8);
 
-  // 대상 플레이어 매칭 (미집계 대상이 아닌 경우에만 이름 또는 값으로 하이라이트)
+  // 대상 플레이어 매칭 (미집계 대상이 아닌 경우에만 이름 매칭; 이름 미지정 시 값 매칭)
   let matchedIndex = -1;
   if (!isUnrecorded) {
     if (currentPlayerName) {
       matchedIndex = sorted.findIndex(m => m.name === currentPlayerName);
-    }
-    if (matchedIndex === -1) {
+    } else {
       matchedIndex = sorted.findIndex(m => Math.abs(m.val - currentValue) < 0.0001);
     }
   }
@@ -4506,6 +4505,14 @@ export async function queryMemberStatsByFilter(
   const sortedSessionsDesc = [...(options.availableSessions || [])].sort(
     (a, b) => parseSessionNumber(b) - parseSessionNumber(a)
   );
+  const sessionDateByNum = new Map<number, string>();
+  for (const s of sortedSessionsDesc) {
+    const num = parseSessionNumber(s);
+    const iso = extractIsoDateFromRecord(s);
+    if (num > 0 && iso && !sessionDateByNum.has(num)) {
+      sessionDateByNum.set(num, iso);
+    }
+  }
 
   let targetSessionNums: Set<number> | null = null;
   let matchedSessionNames: string[] = [];
@@ -4567,7 +4574,9 @@ export async function queryMemberStatsByFilter(
     const rowSess = getCellStr(r.c[15]).trim();
     const sessNum = parseSessionNumber(rowSess);
     if (filter.mode === 'date_range') {
-      const iso = extractIsoDateFromRecord(rowSess, getCellStr(r.c[0]), getCellStr(r.c[1]));
+      const iso =
+        extractIsoDateFromRecord(rowSess, getCellStr(r.c[0]), getCellStr(r.c[1])) ||
+        (sessNum > 0 ? sessionDateByNum.get(sessNum) || '' : '');
       if (!iso) continue;
       if (startDate && iso < startDate) continue;
       if (endDate && iso > endDate) continue;
@@ -4586,7 +4595,9 @@ export async function queryMemberStatsByFilter(
   const matchedGames = allGames.filter((g) => {
     const sessNum = parseSessionNumber(g.sessionLabel);
     if (filter.mode === 'date_range') {
-      const iso = extractIsoDateFromRecord(g.sessionLabel, g.date);
+      const iso =
+        extractIsoDateFromRecord(g.sessionLabel, g.date) ||
+        (sessNum > 0 ? sessionDateByNum.get(sessNum) || '' : '');
       if (!iso) return false;
       if (startDate && iso < startDate) return false;
       if (endDate && iso > endDate) return false;
@@ -4743,6 +4754,10 @@ export interface SeatRankStatsResult {
  */
 export async function fetchSeatRankStats(options?: {
   recentSessions?: number;
+  startSession?: string;
+  endSession?: string;
+  startDate?: string;
+  endDate?: string;
   availableSessions?: string[];
   spreadsheetId?: string;
   forceRefresh?: boolean;
@@ -4756,14 +4771,39 @@ export async function fetchSeatRankStats(options?: {
     '北': '北 (북가)',
   };
 
-  let targetSessionNums: Set<number> | null = null;
-  if (options?.recentSessions && options.recentSessions > 0 && options.availableSessions?.length) {
-    const sorted = [...options.availableSessions].sort(
-      (a, b) => parseSessionNumber(b) - parseSessionNumber(a)
-    );
-    const picked = sorted.slice(0, options.recentSessions);
-    targetSessionNums = new Set(picked.map((s) => parseSessionNumber(s)).filter((n) => n > 0));
+  const sortedSessions = [...(options?.availableSessions || [])].sort(
+    (a, b) => parseSessionNumber(b) - parseSessionNumber(a)
+  );
+  const sessionDateByNum = new Map<number, string>();
+  for (const s of sortedSessions) {
+    const num = parseSessionNumber(s);
+    const iso = extractIsoDateFromRecord(s);
+    if (num > 0 && iso && !sessionDateByNum.has(num)) {
+      sessionDateByNum.set(num, iso);
+    }
   }
+
+  let targetSessionNums: Set<number> | null = null;
+  if (options?.recentSessions && options.recentSessions > 0 && sortedSessions.length > 0) {
+    const picked = sortedSessions.slice(0, Math.floor(options.recentSessions));
+    targetSessionNums = new Set(picked.map((s) => parseSessionNumber(s)).filter((n) => n > 0));
+  } else if (options?.startSession || options?.endSession) {
+    const sNum = parseSessionNumber(options.startSession);
+    const eNum = parseSessionNumber(options.endSession);
+    const minN = sNum > 0 && eNum > 0 ? Math.min(sNum, eNum) : Math.max(sNum, eNum);
+    const maxN = sNum > 0 && eNum > 0 ? Math.max(sNum, eNum) : Math.max(sNum, eNum);
+    if (minN > 0 && maxN > 0) {
+      const picked = sortedSessions.filter((s) => {
+        const n = parseSessionNumber(s);
+        return n >= minN && n <= maxN;
+      });
+      targetSessionNums = new Set(picked.map((s) => parseSessionNumber(s)).filter((n) => n > 0));
+    }
+  }
+
+  const startDate = (options?.startDate || '').trim();
+  const endDate = (options?.endDate || '').trim();
+  const hasDateFilter = Boolean(startDate || endDate);
 
   // gameId별 첫 국(최소 roundSeq) 4인 순서 및 토비 여부 수집
   const gameMap = new Map<
@@ -4782,9 +4822,16 @@ export async function fetchSeatRankStats(options?: {
     const player = getCellStr(r.c[5]).trim();
     if (!gameId || !player) continue;
 
-    if (targetSessionNums) {
-      const sessNum = parseSessionNumber(getCellStr(r.c[15]));
-      if (!targetSessionNums.has(sessNum)) continue;
+    const rowSess = getCellStr(r.c[15]).trim();
+    const sessNum = parseSessionNumber(rowSess);
+    if (targetSessionNums && !targetSessionNums.has(sessNum)) continue;
+    if (hasDateFilter) {
+      const iso =
+        extractIsoDateFromRecord(rowSess, getCellStr(r.c[0]), gameId) ||
+        (sessNum > 0 ? sessionDateByNum.get(sessNum) || '' : '');
+      if (!iso) continue;
+      if (startDate && iso < startDate) continue;
+      if (endDate && iso > endDate) continue;
     }
 
     const roundSeq = getCellNum(r.c[3], 999);

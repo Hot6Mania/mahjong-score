@@ -402,7 +402,7 @@ const compareSections = computed<CompareSection[]>(() => {
     { key: 'core', title: '핵심 종합 지표', rows: coreRows },
     { key: 'offense', title: '공격 · 수비 스탯', rows: offenseRows },
     { key: 'riichi', title: '리치 스탯', rows: riichiRows },
-    { key: 'other', title: '기타 · 효율 · 제재', rows: otherRows },
+    { key: 'other', title: '기타 스탯', rows: otherRows },
   ];
 });
 
@@ -643,7 +643,7 @@ onUnmounted(() => {
           <button type="button" class="vs-cat-btn" :class="{ active: activeCategory === 'core' }" @click="activeCategory = 'core'">핵심 종합</button>
           <button type="button" class="vs-cat-btn" :class="{ active: activeCategory === 'offense' }" @click="activeCategory = 'offense'">공격·수비</button>
           <button type="button" class="vs-cat-btn" :class="{ active: activeCategory === 'riichi' }" @click="activeCategory = 'riichi'">리치</button>
-          <button type="button" class="vs-cat-btn" :class="{ active: activeCategory === 'other' }" @click="activeCategory = 'other'">기타·제재</button>
+          <button type="button" class="vs-cat-btn" :class="{ active: activeCategory === 'other' }" @click="activeCategory = 'other'">기타 스탯</button>
         </div>
 
         <!-- 세부 스탯 미집계 안내 -->
@@ -713,11 +713,12 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-.vs-modal-card.dark {
-  background: #0f172a;
-  color: #f1f5f9;
-  border-color: rgba(148, 163, 184, 0.22);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+.vs-modal-card.dark,
+:global(html.dark) .vs-modal-card {
+  background: #1e1e1e;
+  color: #f5f5f5;
+  border-color: #3a3a3a;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
 }
 
 .vs-modal-header {
@@ -728,9 +729,10 @@ onUnmounted(() => {
   border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
 }
-.vs-modal-card.dark .vs-modal-header {
-  background: #1e293b;
-  border-bottom-color: rgba(148, 163, 184, 0.18);
+.vs-modal-card.dark .vs-modal-header,
+:global(html.dark) .vs-modal-card .vs-modal-header {
+  background: #252525;
+  border-bottom-color: #383838;
 }
 
 .vs-header-title-wrap {
@@ -846,10 +848,11 @@ onUnmounted(() => {
 .vs-select-col.side-b .vs-select-input:focus {
   border-color: #e11d48;
 }
-.vs-modal-card.dark .vs-select-input {
-  background: #1e293b;
-  color: #f1f5f9;
-  border-color: rgba(148, 163, 184, 0.28);
+.vs-modal-card.dark .vs-select-input,
+:global(html.dark) .vs-modal-card .vs-select-input {
+  background: #141414;
+  color: #f5f5f5;
+  border-color: #444444;
 }
 
 .vs-swap-btn {
@@ -975,9 +978,10 @@ onUnmounted(() => {
 .vs-hero-card.side-b {
   border-top: 3px solid #e11d48;
 }
-.vs-modal-card.dark .vs-hero-card {
-  background: #1e293b;
-  border-color: rgba(148, 163, 184, 0.2);
+.vs-modal-card.dark .vs-hero-card,
+:global(html.dark) .vs-modal-card .vs-hero-card {
+  background: #262626;
+  border-color: #3a3a3a;
 }
 .vs-modal-card.dark .vs-hero-card.side-a {
   border-top-color: #3b82f6;
@@ -1104,9 +1108,10 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 9px;
 }
-.vs-modal-card.dark .vs-h2h-card {
-  border-color: rgba(96, 165, 250, 0.25);
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(225, 29, 72, 0.12));
+.vs-modal-card.dark .vs-h2h-card,
+:global(html.dark) .vs-modal-card .vs-h2h-card {
+  border-color: #3f3f46;
+  background: #242424;
 }
 .vs-h2h-header {
   display: flex;
@@ -1260,10 +1265,11 @@ onUnmounted(() => {
   color: #334155;
   border-bottom: 1px solid #e2e8f0;
 }
-.vs-modal-card.dark .vs-section-title {
-  background: #1e293b;
-  color: #e2e8f0;
-  border-bottom-color: rgba(148, 163, 184, 0.16);
+.vs-modal-card.dark .vs-section-title,
+:global(html.dark) .vs-modal-card .vs-section-title {
+  background: #262626;
+  color: #f5f5f5;
+  border-bottom-color: #3a3a3a;
 }
 
 .vs-rows-wrap {
