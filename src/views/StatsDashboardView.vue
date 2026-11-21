@@ -66,6 +66,8 @@ import {
   updateHighlightRecord,
   getHighlightImageUrl,
   getHighlightThumbnailUrl,
+  getHighlightImageIds,
+  MAX_HIGHLIGHT_IMAGES_PER_POST,
   getHighlightStorageInfo,
   getSavedHighlightPin,
   saveHighlightPin,
@@ -84,6 +86,7 @@ import {
   type HighlightRecord,
   type HighlightCategory,
   type HighlightComment,
+  type HighlightImageOrderEntry,
   type MahjongTileEmoteDef,
   type MahjongMeldBlock,
   type MemberAliasesMap
@@ -933,6 +936,25 @@ const formatPct = (val: number | undefined): string => {
 const formatPct5 = (val: number | undefined): string => {
   if (val === undefined || val === null || isNaN(val)) return '0.0000%';
   return Number(val).toFixed(4) + '%';
+};
+
+const getPenaltyCount = (
+  count: number | undefined,
+  ratePct: number | undefined,
+  rounds: number | undefined
+): number => {
+  if (typeof count === 'number' && !isNaN(count)) return count;
+  if (!ratePct || !rounds || isNaN(ratePct) || isNaN(rounds)) return 0;
+  return Math.round((ratePct / 100) * rounds);
+};
+
+const formatPenaltyRate = (
+  ratePct: number | undefined,
+  count: number | undefined,
+  rounds: number | undefined
+): string => {
+  const cnt = getPenaltyCount(count, ratePct, rounds);
+  return `${formatPct5(ratePct)} (${cnt}회)`;
 };
 
 const getDistPct = (count: number, total: number): string => {
@@ -4077,12 +4099,18 @@ const uploadForm = ref<{
   uploadPin: '',
 });
 
-const selectedUploadFile = ref<File | null>(null);
-const selectedUploadPreviewUrl = ref<string>('');
-const selectedUploadDimensions = ref<string>('');
+interface UploadImageItem {
+  key: string;
+  kind: 'existing' | 'new';
+  previewUrl: string;
+  imageId?: string;
+  file?: File;
+}
+
+const uploadImageItems = ref<UploadImageItem[]>([]);
+const hasUploadImageMutation = ref<boolean>(false);
 const highlightFileInputRef = ref<HTMLInputElement | null>(null);
 const editingHighlightRecord = ref<HighlightRecord | null>(null);
-const removeExistingHighlightImage = ref<boolean>(false);
 
 // 선택된 회차의 실제 진행 경기 목록
 const uploadModalGames = computed<SessionGame[]>(() => {
@@ -4639,6 +4667,19 @@ const handleOpenUploadFromGameModal = () => {
   });
 };
 
+const clearUploadImageItems = () => {
+  for (const item of uploadImageItems.value) {
+    if (item.kind === 'new' && item.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(item.previewUrl);
+    }
+  }
+  uploadImageItems.value = [];
+  hasUploadImageMutation.value = false;
+  if (highlightFileInputRef.value) {
+    highlightFileInputRef.value.value = '';
+  }
+};
+
 const openHighlightUploadModal = (preset?: {
   category?: HighlightCategory;
   sessionName?: string;
@@ -4649,7 +4690,6 @@ const openHighlightUploadModal = (preset?: {
 }) => {
   refreshGalleryAuthState();
   editingHighlightRecord.value = null;
-  removeExistingHighlightImage.value = false;
   const rawSession = preset?.sessionName || selectedSession.value || displayedAvailableSessions.value[0] || '';
   const matchedOption = displayedAvailableSessions.value.find(s => matchHighlightSession(s, rawSession));
   const defaultSession = matchedOption || rawSession;
@@ -4672,12 +4712,7 @@ const openHighlightUploadModal = (preset?: {
     uploaderName: '',
     uploadPin: getSavedHighlightPin(),
   };
-  if (selectedUploadPreviewUrl.value && selectedUploadPreviewUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(selectedUploadPreviewUrl.value);
-  }
-  selectedUploadFile.value = null;
-  selectedUploadPreviewUrl.value = '';
-  selectedUploadDimensions.value = '';
+  clearUploadImageItems();
   highlightUploadError.value = '';
   isHighlightUploadModalOpen.value = true;
 
@@ -4690,7 +4725,6 @@ const openHighlightUploadModal = (preset?: {
 const openEditHighlightModal = (rec: HighlightRecord) => {
   refreshGalleryAuthState();
   editingHighlightRecord.value = rec;
-  removeExistingHighlightImage.value = false;
   const matchedOption = displayedAvailableSessions.value.find(s => matchHighlightSession(s, rec.sessionName));
   const targetSession = matchedOption || rec.sessionName;
 
@@ -4711,12 +4745,14 @@ const openEditHighlightModal = (rec: HighlightRecord) => {
     uploaderName: rec.uploaderName || '',
     uploadPin: getSavedHighlightPin(),
   };
-  if (selectedUploadPreviewUrl.value && selectedUploadPreviewUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(selectedUploadPreviewUrl.value);
-  }
-  selectedUploadFile.value = null;
-  selectedUploadPreviewUrl.value = (rec.hasImage && rec.imageId) ? getHighlightImageUrl(rec.imageId) : '';
-  selectedUploadDimensions.value = '';
+  clearUploadImageItems();
+  const existingIds = getHighlightImageIds(rec);
+  uploadImageItems.value = existingIds.map((imgId) => ({
+    key: `ex_${imgId}`,
+    kind: 'existing',
+    imageId: imgId,
+    previewUrl: getHighlightThumbnailUrl(imgId) || getHighlightImageUrl(imgId),
+  }));
   highlightUploadError.value = '';
   isHighlightUploadModalOpen.value = true;
 
@@ -4727,44 +4763,62 @@ const openEditHighlightModal = (rec: HighlightRecord) => {
 };
 
 const closeHighlightUploadModal = () => {
-  if (selectedUploadPreviewUrl.value && selectedUploadPreviewUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(selectedUploadPreviewUrl.value);
-  }
-  selectedUploadPreviewUrl.value = '';
-  selectedUploadFile.value = null;
+  clearUploadImageItems();
   editingHighlightRecord.value = null;
-  removeExistingHighlightImage.value = false;
   isHighlightUploadModalOpen.value = false;
 };
 
 const handleHighlightFileSelect = (e: Event) => {
   if (editingHighlightRecord.value && !isGalleryAdmin.value) return;
   const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-  if (selectedUploadPreviewUrl.value && selectedUploadPreviewUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(selectedUploadPreviewUrl.value);
+  const files = Array.from(input.files || []).filter((f) => f && f.type.startsWith('image/'));
+  if (files.length === 0) return;
+
+  const remaining = MAX_HIGHLIGHT_IMAGES_PER_POST - uploadImageItems.value.length;
+  if (remaining <= 0) {
+    showToast(`한 게시글당 최대 ${MAX_HIGHLIGHT_IMAGES_PER_POST}장까지 등록할 수 있습니다.`);
+    input.value = '';
+    return;
   }
-  selectedUploadFile.value = file;
-  removeExistingHighlightImage.value = false;
-  const url = URL.createObjectURL(file);
-  selectedUploadPreviewUrl.value = url;
+
+  const filesToAdd = files.slice(0, remaining);
+  if (files.length > remaining) {
+    showToast(`최대 ${MAX_HIGHLIGHT_IMAGES_PER_POST}장까지 첨부되어 초과된 ${files.length - remaining}장은 제외되었습니다.`);
+  }
+
+  for (const file of filesToAdd) {
+    const url = URL.createObjectURL(file);
+    uploadImageItems.value.push({
+      key: `new_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      kind: 'new',
+      previewUrl: url,
+      file,
+    });
+  }
+  hasUploadImageMutation.value = true;
+  input.value = '';
 };
 
-const handleRemoveUploadPreview = () => {
+const removeUploadImageItem = (idx: number) => {
   if (editingHighlightRecord.value && !isGalleryAdmin.value) return;
-  if (selectedUploadPreviewUrl.value && selectedUploadPreviewUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(selectedUploadPreviewUrl.value);
+  const item = uploadImageItems.value[idx];
+  if (!item) return;
+  if (item.kind === 'new' && item.previewUrl.startsWith('blob:')) {
+    URL.revokeObjectURL(item.previewUrl);
   }
-  if (editingHighlightRecord.value && editingHighlightRecord.value.hasImage && !selectedUploadFile.value) {
-    removeExistingHighlightImage.value = true;
-  }
-  selectedUploadFile.value = null;
-  selectedUploadPreviewUrl.value = '';
-  selectedUploadDimensions.value = '';
-  if (highlightFileInputRef.value) {
-    highlightFileInputRef.value.value = '';
-  }
+  uploadImageItems.value.splice(idx, 1);
+  hasUploadImageMutation.value = true;
+};
+
+const moveUploadImageItem = (idx: number, delta: number) => {
+  if (editingHighlightRecord.value && !isGalleryAdmin.value) return;
+  const nextIdx = idx + delta;
+  if (nextIdx < 0 || nextIdx >= uploadImageItems.value.length) return;
+  const arr = [...uploadImageItems.value];
+  const [moved] = arr.splice(idx, 1);
+  arr.splice(nextIdx, 0, moved);
+  uploadImageItems.value = arr;
+  hasUploadImageMutation.value = true;
 };
 
 const toggleYakumanTypeInForm = (key: string) => {
@@ -4782,12 +4836,9 @@ const submitHighlightUpload = async () => {
   const f = uploadForm.value;
   const editingRec = editingHighlightRecord.value;
   const canModifyImage = !editingRec || isGalleryAdmin.value;
-  const effectiveUploadFile = canModifyImage ? selectedUploadFile.value : null;
-  const effectiveRemoveImage = canModifyImage ? removeExistingHighlightImage.value : false;
-  const hasFinalImage = Boolean(
-    effectiveUploadFile ||
-    (editingRec && editingRec.hasImage && !effectiveRemoveImage)
-  );
+  const hasFinalImage = canModifyImage
+    ? uploadImageItems.value.length > 0
+    : getHighlightImageIds(editingRec).length > 0;
 
   if (f.category !== 'session' && !f.sessionName) {
     highlightUploadError.value = '회차를 선택해 주세요.';
@@ -4821,6 +4872,27 @@ const submitHighlightUpload = async () => {
   isSubmittingHighlight.value = true;
   try {
     if (editingRec) {
+      let newFiles: File[] | undefined = undefined;
+      let imageOrder: HighlightImageOrderEntry[] | undefined = undefined;
+      let removeImageFlag = false;
+
+      if (canModifyImage && hasUploadImageMutation.value) {
+        const collectedFiles: File[] = [];
+        const orderEntries: HighlightImageOrderEntry[] = [];
+        for (const item of uploadImageItems.value) {
+          if (item.kind === 'existing' && item.imageId) {
+            orderEntries.push({ type: 'existing', imageId: item.imageId });
+          } else if (item.kind === 'new' && item.file) {
+            const newIdx = collectedFiles.length;
+            collectedFiles.push(item.file);
+            orderEntries.push({ type: 'new', newIndex: newIdx });
+          }
+        }
+        newFiles = collectedFiles;
+        imageOrder = orderEntries;
+        removeImageFlag = orderEntries.length === 0;
+      }
+
       const res = await updateHighlightRecord({
         id: editingRec.id,
         category: f.category,
@@ -4833,8 +4905,9 @@ const submitHighlightUpload = async () => {
         winType: (f.category === 'session' || f.category === 'nanikiru' || !f.winnerName.trim()) ? null : f.winType,
         yakumanTypes: (f.category === 'yakuman' || f.category === 'nanikiru') ? f.yakumanTypes : [],
         caption: f.caption,
-        imageFile: effectiveUploadFile,
-        removeImage: effectiveRemoveImage,
+        imageFiles: newFiles,
+        imageOrder,
+        removeImage: removeImageFlag,
         uploadPin: f.uploadPin,
       });
 
@@ -4850,6 +4923,10 @@ const submitHighlightUpload = async () => {
         const updatedItem = highlightsList.value.find(item => item.id === editingRec.id) || res.record;
         if (updatedItem && lightboxHighlight.value && lightboxHighlight.value.id === editingRec.id) {
           lightboxHighlight.value = updatedItem;
+          const nextIds = getHighlightImageIds(updatedItem);
+          if (lightboxImageIndex.value >= nextIds.length) {
+            lightboxImageIndex.value = Math.max(0, nextIds.length - 1);
+          }
         }
         closeHighlightUploadModal();
         showToast('기록이 수정되었습니다!');
@@ -4863,6 +4940,10 @@ const submitHighlightUpload = async () => {
       return;
     }
 
+    const filesToUpload = uploadImageItems.value
+      .filter((it) => it.kind === 'new' && it.file)
+      .map((it) => it.file as File);
+
     const res = await createHighlight({
       category: f.category,
       sessionName: f.sessionName,
@@ -4875,7 +4956,7 @@ const submitHighlightUpload = async () => {
       yakumanTypes: (f.category === 'yakuman' || f.category === 'nanikiru') ? f.yakumanTypes : [],
       caption: f.caption,
       uploaderName: f.uploaderName,
-      imageFile: selectedUploadFile.value,
+      imageFiles: filesToUpload,
       uploadPin: f.uploadPin,
     });
 
@@ -5726,9 +5807,120 @@ const handleZoomHighResLoad = (imageId?: string) => {
   }
 };
 
+const lightboxImageIndex = ref<number>(0);
+const lightboxImageIds = computed<string[]>(() => getHighlightImageIds(lightboxHighlight.value));
+const activeLightboxImageId = computed<string>(() => {
+  const ids = lightboxImageIds.value;
+  if (ids.length === 0) return '';
+  const safeIdx = Math.min(Math.max(0, lightboxImageIndex.value), ids.length - 1);
+  return ids[safeIdx] || ids[0] || '';
+});
+
+const prewarmLightboxPostImages = (ids: string[]) => {
+  if (typeof window === 'undefined' || ids.length <= 1) return;
+  for (const imgId of ids) {
+    if (!imgId || loadedThumbIds.value.has(imgId)) continue;
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      loadedThumbIds.value.add(imgId);
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        recordThumbAspectRatio(imgId, img.naturalWidth, img.naturalHeight);
+      }
+    };
+    img.src = getHighlightThumbnailUrl(imgId);
+  }
+};
+
+const setLightboxImageIndex = (nextIdx: number) => {
+  const ids = lightboxImageIds.value;
+  if (ids.length === 0) {
+    lightboxImageIndex.value = 0;
+    return;
+  }
+  const wrapped = ((nextIdx % ids.length) + ids.length) % ids.length;
+  lightboxImageIndex.value = wrapped;
+  const imgId = ids[wrapped];
+  isLightboxImageLoaded.value = Boolean(
+    imgId && (loadedThumbIds.value.has(imgId) || loadedHighResImageIds.value.has(imgId))
+  );
+  if (isFullImageZoomOpen.value) {
+    isZoomHighResLoaded.value = Boolean(imgId && loadedHighResImageIds.value.has(imgId));
+  }
+};
+
+const prevLightboxImage = () => {
+  if (lightboxImageIds.value.length <= 1) return;
+  setLightboxImageIndex(lightboxImageIndex.value - 1);
+};
+
+const nextLightboxImage = () => {
+  if (lightboxImageIds.value.length <= 1) return;
+  setLightboxImageIndex(lightboxImageIndex.value + 1);
+};
+
+let lbTouchStartX = 0;
+let lbTouchStartY = 0;
+let lbSwipeHandled = false;
+
+const handleLightboxTouchStart = (e: TouchEvent) => {
+  lbSwipeHandled = false;
+  if (e.touches.length !== 1) return;
+  lbTouchStartX = e.touches[0].clientX;
+  lbTouchStartY = e.touches[0].clientY;
+};
+
+const handleLightboxTouchEnd = (e: TouchEvent) => {
+  if (lightboxImageIds.value.length <= 1 || e.changedTouches.length !== 1) return;
+  if (isFullImageZoomOpen.value && fullImageFitMode.value === 'original') return;
+  const dx = e.changedTouches[0].clientX - lbTouchStartX;
+  const dy = e.changedTouches[0].clientY - lbTouchStartY;
+  if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+    lbSwipeHandled = true;
+    if (dx < 0) {
+      nextLightboxImage();
+    } else {
+      prevLightboxImage();
+    }
+  }
+};
+
+const handleLightboxImgClick = () => {
+  if (lbSwipeHandled) {
+    lbSwipeHandled = false;
+    return;
+  }
+  openFullImageZoom();
+};
+
+const handleLightboxKeydown = (e: KeyboardEvent) => {
+  if (!lightboxHighlight.value || lightboxImageIds.value.length <= 1) return;
+  const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement | null)?.isContentEditable) return;
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    prevLightboxImage();
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    nextLightboxImage();
+  }
+};
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', handleLightboxKeydown);
+  }
+});
+
+onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('keydown', handleLightboxKeydown);
+  }
+});
+
 const handleLightboxImageLoad = (ev?: Event) => {
   isLightboxImageLoaded.value = true;
-  const imgId = lightboxHighlight.value?.imageId;
+  const imgId = activeLightboxImageId.value;
   if (imgId) {
     loadedThumbIds.value.add(imgId);
     const imgEl = ev?.target as HTMLImageElement | null;
@@ -5753,7 +5945,7 @@ const handleLightboxImageLoad = (ev?: Event) => {
 };
 
 const openFullImageZoom = () => {
-  const imgId = lightboxHighlight.value?.imageId;
+  const imgId = activeLightboxImageId.value;
   if (!lightboxHighlight.value?.hasImage || !imgId) return;
   fullImageFitMode.value = 'contain';
   isZoomHighResLoaded.value = loadedHighResImageIds.value.has(imgId);
@@ -5771,12 +5963,23 @@ const cycleFullImageFitMode = () => {
 
 watch(lightboxHighlight, (val, oldVal) => {
   if (val) {
+    const ids = getHighlightImageIds(val);
+    if (!oldVal || val.id !== oldVal.id) {
+      lightboxImageIndex.value = 0;
+    } else if (lightboxImageIndex.value >= ids.length) {
+      lightboxImageIndex.value = Math.max(0, ids.length - 1);
+    }
+    const currImgId = ids[lightboxImageIndex.value] || ids[0] || '';
     isLightboxImageLoaded.value = Boolean(
-      val.imageId &&
-        (loadedThumbIds.value.has(val.imageId) || loadedHighResImageIds.value.has(val.imageId))
+      currImgId &&
+        (loadedThumbIds.value.has(currImgId) || loadedHighResImageIds.value.has(currImgId))
     );
+    if (ids.length > 1) {
+      prewarmLightboxPostImages(ids);
+    }
     updateVisualViewportHeight();
   } else {
+    lightboxImageIndex.value = 0;
     clearInitialLightboxImagePending();
     isLightboxImageLoaded.value = false;
     isFullImageZoomOpen.value = false;
@@ -8006,6 +8209,17 @@ const openGamePopupFromLightbox = async (
                       @load="handleThumbImageLoad(rec.imageId, $event)"
                       @error="handleThumbImageLoad(rec.imageId)"
                     />
+                    <span
+                      v-if="getHighlightImageIds(rec).length > 1"
+                      class="hl-multi-photo-badge"
+                      :title="`사진 ${getHighlightImageIds(rec).length}장`"
+                    >
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="7" y="7" width="13" height="13" rx="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                      </svg>
+                      <span>{{ getHighlightImageIds(rec).length }}</span>
+                    </span>
                   </div>
                   <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun', 'is-nanikiru-banner': rec.category === 'nanikiru' }">
                     <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : rec.category === 'nanikiru' ? '何切る' : '和了' }}</span>
@@ -8325,6 +8539,17 @@ const openGamePopupFromLightbox = async (
                 @load="handleThumbImageLoad(rec.imageId, $event)"
                 @error="handleThumbImageLoad(rec.imageId)"
               />
+              <span
+                v-if="getHighlightImageIds(rec).length > 1"
+                class="hl-multi-photo-badge"
+                :title="`사진 ${getHighlightImageIds(rec).length}장`"
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="7" y="7" width="13" height="13" rx="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span>{{ getHighlightImageIds(rec).length }}</span>
+              </span>
             </div>
             <div v-else class="hl-no-img-banner" :class="{ 'is-fun-banner': rec.category === 'fun', 'is-nanikiru-banner': rec.category === 'nanikiru' }">
               <span class="hl-yakuman-kanji">{{ rec.category === 'yakuman' ? '役満' : rec.category === 'nanikiru' ? '何切る' : '和了' }}</span>
@@ -8852,7 +9077,7 @@ const openGamePopupFromLightbox = async (
                           @click.stop="onHoverSessionMetric($event, 'cheatRate', '촌보율', currentSessionPlayerStats.cheatRate, false, '%')"
                         >
                           <span class="stat_label">촌보율</span>
-                          <span class="stat_value text_negative">{{ formatPct5(currentSessionPlayerStats.cheatRate) }}</span>
+                          <span class="stat_value text_negative">{{ formatPenaltyRate(currentSessionPlayerStats.cheatRate, currentSessionPlayerStats.cheatCount, currentSessionPlayerStats.totalRounds) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -8861,7 +9086,7 @@ const openGamePopupFromLightbox = async (
                           @click.stop="onHoverSessionMetric($event, 'beolbuRate', '벌부율', currentSessionPlayerStats.beolbuRate, false, '%')"
                         >
                           <span class="stat_label">벌부율</span>
-                          <span class="stat_value text_negative">{{ formatPct5(currentSessionPlayerStats.beolbuRate) }}</span>
+                          <span class="stat_value text_negative">{{ formatPenaltyRate(currentSessionPlayerStats.beolbuRate, currentSessionPlayerStats.beolbuCount, currentSessionPlayerStats.totalRounds) }}</span>
                         </div>
                         <div 
                           class="stat_row hoverable" 
@@ -9748,7 +9973,7 @@ const openGamePopupFromLightbox = async (
                 @click.stop="onHoverMetric($event, 'cheatRate', '촌보율', displayPlayerStats.cheatRate, false, '%')"
               >
                 <span class="stat_label">촌보율</span>
-                <span class="stat_value text_negative">{{ formatPct5(displayPlayerStats.cheatRate) }}</span>
+                <span class="stat_value text_negative">{{ formatPenaltyRate(displayPlayerStats.cheatRate, displayPlayerStats.cheatCount, displayPlayerStats.totalRounds) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -9757,7 +9982,7 @@ const openGamePopupFromLightbox = async (
                 @click.stop="onHoverMetric($event, 'beolbuRate', '벌부율', displayPlayerStats.beolbuRate, false, '%')"
               >
                 <span class="stat_label">벌부율</span>
-                <span class="stat_value text_negative">{{ formatPct5(displayPlayerStats.beolbuRate) }}</span>
+                <span class="stat_value text_negative">{{ formatPenaltyRate(displayPlayerStats.beolbuRate, displayPlayerStats.beolbuCount, displayPlayerStats.totalRounds) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
@@ -10871,37 +11096,73 @@ const openGamePopupFromLightbox = async (
               </div>
             </div>
 
-            <!-- 사진 업로드 -->
+            <!-- 사진 업로드 (다중 선택 및 순서 변경 지원) -->
             <div class="form-group">
               <label class="form-label">
-                {{ editingHighlightRecord ? (isGalleryAdmin ? '사진 교체 / 첨부' : '등록된 사진') : '사진 첨부' }}
+                {{ editingHighlightRecord ? (isGalleryAdmin ? '사진 추가 / 편집' : '등록된 사진') : '사진 첨부' }}
                 {{ !editingHighlightRecord && (uploadForm.category === 'session' || uploadForm.category === 'nanikiru') ? '*' : (!editingHighlightRecord ? '(선택)' : '') }}
+                <span class="sub-hint">({{ uploadImageItems.length }}/{{ MAX_HIGHLIGHT_IMAGES_PER_POST }}장 · 여러 장 선택 가능)</span>
               </label>
               <template v-if="!editingHighlightRecord || isGalleryAdmin">
                 <input 
                   ref="highlightFileInputRef"
                   type="file" 
                   accept="image/*" 
+                  multiple
                   class="form-file-input"
+                  :disabled="uploadImageItems.length >= MAX_HIGHLIGHT_IMAGES_PER_POST"
                   @change="handleHighlightFileSelect"
                 />
-                <div v-if="selectedUploadPreviewUrl" class="upload-preview-box">
-                  <img :src="selectedUploadPreviewUrl" alt="미리보기" class="upload-preview-img" />
-                  <button 
-                    type="button" 
-                    class="btn-remove-preview" 
-                    @click="handleRemoveUploadPreview"
+                <div v-if="uploadImageItems.length > 0" class="upload-multi-preview-grid">
+                  <div
+                    v-for="(item, idx) in uploadImageItems"
+                    :key="item.key"
+                    class="upload-multi-preview-item"
                   >
-                    사진 제거
-                  </button>
+                    <img :src="item.previewUrl" :alt="`미리보기 ${idx + 1}`" class="upload-multi-preview-img" />
+                    <span class="upload-multi-order-badge" :class="{ 'is-cover': idx === 0 }">
+                      {{ idx === 0 ? '대표' : idx + 1 }}
+                    </span>
+                    <button
+                      type="button"
+                      class="upload-multi-remove-btn"
+                      title="사진 제거"
+                      @click="removeUploadImageItem(idx)"
+                    >✕</button>
+                    <div v-if="uploadImageItems.length > 1" class="upload-multi-move-bar">
+                      <button
+                        type="button"
+                        class="upload-multi-move-btn"
+                        :disabled="idx === 0"
+                        title="앞으로 이동"
+                        @click="moveUploadImageItem(idx, -1)"
+                      >◀</button>
+                      <button
+                        type="button"
+                        class="upload-multi-move-btn"
+                        :disabled="idx === uploadImageItems.length - 1"
+                        title="뒤로 이동"
+                        @click="moveUploadImageItem(idx, 1)"
+                      >▶</button>
+                    </div>
+                  </div>
                 </div>
               </template>
               <template v-else>
                 <div class="photo-edit-locked-notice">
                   등록된 사진의 변경 및 삭제는 관리자만 가능합니다.
                 </div>
-                <div v-if="selectedUploadPreviewUrl" class="upload-preview-box">
-                  <img :src="selectedUploadPreviewUrl" alt="미리보기" class="upload-preview-img" />
+                <div v-if="uploadImageItems.length > 0" class="upload-multi-preview-grid">
+                  <div
+                    v-for="(item, idx) in uploadImageItems"
+                    :key="item.key"
+                    class="upload-multi-preview-item"
+                  >
+                    <img :src="item.previewUrl" :alt="`미리보기 ${idx + 1}`" class="upload-multi-preview-img" />
+                    <span class="upload-multi-order-badge" :class="{ 'is-cover': idx === 0 }">
+                      {{ idx === 0 ? '대표' : idx + 1 }}
+                    </span>
+                  </div>
                 </div>
               </template>
             </div>
@@ -11021,14 +11282,17 @@ const openGamePopupFromLightbox = async (
             @scroll.passive="updateLightboxFloatingBtnState"
           >
             <div
-              v-if="lightboxHighlight.hasImage && lightboxHighlight.imageId"
+              v-if="lightboxHighlight.hasImage && activeLightboxImageId"
               class="lightbox-img-container"
               :class="{ 'is-loaded': isLightboxImageLoaded }"
               title="클릭하여 고화질 원본 크게 보기"
-              @click.stop="openFullImageZoom"
+              @click.stop="handleLightboxImgClick"
+              @touchstart.passive="handleLightboxTouchStart"
+              @touchend.passive="handleLightboxTouchEnd"
             >
               <img
-                :src="getDisplayHighlightImageSrc(lightboxHighlight.imageId)"
+                :key="`lb-img-${activeLightboxImageId}`"
+                :src="getDisplayHighlightImageSrc(activeLightboxImageId)"
                 class="lightbox-full-img"
                 :class="{ 'is-loaded': isLightboxImageLoaded }"
                 alt="사진"
@@ -11038,6 +11302,42 @@ const openGamePopupFromLightbox = async (
                 @load="handleLightboxImageLoad"
                 @error="handleLightboxImageLoad"
               />
+              <template v-if="lightboxImageIds.length > 1">
+                <span class="lb-carousel-counter" @click.stop>
+                  {{ lightboxImageIndex + 1 }} / {{ lightboxImageIds.length }}
+                </span>
+                <button
+                  type="button"
+                  class="lb-carousel-nav prev"
+                  title="이전 사진"
+                  @click.stop="prevLightboxImage"
+                >‹</button>
+                <button
+                  type="button"
+                  class="lb-carousel-nav next"
+                  title="다음 사진"
+                  @click.stop="nextLightboxImage"
+                >›</button>
+              </template>
+            </div>
+
+            <!-- 다중 사진 썸네일 필름스트립 -->
+            <div
+              v-if="lightboxImageIds.length > 1"
+              class="lb-thumb-strip"
+              @click.stop
+            >
+              <button
+                v-for="(imgId, idx) in lightboxImageIds"
+                :key="`lb-strip-${imgId}`"
+                type="button"
+                class="lb-thumb-strip-item"
+                :class="{ active: idx === lightboxImageIndex }"
+                :title="`${idx + 1}번 사진 보기`"
+                @click.stop="setLightboxImageIndex(idx)"
+              >
+                <img :src="getHighlightThumbnailUrl(imgId)" :alt="`사진 ${idx + 1}`" loading="lazy" decoding="async" />
+              </button>
             </div>
 
             <div class="lightbox-info-footer">
@@ -12260,11 +12560,14 @@ const openGamePopupFromLightbox = async (
     <!-- ============================================== -->
     <Transition name="modal-fade">
       <div
-        v-if="isFullImageZoomOpen && lightboxHighlight?.hasImage && lightboxHighlight?.imageId"
+        v-if="isFullImageZoomOpen && lightboxHighlight?.hasImage && activeLightboxImageId"
         class="modal-overlay full-image-zoom-overlay"
         @click="closeFullImageZoom"
       >
         <div class="full-image-zoom-topbar" @click.stop>
+          <span v-if="lightboxImageIds.length > 1" class="zoom-carousel-counter">
+            {{ lightboxImageIndex + 1 }} / {{ lightboxImageIds.length }}
+          </span>
           <button
             type="button"
             class="btn-zoom-scale-toggle"
@@ -12309,6 +12612,8 @@ const openGamePopupFromLightbox = async (
         <div
           class="full-image-zoom-stage"
           :class="`fit-${fullImageFitMode}`"
+          @touchstart.passive="handleLightboxTouchStart"
+          @touchend.passive="handleLightboxTouchEnd"
         >
           <div v-if="!isZoomHighResLoaded" class="zoom-highres-loading-pill" @click.stop>
             <span class="gdm-spinner"></span>
@@ -12316,21 +12621,37 @@ const openGamePopupFromLightbox = async (
           </div>
           <img
             v-if="!isZoomHighResLoaded"
-            :src="getHighlightThumbnailUrl(lightboxHighlight.imageId)"
+            :key="`zoom-thumb-${activeLightboxImageId}`"
+            :src="getHighlightThumbnailUrl(activeLightboxImageId)"
             alt="미리보기"
             class="full-image-zoom-img is-thumb-preview"
             :class="`fit-${fullImageFitMode}`"
             @click.stop="cycleFullImageFitMode"
           />
           <img
-            :src="getHighlightImageUrl(lightboxHighlight.imageId)"
+            :key="`zoom-orig-${activeLightboxImageId}`"
+            :src="getHighlightImageUrl(activeLightboxImageId)"
             alt="원본 크게 보기"
             class="full-image-zoom-img"
             :class="[`fit-${fullImageFitMode}`, { 'is-highres-pending': !isZoomHighResLoaded }]"
-            @load="handleZoomHighResLoad(lightboxHighlight.imageId)"
+            @load="handleZoomHighResLoad(activeLightboxImageId)"
             @error="isZoomHighResLoaded = true"
             @click.stop="cycleFullImageFitMode"
           />
+          <template v-if="lightboxImageIds.length > 1">
+            <button
+              type="button"
+              class="zoom-carousel-nav prev"
+              title="이전 사진"
+              @click.stop="prevLightboxImage"
+            >‹</button>
+            <button
+              type="button"
+              class="zoom-carousel-nav next"
+              title="다음 사진"
+              @click.stop="nextLightboxImage"
+            >›</button>
+          </template>
         </div>
       </div>
     </Transition>
@@ -21255,6 +21576,275 @@ html.dark .ga-alias-chip-name {
 }
 .ga-alias-chip-del:hover:not(:disabled) {
   color: #ef4444;
+}
+
+/* ========================================== */
+/* 갤러리 다중 사진(멀티 포토) 스타일            */
+/* ========================================== */
+.pinterest-img-wrap {
+  position: relative;
+}
+.hl-multi-photo-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.74);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.upload-multi-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.upload-multi-preview-item {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-color, #e2e8f0);
+  background: var(--bg-card, #f8fafc);
+}
+html.dark .upload-multi-preview-item {
+  border-color: #334155;
+  background: #18181b;
+}
+.upload-multi-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.upload-multi-order-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.upload-multi-order-badge.is-cover {
+  background: #2563eb;
+}
+.upload-multi-remove-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(220, 38, 38, 0.88);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.upload-multi-remove-btn:hover {
+  background: #dc2626;
+  transform: scale(1.06);
+}
+.upload-multi-move-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  background: linear-gradient(transparent, rgba(15, 23, 42, 0.72));
+  padding: 6px 4px 3px;
+}
+.upload-multi-move-btn {
+  width: 24px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  font-size: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.upload-multi-move-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.35);
+}
+.upload-multi-move-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.lightbox-img-container {
+  position: relative;
+}
+.lb-carousel-counter {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 4;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  backdrop-filter: blur(4px);
+}
+.lb-carousel-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(15, 23, 42, 0.62);
+  color: #ffffff;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0 2px;
+  backdrop-filter: blur(4px);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.lb-carousel-nav:hover {
+  background: rgba(15, 23, 42, 0.86);
+  transform: translateY(-50%) scale(1.06);
+}
+.lb-carousel-nav.prev {
+  left: 10px;
+}
+.lb-carousel-nav.next {
+  right: 10px;
+}
+
+.lb-thumb-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.lb-thumb-strip-item {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.lb-thumb-strip-item:hover {
+  opacity: 0.9;
+}
+.lb-thumb-strip-item.active {
+  opacity: 1;
+  border-color: #3b82f6;
+  transform: scale(1.04);
+}
+.lb-thumb-strip-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.zoom-carousel-counter {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.zoom-carousel-nav {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(15, 23, 42, 0.68);
+  color: #ffffff;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0 2px;
+  backdrop-filter: blur(4px);
+}
+.zoom-carousel-nav:hover {
+  background: rgba(15, 23, 42, 0.9);
+}
+.zoom-carousel-nav.prev {
+  left: 14px;
+}
+.zoom-carousel-nav.next {
+  right: 14px;
+}
+
+@media (max-width: 600px) {
+  .upload-multi-preview-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .lb-carousel-nav {
+    width: 32px;
+    height: 32px;
+    font-size: 20px;
+  }
+  .lb-thumb-strip {
+    justify-content: flex-start;
+    padding: 6px 8px 2px;
+  }
+  .lb-thumb-strip-item {
+    width: 42px;
+    height: 42px;
+  }
+  .zoom-carousel-nav {
+    width: 36px;
+    height: 36px;
+    font-size: 22px;
+  }
 }
 </style>
 

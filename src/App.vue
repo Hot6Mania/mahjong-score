@@ -2683,13 +2683,17 @@ const saveGameToSheet = async (silent: boolean = false) => {
         }
       );
 
+      // 결과창 레이팅 변화 스냅샷을 ratingsMap 갱신 직전에 먼저 고정 (동기화 중 이중 계산/레이팅 튐 방지)
+      lastGameRatingDeltas.value = matchDeltas;
+      localStorage.setItem("last_game_rating_deltas", JSON.stringify(matchDeltas));
+
+      // 로컬 저장 완료 플래그 선반영 (비동기 시트 업로드 중 중복 계산/재클릭 차단)
+      isGameSaved.value = true;
+      localStorage.setItem("is_game_saved", "true");
+
       // ratingsMap에 병합 및 로컬 스토리지 보존
       Object.assign(ratingsMap.value, updatedRatings);
       localStorage.setItem("mahjong_ratings", JSON.stringify(ratingsMap.value));
-
-      // 결과창 레이팅 변화 스냅샷 보존 (저장 후 이중 계산 방지)
-      lastGameRatingDeltas.value = matchDeltas;
-      localStorage.setItem("last_game_rating_deltas", JSON.stringify(matchDeltas));
 
       // 플레이어 화면 뱃지 즉시 갱신
       players.forEach(p => {
@@ -2724,7 +2728,7 @@ const saveGameToSheet = async (silent: boolean = false) => {
       console.warn("대국 결과 레이팅 계산 실패:", rErr);
     }
 
-    // 기록 성공 플래그 셋팅 및 복구 보장
+    // 기록 성공 플래그 보장
     isGameSaved.value = true;
     localStorage.setItem("is_game_saved", "true");
 

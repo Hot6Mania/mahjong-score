@@ -325,6 +325,7 @@
           </div>
           <ul class="penalty-items">
             <li>오발성 1회 벌부 (치, 퐁, 깡, 리치)</li>
+            <li>첫 타패 후 패산 또는 타가 손패를 3장 이상 공개 시</li>
           </ul>
         </div>
       </div>

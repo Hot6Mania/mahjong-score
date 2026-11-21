@@ -705,8 +705,14 @@ const stats = computed(() => {
     const cleanLoseRiichiRate = parseCleanScore(item.loseRiichiRate);
     const loseRiichiRate = cleanLoseRiichiRate > 0 ? (cleanLoseRiichiRate * 100).toFixed(2) + '%' : '-';
 
-    const cheatRate = item.rounds > 0 ? (parseCleanScore(item.cheatRate) * 100).toFixed(4) + '%' : '-';
-    const beolbuRate = item.rounds > 0 ? (parseCleanScore(item.beolbuRate) * 100).toFixed(4) + '%' : '-';
+    const cheatCountVal = typeof item.cheatCount === 'number'
+      ? item.cheatCount
+      : Math.round(parseCleanScore(item.cheatRate) * (item.rounds || 0));
+    const beolbuCountVal = typeof item.beolbuCount === 'number'
+      ? item.beolbuCount
+      : Math.round(parseCleanScore(item.beolbuRate) * (item.rounds || 0));
+    const cheatRate = item.rounds > 0 ? `${(parseCleanScore(item.cheatRate) * 100).toFixed(4)}% (${cheatCountVal}회)` : '-';
+    const beolbuRate = item.rounds > 0 ? `${(parseCleanScore(item.beolbuRate) * 100).toFixed(4)}% (${beolbuCountVal}회)` : '-';
 
     return {
       totalGames: item.games,
@@ -1104,8 +1110,8 @@ const stats = computed(() => {
   const oyaKaburiRate = oyaKaburiSufferedCount > 0 ? formatRate(manganOyaKaburiCount, tsumoSufferedCount) : '-'
   const oyaKaburiAvg = formatVal(manganOyaKaburiScoreSum, manganOyaKaburiCount)
   const loseRiichiRate = loseWithRiichiCount > 0 ? formatRate(loseWithRiichiCount, loseCount) : '-'
-  const cheatRate = totalRounds > 0 ? ((cheatCount / totalRounds) * 100).toFixed(4) + '%' : '-'
-  const beolbuRate = totalRounds > 0 ? ((beolbuCount / totalRounds) * 100).toFixed(4) + '%' : '-'
+  const cheatRate = totalRounds > 0 ? `${((cheatCount / totalRounds) * 100).toFixed(4)}% (${cheatCount}회)` : '-'
+  const beolbuRate = totalRounds > 0 ? `${((beolbuCount / totalRounds) * 100).toFixed(4)}% (${beolbuCount}회)` : '-'
 
   // 화료 효율, 방총 손실, 알짜 화료 효율
   const winRateNum = totalRounds > 0 ? winCount / totalRounds : 0

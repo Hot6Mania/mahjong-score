@@ -252,7 +252,7 @@ const scoreSheetInfo = computed(() => {
   });
 })
 
-/**대국 결과창 레이팅 변화 정보 계산 (저장 전: 실시간 예측 / 저장 후: 스냅샷 고정으로 이중 계산 방지)*/
+/**대국 결과창 레이팅 변화 정보 계산 (저장/동기화 시 스냅샷 우선 고정으로 이중 계산 및 레이팅 튐 방지)*/
 const resultRatingInfo = computed(() => {
   const map = props.ratingsMap || {};
   const isDefaultOnly = props.players.every(p => !p.name || DEFAULT_PLACEHOLDER_NAMES.has(p.name.trim()));
@@ -260,18 +260,20 @@ const resultRatingInfo = computed(() => {
     return props.players.map(() => null);
   }
 
+  // 저장/동기화 시점에 확보된 변동 스냅샷이 현재 대국 플레이어와 일치하면 최우선 사용
+  if (props.lastGameRatingDeltas && props.players.some(p => Boolean(props.lastGameRatingDeltas?.[p.name]))) {
+    return props.players.map(p => {
+      const d = props.lastGameRatingDeltas?.[p.name];
+      if (!d) return null;
+      return {
+        oldOrdinal: d.oldOrdinal,
+        newOrdinal: d.newOrdinal,
+        delta: d.delta
+      };
+    });
+  }
+
   if (props.isGameSaved) {
-    if (props.lastGameRatingDeltas) {
-      return props.players.map(p => {
-        const d = props.lastGameRatingDeltas?.[p.name];
-        if (!d) return null;
-        return {
-          oldOrdinal: d.oldOrdinal,
-          newOrdinal: d.newOrdinal,
-          delta: d.delta
-        };
-      });
-    }
     return props.players.map(p => {
       const saved = map[p.name];
       if (!saved || saved.games <= 0) return null;
@@ -1188,14 +1190,16 @@ const getSignColor = (sign: number, x: boolean) => {
 
 /* 게임 결과창(표) */
 .result_sheet_modal {
-  padding: 10px 12px;
-  border-radius: 10px;
+  width: min(92vw, 780px);
+  padding: 16px 18px;
+  border-radius: 12px;
 }
 .result_sheet_wrapper {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 10px;
+  gap: 14px;
+  width: 100%;
   max-width: 100%;
 }
 .result_sheet_table_wrap {
@@ -1209,13 +1213,13 @@ const getSignColor = (sign: number, x: boolean) => {
   width: 100%;
   border-collapse: collapse;
   text-align: center;
-  font-size: 16px;
+  font-size: 18px;
   white-space: nowrap;
 }
 .resultsheet_table th {
   font-weight: 700;
-  font-size: 13px;
-  padding: 7px 8px;
+  font-size: 14px;
+  padding: 9px 10px;
   background-color: var(--bg-card);
   color: var(--text-dimmed);
   border-top: 1px solid var(--border-color);
@@ -1223,7 +1227,7 @@ const getSignColor = (sign: number, x: boolean) => {
   transition: border-color 0.3s ease, background-color 0.3s ease;
 }
 .resultsheet_table td {
-  padding: 8px 8px;
+  padding: 11px 8px;
   border-bottom: 1px solid var(--border-color);
   vertical-align: middle;
   transition: border-color 0.3s ease;
@@ -1249,7 +1253,7 @@ const getSignColor = (sign: number, x: boolean) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 4px;
   white-space: nowrap;
 }
 .rs-score-val {
@@ -1276,7 +1280,7 @@ const getSignColor = (sign: number, x: boolean) => {
 }
 .rs-rating-delta {
   font-weight: 700;
-  font-size: 0.9em;
+  font-size: 0.92em;
   color: var(--text-dimmed);
 }
 .rs-rating-empty {
@@ -1285,23 +1289,25 @@ const getSignColor = (sign: number, x: boolean) => {
 .result_sheet_actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 10px;
 }
 .result_sheet_actions.is-google .rs-btn-sync {
   grid-column: 1 / -1;
 }
 .rs-btn {
-  padding: 10px 10px;
-  font-size: 15px;
+  padding: 13px 14px;
+  min-height: 46px;
+  font-size: 16px;
   font-weight: bold;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   transition: opacity 0.2s, background-color 0.2s;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 .rs-btn:disabled {
   cursor: default;
@@ -1664,97 +1670,123 @@ const getSignColor = (sign: number, x: boolean) => {
     max-height: 94vw;
     max-height: 94dvw;
   }
+  .result_sheet_modal {
+    width: min(92vh, 780px);
+    width: min(92dvh, 780px);
+  }
   .container_option {
     max-height: 55vw;
   }
 }
 
-/* 모바일 / iPhone SE 대응 결과창 콤팩트 레이아웃 */
+/* 모바일 / iPhone SE 대응 결과창 — 화면 비율을 넉넉하게 채우도록 최적화 */
 @media (max-width: 768px), (max-height: 500px) {
   .result_sheet_modal {
-    padding: 7px 8px;
+    width: 92vw;
+    width: 92dvw;
+    padding: 12px 12px;
   }
   .result_sheet_wrapper {
-    gap: 7px;
+    gap: 10px;
   }
   .resultsheet_table {
-    font-size: 12.5px;
+    font-size: 14.5px;
   }
   .resultsheet_table th {
-    padding: 4px 4px;
-    font-size: 11px;
+    padding: 7px 5px;
+    font-size: 12.5px;
   }
   .resultsheet_table td {
-    padding: 5px 4px;
+    padding: 8px 5px;
   }
   .rs-score-wrap,
   .rs-rating-wrap {
-    gap: 2px;
+    gap: 3px;
   }
   .rs-rating-nums {
-    gap: 1px;
+    gap: 1.5px;
   }
   .rs-score-uma,
   .rs-rating-delta {
-    font-size: 11px;
+    font-size: 12.5px;
   }
   .rs-btn {
-    padding: 8px 6px;
-    font-size: 13px;
+    padding: 11px 10px;
+    min-height: 44px;
+    font-size: 14.5px;
   }
 }
 
-/* 세로 공간이 좁은 화면(iPhone SE 가로/세로 회전 포함)에서는 버튼을 1줄로 배치 */
+/* 세로모드 모바일에서는 회전된 가로 폭(92dvh)으로 상자 확장 */
+@media (orientation: portrait) and (max-width: 768px) {
+  .result_sheet_modal {
+    width: 92vh;
+    width: 92dvh;
+  }
+}
+
+/* 세로 공간이 좁은 화면(iPhone SE 가로/세로 회전 포함)에서는 버튼을 1줄로 크고 넓게 배치 */
 @media (max-height: 480px), (orientation: portrait) and (max-width: 480px) {
   .result_sheet_actions.is-google {
     grid-template-columns: 1.35fr 1fr 1fr;
-    gap: 6px;
+    gap: 8px;
   }
   .result_sheet_actions.is-google .rs-btn-sync {
     grid-column: auto;
   }
   .result_sheet_actions.is-local {
     grid-template-columns: 1fr 1fr;
-    gap: 6px;
+    gap: 8px;
   }
   .rs-btn {
-    padding: 7px 6px;
-    font-size: 12.5px;
+    padding: 11px 8px;
+    min-height: 44px;
+    font-size: 14px;
   }
 }
 
-/* 초협소 화면(iPhone SE 1세대 / 사파리 툴바 활성 세로모드 등) 2줄 스택 최적화 */
-@media (max-width: 520px) and (orientation: landscape), (max-height: 580px) and (orientation: portrait) {
+/* 초협소 화면(iPhone SE 1세대 460px 등 진짜 좁을 때만) 2줄 스택 전환 */
+@media (max-width: 470px) and (orientation: landscape), (max-height: 490px) and (orientation: portrait) {
   .result_sheet_modal {
-    padding: 6px 5px;
+    width: 94vw;
+    width: 94dvw;
+    padding: 9px 8px;
   }
   .result_sheet_wrapper {
-    gap: 6px;
+    gap: 8px;
   }
   .resultsheet_table {
-    font-size: 11px;
+    font-size: 12px;
   }
   .resultsheet_table th {
-    padding: 4px 2px;
-    font-size: 10px;
+    padding: 5px 3px;
+    font-size: 11px;
     letter-spacing: -0.3px;
   }
   .resultsheet_table td {
-    padding: 4px 2px;
+    padding: 5px 3px;
   }
   .rs-score-wrap,
   .rs-rating-wrap {
     flex-direction: column;
     gap: 0;
-    line-height: 1.15;
+    line-height: 1.18;
   }
   .rs-score-uma,
   .rs-rating-delta {
-    font-size: 9.5px;
+    font-size: 10.5px;
   }
   .rs-btn {
-    padding: 6px 4px;
-    font-size: 11.5px;
+    padding: 9px 6px;
+    min-height: 40px;
+    font-size: 12.5px;
+  }
+}
+
+@media (max-height: 490px) and (orientation: portrait) {
+  .result_sheet_modal {
+    width: 94vh;
+    width: 94dvh;
   }
 }
 </style>

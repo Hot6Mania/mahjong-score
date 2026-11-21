@@ -45,6 +45,19 @@ export interface HighlightComment {
   updatedAt?: number;
 }
 
+export const MAX_HIGHLIGHT_IMAGES_PER_POST = 10;
+
+export interface HighlightImageItem {
+  imageId: string;
+  imageSize?: number;
+  hasThumb?: boolean;
+  thumbSize?: number;
+}
+
+export type HighlightImageOrderEntry =
+  | { type: 'existing'; imageId: string }
+  | { type: 'new'; newIndex: number };
+
 export interface HighlightRecord {
   id: string;
   category: HighlightCategory;
@@ -60,12 +73,46 @@ export interface HighlightRecord {
   uploaderName?: string;
   hasImage: boolean;
   imageId?: string;
+  imageIds?: string[];
+  images?: HighlightImageItem[];
   imageSize?: number;
   hasThumb?: boolean;
   thumbSize?: number;
   comments?: HighlightComment[];
   kmlYakumanId?: number;
   createdAt: number;
+}
+
+/**
+ * 게시글에 첨부된 전체 이미지 ID 목록 반환 (단일/다중 사진 100% 호환)
+ */
+export function getHighlightImageIds(rec?: HighlightRecord | null): string[] {
+  if (!rec) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  if (Array.isArray(rec.imageIds) && rec.imageIds.length > 0) {
+    for (const id of rec.imageIds) {
+      const clean = String(id || '').trim();
+      if (clean && !seen.has(clean)) {
+        seen.add(clean);
+        result.push(clean);
+      }
+    }
+  }
+  if (result.length === 0 && Array.isArray(rec.images) && rec.images.length > 0) {
+    for (const item of rec.images) {
+      const clean = String(item?.imageId || '').trim();
+      if (clean && !seen.has(clean)) {
+        seen.add(clean);
+        result.push(clean);
+      }
+    }
+  }
+  if (result.length === 0 && rec.imageId) {
+    const clean = String(rec.imageId).trim();
+    if (clean) result.push(clean);
+  }
+  return result;
 }
 
 export type MemberAliasesMap = Record<string, string[]>;
@@ -211,23 +258,34 @@ export async function probeActualHighlightImageSizes(records: HighlightRecord[])
   const sizeCache = loadLocalImageSizeCache();
   let updated = false;
 
-  const needFetch: HighlightRecord[] = [];
+  const needFetch: { rec: HighlightRecord; imageId: string; isFirst: boolean }[] = [];
   for (const r of records) {
-    if (!r || !r.hasImage || !r.imageId) continue;
-    if (typeof r.imageSize === 'number' && r.imageSize > 0) {
-      if (sizeCache[r.imageId] !== r.imageSize) {
-        sizeCache[r.imageId] = r.imageSize;
-        updated = true;
+    if (!r || !r.hasImage) continue;
+    const ids = getHighlightImageIds(r);
+    ids.forEach((imgId, idx) => {
+      const imgMeta = r.images?.find((it) => it.imageId === imgId);
+      const existingSize =
+        typeof imgMeta?.imageSize === 'number' && imgMeta.imageSize > 0
+          ? imgMeta.imageSize
+          : idx === 0 && typeof r.imageSize === 'number' && r.imageSize > 0
+            ? r.imageSize
+            : 0;
+      if (existingSize > 0) {
+        if (sizeCache[imgId] !== existingSize) {
+          sizeCache[imgId] = existingSize;
+          updated = true;
+        }
+        return;
       }
-      continue;
-    }
-    const cachedVal = sizeCache[r.imageId];
-    if (typeof cachedVal === 'number' && cachedVal > 0) {
-      r.imageSize = cachedVal;
-      updated = true;
-    } else if (!probingImageIds.has(r.imageId)) {
-      needFetch.push(r);
-    }
+      const cachedVal = sizeCache[imgId];
+      if (typeof cachedVal === 'number' && cachedVal > 0) {
+        if (imgMeta) imgMeta.imageSize = cachedVal;
+        if (idx === 0) r.imageSize = cachedVal;
+        updated = true;
+      } else if (!probingImageIds.has(imgId)) {
+        needFetch.push({ rec: r, imageId: imgId, isFirst: idx === 0 });
+      }
+    });
   }
 
   if (updated) {
@@ -239,23 +297,24 @@ export async function probeActualHighlightImageSizes(records: HighlightRecord[])
 
   if (needFetch.length === 0) return updated;
 
-  for (const r of needFetch) {
-    if (r.imageId) probingImageIds.add(r.imageId);
+  for (const item of needFetch) {
+    probingImageIds.add(item.imageId);
   }
 
   // 초기 화면 및 라이트박스 이미지 로딩을 전혀 방해하지 않도록 지연 후 순차 HEAD 조회만 수행
   await new Promise((resolve) => setTimeout(resolve, 2500));
 
-  for (const r of needFetch) {
-    const imgId = r.imageId;
-    if (!imgId) continue;
+  for (const item of needFetch) {
+    const imgId = item.imageId;
     try {
       const imgUrl = getHighlightImageUrl(imgId);
       const res = await fetch(imgUrl, { method: 'HEAD', cache: 'force-cache' });
       if (res.ok) {
         const clHeader = Number(res.headers.get('content-length') || 0);
         if (clHeader > 0) {
-          r.imageSize = clHeader;
+          const imgMeta = item.rec.images?.find((it) => it.imageId === imgId);
+          if (imgMeta) imgMeta.imageSize = clHeader;
+          if (item.isFirst) item.rec.imageSize = clHeader;
           sizeCache[imgId] = clHeader;
           updated = true;
         }
@@ -304,24 +363,32 @@ function estimateFallbackOtherKvBytes(indexBytes: number): number {
 export function getHighlightStorageInfo(records?: HighlightRecord[]): HighlightStorageInfo {
   const list = records ?? cachedHighlights ?? [];
   const sizeCache = loadLocalImageSizeCache();
-  const imageRecords = list.filter((r) => r && r.hasImage && r.imageId);
-  const imageCount = imageRecords.length;
 
+  let imageCount = 0;
   let localImageBytes = 0;
   let unprobedCount = 0;
-  for (const r of imageRecords) {
-    const knownSize =
-      typeof r.imageSize === 'number' && r.imageSize > 0
-        ? r.imageSize
-        : r.imageId && typeof sizeCache[r.imageId] === 'number' && sizeCache[r.imageId] > 0
-          ? sizeCache[r.imageId]
-          : 0;
-    if (knownSize > 0) {
-      r.imageSize = knownSize;
-      localImageBytes += knownSize;
-    } else {
-      unprobedCount++;
-    }
+  for (const r of list) {
+    if (!r || !r.hasImage) continue;
+    const ids = getHighlightImageIds(r);
+    ids.forEach((imgId, idx) => {
+      imageCount++;
+      const imgMeta = r.images?.find((it) => it.imageId === imgId);
+      const knownSize =
+        typeof imgMeta?.imageSize === 'number' && imgMeta.imageSize > 0
+          ? imgMeta.imageSize
+          : idx === 0 && typeof r.imageSize === 'number' && r.imageSize > 0
+            ? r.imageSize
+            : typeof sizeCache[imgId] === 'number' && sizeCache[imgId] > 0
+              ? sizeCache[imgId]
+              : 0;
+      if (knownSize > 0) {
+        if (imgMeta) imgMeta.imageSize = knownSize;
+        if (idx === 0) r.imageSize = knownSize;
+        localImageBytes += knownSize;
+      } else {
+        unprobedCount++;
+      }
+    });
   }
 
   if (cachedStorageInfo && cachedStorageInfo.maxBytes > 0) {
@@ -522,21 +589,29 @@ export async function generateHighlightThumbnailWebP(file: File): Promise<File |
  */
 export async function backfillMissingHighlightThumbnails(records: HighlightRecord[]): Promise<void> {
   if (typeof window === 'undefined' || !Array.isArray(records)) return;
-  const targets = records.filter(
-    (r) => r && r.hasImage && r.imageId && !r.hasThumb && !backfillingThumbIds.has(r.imageId)
-  );
+  const targets: { rec: HighlightRecord; imageId: string; isFirst: boolean }[] = [];
+  for (const r of records) {
+    if (!r || !r.hasImage) continue;
+    const ids = getHighlightImageIds(r);
+    ids.forEach((imageId, idx) => {
+      const imgMeta = r.images?.find((it) => it.imageId === imageId);
+      const alreadyHasThumb = imgMeta ? Boolean(imgMeta.hasThumb) : (idx === 0 && Boolean(r.hasThumb));
+      if (!alreadyHasThumb && !backfillingThumbIds.has(imageId)) {
+        targets.push({ rec: r, imageId, isFirst: idx === 0 });
+      }
+    });
+  }
   if (targets.length === 0) return;
 
-  for (const r of targets) {
-    if (r.imageId) backfillingThumbIds.add(r.imageId);
+  for (const t of targets) {
+    backfillingThumbIds.add(t.imageId);
   }
 
   // 초기 화면 렌더링에 영향을 주지 않도록 잠시 대기 후 순차 처리
   await new Promise((resolve) => setTimeout(resolve, 1800));
 
-  for (const rec of targets) {
-    const imageId = rec.imageId;
-    if (!imageId) continue;
+  for (const target of targets) {
+    const { rec, imageId, isFirst } = target;
     try {
       const imgUrl = getHighlightImageUrl(imageId);
       const thumbBlob = await new Promise<Blob | null>((resolve) => {
@@ -587,8 +662,15 @@ export async function backfillMissingHighlightThumbnails(records: HighlightRecor
           body: formData,
         });
         if (res.ok) {
-          rec.hasThumb = true;
-          rec.thumbSize = thumbBlob.size;
+          const imgMeta = rec.images?.find((it) => it.imageId === imageId);
+          if (imgMeta) {
+            imgMeta.hasThumb = true;
+            imgMeta.thumbSize = thumbBlob.size;
+          }
+          if (isFirst) {
+            rec.hasThumb = true;
+            rec.thumbSize = thumbBlob.size;
+          }
         }
       }
     } catch {
@@ -845,6 +927,7 @@ export async function createHighlight(params: {
   caption?: string;
   uploaderName?: string;
   imageFile?: File | null;
+  imageFiles?: File[];
   uploadPin?: string;
 }): Promise<{
   success: boolean;
@@ -877,16 +960,36 @@ export async function createHighlight(params: {
     formData.append('refresh_cipher', auth.refresh_cipher);
     formData.append('admin_passcode', auth.admin_passcode);
 
-    let uploadedSize = 0;
-    if (params.imageFile) {
+    const filesToUpload: File[] =
+      Array.isArray(params.imageFiles) && params.imageFiles.length > 0
+        ? params.imageFiles.slice(0, MAX_HIGHLIGHT_IMAGES_PER_POST)
+        : params.imageFile
+          ? [params.imageFile]
+          : [];
+
+    let firstUploadedSize = 0;
+    if (filesToUpload.length === 1) {
       const [optimizedMain, thumbFile] = await Promise.all([
-        convertToOriginalQualityWebP(params.imageFile),
-        generateHighlightThumbnailWebP(params.imageFile),
+        convertToOriginalQualityWebP(filesToUpload[0]),
+        generateHighlightThumbnailWebP(filesToUpload[0]),
       ]);
-      uploadedSize = optimizedMain.size;
+      firstUploadedSize = optimizedMain.size;
       formData.append('image', optimizedMain, optimizedMain.name);
       if (thumbFile) {
         formData.append('thumbnail', thumbFile, thumbFile.name);
+      }
+    } else if (filesToUpload.length > 1) {
+      for (let i = 0; i < filesToUpload.length; i++) {
+        const file = filesToUpload[i];
+        const [optimizedMain, thumbFile] = await Promise.all([
+          convertToOriginalQualityWebP(file),
+          generateHighlightThumbnailWebP(file),
+        ]);
+        if (i === 0) firstUploadedSize = optimizedMain.size;
+        formData.append(`image_${i}`, optimizedMain, optimizedMain.name);
+        if (thumbFile) {
+          formData.append(`thumbnail_${i}`, thumbFile, thumbFile.name);
+        }
       }
     }
 
@@ -904,8 +1007,8 @@ export async function createHighlight(params: {
         cachedStorageInfo = data.storage;
       }
       if (Array.isArray(data.records)) {
-        if (uploadedSize > 0 && data.records[0] && !data.records[0].imageSize) {
-          data.records[0].imageSize = uploadedSize;
+        if (firstUploadedSize > 0 && data.records[0] && !data.records[0].imageSize) {
+          data.records[0].imageSize = firstUploadedSize;
         }
         cachedHighlights = data.records;
       }
@@ -1066,6 +1169,8 @@ export async function updateHighlightRecord(params: {
   yakumanTypes?: string[];
   caption?: string;
   imageFile?: File | null;
+  imageFiles?: File[];
+  imageOrder?: HighlightImageOrderEntry[];
   removeImage?: boolean;
   uploadPin?: string;
 }): Promise<{
@@ -1079,7 +1184,7 @@ export async function updateHighlightRecord(params: {
   try {
     const auth = getClientAuthPayload(params.uploadPin);
     const formData = new FormData();
-    const metadata = {
+    const metadata: Record<string, any> = {
       id: params.id,
       category: params.category,
       sessionName: params.sessionName,
@@ -1093,6 +1198,9 @@ export async function updateHighlightRecord(params: {
       caption: params.caption || '',
       removeImage: Boolean(params.removeImage),
     };
+    if (Array.isArray(params.imageOrder)) {
+      metadata.imageOrder = params.imageOrder;
+    }
 
     formData.append('metadata', JSON.stringify(metadata));
     formData.append('upload_pin', auth.upload_pin);
@@ -1100,14 +1208,33 @@ export async function updateHighlightRecord(params: {
     formData.append('refresh_cipher', auth.refresh_cipher);
     formData.append('admin_passcode', auth.admin_passcode);
 
-    if (params.imageFile) {
+    const filesToUpload: File[] =
+      Array.isArray(params.imageFiles) && params.imageFiles.length > 0
+        ? params.imageFiles.slice(0, MAX_HIGHLIGHT_IMAGES_PER_POST)
+        : params.imageFile
+          ? [params.imageFile]
+          : [];
+
+    if (filesToUpload.length === 1 && !Array.isArray(params.imageOrder)) {
       const [optimizedMain, thumbFile] = await Promise.all([
-        convertToOriginalQualityWebP(params.imageFile),
-        generateHighlightThumbnailWebP(params.imageFile),
+        convertToOriginalQualityWebP(filesToUpload[0]),
+        generateHighlightThumbnailWebP(filesToUpload[0]),
       ]);
       formData.append('image', optimizedMain, optimizedMain.name);
       if (thumbFile) {
         formData.append('thumbnail', thumbFile, thumbFile.name);
+      }
+    } else if (filesToUpload.length > 0) {
+      for (let i = 0; i < filesToUpload.length; i++) {
+        const file = filesToUpload[i];
+        const [optimizedMain, thumbFile] = await Promise.all([
+          convertToOriginalQualityWebP(file),
+          generateHighlightThumbnailWebP(file),
+        ]);
+        formData.append(`image_${i}`, optimizedMain, optimizedMain.name);
+        if (thumbFile) {
+          formData.append(`thumbnail_${i}`, thumbFile, thumbFile.name);
+        }
       }
     }
 
