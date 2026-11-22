@@ -253,12 +253,17 @@ const parseTabFromLocation = (): DashboardTab => {
   return 'ranking';
 };
 
-// 탭 상태 ('ranking' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules' | 'gallery')
+// 탭 상태 ('ranking' | 'statistics' | 'rating' | 'matrix' | 'sessions' | 'schedule' | 'rules' | 'gallery' | 'feedback')
 const activeTab = ref<DashboardTab>(parseTabFromLocation());
 const pendingUrlPhotoId = ref<string>(parsePhotoIdFromLocation());
-const pendingUrlPlayerName = ref<string>(parsePlayerFromLocation());
+const pendingUrlPlayerName = ref<string>(activeTab.value === 'statistics' ? '' : parsePlayerFromLocation());
 const pendingUrlSession = ref<string>(parseSessionFromLocation());
-const pendingUrlPlayerFromSession = ref<boolean>(Boolean(parseSessionFromLocation() && parsePlayerFromLocation()));
+const pendingUrlPlayerFromSession = ref<boolean>(
+  activeTab.value !== 'statistics' && Boolean(parseSessionFromLocation() && parsePlayerFromLocation())
+);
+const statsPageInitialPlayer = ref('');
+const statsPageQueryParams = ref<Record<string, string>>({});
+const hasStatsPageSyncedQuery = ref(false);
 const selectedPlayer = ref<MemberStatItem | null>(null);
 const isModalFromSession = ref(false);
 const modalScopeTab = ref<'session' | 'all'>('all');
@@ -598,6 +603,28 @@ const buildDashboardRelativeUrl = (
       return `${base}/dashboard?tab=schedule&month=${encodeURIComponent(qMonth)}`;
     }
   }
+  if (tab === 'statistics') {
+    const sp = new URLSearchParams();
+    sp.set('tab', 'statistics');
+    if (hasStatsPageSyncedQuery.value) {
+      Object.entries(statsPageQueryParams.value).forEach(([k, v]) => {
+        if (k !== 'tab' && v !== undefined && v !== null && String(v).trim() !== '') {
+          sp.set(k, String(v));
+        }
+      });
+    } else if (typeof window !== 'undefined') {
+      const existing = new URLSearchParams(window.location.search);
+      if (existing.get('tab') === 'statistics') {
+        existing.forEach((v, k) => {
+          if (k !== 'tab' && v.trim() !== '') sp.set(k, v);
+        });
+      } else if (statsPageInitialPlayer.value) {
+        sp.set('player', statsPageInitialPlayer.value);
+      }
+    }
+    return `${base}/dashboard?${sp.toString()}`;
+  }
+
   if (tab === 'ranking') {
     return `${base}/dashboard`;
   }
@@ -615,6 +642,11 @@ const syncDashboardUrl = (preserveScheduleQuery = false) => {
 // 탭 전환 및 URL 동기화
 const switchTab = (tab: DashboardTab, updateUrl = true, preserveScheduleQuery = false) => {
   const prevTab = activeTab.value;
+  if (prevTab === 'statistics' && tab !== 'statistics') {
+    statsPageQueryParams.value = {};
+    hasStatsPageSyncedQuery.value = false;
+    statsPageInitialPlayer.value = '';
+  }
   activeTab.value = tab;
   scrollActiveTabIntoView(true);
   if (tab === 'schedule' && prevTab !== 'schedule') {
@@ -651,9 +683,14 @@ const handleLocationChange = () => {
     }
   }
 
-  // URL 플레이어(?player=) 변경 동기화
+  // URL 플레이어(?player=) 변경 동기화 (통계 스탯 전용 탭에서는 StatisticsPageTab이 직접 처리)
   const urlPlayer = parsePlayerFromLocation();
-  if (!urlPlayer && selectedPlayer.value) {
+  if (activeTab.value === 'statistics') {
+    pendingUrlPlayerName.value = '';
+    if (selectedPlayer.value) {
+      selectedPlayer.value = null;
+    }
+  } else if (!urlPlayer && selectedPlayer.value) {
     selectedPlayer.value = null;
     pendingUrlPlayerName.value = '';
   } else if (urlPlayer && selectedPlayer.value?.name !== urlPlayer) {
@@ -1393,6 +1430,7 @@ const displayedAvailableSessions = computed(() => {
 const isLoadingSession = ref(false);
 
 const tryOpenPendingUrlPlayer = () => {
+  if (activeTab.value === 'statistics') return;
   if (!pendingUrlPlayerName.value || allStats.value.length === 0) return;
   const matched = findMemberStatByName(pendingUrlPlayerName.value);
   if (matched) {
@@ -2221,12 +2259,21 @@ const handleOpenPlayerFromCompare = (name: string) => {
   openPlayerByName(name, false, false, false);
 };
 
-// 통계 스탯 전용 페이지 (플레이어 검색 풀페이지 진입용)
-const statsPageInitialPlayer = ref('');
+// 통계 스탯 전용 페이지 (플레이어 검색 풀페이지 진입 및 URL 쿼리 실시간 동기화)
+const handleStatsPageQueryChange = (params: Record<string, string>) => {
+  statsPageQueryParams.value = { ...params };
+  hasStatsPageSyncedQuery.value = true;
+  if (activeTab.value === 'statistics') {
+    syncDashboardUrl();
+  }
+};
+
 const openPlayerInStatsPage = (name: string) => {
   closePinnedDistTooltip();
   closePlayerModal();
   statsPageInitialPlayer.value = name;
+  statsPageQueryParams.value = name ? { player: name } : {};
+  hasStatsPageSyncedQuery.value = false;
   switchTab('statistics');
 };
 
@@ -3593,6 +3640,9 @@ const copyDashboardLink = async () => {
       showToast('현재 사진 공유 링크가 복사되었습니다!');
     } else if (selectedPlayer.value) {
       showToast(`'${selectedPlayer.value.name}' 통계 링크가 복사되었습니다!`);
+    } else if (activeTab.value === 'statistics') {
+      const pName = statsPageQueryParams.value.player;
+      showToast(pName ? `'${pName}' 통계 스탯 링크가 복사되었습니다!` : '현재 통계 스탯 필터 링크가 복사되었습니다!');
     } else if (activeTab.value === 'sessions' && selectedSession.value) {
       showToast(`'${toShortSessionLabel(selectedSession.value)}' 상세 링크가 복사되었습니다!`);
     } else {
@@ -9526,6 +9576,7 @@ const openGamePopupFromLightbox = async (
           :is-dark="isDark"
           @open-compare="(a, b) => openPlayerCompareModal(a, b || '')"
           @open-popup="(name) => openPlayerByName(name, false, false, false)"
+          @update-query-params="handleStatsPageQueryChange"
         />
       </section>
     </main>

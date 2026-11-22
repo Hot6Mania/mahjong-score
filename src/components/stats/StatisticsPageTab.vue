@@ -40,6 +40,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: 'open-compare', playerA: string, playerB?: string): void;
   (e: 'open-popup', playerName: string): void;
+  (e: 'update-query-params', params: Record<string, string>): void;
 }>();
 
 const activeSubTab = ref<StatsSubTab>(props.initialSubTab || 'player');
@@ -1729,7 +1730,435 @@ const highScoreDealInPlayerSummary = computed(() => {
     .sort((a, b) => (b.lostCount !== a.lostCount ? b.lostCount - a.lostCount : b.maxLost - a.maxLost));
 });
 
+// ==========================================
+// 7. URL 쿼리 파라미터 실시간 동기화 및 복원 (공유 링크 완벽 대응)
+// ==========================================
+const VALID_SUB_TABS: StatsSubTab[] = ['player', 'by-rating', 'by-seat', 'deal-ins', 'games', 'players-count'];
+const isHydratingFromUrl = ref(true);
+const pendingUrlPlayer = ref('');
+const pendingUrlMetricKey = ref('');
+const pendingUrlPlayerSessionRange = ref<{ fromS: number; toS: number } | null>(null);
+const pendingUrlRatingSessionRange = ref<{ fromS: number; toS: number } | null>(null);
+const pendingUrlSeatSessionRange = ref<{ fromS: number; toS: number } | null>(null);
+const pendingUrlLogSessionRange = ref<{ fromS: number; toS: number } | null>(null);
+const pendingUrlLogSessionNum = ref<number | null>(null);
+
+const tryApplyPendingUrlPlayer = () => {
+  if (!pendingUrlPlayer.value || props.allStats.length === 0) return;
+  const matched = findMemberByName(pendingUrlPlayer.value);
+  if (!matched) return;
+  pendingUrlPlayer.value = '';
+  selectedPlayerName.value = matched.name;
+  searchInput.value = matched.name;
+  if (playerScopeMode.value !== 'all') {
+    runPlayerScopeQuery();
+  }
+};
+
+const tryApplyPendingUrlMetric = () => {
+  if (!pendingUrlMetricKey.value || !selectedDetail.value) return;
+  const allCells = [...basicStatCells.value, ...riichiStatCells.value, ...otherStatCells.value];
+  const cell = allCells.find((c) => c.key === pendingUrlMetricKey.value);
+  if (!cell) return;
+  pendingUrlMetricKey.value = '';
+  inspectedMetricKey.value = cell.key;
+  inspectedMetricMeta.value = {
+    label: cell.label,
+    higherIsBetter: cell.higherIsBetter,
+    unit: cell.unit,
+    value: cell.value,
+  };
+};
+
+const tryApplyPendingSessionRanges = () => {
+  if (sortedSessionsDesc.value.length === 0) return;
+  if (pendingUrlPlayerSessionRange.value) {
+    const { fromS, toS } = pendingUrlPlayerSessionRange.value;
+    pendingUrlPlayerSessionRange.value = null;
+    playerScopeStartNum.value = Math.min(fromS, toS);
+    playerScopeEndNum.value = Math.max(fromS, toS);
+    playerScopeStartSession.value = resolveSessionLabelByNum(playerScopeStartNum.value);
+    playerScopeEndSession.value = resolveSessionLabelByNum(playerScopeEndNum.value);
+    if (baseSelectedPlayer.value && playerScopeMode.value === 'session_range') {
+      runPlayerScopeQuery();
+    }
+  }
+  if (pendingUrlRatingSessionRange.value) {
+    const { fromS, toS } = pendingUrlRatingSessionRange.value;
+    pendingUrlRatingSessionRange.value = null;
+    ratingStartNum.value = Math.min(fromS, toS);
+    ratingEndNum.value = Math.max(fromS, toS);
+    ratingStartSession.value = resolveSessionLabelByNum(ratingStartNum.value);
+    ratingEndSession.value = resolveSessionLabelByNum(ratingEndNum.value);
+    if (ratingScopeMode.value === 'session_range') {
+      loadRatingScopedData();
+    }
+  }
+  if (pendingUrlSeatSessionRange.value) {
+    const { fromS, toS } = pendingUrlSeatSessionRange.value;
+    pendingUrlSeatSessionRange.value = null;
+    seatStartNum.value = Math.min(fromS, toS);
+    seatEndNum.value = Math.max(fromS, toS);
+    seatStartSession.value = resolveSessionLabelByNum(seatStartNum.value);
+    seatEndSession.value = resolveSessionLabelByNum(seatEndNum.value);
+    if (seatScopeMode.value === 'session_range') {
+      loadSeatStats();
+    }
+  }
+  if (pendingUrlLogSessionRange.value) {
+    const { fromS, toS } = pendingUrlLogSessionRange.value;
+    pendingUrlLogSessionRange.value = null;
+    logStartNum.value = Math.min(fromS, toS);
+    logEndNum.value = Math.max(fromS, toS);
+    logStartSession.value = resolveSessionLabelByNum(logStartNum.value);
+    logEndSession.value = resolveSessionLabelByNum(logEndNum.value);
+  }
+  if (pendingUrlLogSessionNum.value !== null) {
+    const num = pendingUrlLogSessionNum.value;
+    pendingUrlLogSessionNum.value = null;
+    selectedLogSession.value = resolveSessionLabelByNum(num);
+  }
+};
+
+watch(() => props.allStats, () => {
+  tryApplyPendingUrlPlayer();
+  tryApplyPendingUrlMetric();
+}, { immediate: true });
+
+watch(sortedSessionsDesc, () => {
+  tryApplyPendingSessionRanges();
+}, { immediate: true });
+
+watch(selectedDetail, () => {
+  tryApplyPendingUrlMetric();
+});
+
+const hydrateStateFromUrl = () => {
+  if (typeof window === 'undefined') {
+    isHydratingFromUrl.value = false;
+    return;
+  }
+  const sp = new URLSearchParams(window.location.search);
+  const parsePosInt = (key: string): number | null => {
+    const raw = sp.get(key);
+    if (raw === null || raw.trim() === '') return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+  };
+
+  // props.initialPlayerName가 명시적으로 넘어온 경우(팝업 → '페이지로 보기')에는 해당 플레이어를 우선 표시
+  const subParam = (sp.get('sub') || '').trim() as StatsSubTab;
+  if (!props.initialPlayerName && VALID_SUB_TABS.includes(subParam)) {
+    activeSubTab.value = subParam;
+  }
+
+  if (activeSubTab.value === 'player') {
+    const urlPlayer = (sp.get('player') || '').trim();
+    if (!props.initialPlayerName && urlPlayer) {
+      pendingUrlPlayer.value = urlPlayer;
+    }
+    const mg = parsePosInt('minGames');
+    if (mg !== null) playerTabMinGames.value = mg;
+    const mr = parsePosInt('minRounds');
+    if (mr !== null) playerTabMinRounds.value = mr;
+
+    const scope = (sp.get('scope') || '').trim() as PlayerScopeMode;
+    if (['all', 'recent_games', 'recent_sessions', 'date_range', 'session_range'].includes(scope)) {
+      playerScopeMode.value = scope;
+      if (scope === 'recent_games') {
+        const n = parsePosInt('n');
+        if (n !== null && n > 0) playerScopeRecentGames.value = n;
+      } else if (scope === 'recent_sessions') {
+        const n = parsePosInt('n');
+        if (n !== null && n > 0) playerScopeRecentSessions.value = n;
+      } else if (scope === 'date_range') {
+        const from = (sp.get('from') || '').trim();
+        const to = (sp.get('to') || '').trim();
+        if (from) playerScopeStartDate.value = from;
+        if (to) playerScopeEndDate.value = to;
+      } else if (scope === 'session_range') {
+        const fromS = parsePosInt('fromS');
+        const toS = parsePosInt('toS');
+        if (fromS !== null && toS !== null && fromS > 0 && toS > 0) {
+          pendingUrlPlayerSessionRange.value = { fromS, toS };
+        }
+      }
+    }
+
+    const metric = (sp.get('metric') || '').trim();
+    if (metric) pendingUrlMetricKey.value = metric;
+    const band = (sp.get('band') || '').trim();
+    if (band) drawerSelectedBandKey.value = band;
+    const diTab = (sp.get('diTab') || '').trim();
+    if (diTab === 'lost' || diTab === 'won') playerDealInTab.value = diTab;
+    const diScore = parsePosInt('diScore');
+    if (diScore !== null && [8000, 12000, 16000, 24000, 32000].includes(diScore)) {
+      playerDealInMinScore.value = diScore;
+    }
+
+    tryApplyPendingUrlPlayer();
+    tryApplyPendingSessionRanges();
+    tryApplyPendingUrlMetric();
+  } else if (activeSubTab.value === 'by-rating') {
+    const scope = (sp.get('scope') || '').trim() as RatingScopeMode;
+    if (['overall', 'recent_sessions', 'session_range', 'date_range'].includes(scope)) {
+      ratingScopeMode.value = scope;
+      if (scope === 'recent_sessions') {
+        const n = parsePosInt('n');
+        if (n !== null && n > 0) ratingRecentSessionsCount.value = n;
+      } else if (scope === 'date_range') {
+        const from = (sp.get('from') || '').trim();
+        const to = (sp.get('to') || '').trim();
+        if (from) ratingDateStart.value = from;
+        if (to) ratingDateEnd.value = to;
+      } else if (scope === 'session_range') {
+        const fromS = parsePosInt('fromS');
+        const toS = parsePosInt('toS');
+        if (fromS !== null && toS !== null && fromS > 0 && toS > 0) {
+          pendingUrlRatingSessionRange.value = { fromS, toS };
+        }
+      }
+    }
+    const mg = parsePosInt('minGames');
+    if (mg !== null) {
+      ratingMinGames.value = mg;
+    } else if (ratingScopeMode.value !== 'overall') {
+      ratingMinGames.value = 0;
+    }
+    const mr = parsePosInt('minRounds');
+    if (mr !== null) ratingMinRounds.value = mr;
+
+    tryApplyPendingSessionRanges();
+    if (ratingScopeMode.value !== 'overall' && !pendingUrlRatingSessionRange.value) {
+      loadRatingScopedData();
+    }
+  } else if (activeSubTab.value === 'by-seat') {
+    const p = (sp.get('player') || '').trim();
+    if (p) seatPlayerFilter.value = p;
+    const scope = (sp.get('scope') || '').trim() as SeatScopeMode;
+    if (['all', 'recent_sessions', 'session_range', 'date_range'].includes(scope)) {
+      seatScopeMode.value = scope;
+      if (scope === 'recent_sessions') {
+        const n = parsePosInt('n');
+        if (n !== null && n > 0) seatRecentSessionsCount.value = n;
+      } else if (scope === 'date_range') {
+        const from = (sp.get('from') || '').trim();
+        const to = (sp.get('to') || '').trim();
+        if (from) seatStartDate.value = from;
+        if (to) seatEndDate.value = to;
+      } else if (scope === 'session_range') {
+        const fromS = parsePosInt('fromS');
+        const toS = parsePosInt('toS');
+        if (fromS !== null && toS !== null && fromS > 0 && toS > 0) {
+          pendingUrlSeatSessionRange.value = { fromS, toS };
+        }
+      }
+    }
+    tryApplyPendingSessionRanges();
+    if (!pendingUrlSeatSessionRange.value) {
+      loadSeatStats();
+    }
+  } else if (activeSubTab.value === 'deal-ins') {
+    const ms = parsePosInt('minScore');
+    if (ms !== null && [8000, 12000, 16000, 24000, 32000].includes(ms)) {
+      dealInMinScore.value = ms;
+    }
+    const scope = (sp.get('scope') || '').trim() as 'all' | 'recent_sessions' | 'session_range' | 'date_range';
+    if (['all', 'recent_sessions', 'session_range', 'date_range'].includes(scope)) {
+      dealInScopeMode.value = scope;
+      if (scope === 'recent_sessions') {
+        const n = parsePosInt('n');
+        if (n !== null && n > 0) dealInRecentSessions.value = n;
+      } else if (scope === 'session_range') {
+        const fromS = parsePosInt('fromS');
+        const toS = parsePosInt('toS');
+        if (fromS !== null && fromS > 0) dealInStartNum.value = fromS;
+        if (toS !== null && toS > 0) dealInEndNum.value = toS;
+      } else if (scope === 'date_range') {
+        const from = (sp.get('from') || '').trim();
+        const to = (sp.get('to') || '').trim();
+        if (from) dealInStartDate.value = from;
+        if (to) dealInEndDate.value = to;
+      }
+    }
+    const p = (sp.get('player') || '').trim();
+    if (p) dealInPlayerFilter.value = p;
+    const role = (sp.get('role') || '').trim();
+    if (role === 'all' || role === 'loser' || role === 'winner') {
+      dealInRoleFilter.value = role;
+    }
+    loadHighScoreDealIns();
+  } else if (activeSubTab.value === 'games') {
+    const mode = (sp.get('mode') || '').trim() as GamesLogFilterMode;
+    if (['latest', 'date', 'date_range', 'recent_sessions', 'session_range', 'session'].includes(mode)) {
+      gamesLogMode.value = mode;
+      if (mode === 'date') {
+        const d = (sp.get('date') || '').trim();
+        if (d) selectedLogDate.value = d;
+      } else if (mode === 'date_range') {
+        const from = (sp.get('from') || '').trim();
+        const to = (sp.get('to') || '').trim();
+        if (from) logStartDate.value = from;
+        if (to) logEndDate.value = to;
+      } else if (mode === 'recent_sessions') {
+        const n = parsePosInt('n');
+        if (n !== null && n > 0) logRecentSessionsCount.value = n;
+      } else if (mode === 'session_range') {
+        const fromS = parsePosInt('fromS');
+        const toS = parsePosInt('toS');
+        if (fromS !== null && toS !== null && fromS > 0 && toS > 0) {
+          pendingUrlLogSessionRange.value = { fromS, toS };
+        }
+      } else if (mode === 'session') {
+        const sNum = parsePosInt('s');
+        if (sNum !== null && sNum > 0) {
+          pendingUrlLogSessionNum.value = sNum;
+        }
+      }
+    }
+    tryApplyPendingSessionRanges();
+  }
+
+  isHydratingFromUrl.value = false;
+};
+
+const currentUrlQueryParams = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {};
+  const sub = activeSubTab.value;
+  if (sub !== 'player') {
+    out.sub = sub;
+  }
+
+  if (sub === 'player') {
+    const pName = (selectedPlayerName.value || pendingUrlPlayer.value || '').trim();
+    if (pName) out.player = pName;
+    const mg = Math.max(0, Math.floor(Number(playerTabMinGames.value) || 0));
+    if (mg !== 10) out.minGames = String(mg);
+    const mr = Math.max(0, Math.floor(Number(playerTabMinRounds.value) || 0));
+    if (mr > 0) out.minRounds = String(mr);
+
+    if (pName) {
+      if (playerScopeMode.value !== 'all') {
+        out.scope = playerScopeMode.value;
+        if (playerScopeMode.value === 'recent_games') {
+          out.n = String(Math.max(1, Math.floor(Number(playerScopeRecentGames.value) || 10)));
+        } else if (playerScopeMode.value === 'recent_sessions') {
+          out.n = String(Math.max(1, Math.floor(Number(playerScopeRecentSessions.value) || 3)));
+        } else if (playerScopeMode.value === 'date_range') {
+          if (playerScopeStartDate.value) out.from = playerScopeStartDate.value;
+          if (playerScopeEndDate.value) out.to = playerScopeEndDate.value;
+        } else if (playerScopeMode.value === 'session_range') {
+          const s = pendingUrlPlayerSessionRange.value?.fromS || playerScopeStartNum.value;
+          const e = pendingUrlPlayerSessionRange.value?.toS || playerScopeEndNum.value;
+          if (s > 0) out.fromS = String(s);
+          if (e > 0) out.toS = String(e);
+        }
+      }
+      const mKey = inspectedMetricKey.value || pendingUrlMetricKey.value;
+      if (mKey) {
+        out.metric = String(mKey);
+        if (drawerSelectedBandKey.value && drawerSelectedBandKey.value !== 'all') {
+          out.band = drawerSelectedBandKey.value;
+        }
+      }
+      if (playerDealInTab.value !== 'lost') {
+        out.diTab = playerDealInTab.value;
+      }
+      if (playerDealInMinScore.value !== 8000) {
+        out.diScore = String(playerDealInMinScore.value);
+      }
+    }
+  } else if (sub === 'by-rating') {
+    if (ratingScopeMode.value !== 'overall') {
+      out.scope = ratingScopeMode.value;
+      if (ratingScopeMode.value === 'recent_sessions') {
+        out.n = String(Math.max(1, Math.floor(Number(ratingRecentSessionsCount.value) || 5)));
+      } else if (ratingScopeMode.value === 'session_range') {
+        const s = pendingUrlRatingSessionRange.value?.fromS || ratingStartNum.value;
+        const e = pendingUrlRatingSessionRange.value?.toS || ratingEndNum.value;
+        if (s > 0) out.fromS = String(s);
+        if (e > 0) out.toS = String(e);
+      } else if (ratingScopeMode.value === 'date_range') {
+        if (ratingDateStart.value) out.from = ratingDateStart.value;
+        if (ratingDateEnd.value) out.to = ratingDateEnd.value;
+      }
+    }
+    const mg = Math.max(0, Math.floor(Number(ratingMinGames.value) || 0));
+    const defaultMg = ratingScopeMode.value === 'overall' ? 10 : 0;
+    if (mg !== defaultMg) out.minGames = String(mg);
+    const mr = Math.max(0, Math.floor(Number(ratingMinRounds.value) || 0));
+    if (mr > 0) out.minRounds = String(mr);
+  } else if (sub === 'by-seat') {
+    if (seatPlayerFilter.value) out.player = seatPlayerFilter.value;
+    if (seatScopeMode.value !== 'all') {
+      out.scope = seatScopeMode.value;
+      if (seatScopeMode.value === 'recent_sessions') {
+        out.n = String(Math.max(1, Math.floor(Number(seatRecentSessionsCount.value) || 5)));
+      } else if (seatScopeMode.value === 'session_range') {
+        const s = pendingUrlSeatSessionRange.value?.fromS || seatStartNum.value;
+        const e = pendingUrlSeatSessionRange.value?.toS || seatEndNum.value;
+        if (s > 0) out.fromS = String(s);
+        if (e > 0) out.toS = String(e);
+      } else if (seatScopeMode.value === 'date_range') {
+        if (seatStartDate.value) out.from = seatStartDate.value;
+        if (seatEndDate.value) out.to = seatEndDate.value;
+      }
+    }
+  } else if (sub === 'deal-ins') {
+    if (dealInMinScore.value !== 8000) out.minScore = String(dealInMinScore.value);
+    if (dealInScopeMode.value !== 'all') {
+      out.scope = dealInScopeMode.value;
+      if (dealInScopeMode.value === 'recent_sessions') {
+        out.n = String(Math.max(1, Math.floor(Number(dealInRecentSessions.value) || 5)));
+      } else if (dealInScopeMode.value === 'session_range') {
+        if (dealInStartNum.value > 0) out.fromS = String(dealInStartNum.value);
+        if (dealInEndNum.value > 0) out.toS = String(dealInEndNum.value);
+      } else if (dealInScopeMode.value === 'date_range') {
+        if (dealInStartDate.value) out.from = dealInStartDate.value;
+        if (dealInEndDate.value) out.to = dealInEndDate.value;
+      }
+    }
+    if (dealInPlayerFilter.value) {
+      out.player = dealInPlayerFilter.value;
+      if (dealInRoleFilter.value !== 'all') out.role = dealInRoleFilter.value;
+    }
+  } else if (sub === 'games') {
+    if (gamesLogMode.value !== 'latest') {
+      out.mode = gamesLogMode.value;
+      if (gamesLogMode.value === 'date' && selectedLogDate.value) {
+        out.date = selectedLogDate.value;
+      } else if (gamesLogMode.value === 'date_range') {
+        if (logStartDate.value) out.from = logStartDate.value;
+        if (logEndDate.value) out.to = logEndDate.value;
+      } else if (gamesLogMode.value === 'recent_sessions') {
+        out.n = String(Math.max(1, Math.floor(Number(logRecentSessionsCount.value) || 3)));
+      } else if (gamesLogMode.value === 'session_range') {
+        const s = pendingUrlLogSessionRange.value?.fromS || logStartNum.value;
+        const e = pendingUrlLogSessionRange.value?.toS || logEndNum.value;
+        if (s > 0) out.fromS = String(s);
+        if (e > 0) out.toS = String(e);
+      } else if (gamesLogMode.value === 'session') {
+        const sNum = pendingUrlLogSessionNum.value || parseSessionNumber(selectedLogSession.value);
+        if (sNum > 0) out.s = String(sNum);
+      }
+    }
+  }
+
+  return out;
+});
+
+watch(
+  currentUrlQueryParams,
+  (params) => {
+    if (isHydratingFromUrl.value) return;
+    emit('update-query-params', params);
+  },
+  { deep: true }
+);
+
 onMounted(() => {
+  hydrateStateFromUrl();
+  emit('update-query-params', currentUrlQueryParams.value);
   if (activeSubTab.value === 'by-seat') {
     loadSeatStats();
   } else if (activeSubTab.value === 'deal-ins') {
@@ -1907,7 +2336,7 @@ onMounted(() => {
 
         <!-- 빠른 선택 칩 (성적 상위 + 다전 플레이어) -->
         <div class="sp-quick-players">
-          <span class="sp-quick-lbl">빠른 선택 (성적·다전):</span>
+          <span class="sp-quick-lbl">빠른 선택:</span>
           <button
             v-for="m in quickSelectPlayers"
             :key="'q-' + m.name"
