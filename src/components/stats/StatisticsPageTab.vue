@@ -678,6 +678,7 @@ const riichiStatCells = computed<PageStatCell[]>(() => {
     { key: 'riichiExpenseAvg', label: '리치 지출 평균', value: d.riichiExpenseAvg, higherIsBetter: false, unit: '점' },
     { key: 'firstRiichiRate', label: '선제율', value: d.firstRiichiRate, higherIsBetter: true, unit: '%' },
     { key: 'chaseRiichiRate', label: '추격률', value: d.chaseRiichiRate, higherIsBetter: true, unit: '%' },
+    { key: 'chaseRiichiWinRate', label: '추격리치 성공률', value: d.chaseRiichiWinRate ?? 0, higherIsBetter: true, unit: '%' },
     { key: 'chasedRiichiRate', label: '피추격률', value: d.chasedRiichiRate, higherIsBetter: false, unit: '%' },
   ]);
 });

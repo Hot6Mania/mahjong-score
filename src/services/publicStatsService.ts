@@ -109,6 +109,9 @@ export interface MemberStatItem {
   riichiExpenseAvg: number;
   firstRiichiRate: number; // 선제율
   chaseRiichiRate: number; // 추격률
+  chaseRiichiWinRate: number; // 추격리치 성공률 (추격리치 중 화료 비율)
+  chaseRiichiCount?: number; // 추격리치 횟수
+  chaseRiichiWinCount?: number; // 추격리치 화료 횟수
   chasedRiichiRate: number; // 피추격률
   oyaKaburiRate: number;
   oyaKaburiAvg: number;
@@ -1280,6 +1283,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
           riichiExpenseAvg: Math.round(getCellNum(row[25])),
           firstRiichiRate: parseFloat((getCellNum(row[26]) * 100).toFixed(2)),
           chaseRiichiRate: parseFloat((getCellNum(row[27]) * 100).toFixed(2)),
+          chaseRiichiWinRate: 0,
           chasedRiichiRate: parseFloat((getCellNum(row[28]) * 100).toFixed(2)),
           oyaKaburiRate: parseFloat((getCellNum(row[29]) * 100).toFixed(2)),
           oyaKaburiAvg: Math.round(getCellNum(row[30])),
@@ -1401,6 +1405,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
         riichiExpenseAvg: 0,
         firstRiichiRate: 0,
         chaseRiichiRate: 0,
+        chaseRiichiWinRate: 0,
         chasedRiichiRate: 0,
         oyaKaburiRate: 0,
         oyaKaburiAvg: 0,
@@ -1464,6 +1469,44 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
       });
     } catch (rErr) {
       console.warn("레이팅 데이터 주입 실패:", rErr);
+    }
+
+    // '국별 기록' 원본 데이터에서 추격리치 성공률(추격리치 국 중 화료 비율) 자동 가공 주입
+    try {
+      const roundRows = await fetchAllPublicRoundsRows(sId, forceRefresh);
+      const chaseMap = new Map<string, { chase: number; chaseWin: number }>();
+      for (let i = 0; i < roundRows.length; i++) {
+        const r = roundRows[i];
+        if (!r?.c) continue;
+        const rawName = getCellStr(r.c[5]).trim();
+        if (!rawName) continue;
+        const isRiichi = r.c[9]?.v === true || r.c[9]?.v === "TRUE" || r.c[9]?.v === 1;
+        if (!isRiichi) continue;
+        const isChase = r.c[17]?.v === true || r.c[17]?.v === "TRUE" || r.c[17]?.v === 1;
+        if (!isChase) continue;
+        const isWin = r.c[10]?.v === true || r.c[10]?.v === "TRUE" || r.c[10]?.v === 1;
+        const norm = normalizeRatingPlayerName(rawName);
+        if (!norm) continue;
+        const cur = chaseMap.get(norm) || { chase: 0, chaseWin: 0 };
+        cur.chase++;
+        if (isWin) cur.chaseWin++;
+        chaseMap.set(norm, cur);
+      }
+      items.forEach((item) => {
+        const norm = normalizeRatingPlayerName(item.name);
+        const c = norm ? chaseMap.get(norm) : undefined;
+        const rate = c && c.chase > 0 ? parseFloat(((c.chaseWin / c.chase) * 100).toFixed(2)) : 0;
+        item.chaseRiichiWinRate = rate;
+        item.chaseRiichiCount = c ? c.chase : 0;
+        item.chaseRiichiWinCount = c ? c.chaseWin : 0;
+        if (item.detailedStats) {
+          item.detailedStats.chaseRiichiWinRate = rate;
+          item.detailedStats.chaseRiichiCount = c ? c.chase : 0;
+          item.detailedStats.chaseRiichiWinCount = c ? c.chaseWin : 0;
+        }
+      });
+    } catch (cErr) {
+      console.warn("추격리치 성공률 가공 주입 실패:", cErr);
     }
 
     cachedAllStats = items;
@@ -1924,6 +1967,7 @@ export async function fetchSessionDetailedStats(
       riichiLoseScoreSum: number;
       firstRiichiCount: number;
       chaseRiichiCount: number;
+      chaseRiichiWinCount: number;
       chasedRiichiCount: number;
       loseWithRiichiCount: number;
       oyaTsumoSufferedCount: number;
@@ -1969,6 +2013,7 @@ export async function fetchSessionDetailedStats(
           riichiLoseScoreSum: 0,
           firstRiichiCount: 0,
           chaseRiichiCount: 0,
+          chaseRiichiWinCount: 0,
           chasedRiichiCount: 0,
           loseWithRiichiCount: 0,
           oyaTsumoSufferedCount: 0,
@@ -2048,7 +2093,10 @@ export async function fetchSessionDetailedStats(
         }
         if (endStatus.includes("draw")) p.riichiDrawCount++;
         if (isFirst) p.firstRiichiCount++;
-        if (isChase) p.chaseRiichiCount++;
+        if (isChase) {
+          p.chaseRiichiCount++;
+          if (isWin) p.chaseRiichiWinCount++;
+        }
         if (isChased) p.chasedRiichiCount++;
       }
 
@@ -2105,6 +2153,7 @@ export async function fetchSessionDetailedStats(
       const riichiExpenseAvg = p.riichiLoseCount > 0 ? Math.round(p.riichiLoseScoreSum / p.riichiLoseCount) : 0;
       const firstRiichiRate = p.riichiCount > 0 ? parseFloat(((p.firstRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
       const chaseRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chaseRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
+      const chaseRiichiWinRate = p.chaseRiichiCount > 0 ? parseFloat(((p.chaseRiichiWinCount / p.chaseRiichiCount) * 100).toFixed(2)) : 0;
       const chasedRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chasedRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
       const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(2)) : 0;
       const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
@@ -2155,6 +2204,9 @@ export async function fetchSessionDetailedStats(
         riichiExpenseAvg,
         firstRiichiRate,
         chaseRiichiRate,
+        chaseRiichiWinRate,
+        chaseRiichiCount: p.chaseRiichiCount,
+        chaseRiichiWinCount: p.chaseRiichiWinCount,
         chasedRiichiRate,
         oyaKaburiRate,
         oyaKaburiAvg,
@@ -3968,6 +4020,7 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
     riichiLoseScoreSum: number;
     firstRiichiCount: number;
     chaseRiichiCount: number;
+    chaseRiichiWinCount: number;
     chasedRiichiCount: number;
     loseWithRiichiCount: number;
     oyaTsumoSufferedCount: number;
@@ -4011,6 +4064,7 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
         riichiLoseScoreSum: 0,
         firstRiichiCount: 0,
         chaseRiichiCount: 0,
+        chaseRiichiWinCount: 0,
         chasedRiichiCount: 0,
         loseWithRiichiCount: 0,
         oyaTsumoSufferedCount: 0,
@@ -4090,7 +4144,10 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
       }
       if (endStatus.includes('draw')) p.riichiDrawCount++;
       if (isFirst) p.firstRiichiCount++;
-      if (isChase) p.chaseRiichiCount++;
+      if (isChase) {
+        p.chaseRiichiCount++;
+        if (isWin) p.chaseRiichiWinCount++;
+      }
       if (isChased) p.chasedRiichiCount++;
     }
 
@@ -4146,6 +4203,7 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
     const riichiExpenseAvg = p.riichiLoseCount > 0 ? Math.round(p.riichiLoseScoreSum / p.riichiLoseCount) : 0;
     const firstRiichiRate = p.riichiCount > 0 ? parseFloat(((p.firstRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
     const chaseRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chaseRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
+    const chaseRiichiWinRate = p.chaseRiichiCount > 0 ? parseFloat(((p.chaseRiichiWinCount / p.chaseRiichiCount) * 100).toFixed(2)) : 0;
     const chasedRiichiRate = p.riichiCount > 0 ? parseFloat(((p.chasedRiichiCount / p.riichiCount) * 100).toFixed(2)) : 0;
     const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(2)) : 0;
     const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
@@ -4196,6 +4254,9 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
       riichiExpenseAvg,
       firstRiichiRate,
       chaseRiichiRate,
+      chaseRiichiWinRate,
+      chaseRiichiCount: p.chaseRiichiCount,
+      chaseRiichiWinCount: p.chaseRiichiWinCount,
       chasedRiichiRate,
       oyaKaburiRate,
       oyaKaburiAvg,
@@ -4282,6 +4343,7 @@ function createZeroDetailedStatItem(
     riichiExpenseAvg: 0,
     firstRiichiRate: 0,
     chaseRiichiRate: 0,
+    chaseRiichiWinRate: 0,
     chasedRiichiRate: 0,
     oyaKaburiRate: 0,
     oyaKaburiAvg: 0,

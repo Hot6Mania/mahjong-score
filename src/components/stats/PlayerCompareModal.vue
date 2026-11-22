@@ -386,6 +386,7 @@ const compareSections = computed<CompareSection[]>(() => {
     buildRow('riichiExpenseAvg', '리치 지출 평균', detValA((d) => d.riichiExpenseAvg), detValB((d) => d.riichiExpenseAvg), false, fmtScore, (d) => `${Math.round(d).toLocaleString()}점`),
     buildRow('firstRiichiRate', '선제율', detValA((d) => d.firstRiichiRate), detValB((d) => d.firstRiichiRate), true, fmtPct, (d) => `${d.toFixed(2)}%p`),
     buildRow('chaseRiichiRate', '추격률', detValA((d) => d.chaseRiichiRate), detValB((d) => d.chaseRiichiRate), true, fmtPct, (d) => `${d.toFixed(2)}%p`),
+    buildRow('chaseRiichiWinRate', '추격리치 성공률', detValA((d) => d.chaseRiichiWinRate ?? 0), detValB((d) => d.chaseRiichiWinRate ?? 0), true, fmtPct, (d) => `${d.toFixed(2)}%p`),
     buildRow('chasedRiichiRate', '피추격률', detValA((d) => d.chasedRiichiRate), detValB((d) => d.chasedRiichiRate), false, fmtPct, (d) => `${d.toFixed(2)}%p`),
   ];
 

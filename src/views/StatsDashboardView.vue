@@ -1697,6 +1697,7 @@ const currentSessionPlayerStats = computed<MemberStatItem | null>(() => {
     riichiExpenseAvg: 0,
     firstRiichiRate: 0,
     chaseRiichiRate: 0,
+    chaseRiichiWinRate: 0,
     chasedRiichiRate: 0,
     oyaKaburiRate: 0,
     oyaKaburiAvg: 0,
@@ -1761,6 +1762,7 @@ const onHoverSessionMetric = (
     }
     isDistTooltipPinned.value = true;
     hoveredDistBar.value = null;
+    tappedDistBar.value = null;
   }
 
   const sessionMembers = Object.values(currentSessionDetailedStatsMap.value);
@@ -1782,6 +1784,7 @@ const onHoverSessionMetric = (
   activeDistFromSession.value = true;
   if (!isClickEvent) {
     hoveredDistBar.value = null;
+    tappedDistBar.value = null;
   }
 
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -2091,7 +2094,33 @@ const isTooltipBelow = ref(false);
 const isDistTooltipPinned = ref(false);
 const activeDistFromSession = ref(false);
 const hoveredDistBar = ref<HistogramBar | null>(null);
+const tappedDistBar = ref<HistogramBar | null>(null);
+const lastDistBarPointerIsTouch = ref(false);
 let distHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+const activeDistBar = computed<HistogramBar | null>(
+  () => tappedDistBar.value || hoveredDistBar.value
+);
+
+const isDistTouchMode = (): boolean => {
+  if (lastDistBarPointerIsTouch.value) return true;
+  if (typeof window === 'undefined') return false;
+  return Boolean(window.matchMedia?.('(pointer: coarse)').matches);
+};
+
+const handleDistBarPointerDown = (e: PointerEvent) => {
+  lastDistBarPointerIsTouch.value = e.pointerType !== 'mouse';
+};
+
+const handleDistBarEnter = (bar: HistogramBar) => {
+  if (lastDistBarPointerIsTouch.value) return;
+  hoveredDistBar.value = bar;
+};
+
+const handleDistBarLeave = () => {
+  if (lastDistBarPointerIsTouch.value) return;
+  hoveredDistBar.value = null;
+};
 
 const cancelDistHideTimer = () => {
   if (distHideTimer) {
@@ -2104,6 +2133,7 @@ const closePinnedDistTooltip = () => {
   cancelDistHideTimer();
   isDistTooltipPinned.value = false;
   hoveredDistBar.value = null;
+  tappedDistBar.value = null;
   tooltipPos.value.visible = false;
   activeDist.value = null;
 };
@@ -2113,11 +2143,14 @@ const onEnterDistTooltip = () => {
 };
 
 const onLeaveDistTooltip = () => {
-  hoveredDistBar.value = null;
+  if (!lastDistBarPointerIsTouch.value) {
+    hoveredDistBar.value = null;
+  }
   if (isDistTooltipPinned.value) return;
   cancelDistHideTimer();
   distHideTimer = setTimeout(() => {
     if (!isDistTooltipPinned.value) {
+      tappedDistBar.value = null;
       tooltipPos.value.visible = false;
       activeDist.value = null;
     }
@@ -2139,12 +2172,27 @@ const formatDistValue = (val: number): string => {
   return `${val.toLocaleString()}${activeDistUnit.value}`;
 };
 
-const handleDistBarClick = (bar: HistogramBar) => {
+const navigateFromDistBar = (bar: HistogramBar | null) => {
   if (!bar?.playerName) return;
   const targetName = bar.playerName;
   const fromSess = activeDistFromSession.value;
   closePinnedDistTooltip();
   openPlayerByName(targetName, fromSess, true, true);
+};
+
+const handleDistBarClick = (bar: HistogramBar) => {
+  if (!bar?.playerName) return;
+  if (isDistTouchMode()) {
+    pinDistTooltip();
+    if (tappedDistBar.value && tappedDistBar.value.playerName === bar.playerName) {
+      navigateFromDistBar(bar);
+    } else {
+      tappedDistBar.value = bar;
+      hoveredDistBar.value = bar;
+    }
+    return;
+  }
+  navigateFromDistBar(bar);
 };
 
 const handleDocumentClickForDistTooltip = () => {
@@ -2205,6 +2253,7 @@ const onHoverMetric = (
     }
     isDistTooltipPinned.value = true;
     hoveredDistBar.value = null;
+    tappedDistBar.value = null;
   }
 
   const rawSourceList = (!isModalFromSession.value && isStatsQueryActive.value && activeRankingStats.value.length > 0)
@@ -2257,6 +2306,7 @@ const onHoverMetric = (
   activeDistFromSession.value = false;
   if (!isClickEvent) {
     hoveredDistBar.value = null;
+    tappedDistBar.value = null;
   }
 
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -2289,6 +2339,7 @@ const onLeaveMetric = () => {
       tooltipPos.value.visible = false;
       activeDist.value = null;
       hoveredDistBar.value = null;
+      tappedDistBar.value = null;
     }
   }, 160);
 };
@@ -7625,20 +7676,20 @@ const openGamePopupFromLightbox = async (
             :width="bar.width"
             :height="bar.height"
             :fill="
-              hoveredDistBar && hoveredDistBar.playerName === bar.playerName
+              activeDistBar && activeDistBar.playerName === bar.playerName
                 ? '#f59e0b'
                 : bar.isCurrent
                   ? '#3b82f6'
                   : (isDark ? 'rgba(148, 163, 184, 0.45)' : 'rgba(100, 116, 139, 0.35)')
             "
             :stroke="
-              hoveredDistBar && hoveredDistBar.playerName === bar.playerName
+              activeDistBar && activeDistBar.playerName === bar.playerName
                 ? '#fbbf24'
                 : bar.isCurrent
                   ? '#60a5fa'
                   : 'none'
             "
-            :stroke-width="bar.isCurrent || (hoveredDistBar && hoveredDistBar.playerName === bar.playerName) ? 1 : 0"
+            :stroke-width="bar.isCurrent || (activeDistBar && activeDistBar.playerName === bar.playerName) ? 1 : 0"
             rx="1"
           />
           <!-- 현재 플레이어 위치 상단 하이라이트 핀/삼각형 마커 -->
@@ -7711,8 +7762,9 @@ const openGamePopupFromLightbox = async (
             :width="Math.max(bar.width, 2.5)"
             height="44"
             fill="transparent"
-            @mouseenter="hoveredDistBar = bar"
-            @mouseleave="hoveredDistBar = null"
+            @pointerdown="handleDistBarPointerDown"
+            @mouseenter="handleDistBarEnter(bar)"
+            @mouseleave="handleDistBarLeave"
             @click.stop="handleDistBarClick(bar)"
           >
             <title>{{ bar.playerName }}: {{ formatDistValue(bar.value) }} (클릭하여 스탯 보기)</title>
@@ -7759,18 +7811,23 @@ const openGamePopupFromLightbox = async (
         </button>
       </div>
 
-      <!-- 막대 호버 시 해당 플레이어 정보 및 이동 안내 -->
-      <div class="dist-bar-hover-info" :class="{ active: Boolean(hoveredDistBar) }">
-        <template v-if="hoveredDistBar">
-          <span class="dist-hover-name">{{ hoveredDistBar.playerName }}</span>
-          <span class="dist-hover-val">{{ formatDistValue(hoveredDistBar.value) }}</span>
-          <span class="dist-hover-go">클릭 이동 ↗</span>
+      <!-- 막대 호버/탭 시 해당 플레이어 정보 및 이동 안내 -->
+      <div
+        class="dist-bar-hover-info"
+        :class="{ active: Boolean(activeDistBar) }"
+        :style="activeDistBar ? { cursor: 'pointer' } : undefined"
+        @click.stop="activeDistBar && navigateFromDistBar(activeDistBar)"
+      >
+        <template v-if="activeDistBar">
+          <span class="dist-hover-name">{{ activeDistBar.playerName }}</span>
+          <span class="dist-hover-val">{{ formatDistValue(activeDistBar.value) }}</span>
+          <span class="dist-hover-go">{{ tappedDistBar ? '한 번 더 탭 ↗' : '클릭 이동 ↗' }}</span>
         </template>
         <template v-else-if="isDistTooltipPinned">
-          <span class="dist-hover-hint">막대 클릭 시 해당 플레이어 스탯창으로 이동</span>
+          <span class="dist-hover-hint">막대 선택 시 플레이어 확인 · 재선택 시 이동</span>
         </template>
         <template v-else>
-          <span class="dist-hover-hint">클릭 시 팝업 고정 · 막대 클릭 시 스탯 이동</span>
+          <span class="dist-hover-hint">클릭 시 팝업 고정 · 막대 선택 시 스탯 이동</span>
         </template>
       </div>
     </div>
@@ -9915,6 +9972,15 @@ const openGamePopupFromLightbox = async (
                         </div>
                         <div 
                           class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'chaseRiichiWinRate', '추격리치 성공률', currentSessionPlayerStats.chaseRiichiWinRate ?? 0, true, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'chaseRiichiWinRate', '추격리치 성공률', currentSessionPlayerStats.chaseRiichiWinRate ?? 0, true, '%')"
+                        >
+                          <span class="stat_label">추격리치 성공률</span>
+                          <span class="stat_value text_positive">{{ formatPct(currentSessionPlayerStats.chaseRiichiWinRate ?? 0) }}</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격률', currentSessionPlayerStats.chasedRiichiRate, false, '%')" 
                           @mouseleave="onLeaveMetric"
                           @click.stop="onHoverSessionMetric($event, 'chasedRiichiRate', '피추격률', currentSessionPlayerStats.chasedRiichiRate, false, '%')"
@@ -10836,6 +10902,15 @@ const openGamePopupFromLightbox = async (
               >
                 <span class="stat_label">추격률</span>
                 <span class="stat_value">{{ formatPct(displayPlayerStats.chaseRiichiRate) }}</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'chaseRiichiWinRate', '추격리치 성공률', displayPlayerStats.chaseRiichiWinRate ?? 0, true, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'chaseRiichiWinRate', '추격리치 성공률', displayPlayerStats.chaseRiichiWinRate ?? 0, true, '%')"
+              >
+                <span class="stat_label">추격리치 성공률</span>
+                <span class="stat_value text_positive">{{ formatPct(displayPlayerStats.chaseRiichiWinRate ?? 0) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 
