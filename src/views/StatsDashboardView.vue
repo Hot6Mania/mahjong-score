@@ -2063,7 +2063,7 @@ const activeDistName = ref('');
 const activeDistUnit = ref('');
 const activeDistScopeNote = ref('');
 const activeDistBandFilter = ref<string>('all');
-const distMinGames = ref<number>(20);
+const distMinGames = ref<number>(10);
 
 const selectedPlayerStableRating = computed(() => {
   const p = selectedPlayer.value;

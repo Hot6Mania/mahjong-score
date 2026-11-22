@@ -125,8 +125,8 @@ const highlightedIdx = ref(0);
 const selectedPlayerName = ref('');
 const showAllPlayerGames = ref(false);
 
-// 통계 스탯 분포(상위 %) 기준 최소 총 대국수 (기본 20회 이상) + 별도 최소 국 수 옵션
-const playerTabMinGames = ref<number>(20);
+// 통계 스탯 분포(상위 %) 기준 최소 총 대국수 (기본 10회 이상) + 별도 최소 국 수 옵션
+const playerTabMinGames = ref<number>(10);
 const playerTabMinRounds = ref<number>(0);
 
 const sortedAllMembers = computed<MemberStatItem[]>(() => {
