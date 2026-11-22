@@ -3490,11 +3490,12 @@ export const recalculateAndSyncAllRatings = async (
         if (!gameId || gameId === '대국 ID') return;
 
         const time = r[1] ? String(r[1]).trim() : '';
+        const parseRawNum = (v: any) => Number(String(v ?? '').replace(/,/g, '').trim()) || 0;
         const pList = [
-          { name: r[2] ? String(r[2]).trim() : '', rank: Number(r[3]) || 1, score: Number(r[4]) || 0, uma: parseFloat(String(r[5] || '').replace(/,/g, '')) || 0 },
-          { name: r[6] ? String(r[6]).trim() : '', rank: Number(r[7]) || 2, score: Number(r[8]) || 0, uma: parseFloat(String(r[9] || '').replace(/,/g, '')) || 0 },
-          { name: r[10] ? String(r[10]).trim() : '', rank: Number(r[11]) || 3, score: Number(r[12]) || 0, uma: parseFloat(String(r[13] || '').replace(/,/g, '')) || 0 },
-          { name: r[14] ? String(r[14]).trim() : '', rank: Number(r[15]) || 4, score: Number(r[16]) || 0, uma: parseFloat(String(r[17] || '').replace(/,/g, '')) || 0 }
+          { name: r[2] ? String(r[2]).trim() : '', rank: Number(r[3]) || 1, score: parseRawNum(r[4]), uma: parseFloat(String(r[5] || '').replace(/,/g, '')) || 0 },
+          { name: r[6] ? String(r[6]).trim() : '', rank: Number(r[7]) || 2, score: parseRawNum(r[8]), uma: parseFloat(String(r[9] || '').replace(/,/g, '')) || 0 },
+          { name: r[10] ? String(r[10]).trim() : '', rank: Number(r[11]) || 3, score: parseRawNum(r[12]), uma: parseFloat(String(r[13] || '').replace(/,/g, '')) || 0 },
+          { name: r[14] ? String(r[14]).trim() : '', rank: Number(r[15]) || 4, score: parseRawNum(r[16]), uma: parseFloat(String(r[17] || '').replace(/,/g, '')) || 0 }
         ];
 
         if (pList.some(p => !p.name)) return;

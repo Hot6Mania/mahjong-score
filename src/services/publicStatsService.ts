@@ -2579,7 +2579,8 @@ export function calculateAllPlayersRatingTrajectory(
     if (sessMatch) {
       const sessName = `제${sessMatch[1]}회`;
       sessionGameCounters[sessName] = (sessionGameCounters[sessName] || 0) + 1;
-      const roundNum = sessionGameCounters[sessName];
+      const explicitRound = raw.match(/(\d+)\s*회전/);
+      const roundNum = explicitRound ? parseInt(explicitRound[1], 10) : sessionGameCounters[sessName];
       const normalized = `${sessName} ${roundNum}회전`;
       g.sessionLabel = normalized;
       labels.push(normalized);
@@ -2754,8 +2755,16 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
             }
           });
 
-          let runningRatings: Record<string, PlayerRating> = {};
-          const historyRecords: GameRatingHistoryRecord[] = [];
+          interface ParsedHistoryEntry {
+            gameIdx: number;
+            sessLabel: string;
+            sessionNum: number;
+            roundNum: number | null;
+            dateStr: string;
+            matchPlayers: { name: string; rank: number; score: number; uma?: number }[];
+          }
+
+          let parsedEntries: ParsedHistoryEntry[] = [];
 
           table.rows.forEach((r: any) => {
             if (!r.c) return;
@@ -2793,36 +2802,164 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
             }
 
             if (matchPlayers.length === 4) {
-              const curGameIdx = gameIdx || (historyRecords.length + 1);
-              const { updatedRatings, matchDeltas } = calculateMatchRatings(matchPlayers, runningRatings, {
-                gameIndex: curGameIdx,
-                sessionLabel: sessLabel,
-                date: dateStr
-              });
-              Object.assign(runningRatings, updatedRatings);
-
-              const pList = matchPlayers.map(mp => {
-                const d = matchDeltas[mp.name];
-                const calcUma = mp.uma !== undefined && !isNaN(mp.uma)
-                  ? mp.uma
-                  : parseFloat((((mp.score - 30000) / 1000) + (mp.rank === 1 ? 40 : (mp.rank === 2 ? 10 : (mp.rank === 3 ? -10 : -20)))).toFixed(1));
-                return {
-                  name: mp.name,
-                  rank: mp.rank,
-                  score: mp.score,
-                  uma: calcUma,
-                  ordinal: d ? d.newOrdinal : 1320,
-                  delta: d ? d.delta : 0
-                };
-              });
-
-              historyRecords.push({
-                gameIndex: curGameIdx,
-                sessionLabel: sessLabel,
-                date: dateStr,
-                players: pList
+              const sMatch = sessLabel.match(/제\s*(\d+)\s*회/);
+              const rMatch = sessLabel.match(/(\d+)\s*회전/);
+              parsedEntries.push({
+                gameIdx,
+                sessLabel,
+                sessionNum: sMatch ? parseInt(sMatch[1], 10) : 0,
+                roundNum: rMatch ? parseInt(rMatch[1], 10) : null,
+                dateStr,
+                matchPlayers
               });
             }
+          });
+
+          // 1) '레이팅 이력' 시트에 누락된 회전(예: 1,2,4회전 -> 3회전 누락) 또는 중복 회전이 있는 회차(제9회 이후) 감지 및 (raw) 시트 자동 보정
+          const roundsBySession = new Map<number, number[]>();
+          const countBySession = new Map<number, number>();
+          for (const entry of parsedEntries) {
+            if (entry.sessionNum >= 9) {
+              countBySession.set(entry.sessionNum, (countBySession.get(entry.sessionNum) || 0) + 1);
+              if (entry.roundNum !== null) {
+                const arr = roundsBySession.get(entry.sessionNum) || [];
+                arr.push(entry.roundNum);
+                roundsBySession.set(entry.sessionNum, arr);
+              }
+            }
+          }
+
+          const sessionsToReconcile = new Set<number>();
+          for (const [sNum, roundNums] of roundsBySession.entries()) {
+            const seen = new Set<number>();
+            let hasDup = false;
+            let maxR = 0;
+            for (const rn of roundNums) {
+              if (seen.has(rn)) hasDup = true;
+              seen.add(rn);
+              if (rn > maxR) maxR = rn;
+            }
+            let hasGap = false;
+            for (let k = 1; k <= maxR; k++) {
+              if (!seen.has(k)) {
+                hasGap = true;
+                break;
+              }
+            }
+            if (hasGap || hasDup) {
+              sessionsToReconcile.add(sNum);
+            }
+          }
+
+          if (sessionsToReconcile.size > 0) {
+            try {
+              const allSessions = await fetchPublicSessions(spreadsheetId, forceRefresh);
+              const sessionNameByNum = new Map<number, string>();
+              for (const sName of allSessions) {
+                const m = String(sName || '').match(/제\s*(\d+)\s*회/);
+                if (m) sessionNameByNum.set(parseInt(m[1], 10), sName);
+              }
+
+              const reconciledBySession = new Map<number, ParsedHistoryEntry[]>();
+              await Promise.all(
+                Array.from(sessionsToReconcile).map(async (sNum) => {
+                  const fullSessName = sessionNameByNum.get(sNum);
+                  if (!fullSessName) return;
+                  try {
+                    const detail = await fetchPublicSessionDetail(fullSessName, spreadsheetId, forceRefresh);
+                    const existingCount = countBySession.get(sNum) || 0;
+                    if (!detail || !Array.isArray(detail.games) || detail.games.length < existingCount || detail.games.length === 0) {
+                      return;
+                    }
+                    const rebuilt: ParsedHistoryEntry[] = [];
+                    detail.games.forEach((g, gIdx) => {
+                      if (!Array.isArray(g.players) || g.players.length !== 4) return;
+                      const sortedPlayers = [...g.players].sort((a, b) => a.rank - b.rank);
+                      const mp = sortedPlayers.map((p, idx) => {
+                        const rawName = String(p.name || '').trim();
+                        const norm = normalizeRatingPlayerName(rawName);
+                        if (rawName && norm && !canonicalNameByNorm.has(norm)) {
+                          canonicalNameByNorm.set(norm, rawName);
+                        }
+                        const canonical = (norm && canonicalNameByNorm.get(norm)) || rawName;
+                        return {
+                          name: canonical,
+                          rank: p.rank || idx + 1,
+                          score: Number(p.score) || 0,
+                          uma: p.uma !== undefined && !isNaN(Number(p.uma)) ? Number(p.uma) : undefined
+                        };
+                      });
+                      rebuilt.push({
+                        gameIdx: 0,
+                        sessLabel: `제${sNum}회 ${gIdx + 1}회전`,
+                        sessionNum: sNum,
+                        roundNum: gIdx + 1,
+                        dateStr: formatSheetDateValue(g.time || ''),
+                        matchPlayers: mp
+                      });
+                    });
+                    if (rebuilt.length >= existingCount && rebuilt.length > 0) {
+                      reconciledBySession.set(sNum, rebuilt);
+                    }
+                  } catch (recErr) {
+                    console.warn(`제${sNum}회 레이팅 이력 (raw) 자동 보정 실패:`, recErr);
+                  }
+                })
+              );
+
+              if (reconciledBySession.size > 0) {
+                const mergedEntries: ParsedHistoryEntry[] = [];
+                const insertedSessions = new Set<number>();
+                for (const entry of parsedEntries) {
+                  if (reconciledBySession.has(entry.sessionNum)) {
+                    if (!insertedSessions.has(entry.sessionNum)) {
+                      insertedSessions.add(entry.sessionNum);
+                      mergedEntries.push(...reconciledBySession.get(entry.sessionNum)!);
+                    }
+                  } else {
+                    mergedEntries.push(entry);
+                  }
+                }
+                parsedEntries = mergedEntries;
+              }
+            } catch (reconcileAllErr) {
+              console.warn("레이팅 이력 누락 회차 보정 중 오류:", reconcileAllErr);
+            }
+          }
+
+          let runningRatings: Record<string, PlayerRating> = {};
+          const historyRecords: GameRatingHistoryRecord[] = [];
+
+          parsedEntries.forEach((entry) => {
+            const curGameIdx = historyRecords.length + 1;
+            const { updatedRatings, matchDeltas } = calculateMatchRatings(entry.matchPlayers, runningRatings, {
+              gameIndex: curGameIdx,
+              sessionLabel: entry.sessLabel,
+              date: entry.dateStr
+            });
+            Object.assign(runningRatings, updatedRatings);
+
+            const pList = entry.matchPlayers.map(mp => {
+              const d = matchDeltas[mp.name];
+              const calcUma = mp.uma !== undefined && !isNaN(mp.uma)
+                ? mp.uma
+                : parseFloat((((mp.score - 30000) / 1000) + (mp.rank === 1 ? 40 : (mp.rank === 2 ? 10 : (mp.rank === 3 ? -10 : -20)))).toFixed(1));
+              return {
+                name: mp.name,
+                rank: mp.rank,
+                score: mp.score,
+                uma: calcUma,
+                ordinal: d ? d.newOrdinal : 1320,
+                delta: d ? d.delta : 0
+              };
+            });
+
+            historyRecords.push({
+              gameIndex: curGameIdx,
+              sessionLabel: entry.sessLabel,
+              date: entry.dateStr,
+              players: pList
+            });
           });
 
           if (historyRecords.length >= 107) {
@@ -2852,6 +2989,8 @@ export async function fetchPublicRatingTimeline(spreadsheetId?: string, forceRef
 
 /**
  * 특정 회차의 대국 목록에 대국 전/후 레이팅 및 변동치를 주입
+ * - 동일 4인이 여러 경기를 치른 경우에도 점수·순위까지 검증하여 1:1 매칭 (다른 경기 레이팅 오매칭 방지)
+ * - '레이팅 이력' 시트에 일부 경기가 누락된 경우 이전 회차까지의 레이팅 상태를 기반으로 해당 회차 전 경기를 순차 재계산하여 정확히 주입
  */
 export function attachRatingToSessionGames(
   sessionName: string,
@@ -2860,53 +2999,152 @@ export function attachRatingToSessionGames(
 ): void {
   if (!games || games.length === 0 || !historyRecords || historyRecords.length === 0) return;
 
+  // 재호출 시 이전 오매칭 잔여값 초기화
+  games.forEach((game) => {
+    game.players.forEach((p) => {
+      delete p.ratingBefore;
+      delete p.ratingAfter;
+      delete p.ratingDelta;
+    });
+  });
+
   const sessTargetMatch = sessionName.match(/제\s*(\d+)\s*회/);
   const sessionNum = sessTargetMatch ? parseInt(sessTargetMatch[1], 10) : 0;
   const sessionPrefix = sessTargetMatch ? sessTargetMatch[0] : sessionName;
 
   const sessionRecords = historyRecords.filter(r => {
     const rMatch = r.sessionLabel.match(/제\s*(\d+)\s*회/);
-    if (rMatch) {
+    if (rMatch && sessionNum > 0) {
       return parseInt(rMatch[1], 10) === sessionNum;
     }
     return r.sessionLabel.includes(sessionPrefix);
   });
 
-  games.forEach((game, gameIdx) => {
-    const gamePlayerNorms = new Set(game.players.map(p => normalizeRatingPlayerName(p.name)));
-    let matchedRecord = sessionRecords.find(r => {
-      return r.players.length === 4 && r.players.filter(p => gamePlayerNorms.has(normalizeRatingPlayerName(p.name))).length === 4;
+  const hasSameFourPlayers = (game: SessionGame, rec: GameRatingHistoryRecord): boolean => {
+    if (game.players.length !== 4 || rec.players.length !== 4) return false;
+    const gNames = game.players.map(p => normalizeRatingPlayerName(p.name)).sort();
+    const rNames = rec.players.map(p => normalizeRatingPlayerName(p.name)).sort();
+    return gNames.every((n, i) => n !== '' && n === rNames[i]);
+  };
+
+  const isExactScoreAndRankMatch = (game: SessionGame, rec: GameRatingHistoryRecord): boolean => {
+    if (!hasSameFourPlayers(game, rec)) return false;
+    return rec.players.every(hp => {
+      const hpNorm = normalizeRatingPlayerName(hp.name);
+      const gp = game.players.find(p => normalizeRatingPlayerName(p.name) === hpNorm);
+      return Boolean(gp && gp.score === hp.score && gp.rank === hp.rank);
     });
+  };
 
-    if (!matchedRecord && sessionRecords[gameIdx]) {
-      matchedRecord = sessionRecords[gameIdx];
-    } else if (matchedRecord) {
-      const candidateRecords = sessionRecords.filter(r => {
-        return r.players.length === 4 && r.players.filter(p => gamePlayerNorms.has(normalizeRatingPlayerName(p.name))).length === 4;
-      });
-      if (candidateRecords.length > 1) {
-        const scoreMatched = candidateRecords.find(r => {
-          return r.players.every(hp => {
-            const hpNorm = normalizeRatingPlayerName(hp.name);
-            const gp = game.players.find(p => normalizeRatingPlayerName(p.name) === hpNorm);
-            return gp && gp.score === hp.score;
-          });
-        });
-        if (scoreMatched) matchedRecord = scoreMatched;
-      }
+  const isRankAndUmaMatch = (game: SessionGame, rec: GameRatingHistoryRecord): boolean => {
+    if (!hasSameFourPlayers(game, rec)) return false;
+    return rec.players.every(hp => {
+      const hpNorm = normalizeRatingPlayerName(hp.name);
+      const gp = game.players.find(p => normalizeRatingPlayerName(p.name) === hpNorm);
+      return Boolean(gp && gp.rank === hp.rank && Math.abs((gp.uma ?? 0) - (hp.uma ?? 0)) <= 0.15);
+    });
+  };
+
+  const matchedRecordByGameIdx = new Map<number, GameRatingHistoryRecord>();
+  const usedRecordIndices = new Set<number>();
+
+  // 1차 패스: 4명 이름 + 점수 + 순위 완전 일치 1:1 매칭
+  games.forEach((game, gameIdx) => {
+    const recIdx = sessionRecords.findIndex((r, idx) => !usedRecordIndices.has(idx) && isExactScoreAndRankMatch(game, r));
+    if (recIdx !== -1) {
+      usedRecordIndices.add(recIdx);
+      matchedRecordByGameIdx.set(gameIdx, sessionRecords[recIdx]);
     }
+  });
 
-    if (matchedRecord) {
+  // 2차 패스: 미매칭 경기에 한해 4명 이름 + 순위 + 우마 일치(±0.15 허용) 1:1 매칭
+  games.forEach((game, gameIdx) => {
+    if (matchedRecordByGameIdx.has(gameIdx)) return;
+    const recIdx = sessionRecords.findIndex((r, idx) => !usedRecordIndices.has(idx) && isRankAndUmaMatch(game, r));
+    if (recIdx !== -1) {
+      usedRecordIndices.add(recIdx);
+      matchedRecordByGameIdx.set(gameIdx, sessionRecords[recIdx]);
+    }
+  });
+
+  // 모든 경기가 정확히 매칭되었고 회차 경기 수도 일치하면 이력 레코드 그대로 주입
+  if (matchedRecordByGameIdx.size === games.length && sessionRecords.length === games.length) {
+    games.forEach((game, gameIdx) => {
+      const matchedRecord = matchedRecordByGameIdx.get(gameIdx);
+      if (!matchedRecord) return;
       game.players.forEach(p => {
         const pNorm = normalizeRatingPlayerName(p.name);
-        const hp = matchedRecord!.players.find(hp => hp.name === p.name || normalizeRatingPlayerName(hp.name) === pNorm);
+        const hp = matchedRecord.players.find(hp => hp.name === p.name || normalizeRatingPlayerName(hp.name) === pNorm);
         if (hp) {
           p.ratingAfter = hp.ordinal;
           p.ratingDelta = hp.delta;
           p.ratingBefore = hp.ordinal - hp.delta;
         }
       });
+    });
+    return;
+  }
+
+  // 일부 경기가 '레이팅 이력' 시트에서 누락되었거나 불일치하는 경우:
+  // 직전 회차까지의 전체 이력을 리플레이하여 회차 시작 레이팅을 복원한 뒤, (raw) 기준 전 경기를 순차 계산해 정확히 주입
+  if (sessionNum > 0) {
+    const runningRatings: Record<string, PlayerRating> = {};
+    for (const r of historyRecords) {
+      const rMatch = r.sessionLabel.match(/제\s*(\d+)\s*회/);
+      const rNum = rMatch ? parseInt(rMatch[1], 10) : 0;
+      if (rNum > 0 && rNum >= sessionNum) continue;
+      if (!Array.isArray(r.players) || r.players.length !== 4) continue;
+      const { updatedRatings } = calculateMatchRatings(
+        r.players.map(p => ({
+          name: p.name,
+          rank: p.rank,
+          score: p.score,
+          uma: p.uma
+        })),
+        runningRatings
+      );
+      Object.assign(runningRatings, updatedRatings);
     }
+
+    games.forEach((game) => {
+      if (!Array.isArray(game.players) || game.players.length !== 4) return;
+      const sortedPlayers = [...game.players].sort((a, b) => a.rank - b.rank);
+      const { updatedRatings, matchDeltas } = calculateMatchRatings(
+        sortedPlayers.map(p => ({
+          name: p.name,
+          rank: p.rank,
+          score: p.score,
+          uma: p.uma
+        })),
+        runningRatings
+      );
+      Object.assign(runningRatings, updatedRatings);
+
+      game.players.forEach(p => {
+        const d = matchDeltas[p.name];
+        if (d) {
+          p.ratingBefore = d.oldOrdinal;
+          p.ratingAfter = d.newOrdinal;
+          p.ratingDelta = d.delta;
+        }
+      });
+    });
+    return;
+  }
+
+  // 회차 번호를 알 수 없는 특수 케이스는 정확히 일치한 경기만 안전하게 반영 (절대 타 경기 오매칭 금지)
+  games.forEach((game, gameIdx) => {
+    const matchedRecord = matchedRecordByGameIdx.get(gameIdx);
+    if (!matchedRecord) return;
+    game.players.forEach(p => {
+      const pNorm = normalizeRatingPlayerName(p.name);
+      const hp = matchedRecord.players.find(hp => hp.name === p.name || normalizeRatingPlayerName(hp.name) === pNorm);
+      if (hp) {
+        p.ratingAfter = hp.ordinal;
+        p.ratingDelta = hp.delta;
+        p.ratingBefore = hp.ordinal - hp.delta;
+      }
+    });
   });
 }
 

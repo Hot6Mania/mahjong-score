@@ -2589,7 +2589,7 @@ const startNewGame = async (skipConfirm = false) => {
 };
 
 // 현재 게임 결과 정산 데이터를 구글 스프레드시트 및 로컬 스토리지에 기록합니다.
-const saveGameToSheet = async (silent: boolean = false) => {
+const saveGameToSheet = async (silent: boolean = false, skipSheetRatingUpdate: boolean = false) => {
   // 현재 판의 플레이어 명단 & 최종 점수 조합이 이미 대국 히스토리 리스트에 등록되어 있는지 대조 검사
   const currentSetup = players.map(p => ({ name: p.name, score: p.displayScore }));
   const isAlreadyInHistory = todayGamesHistory.some((g: any) => {
@@ -2723,7 +2723,8 @@ const saveGameToSheet = async (silent: boolean = false) => {
       ratingDeltaSummary = `\n[레이팅] ${deltasStr}`;
 
       // 구글 시트 연동 중일 경우 실시간으로 '레이팅' 및 '레이팅 이력' 시트 즉시 갱신
-      if (googleInfo.isLoggedIn && googleInfo.spreadsheetId && googleInfo.syncMode === 'google') {
+      // (원클릭 기록+동기화 경로에서는 직후 syncLocalDataToGoogle에서 (raw) 기준 전수 정합성 동기화를 수행하므로 중복 API 호출 생략)
+      if (!skipSheetRatingUpdate && googleInfo.isLoggedIn && googleInfo.spreadsheetId && googleInfo.syncMode === 'google') {
         const sessMatch = (currentSessionSheetName.value || '').match(/제\s*(\d+)\s*회/);
         const cleanSessName = sessMatch ? `제${sessMatch[1]}회` : (currentSessionSheetName.value || '회차');
         const sessionRoundLabel = `${cleanSessName} ${todayGamesHistory.length}회전`;
@@ -3143,6 +3144,26 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
         console.warn("'통계' 시트 최종우마 동기화 중 오류:", statsSyncErr);
       }
 
+      // [6-2] '레이팅' 및 '레이팅 이력' 시트를 전체 (raw) 대국 기준으로 정합성 동기화 (실시간 갱신 실패·누락 방지)
+      try {
+        const ratingSyncRes = await recalculateAndSyncAllRatings(googleInfo.spreadsheetId);
+        if (ratingSyncRes.success && Object.keys(ratingSyncRes.ratings).length > 0) {
+          ratingsMap.value = ratingSyncRes.ratings;
+          localStorage.setItem("mahjong_ratings", JSON.stringify(ratingSyncRes.ratings));
+          players.forEach(p => {
+            const pNorm = normalizeRatingPlayerName(p.name);
+            const matched =
+              ratingSyncRes.ratings[p.name] ||
+              Object.values(ratingSyncRes.ratings).find(r => normalizeRatingPlayerName(r.name) === pNorm);
+            if (matched) {
+              p.rating = matched.ordinal;
+            }
+          });
+        }
+      } catch (ratingSyncErr) {
+        console.warn("일괄 동기화 후 레이팅 시트 정합성 동기화 중 오류:", ratingSyncErr);
+      }
+
       // [7] KML 기록 시스템(kml.or.kr/stat255) 신규 대국 자동 동기화 (Worker KV 중복 방지 보장)
       try {
         const kmlGamesPayload: KmlSyncGameInput[] = todayGamesHistory
@@ -3259,12 +3280,14 @@ const saveAndSyncGame = async () => {
 
   try {
     // 1. 로컬에 아직 미저장 상태라면 로컬 저장 먼저 안전하게 실행 (데이터 유실 방지)
+    //    구글 연동 모드에서는 직후 syncLocalDataToGoogle에서 (raw) 기준 레이팅 정합성 동기화를 수행하므로 중복 실시간 시트 쓰기 생략
+    const willSyncToGoogle = googleInfo.isLoggedIn && googleInfo.syncMode === 'google';
     if (!isGameSaved.value) {
-      await saveGameToSheet(true); // silent = true
+      await saveGameToSheet(true, willSyncToGoogle); // silent = true
     }
 
     // 2. 구글 스프레드시트 일괄 동기화 (확인창 생략)
-    if (googleInfo.isLoggedIn && googleInfo.syncMode === 'google') {
+    if (willSyncToGoogle) {
       const success = await syncLocalDataToGoogle(true); // skipConfirm = true
       if (success) {
         isGameSynced.value = true;
