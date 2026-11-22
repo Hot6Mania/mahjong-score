@@ -821,7 +821,7 @@ const ratingStartNum = ref<number>(1);
 const ratingEndNum = ref<number>(1);
 const ratingDateStart = ref<string>('');
 const ratingDateEnd = ref<string>('');
-const ratingMinGames = ref<number>(20);
+const ratingMinGames = ref<number>(10);
 const ratingMinRounds = ref<number>(0);
 const ratingScopedMembers = ref<MemberStatItem[] | null>(null);
 const isLoadingRatingScope = ref(false);
@@ -892,10 +892,10 @@ const loadRatingScopedData = async () => {
 
 const setRatingScopeMode = (mode: RatingScopeMode) => {
   ratingScopeMode.value = mode;
-  // 단기 기간/회차 구간 조회 전환 시 20전 필터로 비어 보이지 않도록 자동 완화, 전체 기간 복귀 시 기본 20회
+  // 단기 기간/회차 구간 조회 전환 시 10전 필터로 비어 보이지 않도록 자동 완화, 전체 기간 복귀 시 기본 10회
   if (mode === 'overall') {
-    if (ratingMinGames.value === 0) ratingMinGames.value = 20;
-  } else if (ratingMinGames.value >= 20) {
+    if (ratingMinGames.value === 0) ratingMinGames.value = 10;
+  } else if (ratingMinGames.value >= 10) {
     ratingMinGames.value = 0;
   }
   initRatingScopeDefaults();
@@ -1840,7 +1840,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 분포 기준 총 대국수 N회 이상 (기본 20회) -->
+        <!-- 분포 기준 총 대국수 N회 이상 (기본 10회) -->
         <div class="sp-min-rounds-row">
           <span class="sp-quick-lbl">분포 기준 (총 대국수):</span>
           <button
