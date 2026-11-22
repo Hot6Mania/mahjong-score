@@ -1188,19 +1188,27 @@ const getSignColor = (sign: number, x: boolean) => {
   scrollbar-color: #888888 var(--bg-stripe-dark);
 }
 
-/* 게임 결과창(표) */
+/* 게임 결과창(표) — 화면 비율을 넉넉하게 채워 가시성 극대화 */
 .result_sheet_modal {
-  width: min(92vw, 780px);
-  padding: 16px 18px;
-  border-radius: 12px;
+  width: min(94%, 1160px);
+  min-height: min(74%, 580px);
+  max-height: 94%;
+  padding: clamp(18px, 2.8vmin, 32px) clamp(18px, 3vmin, 36px);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
 }
 .result_sheet_wrapper {
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   align-items: stretch;
-  gap: 14px;
+  gap: clamp(16px, 2.6vmin, 28px);
   width: 100%;
   max-width: 100%;
+  flex: 1;
 }
 .result_sheet_table_wrap {
   width: 100%;
@@ -1208,18 +1216,21 @@ const getSignColor = (sign: number, x: boolean) => {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   cursor: pointer;
+  flex: 1;
+  display: flex;
+  align-items: center;
 }
 .resultsheet_table {
   width: 100%;
   border-collapse: collapse;
   text-align: center;
-  font-size: 18px;
+  font-size: clamp(20px, 2.8vmin, 30px);
   white-space: nowrap;
 }
 .resultsheet_table th {
   font-weight: 700;
-  font-size: 14px;
-  padding: 9px 10px;
+  font-size: clamp(15px, 2.1vmin, 22px);
+  padding: clamp(11px, 1.8vmin, 18px) clamp(8px, 1.4vmin, 16px);
   background-color: var(--bg-card);
   color: var(--text-dimmed);
   border-top: 1px solid var(--border-color);
@@ -1227,7 +1238,7 @@ const getSignColor = (sign: number, x: boolean) => {
   transition: border-color 0.3s ease, background-color 0.3s ease;
 }
 .resultsheet_table td {
-  padding: 11px 8px;
+  padding: clamp(14px, 2.4vmin, 26px) clamp(8px, 1.4vmin, 16px);
   border-bottom: 1px solid var(--border-color);
   vertical-align: middle;
   transition: border-color 0.3s ease;
@@ -1240,7 +1251,7 @@ const getSignColor = (sign: number, x: boolean) => {
   font-weight: 700;
 }
 .rs-name {
-  font-weight: 600;
+  font-weight: 700;
 }
 .rs-ellipsis {
   vertical-align: bottom;
@@ -1253,11 +1264,11 @@ const getSignColor = (sign: number, x: boolean) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
   white-space: nowrap;
 }
 .rs-score-val {
-  font-weight: 600;
+  font-weight: 700;
 }
 .rs-score-uma {
   font-size: 0.92em;
@@ -1265,7 +1276,7 @@ const getSignColor = (sign: number, x: boolean) => {
 .rs-rating-nums {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
 }
 .rs-rating-before {
   font-weight: 600;
@@ -1289,18 +1300,18 @@ const getSignColor = (sign: number, x: boolean) => {
 .result_sheet_actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: clamp(10px, 1.8vmin, 18px);
 }
 .result_sheet_actions.is-google .rs-btn-sync {
   grid-column: 1 / -1;
 }
 .rs-btn {
-  padding: 13px 14px;
-  min-height: 46px;
-  font-size: 16px;
+  padding: clamp(14px, 2.2vmin, 22px) clamp(16px, 2.4vmin, 24px);
+  min-height: clamp(54px, 7.5vmin, 74px);
+  font-size: clamp(18px, 2.4vmin, 25px);
   font-weight: bold;
   border: none;
-  border-radius: 8px;
+  border-radius: 12px;
   cursor: pointer;
   transition: opacity 0.2s, background-color 0.2s;
   display: inline-flex;
@@ -1671,100 +1682,105 @@ const getSignColor = (sign: number, x: boolean) => {
     max-height: 94dvw;
   }
   .result_sheet_modal {
-    width: min(92vh, 780px);
-    width: min(92dvh, 780px);
+    width: min(94vh, 1160px);
+    width: min(94dvh, 1160px);
+    min-height: min(76vw, 580px);
+    min-height: min(76dvw, 580px);
   }
   .container_option {
     max-height: 55vw;
   }
 }
 
-/* 모바일 / iPhone SE 대응 결과창 — 화면 비율을 넉넉하게 채우도록 최적화 */
-@media (max-width: 768px), (max-height: 500px) {
+/* 모바일 / 태블릿 소형 대응 결과창 — 화면 비율을 넉넉하게 채우도록 최적화 */
+@media (max-width: 900px), (max-height: 540px) {
   .result_sheet_modal {
-    width: 92vw;
-    width: 92dvw;
-    padding: 12px 12px;
+    width: 95%;
+    min-height: 82%;
+    padding: 14px 16px;
+    border-radius: 14px;
   }
   .result_sheet_wrapper {
-    gap: 10px;
+    gap: 12px;
   }
   .resultsheet_table {
-    font-size: 14.5px;
+    font-size: clamp(16px, 3.8vmin, 21px);
   }
   .resultsheet_table th {
-    padding: 7px 5px;
-    font-size: 12.5px;
+    padding: 9px 6px;
+    font-size: clamp(13px, 3.1vmin, 16px);
   }
   .resultsheet_table td {
-    padding: 8px 5px;
+    padding: 11px 6px;
   }
   .rs-score-wrap,
   .rs-rating-wrap {
     gap: 3px;
   }
   .rs-rating-nums {
-    gap: 1.5px;
+    gap: 2px;
   }
   .rs-score-uma,
   .rs-rating-delta {
-    font-size: 12.5px;
+    font-size: 0.9em;
   }
   .rs-btn {
-    padding: 11px 10px;
-    min-height: 44px;
-    font-size: 14.5px;
+    padding: 12px 12px;
+    min-height: 48px;
+    font-size: clamp(15px, 3.6vmin, 18px);
   }
 }
 
-/* 세로모드 모바일에서는 회전된 가로 폭(92dvh)으로 상자 확장 */
-@media (orientation: portrait) and (max-width: 768px) {
+/* 세로모드 모바일에서는 회전된 가로/세로 폭으로 상자 확장 */
+@media (orientation: portrait) and (max-width: 900px) {
   .result_sheet_modal {
-    width: 92vh;
-    width: 92dvh;
+    width: 95vh;
+    width: 95dvh;
+    min-height: 82vw;
+    min-height: 82dvw;
   }
 }
 
-/* 세로 공간이 좁은 화면(iPhone SE 가로/세로 회전 포함)에서는 버튼을 1줄로 크고 넓게 배치 */
-@media (max-height: 480px), (orientation: portrait) and (max-width: 480px) {
+/* 세로 공간이 좁은 화면(모바일 가로/세로 회전 포함)에서는 버튼을 1줄로 크고 넓게 배치 */
+@media (max-height: 500px), (orientation: portrait) and (max-width: 500px) {
   .result_sheet_actions.is-google {
     grid-template-columns: 1.35fr 1fr 1fr;
-    gap: 8px;
+    gap: 10px;
   }
   .result_sheet_actions.is-google .rs-btn-sync {
     grid-column: auto;
   }
   .result_sheet_actions.is-local {
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    gap: 10px;
   }
   .rs-btn {
-    padding: 11px 8px;
-    min-height: 44px;
-    font-size: 14px;
+    padding: 12px 10px;
+    min-height: 48px;
+    font-size: 15.5px;
   }
 }
 
-/* 초협소 화면(iPhone SE 1세대 460px 등 진짜 좁을 때만) 2줄 스택 전환 */
-@media (max-width: 470px) and (orientation: landscape), (max-height: 490px) and (orientation: portrait) {
+/* 초협소 화면(iPhone SE 1세대 등 진짜 좁을 때만) 2줄 스택 전환 */
+@media (max-width: 560px) and (orientation: landscape), (max-height: 560px) and (orientation: portrait) {
   .result_sheet_modal {
-    width: 94vw;
-    width: 94dvw;
-    padding: 9px 8px;
+    width: 96%;
+    min-height: 84%;
+    padding: 10px 10px;
   }
   .result_sheet_wrapper {
     gap: 8px;
   }
   .resultsheet_table {
-    font-size: 12px;
+    font-size: 13.5px;
   }
   .resultsheet_table th {
-    padding: 5px 3px;
-    font-size: 11px;
+    padding: 6px 4px;
+    font-size: 12px;
     letter-spacing: -0.3px;
   }
   .resultsheet_table td {
-    padding: 5px 3px;
+    padding: 7px 4px;
   }
   .rs-score-wrap,
   .rs-rating-wrap {
@@ -1774,19 +1790,21 @@ const getSignColor = (sign: number, x: boolean) => {
   }
   .rs-score-uma,
   .rs-rating-delta {
-    font-size: 10.5px;
+    font-size: 11.5px;
   }
   .rs-btn {
-    padding: 9px 6px;
-    min-height: 40px;
-    font-size: 12.5px;
+    padding: 10px 8px;
+    min-height: 42px;
+    font-size: 13.5px;
   }
 }
 
-@media (max-height: 490px) and (orientation: portrait) {
+@media (max-height: 560px) and (orientation: portrait) {
   .result_sheet_modal {
-    width: 94vh;
-    width: 94dvh;
+    width: 96vh;
+    width: 96dvh;
+    min-height: 84vw;
+    min-height: 84dvw;
   }
 }
 </style>

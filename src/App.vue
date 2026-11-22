@@ -4277,25 +4277,26 @@ html.dark .oauth-redirect-loading {
 .sync-loader-card {
   background: var(--bg-modal, #1e1e1e);
   border: 1px solid var(--border-color, #444);
-  padding: 30px;
-  border-radius: 12px;
-  width: 320px;
+  padding: 36px 32px;
+  border-radius: 16px;
+  width: min(88%, 460px);
   text-align: center;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   color: var(--text-color, #fff);
+  box-sizing: border-box;
 }
 .sync-loader-title {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: bold;
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
 .sync-progress-container {
   width: 100%;
-  height: 12px;
+  height: 16px;
   background: #333;
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 .sync-progress-bar {
   height: 100%;
@@ -4303,7 +4304,7 @@ html.dark .oauth-redirect-loading {
   transition: width 0.3s ease;
 }
 .sync-progress-text {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: bold;
 }
 
