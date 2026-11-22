@@ -787,7 +787,7 @@ export const withSheetsReadRetry = async <T>(
 // ==========================================
 const SPREADSHEET_METADATA_TTL_MS = 60_000;
 const SPREADSHEET_METADATA_FIELDS =
-  'spreadsheetId,sheets(properties(sheetId,title,index,hidden,gridProperties(rowCount,columnCount)),basicFilter,alternatingColorRules)';
+  'spreadsheetId,sheets(properties(sheetId,title,index,hidden,gridProperties(rowCount,columnCount)),basicFilter,bandedRanges)';
 
 const spreadsheetMetadataCache = new Map<string, { data: any; fetchedAt: number }>();
 const spreadsheetMetadataInFlight = new Map<string, Promise<any>>();
@@ -806,7 +806,7 @@ export const invalidateSpreadsheetMetadataCache = (spreadsheetId?: string): void
 };
 
 /**
- * 스프레드시트 메타데이터(시트 목록, gridProperties, basicFilter, alternatingColorRules)를
+ * 스프레드시트 메타데이터(시트 목록, gridProperties, basicFilter, bandedRanges)를
  * 60초 TTL 캐시 + 동시 호출 병합(in-flight dedup) + fields 마스크 + 429 백오프로 조회합니다.
  */
 export const getSpreadsheetMetadataCached = async (
@@ -1583,18 +1583,18 @@ export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<v
         });
       }
 
-      // 교차 색상 규칙(Alternating Colors)도 최신 멤버 행까지 확장
-      const altRules = allStatsSheet.alternatingColorRules;
-      if (Array.isArray(altRules) && altRules.length > 0) {
+      // 교차 색상 규칙(Banded Ranges)도 최신 멤버 행까지 확장
+      const bandedRanges = allStatsSheet.bandedRanges;
+      if (Array.isArray(bandedRanges) && bandedRanges.length > 0 && bandedRanges[0]?.bandedRangeId !== undefined) {
         requests.push({
-          updateAlternatingColorRule: {
-            alternatingColorRule: {
-              alternatingColorRuleId: altRules[0].alternatingColorRuleId,
+          updateBanding: {
+            bandedRange: {
+              bandedRangeId: bandedRanges[0].bandedRangeId,
               range: {
                 sheetId: allStatsSheetId,
-                startRowIndex: 1,
+                startRowIndex: bandedRanges[0].range?.startRowIndex ?? 0,
                 endRowIndex: lastDataRow,
-                startColumnIndex: 0,
+                startColumnIndex: bandedRanges[0].range?.startColumnIndex ?? 0,
                 endColumnIndex: allStatsEndCol,
               },
             },
@@ -2370,21 +2370,21 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
     if (!sheet) return;
     
     const sheetId = sheet.properties.sheetId;
-    const rules = sheet.alternatingColorRules;
-    if (!rules || rules.length === 0) {
+    const bandedRanges = sheet.bandedRanges;
+    if (!Array.isArray(bandedRanges) || bandedRanges.length === 0 || bandedRanges[0]?.bandedRangeId === undefined) {
       console.log("통계 시트에 정의된 교차 색상 규칙이 없습니다.");
       return;
     }
 
-    const rule = rules[0];
-    const ruleId = rule.alternatingColorRuleId;
+    const rule = bandedRanges[0];
+    const bandedRangeId = rule.bandedRangeId;
     const maxCols = sheet.properties?.gridProperties?.columnCount || 39;
     
     const newRange = {
       sheetId: sheetId,
-      startRowIndex: 1,
+      startRowIndex: rule.range?.startRowIndex ?? 0,
       endRowIndex: totalMembers + 1,
-      startColumnIndex: 0,
+      startColumnIndex: rule.range?.startColumnIndex ?? 0,
       endColumnIndex: Math.min(39, maxCols) // A~AM열
     };
 
@@ -2393,9 +2393,9 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
       resource: {
         requests: [
           {
-            updateAlternatingColorRule: {
-              alternatingColorRule: {
-                alternatingColorRuleId: ruleId,
+            updateBanding: {
+              bandedRange: {
+                bandedRangeId,
                 range: newRange
               },
               fields: "range"

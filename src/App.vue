@@ -13,6 +13,9 @@ import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
 import { secureShuffle, getSecureRandomInt } from "@/utils/random"
 
+/**i18n 속성 가져오기*/
+const { t, locale } = useI18n()
+
 /**라우터 가져오기*/
 const router = useRouter()
 const route = useRoute()
@@ -38,9 +41,6 @@ watch(isStatsRoute, (val) => {
 const isSyncingGame = ref(false)
 const isGameSynced = ref(false)
 const isProcessingOAuthRedirect = ref<boolean>(hasPendingOAuthRedirectParams())
-
-/**i18n 속성 가져오기*/
-const { t, locale } = useI18n()
 
 /**data 정의*/
 // 로컬 스토리지에 백업된 대국 데이터가 있는지 확인하고 복원
