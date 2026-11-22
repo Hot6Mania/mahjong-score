@@ -1945,6 +1945,7 @@ export async function fetchSessionDetailedStats(
     const rawAgg: Record<string, {
       name: string;
       gameIds: Set<string>;
+      gameUmaById: Map<string, { maxSeq: number; uma: number }>;
       ranks: Record<number, number>;
       totalUmaSum: number;
       rankSum: number;
@@ -1991,6 +1992,7 @@ export async function fetchSessionDetailedStats(
         rawAgg[player] = {
           name: player,
           gameIds: new Set<string>(),
+          gameUmaById: new Map<string, { maxSeq: number; uma: number }>(),
           ranks: { 1: 0, 2: 0, 3: 0, 4: 0 },
           totalUmaSum: 0,
           rankSum: 0,
@@ -2030,17 +2032,28 @@ export async function fetchSessionDetailedStats(
       p.totalRounds++;
 
       const gameId = getCellStr(r.c[1]).trim();
+      const roundSeq = getCellNum(r.c[3], 0);
       const rank = getCellNum(r.c[13]);
       const uma = getCellNum(r.c[14]);
       const finalScore = getCellNum(r.c[8]);
 
-      if (gameId && !p.gameIds.has(gameId)) {
-        p.gameIds.add(gameId);
-        if (rank >= 1 && rank <= 4) {
-          p.ranks[rank]++;
-          p.rankSum += rank;
+      if (gameId) {
+        if (!p.gameIds.has(gameId)) {
+          p.gameIds.add(gameId);
+          if (rank >= 1 && rank <= 4) {
+            p.ranks[rank]++;
+            p.rankSum += rank;
+          }
+          p.gameUmaById.set(gameId, { maxSeq: roundSeq, uma });
+          p.totalUmaSum += uma;
+        } else {
+          const prev = p.gameUmaById.get(gameId);
+          if (prev && roundSeq >= prev.maxSeq) {
+            p.totalUmaSum += uma - prev.uma;
+            prev.maxSeq = roundSeq;
+            prev.uma = uma;
+          }
         }
-        p.totalUmaSum += uma;
       }
 
       if (gameId && finalScore < 0 && !p.tobiGameIds.has(gameId)) {
@@ -2339,8 +2352,10 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string, forceRefres
         const name = getCellStr(r.c[0]).trim();
         if (!name || name === "이름" || name.startsWith("#")) return;
 
-        const total = parseFloat(getCellNum(r.c[1]).toFixed(1));
+        const sheetTotal = parseFloat(getCellNum(r.c[1]).toFixed(1));
         const sessionUmas: Record<string, number | null> = {};
+        let computedSessionSum = 0;
+        let hasAnySessionVal = false;
 
         for (let c = 2; c < cols.length; c++) {
           const label = cols[c]?.label || "";
@@ -2350,12 +2365,18 @@ export async function fetchPublicStatsMatrix(spreadsheetId?: string, forceRefres
             if (!sessions.includes(sessName)) continue; // 미개최 회차 스킵
             const cell = r.c[c];
             if (cell && (cell.v !== null && cell.v !== undefined || cell.f !== null && cell.f !== undefined)) {
-              sessionUmas[sessName] = parseFloat(getCellNum(cell).toFixed(1));
+              const val = parseFloat(getCellNum(cell).toFixed(1));
+              sessionUmas[sessName] = val;
+              computedSessionSum += val;
+              hasAnySessionVal = true;
             } else {
               sessionUmas[sessName] = null;
             }
           }
         }
+
+        // 시트 B열 수식이 과거 열(예: AA)까지만 합산되어 있는 경우에도 전체 회차 열 합계로 정확한 누적 우마 산출
+        const total = hasAnySessionVal ? parseFloat(computedSessionSum.toFixed(1)) : sheetTotal;
 
         rows.push({
           name,
@@ -3998,6 +4019,7 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
   const rawAgg: Record<string, {
     name: string;
     gameIds: Set<string>;
+    gameUmaById: Map<string, { maxSeq: number; uma: number }>;
     ranks: Record<number, number>;
     totalUmaSum: number;
     rankSum: number;
@@ -4042,6 +4064,7 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
       rawAgg[player] = {
         name: player,
         gameIds: new Set<string>(),
+        gameUmaById: new Map<string, { maxSeq: number; uma: number }>(),
         ranks: { 1: 0, 2: 0, 3: 0, 4: 0 },
         totalUmaSum: 0,
         rankSum: 0,
@@ -4081,17 +4104,28 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
     p.totalRounds++;
 
     const gameId = getCellStr(r.c[1]).trim();
+    const roundSeq = getCellNum(r.c[3], 0);
     const rank = getCellNum(r.c[13]);
     const uma = getCellNum(r.c[14]);
     const finalScore = getCellNum(r.c[8]);
 
-    if (gameId && !p.gameIds.has(gameId)) {
-      p.gameIds.add(gameId);
-      if (rank >= 1 && rank <= 4) {
-        p.ranks[rank]++;
-        p.rankSum += rank;
+    if (gameId) {
+      if (!p.gameIds.has(gameId)) {
+        p.gameIds.add(gameId);
+        if (rank >= 1 && rank <= 4) {
+          p.ranks[rank]++;
+          p.rankSum += rank;
+        }
+        p.gameUmaById.set(gameId, { maxSeq: roundSeq, uma });
+        p.totalUmaSum += uma;
+      } else {
+        const prev = p.gameUmaById.get(gameId);
+        if (prev && roundSeq >= prev.maxSeq) {
+          p.totalUmaSum += uma - prev.uma;
+          prev.maxSeq = roundSeq;
+          prev.uma = uma;
+        }
       }
-      p.totalUmaSum += uma;
     }
 
     if (gameId && finalScore < 0 && !p.tobiGameIds.has(gameId)) {

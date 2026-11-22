@@ -1276,12 +1276,15 @@ export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<v
       });
     }
 
-    // 4. B열 수식이 비어있는 행이 있다면 =SUM(C{r}:ZZ{r}) 보충
+    // 4. B열 수식이 비어있거나 ZZ열까지 포함하지 않는 제한된 SUM(예: C2:AA2)이면 =SUM(C{r}:ZZ{r})로 일괄 보충/확장
     const missingSumUpdates: { range: string; values: string[][] }[] = [];
     for (let r = 2; r <= lastDataRow; r++) {
       const name = (rows[r - 1]?.[0] || '').toString().trim();
       const formula = (rows[r - 1]?.[1] || '').toString().trim();
-      if (name && (!formula || !formula.startsWith('='))) {
+      const isTruncatedSum =
+        /^=(?:IFERROR\s*\(\s*)?SUM\s*\(\s*\$?C\$?\d+\s*:\s*\$?([A-Z]+)\$?\d+\s*\)/i.test(formula) &&
+        !/:\s*\$?ZZ\$?\d+/i.test(formula);
+      if (name && (!formula || !formula.startsWith('=') || isTruncatedSum)) {
         missingSumUpdates.push({
           range: `'통계'!B${r}`,
           values: [[`=SUM(C${r}:ZZ${r})`]],
@@ -1297,7 +1300,7 @@ export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<v
           data: missingSumUpdates,
         },
       });
-      console.log(`'통계' 시트 B열 누락 수식 보충 완료 (${missingSumUpdates.length}개 행)`);
+      console.log(`'통계' 시트 B열 총합 수식(=SUM(C:ZZ)) 보충/확장 완료 (${missingSumUpdates.length}개 행)`);
     }
 
     // 5. 2행의 서식을 3행 ~ lastDataRow까지 copyPaste (PASTE_FORMAT)
@@ -1339,12 +1342,58 @@ export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<v
       },
     });
 
+    // 7. '전체 멤버별 통계' 시트의 기본 필터 및 교차 색상 범위도 최신 멤버 행(lastDataRow)까지 동기화
+    const allStatsSheet = sheets.find((s: any) => s.properties.title === '전체 멤버별 통계');
+    if (allStatsSheet) {
+      const allStatsSheetId = allStatsSheet.properties.sheetId;
+      const allStatsMaxCols = allStatsSheet.properties?.gridProperties?.columnCount || 39;
+      const allStatsEndCol = Math.min(39, allStatsMaxCols);
+
+      // '전체 멤버별 통계'에 기본 필터가 설정되어 있으면 최신 멤버 행까지 확장
+      if (allStatsSheet.basicFilter) {
+        requests.push({
+          setBasicFilter: {
+            filter: {
+              ...allStatsSheet.basicFilter,
+              range: {
+                sheetId: allStatsSheetId,
+                startRowIndex: 0,
+                endRowIndex: lastDataRow,
+                startColumnIndex: 0,
+                endColumnIndex: allStatsEndCol,
+              },
+            },
+          },
+        });
+      }
+
+      // 교차 색상 규칙(Alternating Colors)도 최신 멤버 행까지 확장
+      const altRules = allStatsSheet.alternatingColorRules;
+      if (Array.isArray(altRules) && altRules.length > 0) {
+        requests.push({
+          updateAlternatingColorRule: {
+            alternatingColorRule: {
+              alternatingColorRuleId: altRules[0].alternatingColorRuleId,
+              range: {
+                sheetId: allStatsSheetId,
+                startRowIndex: 1,
+                endRowIndex: lastDataRow,
+                startColumnIndex: 0,
+                endColumnIndex: allStatsEndCol,
+              },
+            },
+            fields: 'range',
+          },
+        });
+      }
+    }
+
     if (requests.length > 0) {
       await window.gapi.client.sheets.spreadsheets.batchUpdate({
         spreadsheetId,
         resource: { requests },
       });
-      console.log(`'통계' 시트 서식/필터 자동 동기화 완료: 2~${lastDataRow}행, A~${getColumnLetter(lastColIdx)}열`);
+      console.log(`'통계' 및 '전체 멤버별 통계' 시트 서식/필터 자동 동기화 완료: 2~${lastDataRow}행, A~${getColumnLetter(lastColIdx)}열`);
     }
   } catch (err) {
     console.warn("'통계' 시트 서식 및 필터 자동 동기화 중 오류 (무시 가능):", err);
@@ -1554,10 +1603,8 @@ export const syncSessionUmaToStatsSheet = async (
       }
     }
 
-    // 5. 신규 멤버가 추가된 경우에만 '통계' 시트 서식(테두리, 서식 등), B열 수식 및 필터 범위 자동 동기화 (평소 동기화 시간 대폭 단축)
-    if (newMembersToAdd.length > 0) {
-      await syncStatsSheetFormatting(spreadsheetId);
-    }
+    // 5. 신규 회차 열 추가 및 기존/신규 멤버 행(FOKKIA, RABU 등)이 필터·서식·총합(C:ZZ) 범위에서 누락되지 않도록 항상 동기화
+    await syncStatsSheetFormatting(spreadsheetId);
   } catch (err) {
     console.warn("'통계' 시트 최종우마 자동 연동 중 오류 (무시 가능):", err);
   }
@@ -2180,7 +2227,8 @@ export const addNewMembersToDb = async (spreadsheetId: string, names: string[]):
       });
       console.log(`'통계' 시트에 신규 멤버 [${toAddToStats.join(', ')}] 등록 완료 (A${startRow}:B${endRow})`);
 
-      // 교차 색상 범위 갱신
+      // '통계' 및 '전체 멤버별 통계' 서식/필터/교차 색상 범위 즉시 동기화
+      await syncStatsSheetFormatting(spreadsheetId);
       const totalMembers = statsExisting.size + toAddToStats.length;
       await updateAlternatingColorsRange(spreadsheetId, totalMembers);
     }

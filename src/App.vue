@@ -2790,8 +2790,28 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
     if (!isValid) return false;
 
     if (todayGamesHistory.length === 0) {
-      if (!skipConfirm) alert("오늘 기록된 로컬 대국 이력이 없습니다.");
-      return false;
+      isSaving.value = true;
+      syncLoaderTitle.value = "'통계' 시트 수식·필터 최신화 중...";
+      syncProgress.value = 30;
+      try {
+        await syncStatsSheetFormatting(googleInfo.spreadsheetId);
+        syncProgress.value = 75;
+        notifyWorkerCacheInvalidate();
+        try {
+          const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+          googleMemberStats.value = stats;
+        } catch (_) {}
+        syncProgress.value = 100;
+        if (!skipConfirm) {
+          triggerToast("새로운 대국은 없으나 '통계'·'전체 멤버별 통계' 총합 수식 및 필터 범위를 최신으로 갱신했습니다!");
+        }
+        return true;
+      } finally {
+        isSaving.value = false;
+        setTimeout(() => {
+          syncProgress.value = 0;
+        }, 800);
+      }
     }
 
     // 종료된 회차(과거 회차 또는 마감된 회차) 동기화 보호 가드
@@ -3153,6 +3173,21 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       triggerToast("동기화 성공!");
       return true;
     } else {
+      // 새로운 대국이 없더라도 '통계'·'전체 멤버별 통계' B열 총합 수식(C:ZZ), 필터·서식·교차 색상 범위를 최신 행/열까지 동기화
+      syncLoaderTitle.value = "'통계' 시트 수식·필터 최신화 중...";
+      syncProgress.value = 70;
+      try {
+        await syncStatsSheetFormatting(googleInfo.spreadsheetId);
+        notifyWorkerCacheInvalidate(sessionSheetName);
+        try {
+          const stats = await fetchMemberStats(googleInfo.spreadsheetId);
+          googleMemberStats.value = stats;
+        } catch (_) {}
+      } catch (fmtErr) {
+        console.warn("통계 시트 서식/필터 보충 동기화 중 오류:", fmtErr);
+      }
+      syncProgress.value = 100;
+
       if (skipCount > 0) {
         // 시트에는 이미 올라갔으나 KML에 미등록된 대국이 있을 경우를 대비해 보충 동기화
         let kmlUploaded = 0;
@@ -3179,16 +3214,14 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
         } catch (_) {}
 
         if (kmlUploaded > 0) {
-          triggerToast(`KML 기록 시스템에 누락된 ${kmlUploaded}개 대국이 동기화되었습니다!`);
-        } else if (!skipConfirm) {
-          alert(`동기화할 새로운 대국이 없습니다. (오늘 로컬의 ${skipCount}개 대국은 이미 스프레드시트에 존재합니다.)`);
+          triggerToast(`KML 누락 ${kmlUploaded}건 동기화 및 통계 시트 수식·필터 갱신 완료!`);
         } else {
-          triggerToast("이미 구글 시트에 최신 반영되어 있습니다.");
+          triggerToast("새로운 대국은 없으나 '통계'·'전체 멤버별 통계' 총합 수식·필터 및 캐시를 최신으로 갱신했습니다!");
         }
         return true;
       } else {
-        if (!skipConfirm) alert("동기화할 세부 기록이 없습니다.");
-        return false;
+        triggerToast("'통계'·'전체 멤버별 통계' 총합 수식 및 필터 범위를 최신으로 갱신했습니다!");
+        return true;
       }
     }
   } catch (err) {
