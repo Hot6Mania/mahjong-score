@@ -116,6 +116,8 @@ export interface MemberStatItem {
   oyaKaburiRate: number;
   oyaKaburiAvg: number;
   dealInRiichiRate: number;
+  yakitoriRate: number; // 야키토리율 (한 게임에서 화료 0회 비율 %)
+  yakitoriCount?: number; // 야키토리 게임 횟수
   cheatRate: number; // 촌보율 (0 ~ 100 %, 소수점 5자리)
   beolbuRate: number; // 벌부율 (0 ~ 100 %, 소수점 5자리)
   cheatCount?: number;
@@ -1288,6 +1290,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
           oyaKaburiRate: parseFloat((getCellNum(row[29]) * 100).toFixed(2)),
           oyaKaburiAvg: Math.round(getCellNum(row[30])),
           dealInRiichiRate: parseFloat((getCellNum(row[31]) * 100).toFixed(2)),
+          yakitoriRate: 0,
           cheatRate: sheetCheatRate,
           beolbuRate: sheetBeolbuRate,
           cheatCount: Math.round((sheetCheatRate / 100) * totalRounds),
@@ -1410,6 +1413,7 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
         oyaKaburiRate: 0,
         oyaKaburiAvg: 0,
         dealInRiichiRate: 0,
+        yakitoriRate: 0,
         cheatRate: 0,
         beolbuRate: 0,
         cheatCount: 0,
@@ -1471,22 +1475,35 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
       console.warn("레이팅 데이터 주입 실패:", rErr);
     }
 
-    // '국별 기록' 원본 데이터에서 추격리치 성공률(추격리치 국 중 화료 비율) 자동 가공 주입
+    // '국별 기록' 원본 데이터에서 추격리치 성공률 및 야키토리율(1게임 화료 0회 비율) 자동 가공 주입
     try {
       const roundRows = await fetchAllPublicRoundsRows(sId, forceRefresh);
       const chaseMap = new Map<string, { chase: number; chaseWin: number }>();
+      const yakitoriMap = new Map<string, { gameIds: Set<string>; wonGameIds: Set<string> }>();
       for (let i = 0; i < roundRows.length; i++) {
         const r = roundRows[i];
         if (!r?.c) continue;
         const rawName = getCellStr(r.c[5]).trim();
         if (!rawName) continue;
+        const norm = normalizeRatingPlayerName(rawName);
+        if (!norm) continue;
+        const gameId = getCellStr(r.c[1]).trim();
+        const isWin = r.c[10]?.v === true || r.c[10]?.v === "TRUE" || r.c[10]?.v === 1;
+
+        if (gameId) {
+          let yEntry = yakitoriMap.get(norm);
+          if (!yEntry) {
+            yEntry = { gameIds: new Set<string>(), wonGameIds: new Set<string>() };
+            yakitoriMap.set(norm, yEntry);
+          }
+          yEntry.gameIds.add(gameId);
+          if (isWin) yEntry.wonGameIds.add(gameId);
+        }
+
         const isRiichi = r.c[9]?.v === true || r.c[9]?.v === "TRUE" || r.c[9]?.v === 1;
         if (!isRiichi) continue;
         const isChase = r.c[17]?.v === true || r.c[17]?.v === "TRUE" || r.c[17]?.v === 1;
         if (!isChase) continue;
-        const isWin = r.c[10]?.v === true || r.c[10]?.v === "TRUE" || r.c[10]?.v === 1;
-        const norm = normalizeRatingPlayerName(rawName);
-        if (!norm) continue;
         const cur = chaseMap.get(norm) || { chase: 0, chaseWin: 0 };
         cur.chase++;
         if (isWin) cur.chaseWin++;
@@ -1496,17 +1513,26 @@ export async function fetchPublicAllStats(spreadsheetId?: string, forceRefresh: 
         const norm = normalizeRatingPlayerName(item.name);
         const c = norm ? chaseMap.get(norm) : undefined;
         const rate = c && c.chase > 0 ? parseFloat(((c.chaseWin / c.chase) * 100).toFixed(2)) : 0;
+        const y = norm ? yakitoriMap.get(norm) : undefined;
+        const yTotal = y ? y.gameIds.size : 0;
+        const yCount = y ? Math.max(0, yTotal - y.wonGameIds.size) : 0;
+        const yRate = yTotal > 0 ? parseFloat(((yCount / yTotal) * 100).toFixed(2)) : 0;
+
         item.chaseRiichiWinRate = rate;
         item.chaseRiichiCount = c ? c.chase : 0;
         item.chaseRiichiWinCount = c ? c.chaseWin : 0;
+        item.yakitoriRate = yRate;
+        item.yakitoriCount = yCount;
         if (item.detailedStats) {
           item.detailedStats.chaseRiichiWinRate = rate;
           item.detailedStats.chaseRiichiCount = c ? c.chase : 0;
           item.detailedStats.chaseRiichiWinCount = c ? c.chaseWin : 0;
+          item.detailedStats.yakitoriRate = yRate;
+          item.detailedStats.yakitoriCount = yCount;
         }
       });
     } catch (cErr) {
-      console.warn("추격리치 성공률 가공 주입 실패:", cErr);
+      console.warn("추격리치 성공률/야키토리율 가공 주입 실패:", cErr);
     }
 
     cachedAllStats = items;
@@ -1945,6 +1971,7 @@ export async function fetchSessionDetailedStats(
     const rawAgg: Record<string, {
       name: string;
       gameIds: Set<string>;
+      wonGameIds: Set<string>;
       gameUmaById: Map<string, { maxSeq: number; uma: number }>;
       ranks: Record<number, number>;
       totalUmaSum: number;
@@ -1992,6 +2019,7 @@ export async function fetchSessionDetailedStats(
         rawAgg[player] = {
           name: player,
           gameIds: new Set<string>(),
+          wonGameIds: new Set<string>(),
           gameUmaById: new Map<string, { maxSeq: number; uma: number }>(),
           ranks: { 1: 0, 2: 0, 3: 0, 4: 0 },
           totalUmaSum: 0,
@@ -2083,6 +2111,7 @@ export async function fetchSessionDetailedStats(
 
       if (isWin) {
         p.winCount++;
+        if (gameId) p.wonGameIds.add(gameId);
         const scoreToAdd = pureScore > 0 ? pureScore : delta;
         p.totalWinScore += scoreToAdd;
         if (endStatus === "tsumo") p.tsumoWinCount++;
@@ -2171,6 +2200,8 @@ export async function fetchSessionDetailedStats(
       const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(2)) : 0;
       const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
       const dealInRiichiRate = p.loseCount > 0 ? parseFloat(((p.loseWithRiichiCount / p.loseCount) * 100).toFixed(2)) : 0;
+      const yakitoriCount = Math.max(0, totalGames - p.wonGameIds.size);
+      const yakitoriRate = totalGames > 0 ? parseFloat(((yakitoriCount / totalGames) * 100).toFixed(2)) : 0;
       const cheatRate = parseFloat(((p.cheatCount / totalRounds) * 100).toFixed(4));
       const beolbuRate = parseFloat(((p.beolbuCount / totalRounds) * 100).toFixed(4));
 
@@ -2224,6 +2255,8 @@ export async function fetchSessionDetailedStats(
         oyaKaburiRate,
         oyaKaburiAvg,
         dealInRiichiRate,
+        yakitoriRate,
+        yakitoriCount,
         cheatRate,
         beolbuRate,
         cheatCount: p.cheatCount,
@@ -4019,6 +4052,7 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
   const rawAgg: Record<string, {
     name: string;
     gameIds: Set<string>;
+    wonGameIds: Set<string>;
     gameUmaById: Map<string, { maxSeq: number; uma: number }>;
     ranks: Record<number, number>;
     totalUmaSum: number;
@@ -4064,6 +4098,7 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
       rawAgg[player] = {
         name: player,
         gameIds: new Set<string>(),
+        wonGameIds: new Set<string>(),
         gameUmaById: new Map<string, { maxSeq: number; uma: number }>(),
         ranks: { 1: 0, 2: 0, 3: 0, 4: 0 },
         totalUmaSum: 0,
@@ -4155,6 +4190,7 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
 
     if (isWin) {
       p.winCount++;
+      if (gameId) p.wonGameIds.add(gameId);
       const scoreToAdd = pureScore > 0 ? pureScore : delta;
       p.totalWinScore += scoreToAdd;
       if (endStatus === 'tsumo') p.tsumoWinCount++;
@@ -4242,6 +4278,8 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
     const oyaKaburiRate = p.oyaTsumoSufferedCount > 0 ? parseFloat(((p.oyaManganSufferedCount / p.oyaTsumoSufferedCount) * 100).toFixed(2)) : 0;
     const oyaKaburiAvg = p.oyaManganSufferedCount > 0 ? Math.round(p.oyaManganLossSum / p.oyaManganSufferedCount) : 0;
     const dealInRiichiRate = p.loseCount > 0 ? parseFloat(((p.loseWithRiichiCount / p.loseCount) * 100).toFixed(2)) : 0;
+    const yakitoriCount = Math.max(0, totalGames - p.wonGameIds.size);
+    const yakitoriRate = totalGames > 0 ? parseFloat(((yakitoriCount / totalGames) * 100).toFixed(2)) : 0;
     const cheatRate = parseFloat(((p.cheatCount / totalRounds) * 100).toFixed(4));
     const beolbuRate = parseFloat(((p.beolbuCount / totalRounds) * 100).toFixed(4));
 
@@ -4295,6 +4333,8 @@ function aggregateRoundsRowsToMemberStats(rows: any[]): Record<string, MemberSta
       oyaKaburiRate,
       oyaKaburiAvg,
       dealInRiichiRate,
+      yakitoriRate,
+      yakitoriCount,
       cheatRate,
       beolbuRate,
       cheatCount: p.cheatCount,
@@ -4382,6 +4422,7 @@ function createZeroDetailedStatItem(
     oyaKaburiRate: 0,
     oyaKaburiAvg: 0,
     dealInRiichiRate: 0,
+    yakitoriRate: 0,
     cheatRate: 0,
     beolbuRate: 0,
     cheatCount: 0,

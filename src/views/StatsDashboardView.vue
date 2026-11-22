@@ -1702,6 +1702,7 @@ const currentSessionPlayerStats = computed<MemberStatItem | null>(() => {
     oyaKaburiRate: 0,
     oyaKaburiAvg: 0,
     dealInRiichiRate: 0,
+    yakitoriRate: 0,
     cheatRate: 0,
     beolbuRate: 0,
     cheatCount: 0,
@@ -10021,6 +10022,15 @@ const openGamePopupFromLightbox = async (
                         </div>
                         <div 
                           class="stat_row hoverable" 
+                          @mouseenter="onHoverSessionMetric($event, 'yakitoriRate', '야키토리율', currentSessionPlayerStats.yakitoriRate ?? 0, false, '%')" 
+                          @mouseleave="onLeaveMetric"
+                          @click.stop="onHoverSessionMetric($event, 'yakitoriRate', '야키토리율', currentSessionPlayerStats.yakitoriRate ?? 0, false, '%')"
+                        >
+                          <span class="stat_label">야키토리율</span>
+                          <span class="stat_value text_negative">{{ formatPct(currentSessionPlayerStats.yakitoriRate ?? 0) }}</span>
+                        </div>
+                        <div 
+                          class="stat_row hoverable" 
                           @mouseenter="onHoverSessionMetric($event, 'cheatRate', '촌보율', currentSessionPlayerStats.cheatRate, false, '%')" 
                           @mouseleave="onLeaveMetric"
                           @click.stop="onHoverSessionMetric($event, 'cheatRate', '촌보율', currentSessionPlayerStats.cheatRate, false, '%')"
@@ -10951,6 +10961,15 @@ const openGamePopupFromLightbox = async (
               >
                 <span class="stat_label">방총 시 리치율</span>
                 <span class="stat_value">{{ formatPct(displayPlayerStats.dealInRiichiRate) }}</span>
+              </div>
+              <div 
+                class="stat_row hoverable" 
+                @mouseenter="onHoverMetric($event, 'yakitoriRate', '야키토리율', displayPlayerStats.yakitoriRate ?? 0, false, '%')" 
+                @mouseleave="onLeaveMetric"
+                @click.stop="onHoverMetric($event, 'yakitoriRate', '야키토리율', displayPlayerStats.yakitoriRate ?? 0, false, '%')"
+              >
+                <span class="stat_label">야키토리율</span>
+                <span class="stat_value text_negative">{{ formatPct(displayPlayerStats.yakitoriRate ?? 0) }}</span>
               </div>
               <div 
                 class="stat_row hoverable" 

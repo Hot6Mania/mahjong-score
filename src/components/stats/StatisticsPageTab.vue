@@ -690,6 +690,7 @@ const otherStatCells = computed<PageStatCell[]>(() => {
     { key: 'oyaKaburiRate', label: '아픈 오야카부리율', value: d.oyaKaburiRate, higherIsBetter: false, unit: '%' },
     { key: 'oyaKaburiAvg', label: '아픈 오야카부리 평균', value: d.oyaKaburiAvg, higherIsBetter: false, unit: '점' },
     { key: 'dealInRiichiRate', label: '방총 시 리치율', value: d.dealInRiichiRate, higherIsBetter: false, unit: '%' },
+    { key: 'yakitoriRate', label: '야키토리율', value: d.yakitoriRate ?? 0, higherIsBetter: false, unit: '%' },
     {
       key: 'cheatRate',
       label: '촌보율',

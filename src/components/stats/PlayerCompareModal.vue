@@ -394,6 +394,7 @@ const compareSections = computed<CompareSection[]>(() => {
     buildRow('oyaKaburiRate', '아픈 오야카부리율', detValA((d) => d.oyaKaburiRate), detValB((d) => d.oyaKaburiRate), false, fmtPct, (d) => `${d.toFixed(2)}%p`),
     buildRow('oyaKaburiAvg', '아픈 오야카부리 평균', detValA((d) => d.oyaKaburiAvg), detValB((d) => d.oyaKaburiAvg), false, fmtScore, (d) => `${Math.round(d).toLocaleString()}점`),
     buildRow('dealInRiichiRate', '방총 시 리치율', detValA((d) => d.dealInRiichiRate), detValB((d) => d.dealInRiichiRate), false, fmtPct, (d) => `${d.toFixed(2)}%p`),
+    buildRow('yakitoriRate', '야키토리율', detValA((d) => d.yakitoriRate ?? 0), detValB((d) => d.yakitoriRate ?? 0), false, fmtPct, (d) => `${d.toFixed(2)}%p`),
     buildRow('winEfficiency', '화료 효율', detValA((d) => d.winEfficiency), detValB((d) => d.winEfficiency), true, (v) => v.toLocaleString(), (d) => Math.round(d).toLocaleString()),
     buildRow('dealInLoss', '방총 손실', detValA((d) => d.dealInLoss), detValB((d) => d.dealInLoss), false, (v) => v.toLocaleString(), (d) => Math.round(d).toLocaleString()),
     buildRow(
