@@ -558,9 +558,21 @@ const getMetricDistForSelected = (
   if (!selectedPlayer.value || activePlayerScopeMembers.value.length === 0) return null;
   const overallKeys: (keyof MemberStatItem)[] = ['totalGames', 'totalUma', 'avgUma', 'avgRank', 'top2Rate'];
   const isOverall = overallKeys.includes(key);
+
+  // 조회 중인 본인이 최소 대국수/국수 조건을 충족하지 못해도 히스토그램에 본인 막대가 표기되도록 포함
+  const me = selectedPlayer.value;
+  const normMe = normalizeRatingPlayerName(me.name);
+  const alreadyIncluded = activePlayerScopeMembers.value.some(
+    (m) => normalizeRatingPlayerName(m.name) === normMe
+  );
+  const membersForDist =
+    !alreadyIncluded && (me.totalGames || 0) > 0
+      ? [...activePlayerScopeMembers.value, me]
+      : activePlayerScopeMembers.value;
+
   const targetList = isOverall
-    ? activePlayerScopeMembers.value
-    : activePlayerScopeMembers.value.map((m) => (m.detailedStats ? { ...m.detailedStats, rating: m.rating } : m));
+    ? membersForDist
+    : membersForDist.map((m) => (m.detailedStats ? { ...m.detailedStats, rating: m.rating } : m));
   const isUnrecorded = !isOverall && !hasSelectedDetail.value;
   return calculateMetricDistribution(
     targetList,
@@ -569,7 +581,7 @@ const getMetricDistForSelected = (
     val,
     unit,
     higherIsBetter,
-    selectedPlayer.value.name,
+    me.name,
     isUnrecorded
   );
 };

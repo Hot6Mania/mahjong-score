@@ -109,7 +109,7 @@ import {
 import zoomPlugin from 'chartjs-plugin-zoom';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import { getRatingColor, hexToRgba, computeStableRating } from '@/utils/ratingEngine';
+import { getRatingColor, hexToRgba, computeStableRating, normalizeRatingPlayerName } from '@/utils/ratingEngine';
 
 ChartJS.register(Title, ChartTooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, zoomPlugin);
 
@@ -2265,10 +2265,26 @@ const onHoverMetric = (
   const useMinGamesFilter = !isStatsQueryActive.value;
   const minG = useMinGamesFilter ? Math.max(0, Math.floor(Number(distMinGames.value) || 0)) : 0;
   const filteredByGames = minG > 0 ? rawSourceList.filter(m => (m.totalGames || 0) >= minG) : rawSourceList;
-  const sourceList = filteredByGames.length > 0 ? filteredByGames : rawSourceList;
+  const baseSourceList = filteredByGames.length > 0 ? filteredByGames : rawSourceList;
+
+  // 조회 중인 본인이 최소 대국수 조건을 충족하지 못해도 히스토그램에 본인 위치는 항상 표기되도록 포함
+  const currentMember = selectedPlayer.value;
+  const normCurrentName = currentMember ? normalizeRatingPlayerName(currentMember.name) : '';
+  const hasCurrentInSource = normCurrentName
+    ? baseSourceList.some((m) => normalizeRatingPlayerName(m.name) === normCurrentName)
+    : true;
+  const shouldIncludeCurrent = Boolean(
+    currentMember && (currentMember.totalGames || 0) > 0 && !hasCurrentInSource
+  );
+  const sourceList = shouldIncludeCurrent && currentMember
+    ? [...baseSourceList, currentMember]
+    : baseSourceList;
+
   activeDistScopeNote.value =
     minG > 0 && filteredByGames.length > 0
-      ? `총 대국수 ${minG}회 이상 (${filteredByGames.length}명) 기준`
+      ? shouldIncludeCurrent
+        ? `총 대국수 ${minG}회 이상 (${filteredByGames.length}명) + 본인 포함 기준`
+        : `총 대국수 ${minG}회 이상 (${filteredByGames.length}명) 기준`
       : isStatsQueryActive.value && statsQueryResult.value
         ? `${statsQueryResult.value.summaryLabel} 기준`
         : '전체 멤버 기준';
