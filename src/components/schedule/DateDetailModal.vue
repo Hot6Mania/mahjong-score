@@ -15,7 +15,7 @@ import {
   recordPinSuccess,
   applyDelayIfRepeated
 } from '@/utils/pinRateLimiter';
-import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName, notifyWorkerCacheInvalidate, ensureValidGoogleAccessToken } from '@/utils/googleSheets';
+import { createSessionSheetIfNotExist, saveSessionMembers, isGoogleAuthError, deleteSessionSheetByName, notifyWorkerCacheInvalidate, ensureValidGoogleAccessToken, getSpreadsheetMetadataCached } from '@/utils/googleSheets';
 import { getKSTDayOfWeekName, isKSTPastDate } from '@/utils/kstTime';
 
 const props = defineProps<{
@@ -637,7 +637,7 @@ const openCreateSessionSheetModal = async () => {
     const spreadsheetId = localStorage.getItem('google_spreadsheet_id') || '';
     if (spreadsheetId && typeof window.gapi !== 'undefined' && window.gapi.client?.sheets) {
       try {
-        const res = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+        const res = await getSpreadsheetMetadataCached(spreadsheetId);
         const sheets: string[] = res.result.sheets.map((s: any) => s.properties.title);
         let maxN = 0;
         sheets.forEach(t => {
@@ -889,7 +889,7 @@ const onConfirmSessionClick = async () => {
       try {
         const rawDate = props.dayItem.date.replace(/-/g, '');
         const yymmdd = rawDate.length === 8 ? rawDate.slice(2) : rawDate;
-        const res = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+        const res = await getSpreadsheetMetadataCached(spreadsheetId);
         const sheets: string[] = res.result.sheets.map((s: any) => s.properties.title);
         const matched = sheets.find(t => t.includes(yymmdd));
         if (matched) {

@@ -4,7 +4,7 @@ import { ModalDice, ModalTile } from "@/components/modals/setup";
 import { ModalChooseMenu } from "@/components/modals/system";
 import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputManual, ModalBackupArchive } from "@/components/modals/stats";
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
-import { compareSessionDesc } from "@/utils/googleSheets"
+import { compareSessionDesc, getSpreadsheetMetadataCached } from "@/utils/googleSheets"
 import { calculateMatchRatings, getRatingColor, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { computed, ref, watch, onMounted, onUnmounted } from "vue"
 import { useI18n } from "vue-i18n"
@@ -130,9 +130,7 @@ const loadGoogleSessions = async () => {
   }
   isLoadingSessions.value = true;
   try {
-    const res = await window.gapi.client.sheets.spreadsheets.get({
-      spreadsheetId: props.googleInfo.spreadsheetId
-    });
+    const res = await getSpreadsheetMetadataCached(props.googleInfo.spreadsheetId);
     const sheetTitles: string[] = res.result.sheets.map((s: any) => s.properties.title);
     
     // 1. '제n회 YYMMDD' 패턴의 기본 탭 이름들 필터링

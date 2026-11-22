@@ -710,7 +710,211 @@ export const logoutGoogle = (): void => {
   sessionStorage.removeItem("schedule_admin_attendee_name");
   sessionStorage.removeItem("schedule_admin_passcode");
 
+  invalidateSpreadsheetMetadataCache();
+  invalidateMemberListCache();
+
   window.dispatchEvent(new CustomEvent('mahjong_admin_auth_changed'));
+};
+
+/**
+ * 구글 API 에러가 429(분당 읽기/쓰기 한도 초과: Quota Exceeded / Rate Limit)인지 판별합니다.
+ */
+export const isGoogleQuotaError = (err: any): boolean => {
+  if (!err) return false;
+  if (err.status === 429 || err.result?.error?.code === 429) return true;
+  const statusStr = String(err.result?.error?.status || '').toUpperCase();
+  if (statusStr === 'RESOURCE_EXHAUSTED' || statusStr === 'RATE_LIMIT_EXCEEDED') return true;
+  const errorsArr = err.result?.error?.errors;
+  if (Array.isArray(errorsArr)) {
+    const hasQuotaReason = errorsArr.some((e: any) => {
+      const reason = String(e?.reason || '').toLowerCase();
+      return (
+        reason.includes('ratelimit') ||
+        reason.includes('quota') ||
+        reason.includes('resource_exhausted')
+      );
+    });
+    if (hasQuotaReason) return true;
+  }
+  const msg = (
+    err.message ||
+    err.result?.error?.message ||
+    (typeof err === 'string' ? err : '')
+  ).toLowerCase();
+  return (
+    msg.includes('quota exceeded') ||
+    msg.includes('read requests per minute') ||
+    msg.includes('write requests per minute') ||
+    msg.includes('rate limit') ||
+    msg.includes('rate_limit_exceeded') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('too many requests')
+  );
+};
+
+const SHEETS_RETRY_DELAYS_MS = [2000, 5000, 12000];
+
+/**
+ * 읽기 전용 Sheets API 호출을 429 Quota 초과 시 지수 백오프 + 지터로 자동 재시도합니다.
+ * 401/403/400 등 비-쿼터 에러는 즉시 그대로 throw 합니다.
+ */
+export const withSheetsReadRetry = async <T>(
+  fn: () => Promise<T>,
+  label = 'Sheets Read'
+): Promise<T> => {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isGoogleQuotaError(err) || attempt >= SHEETS_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+      const baseDelay = SHEETS_RETRY_DELAYS_MS[attempt];
+      const jitter = Math.floor(Math.random() * 500);
+      const waitMs = baseDelay + jitter;
+      attempt++;
+      console.warn(
+        `[Sheets Quota] ${label} 한도 초과(429) 감지 — ${waitMs}ms 후 자동 재시도 (${attempt}/${SHEETS_RETRY_DELAYS_MS.length})`
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+};
+
+// ==========================================
+// 스프레드시트 메타데이터 캐시 & 배치 읽기 유틸
+// ==========================================
+const SPREADSHEET_METADATA_TTL_MS = 60_000;
+const SPREADSHEET_METADATA_FIELDS =
+  'spreadsheetId,sheets(properties(sheetId,title,index,hidden,gridProperties(rowCount,columnCount)),basicFilter,alternatingColorRules)';
+
+const spreadsheetMetadataCache = new Map<string, { data: any; fetchedAt: number }>();
+const spreadsheetMetadataInFlight = new Map<string, Promise<any>>();
+
+/**
+ * 스프레드시트 메타데이터 캐시를 무효화합니다. (시트 생성/삭제/이름변경/행·열 확장/필터 변경 직후 호출)
+ */
+export const invalidateSpreadsheetMetadataCache = (spreadsheetId?: string): void => {
+  if (!spreadsheetId) {
+    spreadsheetMetadataCache.clear();
+    spreadsheetMetadataInFlight.clear();
+    return;
+  }
+  spreadsheetMetadataCache.delete(spreadsheetId);
+  spreadsheetMetadataInFlight.delete(spreadsheetId);
+};
+
+/**
+ * 스프레드시트 메타데이터(시트 목록, gridProperties, basicFilter, alternatingColorRules)를
+ * 60초 TTL 캐시 + 동시 호출 병합(in-flight dedup) + fields 마스크 + 429 백오프로 조회합니다.
+ */
+export const getSpreadsheetMetadataCached = async (
+  spreadsheetId: string,
+  options?: { forceRefresh?: boolean }
+): Promise<any> => {
+  if (!spreadsheetId) {
+    return { result: { spreadsheetId: '', sheets: [] } };
+  }
+  const forceRefresh = Boolean(options?.forceRefresh);
+  if (!forceRefresh) {
+    const cached = spreadsheetMetadataCache.get(spreadsheetId);
+    if (cached && Date.now() - cached.fetchedAt < SPREADSHEET_METADATA_TTL_MS) {
+      return cached.data;
+    }
+    const inFlight = spreadsheetMetadataInFlight.get(spreadsheetId);
+    if (inFlight) {
+      return inFlight;
+    }
+  }
+
+  const reqPromise = withSheetsReadRetry(
+    () =>
+      window.gapi.client.sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: SPREADSHEET_METADATA_FIELDS,
+      }),
+    'spreadsheets.get'
+  )
+    .then((res) => {
+      spreadsheetMetadataCache.set(spreadsheetId, { data: res, fetchedAt: Date.now() });
+      return res;
+    })
+    .finally(() => {
+      spreadsheetMetadataInFlight.delete(spreadsheetId);
+    });
+
+  spreadsheetMetadataInFlight.set(spreadsheetId, reqPromise);
+  return reqPromise;
+};
+
+/**
+ * 단일 범위 values.get 호출을 429 자동 재시도로 감싸서 실행합니다.
+ */
+export const getSheetValuesWithRetry = async (
+  spreadsheetId: string,
+  range: string,
+  valueRenderOption?: string
+): Promise<any> => {
+  const params: Record<string, any> = { spreadsheetId, range };
+  if (valueRenderOption) {
+    params.valueRenderOption = valueRenderOption;
+  }
+  return withSheetsReadRetry(
+    () => window.gapi.client.sheets.spreadsheets.values.get(params),
+    `values.get(${range})`
+  );
+};
+
+/**
+ * 여러 범위를 values.batchGet으로 묶어 1회(최대 25개씩 청킹) Read Quota로 일괄 조회합니다.
+ * 반환 배열은 입력 ranges와 1:1 대응하는 2차원 values 배열 목록입니다.
+ */
+export const batchGetSheetValues = async (
+  spreadsheetId: string,
+  ranges: string[],
+  valueRenderOption?: string
+): Promise<any[][][]> => {
+  if (!spreadsheetId || ranges.length === 0) return [];
+  const CHUNK_SIZE = 25;
+  const results: any[][][] = [];
+
+  for (let i = 0; i < ranges.length; i += CHUNK_SIZE) {
+    const chunk = ranges.slice(i, i + CHUNK_SIZE);
+    const params: Record<string, any> = {
+      spreadsheetId,
+      ranges: chunk,
+    };
+    if (valueRenderOption) {
+      params.valueRenderOption = valueRenderOption;
+    }
+    const res: any = await withSheetsReadRetry<any>(
+      () => window.gapi.client.sheets.spreadsheets.values.batchGet(params),
+      `values.batchGet(${chunk.length} ranges)`
+    );
+    const valueRanges = res?.result?.valueRanges || [];
+    for (let j = 0; j < chunk.length; j++) {
+      results.push(valueRanges[j]?.values || []);
+    }
+  }
+  return results;
+};
+
+// 멤버 목록(30초 TTL) 및 자주 호출되는 전체 스탯/레이팅 동시 요청 병합 캐시
+const MEMBER_LIST_TTL_MS = 30_000;
+const memberListCache = new Map<string, { data: string[]; fetchedAt: number }>();
+const memberListInFlight = new Map<string, Promise<string[]>>();
+const memberStatsInFlight = new Map<string, Promise<any[]>>();
+const ratingsFetchInFlight = new Map<string, Promise<Record<string, PlayerRating>>>();
+
+export const invalidateMemberListCache = (spreadsheetId?: string): void => {
+  if (!spreadsheetId) {
+    memberListCache.clear();
+    memberListInFlight.clear();
+    return;
+  }
+  memberListCache.delete(spreadsheetId);
+  memberListInFlight.delete(spreadsheetId);
 };
 
 /**
@@ -719,7 +923,7 @@ export const logoutGoogle = (): void => {
 export const deleteSessionSheetByName = async (spreadsheetId: string, sheetTitle: string): Promise<boolean> => {
   if (!spreadsheetId || !sheetTitle) return false;
   try {
-    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
     const sheets = resMetadata.result.sheets || [];
     const targetSheet = sheets.find((s: any) => s.properties.title === sheetTitle);
     if (!targetSheet) {
@@ -739,6 +943,7 @@ export const deleteSessionSheetByName = async (spreadsheetId: string, sheetTitle
         ]
       }
     });
+    invalidateSpreadsheetMetadataCache(spreadsheetId);
     return true;
   } catch (err) {
     console.error(`시트 '${sheetTitle}' 삭제 실패:`, err);
@@ -788,78 +993,94 @@ export const tryAutoLogin = async (onTokenCallback: (token: string) => void): Pr
 
 /**
  * 지정된 구글 스프레드시트의 '전체 멤버별 통계' 시트에서 멤버들의 이름을 가져옵니다.
+ * batchGet으로 2개 범위를 1회 Read로 묶고 30초 TTL 캐시 + 동시 호출 병합을 적용합니다.
  */
-export const fetchMemberList = async (spreadsheetId: string): Promise<string[]> => {
+export const fetchMemberList = async (
+  spreadsheetId: string,
+  options?: { forceRefresh?: boolean }
+): Promise<string[]> => {
   if (!spreadsheetId) return [];
 
-  // 1순위: '전체 멤버별 통계'!A:A
-  let list1: string[] = [];
-  try {
-    const range = "'전체 멤버별 통계'!A:A";
-    const response = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId: spreadsheetId,
-      range: range,
-    });
-    const values = response.result.values;
-    if (values && values.length > 1) {
-      list1 = values
-        .slice(1)
-        .map((row: any) => row[0]?.toString().trim())
-        .filter((name: string) => name && name !== '' && !name.startsWith('#') && name !== '이름');
+  const forceRefresh = Boolean(options?.forceRefresh);
+  if (!forceRefresh) {
+    const cached = memberListCache.get(spreadsheetId);
+    if (cached && Date.now() - cached.fetchedAt < MEMBER_LIST_TTL_MS) {
+      return [...cached.data];
     }
-  } catch (e) {
-    console.warn("fetchMemberList '전체 멤버별 통계' 조회 실패, 폴백 시도:", e);
-  }
-
-  // 2순위: '통계'!A2:A (원본 마스터 명단)
-  let statsList: string[] = [];
-  try {
-    const statsRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'통계'!A2:A",
-    });
-    const statsValues = statsRes.result.values;
-    if (statsValues && statsValues.length > 0) {
-      statsList = statsValues
-        .map((row: any) => row[0]?.toString().trim())
-        .filter((name: string) => name && name !== '' && !name.startsWith('#') && name !== '이름');
+    const inFlight = memberListInFlight.get(spreadsheetId);
+    if (inFlight) {
+      return inFlight.then((arr) => [...arr]);
     }
-  } catch (e2) {
-    console.warn("fetchMemberList '통계' 조회 실패:", e2);
   }
 
-  // Spill Error 등으로 '전체 멤버별 통계'의 멤버 수가 '통계' 시트보다 적어진 경우, 완전한 '통계' 시트 명단 반환
-  if (statsList.length > list1.length) {
-    return Array.from(new Set(statsList));
-  }
-  if (list1.length > 0) {
-    return Array.from(new Set(list1));
-  }
-  if (statsList.length > 0) {
-    return Array.from(new Set(statsList));
-  }
-
-  // 3순위 폴백: '전체 멤버목록 (데이터)'!A:A
-  try {
-    const fb1Res = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'전체 멤버목록 (데이터)'!A:A",
-    });
-    const fb1Values = fb1Res.result.values;
-    if (fb1Values && fb1Values.length > 1) {
-      const list = fb1Values
-        .slice(1)
+  const runFetch = async (): Promise<string[]> => {
+    const parseNames = (values: any[][] | undefined, skipHeader: boolean): string[] => {
+      if (!values || values.length === 0) return [];
+      const rows = skipHeader ? values.slice(1) : values;
+      return rows
         .map((row: any) => row[0]?.toString().trim())
         .filter((name: string) => name && name !== '' && !name.startsWith('#') && name !== '이름');
-      if (list.length > 0) {
-        return Array.from(new Set(list));
+    };
+
+    let list1: string[] = [];
+    let statsList: string[] = [];
+
+    // 1순위 + 2순위 동시 배치 조회 (1회 Read Quota 소모)
+    try {
+      const [allStatsVals, statsVals] = await batchGetSheetValues(spreadsheetId, [
+        "'전체 멤버별 통계'!A:A",
+        "'통계'!A2:A",
+      ]);
+      list1 = parseNames(allStatsVals, true);
+      statsList = parseNames(statsVals, false);
+    } catch (batchErr) {
+      console.warn("fetchMemberList batchGet 실패, 개별 조회 폴백 시도:", batchErr);
+      try {
+        const response = await getSheetValuesWithRetry(spreadsheetId, "'전체 멤버별 통계'!A:A");
+        list1 = parseNames(response.result.values, true);
+      } catch (e) {
+        console.warn("fetchMemberList '전체 멤버별 통계' 조회 실패:", e);
+      }
+      try {
+        const statsRes = await getSheetValuesWithRetry(spreadsheetId, "'통계'!A2:A");
+        statsList = parseNames(statsRes.result.values, false);
+      } catch (e2) {
+        console.warn("fetchMemberList '통계' 조회 실패:", e2);
       }
     }
-  } catch (e1) {
-    console.warn("fetchMemberList '전체 멤버목록 (데이터)' 폴백 실패:", e1);
-  }
 
-  return [];
+    // Spill Error 등으로 '전체 멤버별 통계'의 멤버 수가 '통계' 시트보다 적어진 경우, 완전한 '통계' 시트 명단 반환
+    let finalResult: string[] = [];
+    if (statsList.length > list1.length) {
+      finalResult = Array.from(new Set(statsList));
+    } else if (list1.length > 0) {
+      finalResult = Array.from(new Set(list1));
+    } else if (statsList.length > 0) {
+      finalResult = Array.from(new Set(statsList));
+    } else {
+      // 3순위 폴백: '전체 멤버목록 (데이터)'!A:A
+      try {
+        const fb1Res = await getSheetValuesWithRetry(spreadsheetId, "'전체 멤버목록 (데이터)'!A:A");
+        const list = parseNames(fb1Res.result.values, true);
+        if (list.length > 0) {
+          finalResult = Array.from(new Set(list));
+        }
+      } catch (e1) {
+        console.warn("fetchMemberList '전체 멤버목록 (데이터)' 폴백 실패:", e1);
+      }
+    }
+
+    if (finalResult.length > 0) {
+      memberListCache.set(spreadsheetId, { data: finalResult, fetchedAt: Date.now() });
+    }
+    return finalResult;
+  };
+
+  const promise = runFetch().finally(() => {
+    memberListInFlight.delete(spreadsheetId);
+  });
+  memberListInFlight.set(spreadsheetId, promise);
+  return promise.then((arr) => [...arr]);
 };
 
 /**
@@ -874,10 +1095,7 @@ export const fetchSessionMembers = async (spreadsheetId: string, memberSheetTitl
 
   try {
     // raw 시트의 A2:B20 범위를 조회합니다.
-    const response = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId: spreadsheetId,
-      range: `'${rawTitle}'!A2:B20`,
-    });
+    const response = await getSheetValuesWithRetry(spreadsheetId, `'${rawTitle}'!A2:B20`);
     const values = response.result.values;
     const memberPoints: Record<string, number> = {};
     if (values && values.length > 0) {
@@ -960,8 +1178,9 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
 
   let existingSheets: string[] = [];
   let resMetadata: any = null;
+  let didMutateSheets = false;
   try {
-    resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
     existingSheets = resMetadata.result.sheets.map((s: any) => s.properties.title);
   } catch (e) {
     console.error("회차 시트 생성 전 메타데이터 로드 실패:", e);
@@ -987,6 +1206,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
           ],
         },
       });
+      didMutateSheets = true;
 
       const headers = [
         '대국 일시', '대국 ID', '국 구분', '국 인덱스', '종료 상태',
@@ -1028,6 +1248,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
           ],
         },
       });
+      didMutateSheets = true;
 
       // A1:E1: 멤버 성적표 헤더 기입
       await window.gapi.client.sheets.spreadsheets.values.update({
@@ -1169,10 +1390,7 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
       let searchRow = -1;
       let searchCol = -1;
       try {
-        const scanRes = await window.gapi.client.sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: `'${sampleTitle}'!A1:Z100`
-        });
+        const scanRes = await getSheetValuesWithRetry(spreadsheetId, `'${sampleTitle}'!A1:Z100`);
         const rows = scanRes.result.values || [];
         for (let r = 0; r < rows.length; r++) {
           for (let c = 0; c < rows[r].length; c++) {
@@ -1200,11 +1418,16 @@ export const createSessionSheetIfNotExist = async (spreadsheetId: string, sheetT
           values: [[rawTitle]]
         }
       });
+      didMutateSheets = true;
       console.log(`복제 시트의 '${targetCell}' 셀에 '${rawTitle}' 데이터 연결 완료`);
     } catch (dupErr) {
       console.error(`'${cleanTitle}' 공개용 시트 복제 개설 실패:`, dupErr);
       throw dupErr;
     }
+  }
+
+  if (didMutateSheets) {
+    invalidateSpreadsheetMetadataCache(spreadsheetId);
   }
 };
 
@@ -1217,7 +1440,7 @@ export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<v
   if (!spreadsheetId) return;
 
   try {
-    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
     const sheets = resMetadata.result.sheets || [];
     const statsSheet = sheets.find((s: any) => s.properties.title === '통계');
     if (!statsSheet) return;
@@ -1225,12 +1448,13 @@ export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<v
     const sheetId = statsSheet.properties.sheetId;
     const currentMaxRows = statsSheet.properties?.gridProperties?.rowCount || 100;
 
-    // 1. 1행 헤더 조회하여 유효 마지막 열(lastColIdx: 0-based) 파악
-    const headerRes = await window.gapi.client.sheets.spreadsheets.values.get({
+    // 1~2. 1행 헤더와 A1:B200(수식)을 batchGet 1회 Read로 일괄 조회
+    const [headerValues, rows] = await batchGetSheetValues(
       spreadsheetId,
-      range: "'통계'!1:1",
-    });
-    const headerRow: string[] = headerRes.result.values?.[0] || [];
+      ["'통계'!1:1", "'통계'!A1:B200"],
+      'FORMULA'
+    );
+    const headerRow: string[] = headerValues?.[0] || [];
     let lastColIdx = 1; // 최소 B열(1)
     for (let c = headerRow.length - 1; c >= 0; c--) {
       if (headerRow[c] !== undefined && headerRow[c] !== null && String(headerRow[c]).trim() !== '') {
@@ -1239,14 +1463,6 @@ export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<v
       }
     }
     const endColumnIndex = lastColIdx + 1; // 0-based exclusive
-
-    // 2. A열 및 B열 조회하여 마지막 데이터 행(lastDataRow: 1-based) 및 B열 수식 누락 행 파악
-    const rowsRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'통계'!A1:B200",
-      valueRenderOption: 'FORMULA',
-    });
-    const rows: string[][] = rowsRes.result.values || [];
 
     let lastDataRow = 1; // 1-based
     for (let r = rows.length - 1; r >= 1; r--) {
@@ -1393,6 +1609,7 @@ export const syncStatsSheetFormatting = async (spreadsheetId: string): Promise<v
         spreadsheetId,
         resource: { requests },
       });
+      invalidateSpreadsheetMetadataCache(spreadsheetId);
       console.log(`'통계' 및 '전체 멤버별 통계' 시트 서식/필터 자동 동기화 완료: 2~${lastDataRow}행, A~${getColumnLetter(lastColIdx)}열`);
     }
   } catch (err) {
@@ -1417,7 +1634,7 @@ export const syncSessionUmaToStatsSheet = async (
   const rawTitle = `${cleanTitle} (raw)`;
 
   try {
-    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
     const sheets = resMetadata.result.sheets || [];
     const statsSheet = sheets.find((s: any) => s.properties.title === '통계');
     if (!statsSheet) {
@@ -1425,12 +1642,35 @@ export const syncSessionUmaToStatsSheet = async (
       return;
     }
 
-    // 1. '통계' 시트 1행 헤더 조회 (어느 열이 해당 회차인지 판별)
-    const headerRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'통계'!1:1",
-    });
-    const headerRow: string[] = headerRes.result.values?.[0] || [];
+    // 1~2. '통계' 시트 1행 헤더 + 선수 명단(A1:B100) (+ 필요 시 raw 참가자 명단) 1회 batchGet으로 일괄 조회
+    const needRawMembers = todayMembers.length === 0;
+    const batchRanges = ["'통계'!1:1", "'통계'!A1:B100"];
+    if (needRawMembers) {
+      batchRanges.push(`'${rawTitle}'!A2:A30`);
+    }
+
+    let headerRow: string[] = [];
+    let playerRows: string[][] = [];
+    let rawMemberRows: any[][] = [];
+    try {
+      const batchRes = await batchGetSheetValues(spreadsheetId, batchRanges);
+      headerRow = batchRes[0]?.[0] || [];
+      playerRows = batchRes[1] || [];
+      if (needRawMembers) {
+        rawMemberRows = batchRes[2] || [];
+      }
+    } catch (batchErr) {
+      // raw 시트가 아직 없는 경우 통계 2개 범위만 배치 재조회
+      const [hVals, pVals] = await batchGetSheetValues(spreadsheetId, [
+        "'통계'!1:1",
+        "'통계'!A1:B100",
+      ]);
+      headerRow = hVals?.[0] || [];
+      playerRows = pVals || [];
+      if (needRawMembers) {
+        console.warn(`'${rawTitle}' 참가자 명단 조회 실패:`, batchErr);
+      }
+    }
 
     // 회차 키워드 및 회차 번호 정밀 추출 (예: '제15회 260926' -> roundNum=15, roundKeyword='제15회')
     const matchRound = cleanTitle.match(/제\s*(\d+)\s*(?:회차|회)/);
@@ -1495,6 +1735,7 @@ export const syncSessionUmaToStatsSheet = async (
           ],
         },
       });
+      invalidateSpreadsheetMetadataCache(spreadsheetId);
       console.log(`'통계' 시트 우측 열 자동 확장 완료: ${gridCols}열 -> ${gridCols + colsToAdd}열 (신규 회차 수용)`);
     }
 
@@ -1515,12 +1756,7 @@ export const syncSessionUmaToStatsSheet = async (
     });
     console.log(`'통계' 시트 ${sessionColLetter}1 헤더를 '${headerTitle.replace('\n', ' ')}'으로 갱신 완료`);
 
-    // 2. '통계' 시트 선수 명단(A열) 및 총합(B열) 조회
-    const playersRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'통계'!A1:B100",
-    });
-    const playerRows: string[][] = playersRes.result.values || [];
+    // 2. '통계' 시트 선수 명단(A열) 매핑
     const existingPlayers = new Map<string, number>(); // name -> 1-based row index
 
     for (let r = 1; r < playerRows.length; r++) { // 0행은 헤더
@@ -1532,17 +1768,8 @@ export const syncSessionUmaToStatsSheet = async (
 
     // 3. 오늘 참석자 중 '통계' 시트에 없는 신규 멤버가 있으면 행 추가 (총합 수식은 ZZ열까지 여유있게 합산)
     let activeMembers = [...todayMembers];
-    if (activeMembers.length === 0) {
-      try {
-        const rawRes = await window.gapi.client.sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: `'${rawTitle}'!A2:A30`,
-        });
-        const rawRows = rawRes.result.values || [];
-        activeMembers = rawRows.map((r: any) => (r[0] || '').toString().trim()).filter(Boolean);
-      } catch (e) {
-        console.warn(`'${rawTitle}' 참가자 명단 조회 실패:`, e);
-      }
+    if (activeMembers.length === 0 && rawMemberRows.length > 0) {
+      activeMembers = rawMemberRows.map((r: any) => (r[0] || '').toString().trim()).filter(Boolean);
     }
 
     const newMembersToAdd = activeMembers.filter(m => m && m.trim() && !existingPlayers.has(m.trim()));
@@ -1624,7 +1851,7 @@ export const expandSessionSheetRowsIfNeeded = async (
   const cleanTitle = sheetTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
 
   try {
-    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
     const sheets = resMetadata.result.sheets || [];
     const sessionSheet = sheets.find((s: any) => s.properties.title === cleanTitle);
     if (!sessionSheet) return;
@@ -1632,10 +1859,7 @@ export const expandSessionSheetRowsIfNeeded = async (
     const sheetId = sessionSheet.properties.sheetId;
 
     // A열 1~120행을 스캔하여 '성적' 및 '시트명'의 현재 행 위치 탐색
-    const colARes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${cleanTitle}'!A1:B120`,
-    });
+    const colARes = await getSheetValuesWithRetry(spreadsheetId, `'${cleanTitle}'!A1:B120`);
     const colAValues: any[][] = colARes.result.values || [];
 
     let scoreRowIdx = -1; // 1-based row index for '성적'
@@ -1694,6 +1918,7 @@ export const expandSessionSheetRowsIfNeeded = async (
         ],
       },
     });
+    invalidateSpreadsheetMetadataCache(spreadsheetId);
 
     const newScoreRowIdx = scoreRowIdx + rowsToInsert;
     const newSheetNameRowIdx = sheetNameRowIdx + rowsToInsert;
@@ -1704,11 +1929,11 @@ export const expandSessionSheetRowsIfNeeded = async (
     let formulaTemplates: any[][] = [];
 
     try {
-      const sampleRes = await window.gapi.client.sheets.spreadsheets.values.get({
+      const sampleRes = await getSheetValuesWithRetry(
         spreadsheetId,
-        range: `'${cleanTitle}'!B${sampleRowStart}:Z${sampleRowEnd}`,
-        valueRenderOption: 'FORMULA',
-      });
+        `'${cleanTitle}'!B${sampleRowStart}:Z${sampleRowEnd}`,
+        'FORMULA'
+      );
       formulaTemplates = sampleRes.result.values || [];
     } catch (e) {
       console.warn("회전 수식 템플릿 읽기 실패:", e);
@@ -1763,10 +1988,7 @@ export const expandSessionSheetRowsIfNeeded = async (
 
     // 4. '성적' 행의 SUM 수식 범위 갱신: =SUM(C2:C{lastGameRow})
     const lastGameRow = newScoreRowIdx - 2;
-    const headerColsRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${cleanTitle}'!1:1`,
-    });
+    const headerColsRes = await getSheetValuesWithRetry(spreadsheetId, `'${cleanTitle}'!1:1`);
     const headerCols: any[] = headerColsRes.result.values?.[0] || [];
     const sumRowValues: string[] = ['성적'];
 
@@ -1910,7 +2132,7 @@ export const appendRoundRecords = async (
 
   if (!isGlobalLog && !skipEnsureSheet) {
     const baseTitle = sheetTitle.replace(/\s*\((?:raw|데이터|멤버|상세기록)\)/g, '').trim();
-    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
     const existing = resMetadata.result.sheets.map((s: any) => s.properties.title);
     if (!existing.includes(sheetTitle)) {
       const membersToUse = todayMembers && todayMembers.length > 0
@@ -1942,16 +2164,24 @@ export const appendRoundRecords = async (
 
 /**
  * 표시용 회차 시트의 가로 대국 요약 데이터(F:W)를 추가 적재합니다. (F2부터 정밀 기입!)
+ * knownExistingCount를 전달하면 F2:F100 중복 조회(1 Read)를 생략할 수 있습니다.
  */
-export const appendSessionSummaryRecords = async (spreadsheetId: string, sheetTitle: string, summaryRows: any[][]): Promise<void> => {
+export const appendSessionSummaryRecords = async (
+  spreadsheetId: string,
+  sheetTitle: string,
+  summaryRows: any[][],
+  knownExistingCount?: number
+): Promise<void> => {
   if (!spreadsheetId || summaryRows.length === 0) return;
   try {
-    const response = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${sheetTitle}'!F2:F100`
-    });
-    const values = response.result.values || [];
-    const existingCount = values.filter((row: any) => row[0] && row[0].toString().trim() !== '').length;
+    let existingCount: number;
+    if (typeof knownExistingCount === 'number' && knownExistingCount >= 0) {
+      existingCount = knownExistingCount;
+    } else {
+      const response = await getSheetValuesWithRetry(spreadsheetId, `'${sheetTitle}'!F2:F100`);
+      const values = response.result.values || [];
+      existingCount = values.filter((row: any) => row[0] && row[0].toString().trim() !== '').length;
+    }
     
     const targetRow = 2 + existingCount;
     const endRow = targetRow + summaryRows.length - 1;
@@ -1989,7 +2219,7 @@ export const deleteGameFromSheets = async (spreadsheetId: string, gameId: string
   let existingSheets: string[] = [];
   let res: any = null;
   try {
-    res = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    res = await getSpreadsheetMetadataCached(spreadsheetId);
     existingSheets = res.result.sheets.map((s: any) => s.properties.title);
   } catch (e) {
     console.error("삭제 전 시트 목록 조회 실패:", e);
@@ -2013,19 +2243,32 @@ export const deleteGameFromSheets = async (spreadsheetId: string, gameId: string
     }
   });
 
+  const validTargets = targets.filter(t => existingSheets.includes(t.title));
   const requests: any[] = [];
 
-  for (const target of targets) {
-    if (!existingSheets.includes(target.title)) continue;
-
+  if (validTargets.length > 0) {
+    let targetValuesList: any[][][] = [];
     try {
-      const range = `'${target.title}'!${target.col}:${target.col}`;
-      const response = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range,
-      });
-      const values = response.result.values;
-      if (!values) continue;
+      const ranges = validTargets.map(t => `'${t.title}'!${t.col}:${t.col}`);
+      targetValuesList = await batchGetSheetValues(spreadsheetId, ranges);
+    } catch (batchErr) {
+      console.warn("deleteGameFromSheets batchGet 실패, 개별 조회 폴백:", batchErr);
+      targetValuesList = [];
+      for (const target of validTargets) {
+        try {
+          const response = await getSheetValuesWithRetry(spreadsheetId, `'${target.title}'!${target.col}:${target.col}`);
+          targetValuesList.push(response.result.values || []);
+        } catch (err) {
+          console.warn(`${target.title}에서 대국 ID(${gameId}) 삭제 준비 중 에러:`, err);
+          targetValuesList.push([]);
+        }
+      }
+    }
+
+    for (let tIdx = 0; tIdx < validTargets.length; tIdx++) {
+      const target = validTargets[tIdx];
+      const values = targetValuesList[tIdx];
+      if (!values || values.length === 0) continue;
 
       let startIndex = -1;
       let count = 0;
@@ -2055,8 +2298,6 @@ export const deleteGameFromSheets = async (spreadsheetId: string, gameId: string
           });
         }
       }
-    } catch (err) {
-      console.warn(`${target.title}에서 대국 ID(${gameId}) 삭제 준비 중 에러:`, err);
     }
   }
 
@@ -2066,6 +2307,7 @@ export const deleteGameFromSheets = async (spreadsheetId: string, gameId: string
         spreadsheetId,
         resource: { requests }
       });
+      invalidateSpreadsheetMetadataCache(spreadsheetId);
       console.log(`구글 시트 대국 ID(${gameId}) 삭제 완료!`);
       deleteGameFromKmlViaWorker(gameId).catch(() => {});
       notifyWorkerCacheInvalidate();
@@ -2090,7 +2332,7 @@ export const getNextSessionSheetName = async (spreadsheetId: string): Promise<st
   }
 
   try {
-    const res = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const res = await getSpreadsheetMetadataCached(spreadsheetId);
     const sheets = res.result.sheets.map((s: any) => s.properties.title);
     
     let maxN = 0;
@@ -2120,10 +2362,7 @@ export const getNextSessionSheetName = async (spreadsheetId: string): Promise<st
 export const updateAlternatingColorsRange = async (spreadsheetId: string, totalMembers: number): Promise<void> => {
   if (!spreadsheetId) return;
   try {
-    const metadata = await window.gapi.client.sheets.spreadsheets.get({
-      spreadsheetId,
-      includeGridData: false
-    });
+    const metadata = await getSpreadsheetMetadataCached(spreadsheetId);
     
     const sheet = metadata.result.sheets.find(
       (s: any) => s.properties.title === '전체 멤버별 통계'
@@ -2165,6 +2404,7 @@ export const updateAlternatingColorsRange = async (spreadsheetId: string, totalM
         ]
       }
     });
+    invalidateSpreadsheetMetadataCache(spreadsheetId);
     console.log(`교차 색상 규칙 범위 갱신 완료: A2:AM${totalMembers + 1}`);
   } catch (err) {
     console.warn("교차 색상 범위 업데이트 중 오류 발생 (무시 가능):", err);
@@ -2191,14 +2431,15 @@ export const repairStatsSheetSpillError = async (_spreadsheetId: string): Promis
  * 여기에 직접 append를 하면 #REF! Spill Error가 발생합니다.
  * 따라서 신규 멤버는 동적 배열 수식의 원천인 '통계' 시트 A열에 안전하게 등록합니다.
  */
-export const addNewMembersToDb = async (spreadsheetId: string, names: string[]): Promise<void> => {
+export const addNewMembersToDb = async (
+  spreadsheetId: string,
+  names: string[],
+  options?: { skipFormatSync?: boolean }
+): Promise<void> => {
   if (!spreadsheetId || names.length === 0) return;
   try {
     // 1. 신규 멤버가 '통계' 시트에 있는지 확인 후 '통계' 시트 A열에 등록
-    const statsSheetRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "'통계'!A1:B100",
-    });
+    const statsSheetRes = await getSheetValuesWithRetry(spreadsheetId, "'통계'!A1:B100");
     const statsValues: string[][] = statsSheetRes.result.values || [];
     const statsExisting = new Set<string>();
     for (let i = 1; i < statsValues.length; i++) {
@@ -2225,12 +2466,13 @@ export const addNewMembersToDb = async (spreadsheetId: string, names: string[]):
           values: combinedRows,
         },
       });
+      invalidateMemberListCache(spreadsheetId);
       console.log(`'통계' 시트에 신규 멤버 [${toAddToStats.join(', ')}] 등록 완료 (A${startRow}:B${endRow})`);
 
-      // '통계' 및 '전체 멤버별 통계' 서식/필터/교차 색상 범위 즉시 동기화
-      await syncStatsSheetFormatting(spreadsheetId);
-      const totalMembers = statsExisting.size + toAddToStats.length;
-      await updateAlternatingColorsRange(spreadsheetId, totalMembers);
+      // '통계' 및 '전체 멤버별 통계' 서식/필터/교차 색상 범위 즉시 동기화 (동기화 흐름에서 후속 호출 시 중복 생략 가능)
+      if (!options?.skipFormatSync) {
+        await syncStatsSheetFormatting(spreadsheetId);
+      }
     }
   } catch (err) {
     console.error("신규 멤버 구글 시트 추가 실패:", err);
@@ -2245,20 +2487,26 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
   if (!spreadsheetId || !name || !name.trim()) return;
 
   try {
-    const spreadsheet = await window.gapi.client.sheets.spreadsheets.get({
-      spreadsheetId,
-    });
-    
-    // 1. '통계' 시트에서 해당 멤버 행 삭제
+    const spreadsheet = await getSpreadsheetMetadataCached(spreadsheetId);
     const statsSheet = spreadsheet.result.sheets.find(
       (s: any) => s.properties.title === '통계'
     );
+    const mSheet = spreadsheet.result.sheets.find(
+      (s: any) => s.properties.title === '전체 멤버목록 (데이터)'
+    );
+
+    const rangesToRead: string[] = [];
+    if (statsSheet) rangesToRead.push("'통계'!A:A");
+    if (mSheet) rangesToRead.push("'전체 멤버목록 (데이터)'!A:A");
+
+    const batchVals = rangesToRead.length > 0
+      ? await batchGetSheetValues(spreadsheetId, rangesToRead)
+      : [];
+    let valIdx = 0;
+
+    // 1. '통계' 시트에서 해당 멤버 행 삭제
     if (statsSheet) {
-      const statsRes = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: "'통계'!A:A",
-      });
-      const statsValues: string[][] = statsRes.result.values || [];
+      const statsValues: string[][] = batchVals[valIdx++] || [];
       const sRowIndex = statsValues.findIndex((r: any) => r[0] && r[0].toString().trim() === name.trim());
       if (sRowIndex !== -1) {
         await window.gapi.client.sheets.spreadsheets.batchUpdate({
@@ -2283,15 +2531,8 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
     }
 
     // 2. 만약 '전체 멤버목록 (데이터)' 시트에 하드코딩된 행이 있다면 삭제
-    const mSheet = spreadsheet.result.sheets.find(
-      (s: any) => s.properties.title === '전체 멤버목록 (데이터)'
-    );
     if (mSheet) {
-      const masterRes = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: "'전체 멤버목록 (데이터)'!A:A",
-      });
-      const masterValues: string[][] = masterRes.result.values || [];
+      const masterValues: string[][] = batchVals[valIdx++] || [];
       const mRowIndex = masterValues.findIndex((r: any) => r[0] && r[0].toString().trim() === name.trim());
       if (mRowIndex !== -1 && mRowIndex > 0) { // A1 헤더 제외
         await window.gapi.client.sheets.spreadsheets.batchUpdate({
@@ -2314,6 +2555,9 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
         console.log(`'전체 멤버목록 (데이터)'에서 멤버 '${name}' 삭제 완료`);
       }
     }
+
+    invalidateMemberListCache(spreadsheetId);
+    invalidateSpreadsheetMetadataCache(spreadsheetId);
   } catch (err) {
     console.error("구글 시트에서 멤버 삭제 실패:", err);
     throw err;
@@ -2322,15 +2566,17 @@ export const deleteMemberFromDb = async (spreadsheetId: string, name: string): P
 
 /**
  * '전체 멤버별 통계' 시트에서 스탯 목록을 가져옵니다.
+ * 동시 중복 호출 병합(in-flight dedup) 및 429 자동 백오프가 적용됩니다.
  */
 export const fetchMemberStats = async (spreadsheetId: string, silent = false): Promise<any[]> => {
   if (!spreadsheetId) return [];
-  try {
-    const range = "'전체 멤버별 통계'!2:100";
-    const response = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range
-    });
+  const inFlight = memberStatsInFlight.get(spreadsheetId);
+  if (inFlight) return inFlight;
+
+  const runFetch = async (): Promise<any[]> => {
+    try {
+      const range = "'전체 멤버별 통계'!2:100";
+      const response = await getSheetValuesWithRetry(spreadsheetId, range);
 
     const values = response.result.values;
     if (values) {
@@ -2399,18 +2645,27 @@ export const fetchMemberStats = async (spreadsheetId: string, silent = false): P
       });
     }
     return [];
-  } catch (err: any) {
-    console.warn("구글 시트 전체 통계 로드 실패:", err);
-    if (!silent) {
-      const msg = err?.result?.error?.message || "";
-      if (msg.includes("range") || err?.status === 400) {
-        alert("구글 스프레드시트의 열(Column) 개수가 부족하여 전체 기간 통계를 불러오지 못했습니다.\n\n구글 스프레드시트의 '전체 멤버별 통계' 시트에서 W열 오른쪽으로 열을 AG열(33번째 열)까지 늘려주세요.\n(W열 머리글 우클릭 -> '오른쪽에 1개 열 삽입'을 10번 반복)");
-      } else {
-        alert("전체 통계를 불러오는 중 오류가 발생했습니다: " + msg);
+    } catch (err: any) {
+      console.warn("구글 시트 전체 통계 로드 실패:", err);
+      if (!silent) {
+        const msg = err?.result?.error?.message || "";
+        if (isGoogleQuotaError(err)) {
+          alert("구글 시트 분당 읽기 한도에 도달했습니다. 약 30초~1분 후 다시 시도해 주세요.");
+        } else if (msg.includes("range") || err?.status === 400) {
+          alert("구글 스프레드시트의 열(Column) 개수가 부족하여 전체 기간 통계를 불러오지 못했습니다.\n\n구글 스프레드시트의 '전체 멤버별 통계' 시트에서 W열 오른쪽으로 열을 AG열(33번째 열)까지 늘려주세요.\n(W열 머리글 우클릭 -> '오른쪽에 1개 열 삽입'을 10번 반복)");
+        } else {
+          alert("전체 통계를 불러오는 중 오류가 발생했습니다: " + msg);
+        }
       }
+      return [];
     }
-    return [];
-  }
+  };
+
+  const promise = runFetch().finally(() => {
+    memberStatsInFlight.delete(spreadsheetId);
+  });
+  memberStatsInFlight.set(spreadsheetId, promise);
+  return promise;
 };
 
 /**
@@ -2419,7 +2674,7 @@ export const fetchMemberStats = async (spreadsheetId: string, silent = false): P
 export const verifySpreadsheetStructures = async (spreadsheetId: string): Promise<boolean> => {
   if (!spreadsheetId) return false;
   try {
-    const res = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const res = await getSpreadsheetMetadataCached(spreadsheetId);
     const titles = res.result.sheets.map((s: any) => s.properties.title);
     const required = [
       '전체 국별기록 (데이터)',
@@ -2470,7 +2725,7 @@ export const migrateSessionSheetToNewMembers = async (
   const backupTitle = `${cleanTitle}_백업_${p.hourStr}${p.minuteStr}_${p.secondStr}`;
 
   // 1. 현재 스프레드시트 메타데이터 조회
-  const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+  const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
   const sheets = resMetadata.result.sheets || [];
 
   const currentCleanSheet = sheets.find((s: any) => s.properties.title === cleanTitle);
@@ -2581,10 +2836,7 @@ export const migrateSessionSheetToNewMembers = async (
   let searchRow = -1;
   let searchCol = -1;
   try {
-    const scanRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${sampleTitle}'!A1:Z100`
-    });
+    const scanRes = await getSheetValuesWithRetry(spreadsheetId, `'${sampleTitle}'!A1:Z100`);
     const rows = scanRes.result.values || [];
     for (let r = 0; r < rows.length; r++) {
       for (let c = 0; c < rows[r].length; c++) {
@@ -2612,6 +2864,7 @@ export const migrateSessionSheetToNewMembers = async (
       values: [[rawTitle]]
     }
   });
+  invalidateSpreadsheetMetadataCache(spreadsheetId);
 
   // 7. raw 시트 A2:A20에 새 멤버 목록 반영
   await saveSessionMembers(spreadsheetId, cleanTitle, newMembers);
@@ -2660,7 +2913,7 @@ export const backupSessionSheet = async (
   const p = getKSTNowParts();
   const backupTitle = `${cleanTitle}_수동백업_${p.hourStr}${p.minuteStr}_${p.secondStr}`;
 
-  const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+  const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
   const sheets = resMetadata.result.sheets || [];
   const currentSheet = sheets.find((s: any) => s.properties.title === cleanTitle);
   if (!currentSheet) {
@@ -2681,6 +2934,7 @@ export const backupSessionSheet = async (
       ]
     }
   });
+  invalidateSpreadsheetMetadataCache(spreadsheetId);
 
   const backupRecord: SessionMigrationBackup = {
     id: `manual_${Date.now()}`,
@@ -2715,7 +2969,7 @@ export const restoreSessionSheetFromBackup = async (
 ): Promise<void> => {
   if (!spreadsheetId || !backup) throw new Error("스프레드시트 ID 또는 백업 정보가 없습니다.");
 
-  const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+  const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
   const sheets = resMetadata.result.sheets || [];
 
   const backupSheet = sheets.find((s: any) => s.properties.title === backup.backupSheetTitle);
@@ -2759,6 +3013,7 @@ export const restoreSessionSheetFromBackup = async (
       ]
     }
   });
+  invalidateSpreadsheetMetadataCache(spreadsheetId);
 
   // 3. raw 시트의 A열 멤버 명단도 백업 당시의 멤버로 복원
   await saveSessionMembers(spreadsheetId, backup.sessionSheetName, backup.oldMembers);
@@ -2803,7 +3058,7 @@ export const RATING_HISTORY_SHEET_TITLE = '레이팅 이력';
 export const ensureRatingHistorySheetExists = async (spreadsheetId: string): Promise<boolean> => {
   if (!spreadsheetId) return false;
   try {
-    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
     const existingSheets = resMetadata.result.sheets.map((s: any) => s.properties.title);
     if (existingSheets.includes(RATING_HISTORY_SHEET_TITLE)) {
       return true;
@@ -2829,6 +3084,7 @@ export const ensureRatingHistorySheetExists = async (spreadsheetId: string): Pro
         ]
       }
     });
+    invalidateSpreadsheetMetadataCache(spreadsheetId);
 
     const headers = [
       '대국 번호', '회차', '일시',
@@ -2858,7 +3114,7 @@ export const ensureRatingHistorySheetExists = async (spreadsheetId: string): Pro
 export const ensureRatingSheetExists = async (spreadsheetId: string): Promise<boolean> => {
   if (!spreadsheetId) return false;
   try {
-    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId);
     const existingSheets = resMetadata.result.sheets.map((s: any) => s.properties.title);
     if (existingSheets.includes(RATING_SHEET_TITLE)) {
       return true;
@@ -2884,6 +3140,7 @@ export const ensureRatingSheetExists = async (spreadsheetId: string): Promise<bo
         ]
       }
     });
+    invalidateSpreadsheetMetadataCache(spreadsheetId);
 
     const headers = [
       '순위', '이름', '레이팅', 'μ (실력)', 'σ (불확실성)', '대국수', '최고 레이팅', '최근 등락 (Δ)', '최종 갱신'
@@ -2905,61 +3162,69 @@ export const ensureRatingSheetExists = async (spreadsheetId: string): Promise<bo
 
 /**
  * '레이팅' 시트에서 현재 전체 선수 레이팅 데이터를 조회합니다.
+ * 동시 중복 호출 병합(in-flight dedup) 및 429 자동 백오프가 적용됩니다.
  */
 export const fetchRatingsFromSheet = async (spreadsheetId: string): Promise<Record<string, PlayerRating>> => {
-  const result: Record<string, PlayerRating> = {};
-  if (!spreadsheetId) return result;
+  if (!spreadsheetId) return {};
+  const inFlight = ratingsFetchInFlight.get(spreadsheetId);
+  if (inFlight) return inFlight.then((r) => ({ ...r }));
 
-  try {
-    const res = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${RATING_SHEET_TITLE}'!A1:J100`
-    });
-    const allRows = res.result.values || [];
-    if (allRows.length === 0) return result;
+  const runFetch = async (): Promise<Record<string, PlayerRating>> => {
+    const result: Record<string, PlayerRating> = {};
+    try {
+      const res = await getSheetValuesWithRetry(spreadsheetId, `'${RATING_SHEET_TITLE}'!A1:J100`);
+      const allRows = res.result.values || [];
+      if (allRows.length === 0) return result;
 
-    const headerRow = allRows[0] || [];
-    const hasLowestCol = headerRow.includes('최저 레이팅');
-    const dataRows = allRows.slice(1);
+      const headerRow = allRows[0] || [];
+      const hasLowestCol = headerRow.includes('최저 레이팅');
+      const dataRows = allRows.slice(1);
 
-    dataRows.forEach((r: any) => {
-      const name = r[1] ? String(r[1]).trim() : '';
-      if (!name || name === '이름') return;
+      dataRows.forEach((r: any) => {
+        const name = r[1] ? String(r[1]).trim() : '';
+        if (!name || name === '이름') return;
 
-      const ordinal = Number(r[2]) || 1320;
-      const mu = Number(r[3]) || 1500;
-      const sigma = Number(r[4]) || 120;
-      const games = Number(r[5]) || 0;
-      const peak = Number(r[6]) || ordinal;
-      let lowest = ordinal;
-      let recentDelta = 0;
-      let lastUpdated = '';
+        const ordinal = Number(r[2]) || 1320;
+        const mu = Number(r[3]) || 1500;
+        const sigma = Number(r[4]) || 120;
+        const games = Number(r[5]) || 0;
+        const peak = Number(r[6]) || ordinal;
+        let lowest = ordinal;
+        let recentDelta = 0;
+        let lastUpdated = '';
 
-      if (hasLowestCol) {
-        lowest = Number(r[7]) || ordinal;
-        recentDelta = Number(String(r[8] || '').replace('+', '')) || 0;
-        lastUpdated = r[9] ? String(r[9]).trim() : '';
-      } else {
-        recentDelta = Number(String(r[7] || '').replace('+', '')) || 0;
-        lastUpdated = r[8] ? String(r[8]).trim() : '';
-      }
+        if (hasLowestCol) {
+          lowest = Number(r[7]) || ordinal;
+          recentDelta = Number(String(r[8] || '').replace('+', '')) || 0;
+          lastUpdated = r[9] ? String(r[9]).trim() : '';
+        } else {
+          recentDelta = Number(String(r[7] || '').replace('+', '')) || 0;
+          lastUpdated = r[8] ? String(r[8]).trim() : '';
+        }
 
-      result[name] = {
-        name,
-        ordinal,
-        mu,
-        sigma,
-        games,
-        peakOrdinal: peak,
-        lowestOrdinal: lowest,
-        recentDelta,
-        lastUpdated
-      };
-    });
-  } catch (err) {
-    console.warn(`'${RATING_SHEET_TITLE}' 시트 조회 실패:`, err);
-  }
-  return result;
+        result[name] = {
+          name,
+          ordinal,
+          mu,
+          sigma,
+          games,
+          peakOrdinal: peak,
+          lowestOrdinal: lowest,
+          recentDelta,
+          lastUpdated
+        };
+      });
+    } catch (err) {
+      console.warn(`'${RATING_SHEET_TITLE}' 시트 조회 실패:`, err);
+    }
+    return result;
+  };
+
+  const promise = runFetch().finally(() => {
+    ratingsFetchInFlight.delete(spreadsheetId);
+  });
+  ratingsFetchInFlight.set(spreadsheetId, promise);
+  return promise.then((r) => ({ ...r }));
 };
 
 /**
@@ -3192,11 +3457,11 @@ export const recalculateAndSyncAllRatings = async (
   }
 
   try {
-    // 1. 스프레드시트 내 존재하는 회차 (raw) 시트 목록 탐색
-    const resMetadata = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+    // 1. 스프레드시트 내 존재하는 회차 (raw) 시트 목록 탐색 (최신 시트 목록 확보를 위해 forceRefresh)
+    const resMetadata = await getSpreadsheetMetadataCached(spreadsheetId, { forceRefresh: true });
     const sheetTitles: string[] = resMetadata.result.sheets.map((s: any) => s.properties.title);
 
-    // 제N회 ... (raw) 시트 필터링 및 숫자 오름차순 정렬 (제9회 -> 제15회)
+    // 제N회 ... (raw) 시트 필터링 및 숫자 오름차순 정렬 (제9회 -> 최신 회차)
     const rawSheetTitles = sheetTitles
       .filter((title: string) => /제\s*\d+\s*회.*\(raw\)/.test(title))
       .sort((a, b) => {
@@ -3210,14 +3475,14 @@ export const recalculateAndSyncAllRatings = async (
       games: { gameId: string; time?: string; players: { name: string; rank: number; score?: number; uma?: number }[] }[];
     }[] = [];
 
-    // 2. 각 raw 시트에서 경기 데이터(F:W열) 추출
-    for (const rawTitle of rawSheetTitles) {
+    // 2. 모든 raw 시트의 경기 데이터(F2:W100)를 batchGet으로 묶어 1~2회 Read Quota로 일괄 조회
+    const rawRanges = rawSheetTitles.map((rawTitle) => `'${rawTitle}'!F2:W100`);
+    const allRawRows = await batchGetSheetValues(spreadsheetId, rawRanges);
+
+    for (let idx = 0; idx < rawSheetTitles.length; idx++) {
+      const rawTitle = rawSheetTitles[idx];
       const sessCleanName = rawTitle.replace(/\s*\(raw\)/, '').trim();
-      const res = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `'${rawTitle}'!F2:W100`
-      });
-      const rows = res.result.values || [];
+      const rows = allRawRows[idx] || [];
       const games: any[] = [];
 
       rows.forEach((r: any) => {

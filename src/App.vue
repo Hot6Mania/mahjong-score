@@ -7,7 +7,7 @@ import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, hasPendingOAuthRedirectParams, startGoogleRedirectLogin, consumeGoogleRedirectCallback, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
+import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, hasPendingOAuthRedirectParams, startGoogleRedirectLogin, consumeGoogleRedirectCallback, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, isGoogleQuotaError, getSpreadsheetMetadataCached, batchGetSheetValues, getSheetValuesWithRetry, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
 import { calculateMatchRatings, normalizeRatingPlayerName, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
 import type { GoogleInfo, Player as PlayerInterface, Option as OptionType, Records as RecordsType, PanelInfo as PanelInfoType } from "@/types/types.d"
@@ -343,6 +343,8 @@ const showErrorModal = (title: string, err: any) => {
 
   if (isGoogleAuthError(err)) {
     errMsg = `[안내] 구글 인증 만료 또는 편집 권한(401/403) 오류입니다.\n로그인 문제일 수 있으니 상단 메뉴에서 재로그인 해주세요.\n\n-- 상세 로그 --\n${errMsg}`;
+  } else if (isGoogleQuotaError(err)) {
+    errMsg = `[안내] 구글 시트 분당 읽기 한도(429 Quota Exceeded)에 도달했습니다.\n약 30초~1분 후 다시 시도해 주세요.\n\n-- 상세 로그 --\n${errMsg}`;
   }
 
   errorModalState.message = errMsg;
@@ -492,9 +494,7 @@ const loadGoogleSessions = async () => {
   }
   isLoadingSessions.value = true;
   try {
-    const res = await window.gapi.client.sheets.spreadsheets.get({
-      spreadsheetId: googleInfo.spreadsheetId
-    });
+    const res = await getSpreadsheetMetadataCached(googleInfo.spreadsheetId);
     const sheetTitles: string[] = res.result.sheets.map((s: any) => s.properties.title);
     
     // 1. 모든 시트 탭 명칭에서 접미사 (raw, 데이터, 멤버, 상세기록)를 제거하여 순수 회차 타이틀 후보군 도출
@@ -2835,42 +2835,48 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
     syncLoaderTitle.value = "구글 스프레드시트 일괄 동기화 중...";
     syncProgress.value = 5;
 
-    // 1. 이미 업로드된 대국 ID 목록 조회 (중복 방지)
+    // 1. 이미 업로드된 대국 ID 목록 조회 (중복 방지 — batchGet으로 1회 Read로 묶음)
     const sessionSheetName = await getOrInitSessionSheetName();
     const uploadedGameIds = new Set<string>();
-    
-    // A. '전체 국별기록 (데이터)'의 B열 조회
-    try {
-      const res = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId: googleInfo.spreadsheetId,
-        range: "'전체 국별기록 (데이터)'!B2:B",
-      });
-      if (res.result.values) {
-        res.result.values.forEach((row: any) => {
-          if (row[0]) {
-            uploadedGameIds.add(row[0].toString().trim());
-          }
-        });
-      }
-    } catch (e) {
-      console.warn("기존 전체 국별기록 (데이터) ID 조회 실패:", e);
-    }
+    let existingRawSummaryCount: number | undefined = undefined;
 
-    // A2. 회차별 요약 시트(raw)의 F열 조회 (대국 ID 목록)
     try {
-      const resRaw = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId: googleInfo.spreadsheetId,
-        range: `'${sessionSheetName} (raw)'!F2:F`,
+      const [globalIdsVals, rawIdsVals] = await batchGetSheetValues(googleInfo.spreadsheetId, [
+        "'전체 국별기록 (데이터)'!B2:B",
+        `'${sessionSheetName} (raw)'!F2:F`,
+      ]);
+      globalIdsVals.forEach((row: any) => {
+        if (row[0]) {
+          uploadedGameIds.add(row[0].toString().trim());
+        }
       });
-      if (resRaw.result.values) {
-        resRaw.result.values.forEach((row: any) => {
-          if (row[0]) {
-            uploadedGameIds.add(row[0].toString().trim());
-          }
-        });
+      let rawCount = 0;
+      rawIdsVals.forEach((row: any) => {
+        if (row[0] && row[0].toString().trim() !== '') {
+          uploadedGameIds.add(row[0].toString().trim());
+          rawCount++;
+        }
+      });
+      existingRawSummaryCount = rawCount;
+    } catch (batchErr) {
+      // 신규 회차여서 '${sessionSheetName} (raw)' 탭이 아직 없을 수 있으므로 전체 국별기록만 폴백 조회
+      console.warn("기존 대국 ID batchGet 조회 폴백 (신규 회차일 수 있음):", batchErr);
+      try {
+        const res = await getSheetValuesWithRetry(
+          googleInfo.spreadsheetId,
+          "'전체 국별기록 (데이터)'!B2:B"
+        );
+        if (res.result.values) {
+          res.result.values.forEach((row: any) => {
+            if (row[0]) {
+              uploadedGameIds.add(row[0].toString().trim());
+            }
+          });
+        }
+      } catch (e) {
+        console.warn("기존 전체 국별기록 (데이터) ID 조회 실패:", e);
       }
-    } catch (e) {
-      console.warn("기존 회차 raw ID 조회 실패 (신규 회차일 수 있음):", e);
+      existingRawSummaryCount = 0;
     }
     syncProgress.value = 15;
 
@@ -3048,7 +3054,7 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       await createSessionSheetIfNotExist(googleInfo.spreadsheetId, sessionSheetName, membersToUse);
       await saveSessionMembers(googleInfo.spreadsheetId, sessionSheetName, membersToUse);
 
-      await addNewMembersToDb(googleInfo.spreadsheetId, offlineMembers);
+      await addNewMembersToDb(googleInfo.spreadsheetId, offlineMembers, { skipFormatSync: true });
       syncProgress.value = 55;
 
       // 오늘의 멤버 누적 포인트 가산 업데이트
@@ -3098,7 +3104,12 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
       });
       if (summaryRows.length > 0) {
         uploadTasks.push(
-          appendSessionSummaryRecords(googleInfo.spreadsheetId, sessionSheetName + " (raw)", summaryRows)
+          appendSessionSummaryRecords(
+            googleInfo.spreadsheetId,
+            sessionSheetName + " (raw)",
+            summaryRows,
+            existingRawSummaryCount
+          )
         );
       }
 
@@ -3228,6 +3239,8 @@ const syncLocalDataToGoogle = async (skipConfirm: boolean = false): Promise<bool
     console.error("일괄 동기화 실패:", err);
     if (isGoogleAuthError(err)) {
       triggerToast("동기화 실패: 로그인 문제일 수 있습니다. 상단 메뉴에서 재로그인 해주세요.");
+    } else if (isGoogleQuotaError(err)) {
+      triggerToast("구글 시트 분당 읽기 한도에 도달했습니다. 약 30초~1분 후 다시 시도해 주세요.");
     }
     showErrorModal("일괄 동기화 오류", err);
     return false;
@@ -3392,14 +3405,63 @@ const loadExistingSession = async (cleanTitle: string) => {
     currentSessionSheetName.value = cleanTitle;
     localStorage.setItem("current_session_sheet_name", cleanTitle);
 
-    // 2. 오늘의 멤버 목록 & 누적 포인트 복원 (cleanTitle (raw) 시트의 A2:E50 긁어오기)
-    syncProgress.value = 40;
-    const rawRes = await window.gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId: googleInfo.spreadsheetId,
-      range: `'${cleanTitle} (raw)'!A2:E50`
-    });
-    
-    const rawRows = rawRes.result.values || [];
+    // 2~3. 멤버 목록(raw A2:E50) + 대국 이력(데이터 A2:V) + 대국 요약(raw F2:W)을 batchGet 1회 Read로 일괄 복원
+    syncProgress.value = 45;
+    let rawRows: any[][] = [];
+    let dataRows: any[][] = [];
+    let rawDataRows: any[][] = [];
+
+    try {
+      const [mRows, dRows, sRows] = await batchGetSheetValues(googleInfo.spreadsheetId, [
+        `'${cleanTitle} (raw)'!A2:E50`,
+        `'${cleanTitle} (데이터)'!A2:V`,
+        `'${cleanTitle} (raw)'!F2:W`,
+      ]);
+      rawRows = mRows;
+      dataRows = dRows;
+      rawDataRows = sRows;
+    } catch {
+      // 구버전 20열(A2:T) 시트 또는 일부 시트 미존재 폴백
+      try {
+        const [mRows, dRows, sRows] = await batchGetSheetValues(googleInfo.spreadsheetId, [
+          `'${cleanTitle} (raw)'!A2:E50`,
+          `'${cleanTitle} (데이터)'!A2:T`,
+          `'${cleanTitle} (raw)'!F2:W`,
+        ]);
+        rawRows = mRows;
+        dataRows = dRows;
+        rawDataRows = sRows;
+      } catch {
+        const rawRes = await getSheetValuesWithRetry(
+          googleInfo.spreadsheetId,
+          `'${cleanTitle} (raw)'!A2:E50`
+        );
+        rawRows = rawRes.result.values || [];
+        try {
+          const dataRes = await getSheetValuesWithRetry(
+            googleInfo.spreadsheetId,
+            `'${cleanTitle} (데이터)'!A2:V`
+          );
+          dataRows = dataRes.result.values || [];
+        } catch {
+          const dataRes = await getSheetValuesWithRetry(
+            googleInfo.spreadsheetId,
+            `'${cleanTitle} (데이터)'!A2:T`
+          );
+          dataRows = dataRes.result.values || [];
+        }
+        try {
+          const rawDataRes = await getSheetValuesWithRetry(
+            googleInfo.spreadsheetId,
+            `'${cleanTitle} (raw)'!F2:W`
+          );
+          rawDataRows = rawDataRes.result.values || [];
+        } catch (e) {
+          console.warn("raw 시트에서 대국 요약 리스트 로드 실패:", e);
+        }
+      }
+    }
+
     const restoredMembers: string[] = [];
     const restoredPoints: Record<string, number> = {};
 
@@ -3424,34 +3486,7 @@ const loadExistingSession = async (cleanTitle: string) => {
       localStorage.setItem("today_members_points", JSON.stringify(restoredPoints));
     }
 
-    // 3. 대국 이력(todayGamesHistory) 복원 (cleanTitle (데이터) 시트의 A2:V 긁어오기, 구버전 20열 시트일 경우 A2:T 폴백)
     syncProgress.value = 70;
-    let dataRes: any = null;
-    try {
-      dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId: googleInfo.spreadsheetId,
-        range: `'${cleanTitle} (데이터)'!A2:V`
-      });
-    } catch {
-      dataRes = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId: googleInfo.spreadsheetId,
-        range: `'${cleanTitle} (데이터)'!A2:T`
-      });
-    }
-
-    const dataRows = dataRes?.result?.values || [];
-
-    // 3.1. 대국 요약 이력(raw) 복원 (수동 입력 대국 복원용)
-    let rawDataRows: any[][] = [];
-    try {
-      const rawDataRes = await window.gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId: googleInfo.spreadsheetId,
-        range: `'${cleanTitle} (raw)'!F2:W`
-      });
-      rawDataRows = rawDataRes.result.values || [];
-    } catch (e) {
-      console.warn("raw 시트에서 대국 요약 리스트 로드 실패:", e);
-    }
 
     const gamesMap: Record<string, {
       timestamp: string,
