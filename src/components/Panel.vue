@@ -31,7 +31,7 @@ const emit = defineEmits<Emits>()
   <div v-if="isMenuOpen" class="menu_backdrop" @click="emit('close-menu')"></div>
 </Transition>
 
-<div class="panel_container" id="Mid">
+<div class="panel_container" id="Mid" :class="{ 'event-mid': Boolean(eventMatchLabel && isMenuOpen) }">
   <!-- 일반 모드 (현재 국, 리치봉 개수, 연장봉 개수) -->
   <Transition name="panel-fade" mode="out-in">
     <div v-if="!isMenuOpen" class="normal_layout" @click.stop="isGameFinished ? emit('show-modal', 'result_sheet') : emit('toggle-menu')">
@@ -55,15 +55,18 @@ const emit = defineEmits<Emits>()
     </div>
 
     <!-- 메뉴 팝업 모드 (화료, 유국, 촌보 버튼들 가로 배열, 완벽한 직사각형 불투명 박스) -->
-    <div v-else class="menu_layout" @click.stop>
+    <div v-else class="menu_layout" :class="{ 'event-menu-layout': Boolean(eventMatchLabel) }" @click.stop>
       <!-- 화료 버튼 -->
       <button class="btn_action win" @click="emit('show-modal', 'check_player_win')">
         {{ t('panel.win') }}
       </button>
       <!-- 구분선 -->
       <div class="menu_separator"></div>
-      <!-- 유국 버튼 -->
-      <button class="btn_action draw" @click="emit('show-modal', 'choose_draw_kind')">
+      <!-- 유국 버튼 (KNU-NPM M리그 룰은 도중유국 없음 → 통상유국 직행) -->
+      <button
+        class="btn_action draw"
+        @click="emit('show-modal', eventMatchLabel ? 'check_player_tenpai' : 'choose_draw_kind')"
+      >
         {{ t('panel.draw') }}
       </button>
       <!-- 구분선 -->
@@ -177,13 +180,12 @@ const emit = defineEmits<Emits>()
   flex-shrink: 0;
 }
 
-/* 박스 바깥 어두워지는 백드롭 */
+/* 박스 바깥 어두워지는 백드롭 (세로 회전 컨테이너에서도 화면 전체 100% 덮도록 inset/100% 사용) */
 .menu_backdrop {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   background-color: rgba(0, 0, 0, 0.45); /* 박스 켜지면 바깥이 어두워짐 */
   z-index: 4; /* Mid(z-index: 5) 바로 아래 */
   pointer-events: auto;
@@ -197,6 +199,11 @@ const emit = defineEmits<Emits>()
   position: fixed;
   z-index: 5;
   pointer-events: none;
+}
+#Mid.event-mid {
+  width: min(500px, calc(100% - 170px));
+  display: flex;
+  justify-content: center;
 }
 
 /* 메뉴창 위치 */
@@ -360,11 +367,34 @@ const emit = defineEmits<Emits>()
   color: var(--color-disabled);
 }
 
+.menu_layout.event-menu-layout {
+  width: 100%;
+  height: 118px;
+  container-type: inline-size;
+}
+.menu_layout.event-menu-layout .btn_action {
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  line-height: 1.1;
+}
+.menu_layout.event-menu-layout .btn_action.win,
+.menu_layout.event-menu-layout .btn_action.draw {
+  flex: 1.38;
+  font-size: clamp(22px, 8.5cqi, 44px);
+}
+.menu_layout.event-menu-layout .btn_action.cheat {
+  flex: 0.84;
+  padding: 0 6px;
+  font-size: clamp(13px, 4.2cqi, 22px);
+}
+
 .menu_separator {
   width: 2px;
   height: 75px; /* 늘어난 높이에 맞춰 구분선 길이 상향 */
   background-color: var(--border-color);
   opacity: 0.15;
+  flex-shrink: 0;
 }
 
 /* 극도로 빠른 페이드 아웃/인 애니메이션 (40ms) */
