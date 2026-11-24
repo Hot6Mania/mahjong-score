@@ -27,16 +27,19 @@ import {
   type TeamId,
 } from '@/data/knuNpm2026';
 import {
+  buildCustomSandboxLiveSnapshot,
   buildEventCsv,
   computeLeagueStandings,
   computeRoundTimerDisplay,
   formatDualMetric,
   formatSignedPoint,
   normalizeConfig,
+  runEventQaSelfTest,
   type EventStatePayload,
   type LiveStatePayload,
   type LiveTableState,
   type PlayerStanding,
+  type QaSelfTestReport,
   type StoredTableResult,
   type TableScoreEntryInput,
 } from '@/utils/knuNpmScoring';
@@ -58,12 +61,14 @@ import {
   rollbackAuditEntry,
   saveStaffPin,
   seedSandboxData,
+  seedSandboxEdgeCases,
   seedSandboxLiveGames,
   submitTableResult,
   subscribeEventStateUpdates,
   subscribeLiveStateUpdates,
   updateEventConfig,
   updateSandboxQuickTimer,
+  upsertLiveTableState,
   verifyStaffPin,
 } from '@/services/knuNpmEventService';
 import { getKnuNpmBasePath, getKnuNpmLiveMonitorPath } from '@/utils/eventMode';
@@ -799,16 +804,120 @@ const copyEventLink = () => {
 };
 
 // Sandbox Helpers
+const qaReport = ref<QaSelfTestReport | null>(null);
+
 const handleSeedSandbox = (rounds: number) => {
   if (!props.isSandbox) return;
   state.value = seedSandboxData(rounds);
   showToast(`Seeded R1–R${rounds} (${rounds * 7} games: ${rounds * 6} Scorer + ${rounds} JP-C)`);
 };
 
+const handleSeedEdgeCases = () => {
+  if (!props.isSandbox) return;
+  state.value = seedSandboxEdgeCases();
+  showToast('Seeded 4 edge cases: 2-way tie, 4-way 25k tie, negative+chombo, JP-C!');
+};
+
 const handleResetSandbox = () => {
   if (!props.isSandbox) return;
   state.value = resetSandboxData();
+  qaReport.value = null;
   showToast('Sandbox reset to 0 / 42 games.');
+};
+
+const handleSandboxAutoStaffLogin = async () => {
+  if (!props.isSandbox) return;
+  const ok = await verifyStaffPin('20261128', true);
+  if (ok) {
+    saveStaffPin('20261128');
+    isStaff.value = true;
+    showToast('🔓 Sandbox Staff Mode unlocked! (PIN 20261128)');
+  }
+};
+
+const handleRunQaSelfTest = () => {
+  if (!props.isSandbox) return;
+  qaReport.value = runEventQaSelfTest(state.value);
+  showToast(
+    qaReport.value.failed === 0
+      ? `✅ QA Self-Test: ${qaReport.value.passed}/${qaReport.value.checks.length} PASSED`
+      : `⚠️ QA Self-Test: ${qaReport.value.failed} FAILED`
+  );
+};
+
+const launchSandboxScenario = async (scenario: 'orasu25k' | 'timer500' | 'timer501' | 'handoff') => {
+  if (!props.isSandbox) return;
+  const r = selectedRound.value;
+  if (scenario === 'orasu25k') {
+    const snap = buildCustomSandboxLiveSnapshot(
+      r,
+      2,
+      {
+        wind: '南',
+        roundNum: 4,
+        renchan: 0,
+        riichiSticks: 2,
+        scores: [25000, 25000, 25000, 23000],
+      },
+      state.value.config
+    );
+    if (!snap) return;
+    liveState.value = await upsertLiveTableState(snap, true);
+    const slot = EVENT_MATCH_MAP[snap.key];
+    if (slot) handleContinueLiveTable(slot);
+    return;
+  }
+  if (scenario === 'timer500' || scenario === 'timer501') {
+    const now = Date.now();
+    const extraHands: 0 | 1 = scenario === 'timer501' ? 1 : 0;
+    state.value = updateSandboxQuickTimer({
+      round: r,
+      durationMinutes: 50,
+      extraHands,
+      status: 'running',
+      endsAt: now + 10_000, // 10 seconds left so user can watch expiry immediately!
+      pausedRemainingMs: null,
+      updatedAt: now,
+    });
+    const tableNum = scenario === 'timer501' ? 5 : 3;
+    const snap = buildCustomSandboxLiveSnapshot(
+      r,
+      tableNum,
+      {
+        wind: '東',
+        roundNum: 3,
+        renchan: 0,
+        riichiSticks: 0,
+        scores: [29000, 26000, 24000, 21000],
+      },
+      state.value.config
+    );
+    if (!snap) return;
+    liveState.value = await upsertLiveTableState(snap, true);
+    const slot = EVENT_MATCH_MAP[snap.key];
+    if (slot) handleContinueLiveTable(slot);
+    return;
+  }
+  if (scenario === 'handoff') {
+    const snap = buildCustomSandboxLiveSnapshot(
+      r,
+      6,
+      {
+        wind: '南',
+        roundNum: 2,
+        renchan: 1,
+        riichiSticks: 1,
+        scores: [33200, 26800, 22000, 17000],
+        riichiActive: [false, true, false, false],
+        chomboCounts: [0, 0, 1, 0],
+      },
+      state.value.config
+    );
+    if (!snap) return;
+    liveState.value = await upsertLiveTableState(snap, true);
+    activeTab.value = 'schedule';
+    showToast(`Seeded live handoff checkpoint on ${snap.key} (South 2, 1 Riichi, 1 Chombo) — click "Continue Here"!`);
+  }
 };
 
 const switchSandboxRoute = (toSandbox: boolean) => {
@@ -853,37 +962,59 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
         </button>
       </div>
       <p class="sb-desc">{{ tr('sandboxDesc') }}</p>
-      <div class="sb-actions">
-        <button type="button" class="sb-btn" @click="handleSeedSandbox(1)">
-          ⚡ {{ tr('sandboxSeed1R') }}
-        </button>
-        <button type="button" class="sb-btn" @click="handleSeedSandbox(3)">
-          ⚡ {{ tr('sandboxSeed3R') }}
-        </button>
-        <button type="button" class="sb-btn" @click="handleSeedSandbox(6)">
-          ⚡ {{ tr('sandboxSeedAll') }}
-        </button>
-        <button type="button" class="sb-btn accent" @click="quickTestScorerR1T1">
-          🀄 {{ tr('sandboxTestScorer') }}
-        </button>
-        <button type="button" class="sb-btn accent" @click="quickTestJpCR1T4">
-          📝 {{ tr('sandboxTestJpC') }}
-        </button>
-        <button type="button" class="sb-btn" @click="handleSimulateSandboxLive">
-          📡 {{ tr('sandboxSimLive') }}
-        </button>
-        <button type="button" class="sb-btn accent" @click="openLiveMonitor">
-          📺 {{ tr('sandboxOpenMonitor') }}
-        </button>
-        <button type="button" class="sb-btn" @click="handleStartSandboxTimer(50)">
-          ⏱ {{ tr('sandboxStartTimerBtn') }}
-        </button>
-        <button type="button" class="sb-btn" @click="handleStartSandboxTimer(1)">
-          ⏱ {{ tr('sandboxStartShortTimerBtn') }}
-        </button>
-        <button type="button" class="sb-btn danger" @click="handleResetSandbox">
-          🗑 {{ tr('sandboxReset') }}
-        </button>
+      <div class="sb-groups">
+        <div class="sb-group">
+          <span class="sb-group-lbl">📊 Seed</span>
+          <div class="sb-actions">
+            <button type="button" class="sb-btn" @click="handleSeedSandbox(1)">⚡ {{ tr('sandboxSeed1R') }}</button>
+            <button type="button" class="sb-btn" @click="handleSeedSandbox(3)">⚡ {{ tr('sandboxSeed3R') }}</button>
+            <button type="button" class="sb-btn" @click="handleSeedSandbox(6)">⚡ {{ tr('sandboxSeedAll') }}</button>
+            <button type="button" class="sb-btn" @click="handleSeedEdgeCases">⚖️ 동점·촌보·음수 엣지 시드</button>
+            <button type="button" class="sb-btn danger" @click="handleResetSandbox">🗑 {{ tr('sandboxReset') }}</button>
+          </div>
+        </div>
+        <div class="sb-group">
+          <span class="sb-group-lbl">🀄 Scenario</span>
+          <div class="sb-actions">
+            <button type="button" class="sb-btn accent" @click="quickTestScorerR1T1">🀄 {{ tr('sandboxTestScorer') }}</button>
+            <button type="button" class="sb-btn accent" @click="launchSandboxScenario('orasu25k')">🔥 오라스(남4국) 직행</button>
+            <button type="button" class="sb-btn accent" @click="launchSandboxScenario('timer500')">⏰ 50+0 (10초 테스트)</button>
+            <button type="button" class="sb-btn accent" @click="launchSandboxScenario('timer501')">⏰ 50+1 (10초 테스트)</button>
+            <button type="button" class="sb-btn" @click="launchSandboxScenario('handoff')">💥 이어하기·촌보 시드</button>
+            <button type="button" class="sb-btn accent" @click="quickTestJpCR1T4">📝 {{ tr('sandboxTestJpC') }}</button>
+          </div>
+        </div>
+        <div class="sb-group">
+          <span class="sb-group-lbl">📺 Live &amp; QA</span>
+          <div class="sb-actions">
+            <button type="button" class="sb-btn" @click="handleSimulateSandboxLive">📡 {{ tr('sandboxSimLive') }}</button>
+            <button type="button" class="sb-btn accent" @click="openLiveMonitor">📺 {{ tr('sandboxOpenMonitor') }}</button>
+            <button type="button" class="sb-btn" @click="handleStartSandboxTimer(50)">⏱ {{ tr('sandboxStartTimerBtn') }}</button>
+            <button type="button" class="sb-btn" @click="handleStartSandboxTimer(1)">⏱ {{ tr('sandboxStartShortTimerBtn') }}</button>
+            <button v-if="!isStaff" type="button" class="sb-btn" @click="handleSandboxAutoStaffLogin">🔓 스태프 원클릭 인증</button>
+            <button type="button" class="sb-btn qa-btn" @click="handleRunQaSelfTest">🤖 자동 규칙 자가진단</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Automated QA Self-Test Report -->
+      <div v-if="qaReport" class="qa-report-box">
+        <div class="qa-report-head">
+          <strong>
+            {{ qaReport.failed === 0 ? '✅ ALL CHECKS PASSED' : '⚠️ SOME CHECKS FAILED' }}
+            ({{ qaReport.passed }} / {{ qaReport.checks.length }})
+          </strong>
+          <button type="button" class="qa-close-btn" @click="qaReport = null">✕</button>
+        </div>
+        <div class="qa-checks-grid">
+          <div v-for="(chk, idx) in qaReport.checks" :key="idx" class="qa-check-item" :class="chk.ok ? 'ok' : 'fail'">
+            <span class="qac-icon">{{ chk.ok ? '✅' : '❌' }}</span>
+            <div class="qac-body">
+              <div class="qac-name">{{ chk.name }}</div>
+              <div class="qac-detail">{{ chk.detail }}</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1799,9 +1930,12 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
 .hdr-timer-pill {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
+  min-width: 132px;
   padding: 2px 9px;
   border-radius: 999px;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Noto Sans KR', monospace;
   font-size: 12px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
@@ -1824,6 +1958,74 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
   border-color: rgba(239, 68, 68, 0.55);
   color: #ef4444;
 }
+.sb-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sb-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sb-group-lbl {
+  font-size: 11px;
+  font-weight: 900;
+  color: #f59e0b;
+  min-width: 78px;
+  padding-top: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.sb-btn.qa-btn {
+  border-color: rgba(16, 185, 129, 0.55);
+  background: rgba(16, 185, 129, 0.16);
+  color: #10b981;
+}
+.qa-report-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #f1f5f9;
+}
+.qa-report-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+}
+.qa-close-btn {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 14px;
+}
+.qa-checks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 6px;
+}
+.qa-check-item {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.qa-check-item.fail {
+  border-color: rgba(239, 68, 68, 0.6);
+  background: rgba(127, 29, 29, 0.35);
+}
+.qac-name { font-weight: 800; color: #f8fafc; }
+.qac-detail { font-size: 10.5px; color: #cbd5e1; margin-top: 1px; }
 .ev-toast {
   position: fixed;
   bottom: 24px;

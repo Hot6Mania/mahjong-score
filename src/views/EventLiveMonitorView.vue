@@ -27,12 +27,15 @@ import {
   type EventLocale,
 } from '@/locales/knuNpmEvent';
 import {
+  clearLiveTableState,
   fetchEventState,
   fetchEventStateIfChanged,
   fetchLiveState,
   fetchLiveStateIfChanged,
   getSyncedNowMs,
+  resetSandboxData,
   seedSandboxLiveGames,
+  submitTableResult,
   subscribeEventStateUpdates,
   subscribeLiveStateUpdates,
   updateSandboxQuickTimer,
@@ -602,8 +605,31 @@ const runSandboxDemoStep = async () => {
           wind = '南';
           roundNum = 1;
         } else {
-          wind = '東';
-          roundNum = 1;
+          // Reached end of South 4 -> transition this sandbox table to FINAL ✓!
+          const finalEntries = lg.seatPlayerIds.map((pid, idx) => ({
+            playerId: pid,
+            rawScore: scores[idx],
+            penalty: -(Number(lg.chomboCounts?.[idx] || 0) * Math.abs(state.value.config.chomboPenalty ?? 20)),
+            seatIndex: idx,
+          }));
+          try {
+            state.value = await submitTableResult(
+              {
+                round: lg.round,
+                table: lg.table,
+                source: 'scorer',
+                entries: finalEntries,
+                rounds: lg.records,
+                submittedBy: 'Demo Auto-Finish',
+              },
+              true
+            );
+            liveState.value = await clearLiveTableState(lg.round, lg.table, true);
+            continue;
+          } catch {
+            wind = '東';
+            roundNum = 1;
+          }
         }
       }
     }
@@ -639,6 +665,14 @@ const cycleDemoSpeed = () => {
   demoSpeed.value =
     demoSpeed.value === 'normal' ? 'fast' : demoSpeed.value === 'fast' ? 'turbo' : 'normal';
   if (isDemoRunning.value) startDemoLoop();
+};
+
+const handleResetSandboxDemo = () => {
+  if (!props.isSandbox) return;
+  if (isDemoRunning.value) toggleSandboxDemo();
+  state.value = resetSandboxData();
+  liveState.value = seedSandboxLiveGames(activeRound.value);
+  lastSyncAt.value = Date.now();
 };
 
 const toggleSandboxDemo = () => {
@@ -747,6 +781,9 @@ const lastSyncText = computed(() => {
         </button>
         <button v-if="isSandbox" type="button" class="lm-btn" @click="runSandboxDemoStep">
           +1 Step
+        </button>
+        <button v-if="isSandbox" type="button" class="lm-btn" @click="handleResetSandboxDemo">
+          ↺ Reset
         </button>
         <button v-if="isSandbox" type="button" class="lm-btn" @click="handleToggleSandboxTimer">
           ⏱ {{ monitorTimerDisplay ? tr('timerResetBtn') : '50+0' }}
@@ -930,9 +967,12 @@ const lastSyncText = computed(() => {
   animation: none;
 }
 .lmt-clock {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   font-size: 20px;
   font-weight: 900;
-  letter-spacing: 0.5px;
+  min-width: 92px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 .lmt-meta {
   font-size: 11px;

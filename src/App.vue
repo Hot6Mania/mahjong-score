@@ -17,6 +17,7 @@ import {
   getSyncedNowMs,
   submitTableResult,
   subscribeEventStateUpdates,
+  updateSandboxQuickTimer,
   upsertLiveTableState,
 } from "@/services/knuNpmEventService"
 import type { EventLocale } from "@/locales/knuNpmEvent"
@@ -130,7 +131,6 @@ const eventTimerComputed = computed(() => {
   if (!isEventMode.value || !m) return null;
   const tmr = normalizeRoundTimer(activeEventTimer.value);
   if (tmr.status === 'idle') return null;
-  if (tmr.round !== m.round) return null;
   return computeRoundTimerDisplay(tmr, getSyncedNowMs(m.sandbox));
 });
 
@@ -166,10 +166,12 @@ const eventTimerBadge = computed(() => {
   };
 });
 
-const shouldEndEventByTimeLimit = (): boolean => {
+const isTimeUpFinishPromptOpen = ref(false);
+
+const isEventTimeLimitExpiredNow = (): boolean => {
   if (!isEventMode.value || !activeEventMatch.value) return false;
   const tmr = normalizeRoundTimer(activeEventTimer.value);
-  if (tmr.status !== 'running' || tmr.round !== activeEventMatch.value.round || tmr.endsAt === null) {
+  if (tmr.status !== 'running' || tmr.endsAt === null) {
     return false;
   }
   const nowMs = getSyncedNowMs(activeEventMatch.value.sandbox);
@@ -179,9 +181,56 @@ const shouldEndEventByTimeLimit = (): boolean => {
     eventTimeUpAtHandCount.value = Math.max(0, completedNow - 1);
     eventTimeUpTimerId.value = tmr.updatedAt;
   }
-  const handsFinishedAfterExpiry = completedNow - eventTimeUpAtHandCount.value;
-  const requiredHands = tmr.extraHands === 1 ? 2 : 1;
-  return handsFinishedAfterExpiry >= requiredHands;
+  return true;
+};
+
+const timeUpPromptInfo = computed(() => {
+  const loc = eventLocale.value;
+  const tmr = normalizeRoundTimer(activeEventTimer.value);
+  const completed = getCompletedNonChomboHandsCount();
+  const base = eventTimeUpAtHandCount.value ?? completed;
+  const handsAfter = Math.max(0, completed - base);
+  const is501StillExtra = tmr.extraHands === 1 && handsAfter < 2;
+
+  if (loc === 'ja') {
+    return {
+      title: `⏰ 制限時間終了（${tmr.durationMinutes}+${tmr.extraHands}局）`,
+      body: is501StillExtra
+        ? '現在 +1局 ルール適用中です。「続行」で次の最終1局へ進むか、「対局終了」で結果画面へ移動できます。'
+        : '制限時間終了後の局が完了しました。「対局終了」を押すと結果画面へ移動します（続行も可能）。',
+      continueBtn: '▶ 続行する',
+      finishBtn: '🏁 対局終了（結果へ）',
+    };
+  }
+  if (loc === 'ko') {
+    return {
+      title: `⏰ 제한시간 종료 (${tmr.durationMinutes}+${tmr.extraHands}국)`,
+      body: is501StillExtra
+        ? '현재 +1국 규칙 적용 중입니다. 계속 진행하여 추가 1국을 플레이하거나, 지금 수동으로 경기를 종료할 수 있습니다.'
+        : '시간 종료 후 국이 완료되었습니다. 경기를 종료하고 결과 기록창으로 이동할까요? (계속 진행 가능)',
+      continueBtn: '▶ 계속 진행',
+      finishBtn: '🏁 경기 종료 (결과창)',
+    };
+  }
+  return {
+    title: `⏰ Time Up (${tmr.durationMinutes}+${tmr.extraHands})`,
+    body: is501StillExtra
+      ? '+1 Hand rule is active. Continue to play the final extra hand, or finish the match manually now.'
+      : 'A hand has finished after time expired. Finish the match now to open the Result Sheet, or continue playing.',
+    continueBtn: '▶ Continue',
+    finishBtn: '🏁 Finish Match',
+  };
+});
+
+const finishEventMatchManually = () => {
+  isTimeUpFinishPromptOpen.value = false;
+  if (!isEventMode.value || !activeEventMatch.value) return;
+  if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+    records.time[records.time.length - 1] = '결과';
+  }
+  persistEventScorerSessionToLocal();
+  syncEventLiveCheckpoint(false);
+  showModal('result_sheet');
 };
 
 let eventTimerTickInterval: ReturnType<typeof setInterval> | null = null;
@@ -2143,31 +2192,18 @@ const saveRound = () => {
     // 3) 남4국 / 서풍전 연장 및 종료 조건 분기
     if (curWind === '南' && curRound === 4) {
       if (isEventMode.value) {
-        // KNU-NPM 이벤트 규칙: 화료톱·텐파이톱 없음 & 서입 없음 (+ 제한시간 50+0 / 50+1 종료 체크)
-        if (shouldEndEventByTimeLimit()) {
-          if (status === 'tsumo' || status === 'ron') {
-            panelInfo.riichi = 0;
-          }
-          if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
-            records.time[records.time.length - 1] = '결과';
-          }
-          persistEventScorerSessionToLocal();
-          syncEventLiveCheckpoint(false);
-          triggerToast(
-            eventLocale.value === 'ja'
-              ? '⏰ 時間制限ルールにより対局終了となりました'
-              : eventLocale.value === 'ko'
-                ? '⏰ 제한시간 규칙에 따라 대국이 종료되었습니다'
-                : '⏰ Game ended by time limit rule'
-          );
-          showModal('result_sheet');
-        } else if (isRenchan) {
+        // KNU-NPM 이벤트 규칙: 화료톱·텐파이톱 없음 & 서입 없음
+        // 오야 화료 / 오야 텐파이 시 무조건 남4국 연장 (단, 제한시간 만료 시 수동 경기 종료 선택창 노출)
+        if (isRenchan) {
           panelInfo.renchan++;
           if (status === 'tsumo' || status === 'ron') {
             panelInfo.riichi = 0;
           }
           persistEventScorerSessionToLocal();
           syncEventLiveCheckpoint(false);
+          if (isEventTimeLimitExpiredNow()) {
+            isTimeUpFinishPromptOpen.value = true;
+          }
         } else {
           if (status === 'tsumo' || status === 'ron') {
             panelInfo.riichi = 0;
@@ -2266,25 +2302,6 @@ const saveRound = () => {
       }
     } else {
       // 일반적인 국 (동풍전 및 남1~남3국)
-      if (isEventMode.value && shouldEndEventByTimeLimit()) {
-        if (status === 'tsumo' || status === 'ron') {
-          panelInfo.riichi = 0;
-        }
-        if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
-          records.time[records.time.length - 1] = '결과';
-        }
-        persistEventScorerSessionToLocal();
-        syncEventLiveCheckpoint(false);
-        triggerToast(
-          eventLocale.value === 'ja'
-            ? '⏰ 時間制限ルールにより対局終了となりました'
-            : eventLocale.value === 'ko'
-              ? '⏰ 제한시간 규칙에 따라 대국이 종료되었습니다'
-              : '⏰ Game ended by time limit rule'
-        );
-        showModal('result_sheet');
-        return;
-      }
       if (isRenchan) {
         panelInfo.renchan++;
       } else {
@@ -2297,6 +2314,10 @@ const saveRound = () => {
       if (isEventMode.value && activeEventMatch.value) {
         persistEventScorerSessionToLocal();
         syncEventLiveCheckpoint(false);
+        // 50분 경과 후 화료/유국 완료 시 자동 강제종료 대신 수동 경기 종료 선택창 노출
+        if (isEventTimeLimitExpiredNow()) {
+          isTimeUpFinishPromptOpen.value = true;
+        }
       }
     }
   });
@@ -3369,6 +3390,61 @@ const resumeEventScorer = () => {
   isEventScorerVisible.value = true;
   persistEventScorerSessionToLocal();
   syncEventScorerUrlQuery(activeEventMatch.value.key, activeEventMatch.value.round);
+};
+
+const isSandboxQaMenuOpen = ref(false);
+
+const runSandboxScorerQa = (action: 'orasu25k' | 'orasuRiichi2' | 'timer10_0' | 'timer10_1' | 'reload' | 'openLive') => {
+  if (!isEventMode.value || !isEventSandbox.value || !activeEventMatch.value) return;
+  isSandboxQaMenuOpen.value = false;
+  if (action === 'orasu25k' || action === 'orasuRiichi2') {
+    panelInfo.wind = '南';
+    panelInfo.round = 4;
+    panelInfo.renchan = 0;
+    panelInfo.riichi = action === 'orasuRiichi2' ? 2 : 0;
+    const winds = ['南', '西', '北', '東']; // seat 3 is South 4 dealer
+    const scores = action === 'orasuRiichi2' ? [26000, 25000, 24000, 23000] : [25000, 25000, 25000, 25000];
+    players.forEach((p, idx) => {
+      p.wind = winds[idx];
+      p.displayScore = scores[idx];
+      p.isRiichi = false;
+    });
+    riichiOrder.value = [];
+    persistEventScorerSessionToLocal();
+    syncEventLiveCheckpoint(false);
+    triggerToast(
+      action === 'orasuRiichi2'
+        ? '🧪 QA: 남4국 + 공탁봉 2개 상태로 점프!'
+        : '🧪 QA: 남4국 전원 25,000 상태로 점프! (오야 노텐 종료 / 오야 텐파이 연장 테스트)'
+    );
+    return;
+  }
+  if (action === 'timer10_0' || action === 'timer10_1') {
+    const now = Date.now();
+    const extraHands: 0 | 1 = action === 'timer10_1' ? 1 : 0;
+    const nextState = updateSandboxQuickTimer({
+      round: activeEventMatch.value.round,
+      durationMinutes: 50,
+      extraHands,
+      status: 'running',
+      endsAt: now + 10_000,
+      pausedRemainingMs: null,
+      updatedAt: now,
+    });
+    activeEventTimer.value = normalizeRoundTimer(nextState.config.roundTimer);
+    eventTimeUpAtHandCount.value = null;
+    eventTimeUpTimerId.value = 0;
+    triggerToast(`🧪 QA: 10초 뒤 종료되는 50+${extraHands} 타이머 시작!`);
+    return;
+  }
+  if (action === 'reload') {
+    persistEventScorerSessionToLocal();
+    window.location.reload();
+    return;
+  }
+  if (action === 'openLive') {
+    window.open('/test/live', '_blank');
+  }
 };
 
 const handleBackToEventDashboard = async () => {
@@ -4894,7 +4970,41 @@ const addBackupGameToCurrent = (game: any) => {
       @toggle-menu="isPanelMenuOpen = !isPanelMenuOpen"
       @close-menu="isPanelMenuOpen = false"
       @open-dashboard="isEventMode ? handleBackToEventDashboard() : router.push('/dashboard')"
+      @open-timeup-finish="isTimeUpFinishPromptOpen = true"
     />
+    <!-- 제한시간 종료 후 수동 경기 종료 선택 모달 (KNU-NPM 전용, 자동 강제 종료 없음) -->
+    <div
+      v-if="isEventMode && isTimeUpFinishPromptOpen && !isGameFinished"
+      class="timeup-manual-backdrop"
+      @click.stop="isTimeUpFinishPromptOpen = false"
+    >
+      <div class="timeup-manual-card" @click.stop>
+        <div class="tmc-title">{{ timeUpPromptInfo.title }}</div>
+        <p class="tmc-body">{{ timeUpPromptInfo.body }}</p>
+        <div class="tmc-actions">
+          <button type="button" class="tmc-btn-continue" @click="isTimeUpFinishPromptOpen = false">
+            {{ timeUpPromptInfo.continueBtn }}
+          </button>
+          <button type="button" class="tmc-btn-finish" @click="finishEventMatchManually">
+            {{ timeUpPromptInfo.finishBtn }}
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- 테스트 샌드박스 점수판 전용 QA 퀵 도구 (좌하단 — 실전 페이지에는 미노출) -->
+    <div v-if="isEventMode && isEventSandbox && activeEventMatch" class="sandbox-scorer-qa" @click.stop>
+      <button type="button" class="ssqa-toggle" @click.stop="isSandboxQaMenuOpen = !isSandboxQaMenuOpen">
+        🧪 QA
+      </button>
+      <div v-if="isSandboxQaMenuOpen" class="ssqa-popover">
+        <button type="button" @click="runSandboxScorerQa('orasu25k')">⏩ 남4국 점프 (전원 25k)</button>
+        <button type="button" @click="runSandboxScorerQa('orasuRiichi2')">⏩ 남4국 (공탁봉 2개)</button>
+        <button type="button" @click="runSandboxScorerQa('timer10_0')">⏰ 10초 타이머 (50+0)</button>
+        <button type="button" @click="runSandboxScorerQa('timer10_1')">⏰ 10초 타이머 (50+1)</button>
+        <button type="button" @click="runSandboxScorerQa('reload')">💥 새로고침 복구 테스트</button>
+        <button type="button" @click="runSandboxScorerQa('openLive')">📺 라이브 모니터 새 탭</button>
+      </div>
+    </div>
   </main>
   <!-- modal 컴포넌트 생성 (자연스러운 페이드인 효과를 위해 Transition 적용) -->
   <Transition name="modal-fade">
@@ -5491,5 +5601,112 @@ html.dark .oauth-redirect-loading {
   filter: brightness(1.08);
 }
 
+/* 테스트 샌드박스 점수판 전용 QA 퀵 도구 (좌하단) */
+.sandbox-scorer-qa {
+  position: fixed;
+  bottom: 10px;
+  left: 12px;
+  z-index: 20;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
+}
+.ssqa-toggle {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(245, 158, 11, 0.7);
+  background: rgba(15, 23, 42, 0.88);
+  color: #fbbf24;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.ssqa-popover {
+  position: absolute;
+  bottom: 34px;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  min-width: 190px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+}
+.ssqa-popover button {
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(30, 41, 59, 0.9);
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ssqa-popover button:hover {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(96, 165, 250, 0.6);
+}
 
+/* 제한시간 종료 후 수동 경기 종료 선택 모달 */
+.timeup-manual-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(15, 23, 42, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.timeup-manual-card {
+  width: min(440px, 90%);
+  background: var(--modal-bg-color, #ffffff);
+  color: var(--text-color, #111827);
+  border: 2px solid rgba(239, 68, 68, 0.7);
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
+  text-align: center;
+}
+.tmc-title {
+  font-size: 17px;
+  font-weight: 900;
+  color: #ef4444;
+  margin-bottom: 8px;
+}
+.tmc-body {
+  font-size: 13.5px;
+  line-height: 1.5;
+  margin: 0 0 16px;
+  color: var(--text-color);
+  word-break: keep-all;
+}
+.tmc-actions {
+  display: flex;
+  gap: 10px;
+}
+.tmc-actions button {
+  flex: 1;
+  padding: 11px 12px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  border: none;
+}
+.tmc-btn-continue {
+  background: var(--color-input-bg, rgba(148, 163, 184, 0.2));
+  color: var(--text-color);
+  border: 1px solid var(--border-color) !important;
+}
+.tmc-btn-finish {
+  background: #dc2626;
+  color: #ffffff;
+}
 </style>

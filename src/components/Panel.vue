@@ -27,6 +27,7 @@ type Emits = {
   (e: 'toggle-menu'): void,
   (e: 'close-menu'): void,
   (e: 'open-dashboard'): void,
+  (e: 'open-timeup-finish'): void,
 }
 const emit = defineEmits<Emits>()
 </script>
@@ -96,7 +97,11 @@ const emit = defineEmits<Emits>()
 <div
   v-if="eventMatchLabel && eventTimerBadge"
   id="EventTimerPill"
-  :class="[`sev-${eventTimerBadge.severity}`, { paused: eventTimerBadge.paused }]"
+  :class="[
+    `sev-${eventTimerBadge.severity}`,
+    { paused: eventTimerBadge.paused, clickable: eventTimerBadge.severity === 'expired' && !isGameFinished }
+  ]"
+  @click.stop="eventTimerBadge.severity === 'expired' && !isGameFinished ? emit('open-timeup-finish') : null"
 >
   <span class="etp-main">{{ eventTimerBadge.text }}</span>
   <span v-if="eventTimerBadge.sub" class="etp-sub">{{ eventTimerBadge.sub }}</span>
@@ -136,20 +141,24 @@ const emit = defineEmits<Emits>()
   right: 12px;
   z-index: 10;
   display: inline-flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  padding: 5px 10px;
-  border-radius: 10px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
-  font-size: 14px;
-  font-weight: 900;
-  line-height: 1.1;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 132px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Noto Sans KR', monospace;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   background: rgba(15, 23, 42, 0.86);
   color: #f8fafc;
   border: 1.5px solid rgba(148, 163, 184, 0.45);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
   user-select: none;
   white-space: nowrap;
   pointer-events: none;
@@ -174,16 +183,24 @@ const emit = defineEmits<Emits>()
   opacity: 0.78;
   animation: none;
 }
+#EventTimerPill.clickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
 .etp-main {
-  font-size: 15px;
-  letter-spacing: 0.3px;
+  font-size: 13.5px;
+  min-width: 60px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 .etp-sub {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
   font-size: 10px;
   font-weight: 800;
-  padding: 1px 6px;
+  padding: 2px 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.18);
+  text-align: center;
 }
 @keyframes timerPillPulse {
   0%, 100% { box-shadow: 0 2px 10px rgba(220, 38, 38, 0.35); }

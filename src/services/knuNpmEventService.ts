@@ -6,6 +6,7 @@ import {
   type EventScoringConfig,
 } from '@/data/knuNpm2026';
 import {
+  generateEdgeCaseEventResults,
   generateSampleEventResults,
   generateSampleLiveGames,
   normalizeConfig,
@@ -232,6 +233,24 @@ export function seedSandboxData(roundCount: number): EventStatePayload {
   return saveSandboxState({
     ...cur,
     results: sampleResults,
+    auditLog: [auditEntry, ...cur.auditLog].slice(0, 80),
+  });
+}
+
+export function seedSandboxEdgeCases(): EventStatePayload {
+  const cur = loadSandboxState();
+  const edgeResults = generateEdgeCaseEventResults(cur.config);
+  const auditEntry: EventAuditEntry = {
+    id: `sb-edge-${Date.now()}`,
+    timestamp: Date.now(),
+    action: 'config',
+    actor: 'staff',
+    actorLabel: 'Sandbox QA',
+    summary: 'Seeded 4 edge-case matches (2-way tie, 4-way 25k tie, negative+chombo, JP-C)',
+  };
+  return saveSandboxState({
+    ...cur,
+    results: { ...cur.results, ...edgeResults },
     auditLog: [auditEntry, ...cur.auditLog].slice(0, 80),
   });
 }

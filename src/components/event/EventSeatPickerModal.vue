@@ -136,12 +136,17 @@ const launch = () => {
   align-items: center;
   justify-content: center;
   z-index: 1200;
-  padding: 16px;
+  padding: 12px;
+  box-sizing: border-box;
 }
 
 .seat-picker-card {
   width: 100%;
   max-width: 520px;
+  max-height: 92vh;
+  max-height: 92dvh;
+  display: flex;
+  flex-direction: column;
   background: var(--card-bg-color);
   color: var(--text-color);
   border: 1px solid var(--border-color);
@@ -156,8 +161,9 @@ const launch = () => {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
-  padding: 18px 20px 14px;
+  padding: 15px 18px 12px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .ev-modal-title {
@@ -190,8 +196,12 @@ const launch = () => {
 .seat-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 16px 20px;
+  gap: 8px;
+  padding: 14px 16px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
 }
 
 .seat-row {
@@ -289,9 +299,50 @@ const launch = () => {
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 14px 20px 18px;
+  gap: 8px;
+  padding: 12px 16px 14px;
   border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+@media (max-width: 520px) {
+  .ev-modal-backdrop {
+    padding: 8px;
+  }
+  .ev-modal-header {
+    padding: 12px 14px 10px;
+  }
+  .ev-modal-title {
+    font-size: 15.5px;
+  }
+  .ev-modal-sub {
+    font-size: 11.5px;
+  }
+  .seat-list {
+    padding: 10px 12px;
+    gap: 7px;
+  }
+  .seat-row {
+    padding: 8px 9px;
+    gap: 7px;
+  }
+  .seat-wind-pill {
+    min-width: 58px;
+    padding: 3px 6px;
+    font-size: 11px;
+  }
+  .seat-name {
+    font-size: 13px;
+  }
+  .ev-modal-footer {
+    padding: 10px 12px 12px;
+  }
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost {
+    padding: 7px 10px;
+    font-size: 12px;
+  }
 }
 
 .footer-right {

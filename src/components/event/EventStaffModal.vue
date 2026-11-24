@@ -543,7 +543,8 @@ const formatTime = (ts: number) => {
 .staff-modal-card {
   width: 100%;
   max-width: 580px;
-  max-height: 90vh;
+  max-height: 92vh;
+  max-height: 92dvh;
   display: flex;
   flex-direction: column;
   background: var(--card-bg-color);
@@ -585,23 +586,28 @@ const formatTime = (ts: number) => {
 
 .staff-tabs {
   display: flex;
-  gap: 4px;
-  padding: 8px 14px;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border-color);
-  overflow-x: auto;
+  flex-shrink: 0;
 }
 .staff-tabs button {
-  padding: 6px 11px;
+  padding: 6px 10px;
   border-radius: 8px;
-  border: none;
-  background: transparent;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
   color: var(--text-dimmed);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
 }
-.staff-tabs button.active { background: #2563eb; color: #fff; }
+.staff-tabs button.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
 
 .staff-body {
   padding: 16px 18px;

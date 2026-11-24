@@ -1570,3 +1570,372 @@ export function generateSampleLiveGames(
   }
   return out;
 }
+
+/**
+ * 테스트 QA 전용: 엣지케이스 검증용 시드 데이터
+ * - R1-T1: 1위 2인 동점 (+20/+20 우마 분할)
+ * - R1-T2: 4인 전원 25,000 동점 (0.0pt 분배)
+ * - R1-T3: 음수 소점(토비 OFF) + 촌보 누적 포인트 -20pt 차감 (인게임 소점 무변동)
+ * - R1-T4: JP-C(수동 입력) 하이브리드 세부 스탯 분기 검증
+ */
+export function generateEdgeCaseEventResults(
+  config: EventScoringConfig = DEFAULT_EVENT_CONFIG
+): Record<string, StoredTableResult> {
+  const out: Record<string, StoredTableResult> = {};
+  const start = config.startingScore;
+  const buildSimpleRounds = (
+    seatPlayerIds: [number, number, number, number],
+    finalScores: [number, number, number, number],
+    chomboSeatIdx: number | null = null
+  ): CompactRoundRecords => {
+    const deltas = finalScores.map((s) => s - start);
+    const time = ['ㅤ', '東 1局 0本場', 'ㅤ'];
+    const score = [0, 1, 2, 3].map((i) => [start, deltas[i], finalScores[i]]);
+    const riichi: boolean[][] = [[false, false, false, false], [true, false, false, false]];
+    const win: boolean[][] = [[false, false, false, false], [true, false, false, false]];
+    const lose: boolean[][] = [[false, false, false, false], [false, false, false, true]];
+    const tenpai: boolean[][] = [[false, false, false, false], [false, false, false, false]];
+    const cheat: boolean[][] = [[false, false, false, false], [false, false, false, false]];
+    const beolbu: number[][] = [[0, 0, 0, 0], [0, 0, 0, 0]];
+    const status: string[] = ['initial', 'ron'];
+    const riichiOrder: number[][] = [[], [0]];
+    const dealer: number[] = [0, 0];
+
+    if (chomboSeatIdx !== null) {
+      time.push('南 2局 0本場', 'ㅤ');
+      for (let i = 0; i < 4; i++) score[i].push(0, finalScores[i]);
+      riichi.push([false, false, false, false]);
+      win.push([false, false, false, false]);
+      lose.push([false, false, false, false]);
+      tenpai.push([false, false, false, false]);
+      cheat.push([0, 1, 2, 3].map((i) => i === chomboSeatIdx));
+      beolbu.push([0, 0, 0, 0]);
+      status.push('cheat');
+      riichiOrder.push([]);
+      dealer.push(1);
+    }
+    time[time.length - 1] = '결과';
+
+    return {
+      seatPlayerIds,
+      time,
+      score,
+      riichi,
+      win,
+      lose,
+      tenpai,
+      cheat,
+      beolbu,
+      status,
+      riichiOrder,
+      dealer,
+    };
+  };
+
+  const specs: {
+    key: string;
+    table: number;
+    source: ResultSource;
+    scores: [number, number, number, number];
+    penalties: [number, number, number, number];
+    chomboIdx: number | null;
+    note: string;
+  }[] = [
+    {
+      key: 'R1-T1',
+      table: 1,
+      source: 'scorer',
+      scores: [35000, 35000, 20000, 10000],
+      penalties: [0, 0, 0, 0],
+      chomboIdx: null,
+      note: 'QA Edge: 1st place 2-way tie (Split Uma)',
+    },
+    {
+      key: 'R1-T2',
+      table: 2,
+      source: 'scorer',
+      scores: [25000, 25000, 25000, 25000],
+      penalties: [0, 0, 0, 0],
+      chomboIdx: null,
+      note: 'QA Edge: 4-way exact 25,000 tie',
+    },
+    {
+      key: 'R1-T3',
+      table: 3,
+      source: 'scorer',
+      scores: [54200, 28000, 22000, -4200],
+      penalties: [0, -Math.abs(config.chomboPenalty ?? 20), 0, 0],
+      chomboIdx: 1,
+      note: 'QA Edge: Negative score (Tobi OFF) + Chombo -20pt',
+    },
+    {
+      key: 'R1-T4',
+      table: 4,
+      source: 'manual',
+      scores: [38400, 26600, 22500, 12500],
+      penalties: [0, 0, 0, 0],
+      chomboIdx: null,
+      note: 'QA Edge: Table 4 JP-C manual result',
+    },
+  ];
+
+  for (const s of specs) {
+    const slot = EVENT_MATCH_SCHEDULE.find((m) => m.key === s.key);
+    if (!slot) continue;
+    const pids = [...slot.playerIds] as [number, number, number, number];
+    out[s.key] = {
+      key: s.key,
+      round: 1,
+      table: s.table,
+      source: s.source,
+      entries: pids.map((pid, idx) => ({
+        playerId: pid,
+        rawScore: s.scores[idx],
+        penalty: s.penalties[idx],
+        seatIndex: idx,
+      })),
+      rounds: s.source === 'scorer' ? buildSimpleRounds(pids, s.scores, s.chomboIdx) : null,
+      submittedAt: Date.now() - (5 - s.table) * 60_000,
+      submittedBy: 'QA Edge Seed',
+      note: s.note,
+    };
+  }
+
+  return out;
+}
+
+export function buildCustomSandboxLiveSnapshot(
+  round: number,
+  table: number,
+  preset: {
+    wind: string;
+    roundNum: number;
+    renchan: number;
+    riichiSticks: number;
+    scores: [number, number, number, number];
+    riichiActive?: [boolean, boolean, boolean, boolean];
+    chomboCounts?: [number, number, number, number];
+  },
+  config: EventScoringConfig = DEFAULT_EVENT_CONFIG
+): LiveTableState | null {
+  const key = getMatchKey(round, table);
+  const slot = EVENT_MATCH_SCHEDULE.find((m) => m.key === key);
+  if (!slot) return null;
+  const baseWinds = ['東', '南', '西', '北'];
+  const rot = (preset.roundNum - 1) % 4;
+  const winds = [0, 1, 2, 3].map((i) => baseWinds[(i - rot + 4) % 4]) as [string, string, string, string];
+  const start = config.startingScore;
+  const riichiActive: [boolean, boolean, boolean, boolean] = preset.riichiActive || [false, false, false, false];
+  const chomboCounts: [number, number, number, number] = preset.chomboCounts || [0, 0, 0, 0];
+  const scoreBeforeRiichi = preset.scores.map((s, idx) => s + (riichiActive[idx] ? 1000 : 0));
+  const deltas = scoreBeforeRiichi.map((s) => s - start);
+
+  const time = ['ㅤ', '東 1局 0本場', 'ㅤ'];
+  const score = [0, 1, 2, 3].map((i) => [start, deltas[i], scoreBeforeRiichi[i]]);
+  const riichi: boolean[][] = [[false, false, false, false], [false, false, false, false]];
+  const win: boolean[][] = [[false, false, false, false], [true, false, false, false]];
+  const lose: boolean[][] = [[false, false, false, false], [false, false, false, true]];
+  const tenpai: boolean[][] = [[false, false, false, false], [false, false, false, false]];
+  const cheat: boolean[][] = [[false, false, false, false], [false, false, false, false]];
+  const beolbu: number[][] = [[0, 0, 0, 0], [0, 0, 0, 0]];
+  const status: string[] = ['initial', 'ron'];
+  const riichiOrder: number[][] = [[], []];
+  const dealer: number[] = [0, 0];
+
+  chomboCounts.forEach((cnt, seatIdx) => {
+    for (let c = 0; c < cnt; c++) {
+      time.push(`${preset.wind} ${preset.roundNum}局 0本場`, 'ㅤ');
+      for (let i = 0; i < 4; i++) score[i].push(0, scoreBeforeRiichi[i]);
+      riichi.push([false, false, false, false]);
+      win.push([false, false, false, false]);
+      lose.push([false, false, false, false]);
+      tenpai.push([false, false, false, false]);
+      cheat.push([0, 1, 2, 3].map((i) => i === seatIdx));
+      beolbu.push([0, 0, 0, 0]);
+      status.push('cheat');
+      riichiOrder.push([]);
+      dealer.push(rot);
+    }
+  });
+
+  return {
+    key,
+    round,
+    table,
+    seatPlayerIds: [...slot.playerIds] as [number, number, number, number],
+    scores: [...preset.scores] as [number, number, number, number],
+    winds,
+    riichiActive,
+    chomboCounts,
+    wind: preset.wind,
+    roundNum: preset.roundNum,
+    renchan: preset.renchan,
+    riichiSticks: preset.riichiSticks,
+    isFinished: false,
+    records: {
+      seatPlayerIds: [...slot.playerIds] as [number, number, number, number],
+      time,
+      score,
+      riichi,
+      win,
+      lose,
+      tenpai,
+      cheat,
+      beolbu,
+      status,
+      riichiOrder,
+      dealer,
+    },
+    updatedAt: Date.now(),
+  };
+}
+
+export interface QaSelfTestCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface QaSelfTestReport {
+  passed: number;
+  failed: number;
+  ranAt: number;
+  checks: QaSelfTestCheck[];
+}
+
+export function runEventQaSelfTest(currentState: EventStatePayload): QaSelfTestReport {
+  const checks: QaSelfTestCheck[] = [];
+
+  // 1. Roster check
+  const uniqueIds = new Set(EVENT_PLAYERS.map((p) => p.id));
+  const proCount = EVENT_PLAYERS.filter((p) => p.isPro).length;
+  const teamSizes = EVENT_TEAMS.map((t) => EVENT_PLAYERS.filter((p) => p.teamId === t.id).length);
+  const rosterOk = EVENT_PLAYERS.length === 28 && uniqueIds.size === 28 && proCount === 5 && teamSizes.every((n) => n === 7);
+  checks.push({
+    name: 'Roster Integrity (28 Players / 4 Teams / 5 Pros)',
+    ok: rosterOk,
+    detail: `Players=${EVENT_PLAYERS.length}, Pros=${proCount}, Teams=[${teamSizes.join(',')}]`,
+  });
+
+  // 2. 42-Game schedule check
+  const appearances: Record<number, number> = {};
+  let validTables = 0;
+  for (const m of EVENT_MATCH_SCHEDULE) {
+    if (new Set(m.playerIds).size === 4) validTables++;
+    m.playerIds.forEach((pid) => {
+      appearances[pid] = (appearances[pid] || 0) + 1;
+    });
+  }
+  const allSix = EVENT_PLAYERS.every((p) => appearances[p.id] === 6);
+  checks.push({
+    name: 'Schedule Integrity (6R × 7T = 42 Games)',
+    ok: EVENT_MATCH_SCHEDULE.length === 42 && validTables === 42 && allSix,
+    detail: `Matches=${EVENT_MATCH_SCHEDULE.length}, All play 6 games=${allSix}`,
+  });
+
+  // 3. Standard M-League scoring zero-sum check
+  const stdCalc = calculateTableScoring([
+    { playerId: 1, rawScore: 42000, seatIndex: 0 },
+    { playerId: 6, rawScore: 28000, seatIndex: 1 },
+    { playerId: 7, rawScore: 19000, seatIndex: 2 },
+    { playerId: 8, rawScore: 11000, seatIndex: 3 },
+  ]);
+  const stdSum = round1(stdCalc.entries.reduce((a, b) => a + b.finalPoint, 0));
+  const stdTop = stdCalc.entries.find((e) => e.playerId === 1)?.finalPoint;
+  checks.push({
+    name: 'M-League 25k/30k Uma +30/+10/-10/-30',
+    ok: stdTop === 62 && stdSum === 0,
+    detail: `42,000 → ${stdTop}pt (expected +62.0), Zero-sum=${stdSum}`,
+  });
+
+  // 4. Tie-break split check (2-way tie & 4-way 25,000 tie)
+  const tie2 = calculateTableScoring([
+    { playerId: 1, rawScore: 35000, seatIndex: 0 },
+    { playerId: 6, rawScore: 35000, seatIndex: 1 },
+    { playerId: 7, rawScore: 20000, seatIndex: 2 },
+    { playerId: 8, rawScore: 10000, seatIndex: 3 },
+  ]);
+  const tie4 = calculateTableScoring([
+    { playerId: 1, rawScore: 25000, seatIndex: 0 },
+    { playerId: 6, rawScore: 25000, seatIndex: 1 },
+    { playerId: 7, rawScore: 25000, seatIndex: 2 },
+    { playerId: 8, rawScore: 25000, seatIndex: 3 },
+  ]);
+  const tie2Pts = tie2.entries.map((e) => e.finalPoint);
+  const tie4Ok = tie4.entries.every((e) => e.finalPoint === 0 && e.rank === 1);
+  checks.push({
+    name: 'Split Tie-Break (2-Way & 4-Way 25k)',
+    ok: tie2Pts[0] === 35 && tie2Pts[1] === 35 && tie4Ok,
+    detail: `2-way=[${tie2Pts.join(', ')}], 4-way all 0.0pt=${tie4Ok}`,
+  });
+
+  // 5. Chombo -20pt off cumulative only
+  const chomboCalc = calculateTableScoring([
+    { playerId: 1, rawScore: 30000, penalty: -20, seatIndex: 0 },
+    { playerId: 6, rawScore: 25000, penalty: 0, seatIndex: 1 },
+    { playerId: 7, rawScore: 23000, penalty: 0, seatIndex: 2 },
+    { playerId: 8, rawScore: 22000, penalty: 0, seatIndex: 3 },
+  ]);
+  const chomboP1 = chomboCalc.entries.find((e) => e.playerId === 1);
+  checks.push({
+    name: 'Chombo -20pt Cumulative Penalty Only',
+    ok: Boolean(chomboP1 && chomboP1.rawScore === 30000 && chomboP1.finalPoint === 30),
+    detail: `30,000 + Oka/Uma(+50) - Chombo(20) = ${chomboP1?.finalPoint}pt`,
+  });
+
+  // 6. Round Timer 50+0 / 50+1 countdown & expiry
+  const now = 1_700_000_000_000;
+  const tRun = computeRoundTimerDisplay(
+    { round: 1, durationMinutes: 50, extraHands: 0, status: 'running', endsAt: now + 90_000, pausedRemainingMs: null, updatedAt: now },
+    now
+  );
+  const tExp = computeRoundTimerDisplay(
+    { round: 1, durationMinutes: 50, extraHands: 1, status: 'running', endsAt: now - 1000, pausedRemainingMs: null, updatedAt: now },
+    now
+  );
+  checks.push({
+    name: 'Round Timer Countdown & Time-Up (50+0 / 50+1)',
+    ok: tRun.formatted === '01:30' && tRun.severity === 'critical' && tExp.isExpired && tExp.ruleTag === '50+1',
+    detail: `Running=${tRun.formatted} (${tRun.severity}), Expired=${tExp.isExpired} (${tExp.ruleTag})`,
+  });
+
+  // 7. Histogram bar direction (higher actual value = taller bar) & Bottom% check
+  const edgeRes = generateEdgeCaseEventResults(DEFAULT_EVENT_CONFIG);
+  const edgeStandings = computeLeagueStandings(edgeRes, DEFAULT_EVENT_CONFIG);
+  const dist = calculateEventMetricDistribution(
+    edgeStandings.players,
+    (p: PlayerStanding) => p.detailed.dealInRate,
+    1,
+    'Deal-in',
+    '%',
+    false,
+    true
+  );
+  const barsMonotonic =
+    dist.bars.length >= 2 &&
+    dist.bars.every((b, i) => (i === 0 ? true : b.value >= dist.bars[i - 1].value && b.height >= dist.bars[i - 1].height - 0.01));
+  checks.push({
+    name: 'Histogram Scale (Higher Value = Taller Bar) & Top/Bottom%',
+    ok: barsMonotonic && dist.topPct >= 0 && dist.bottomPct >= 0,
+    detail: `Bars=${dist.bars.length}, MonotonicHeight=${barsMonotonic}, Top=${dist.topPct}% / Bottom=${dist.bottomPct}%`,
+  });
+
+  // 8. Current Sandbox State consistency
+  const curStandings = computeLeagueStandings(currentState.results, currentState.config);
+  const teamSum = round1(curStandings.teams.reduce((a, t) => a + t.totalPoints, 0));
+  const playerSum = round1(curStandings.players.reduce((a, p) => a + p.totalPoints, 0));
+  const sumMatches = Math.abs(teamSum - playerSum) < 0.15;
+  checks.push({
+    name: 'Current Sandbox State Consistency',
+    ok: sumMatches,
+    detail: `Games=${curStandings.completedGames}/42, TeamSum=${teamSum}pt, PlayerSum=${playerSum}pt`,
+  });
+
+  const passed = checks.filter((c) => c.ok).length;
+  return {
+    passed,
+    failed: checks.length - passed,
+    ranAt: Date.now(),
+    checks,
+  };
+}
