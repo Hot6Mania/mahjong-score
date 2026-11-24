@@ -671,6 +671,7 @@ const getSignColor = (sign: number, x: boolean) => {
       @back-to-event-dashboard="emit('back-to-event-dashboard')"
       @change-event-locale="(loc) => emit('change-event-locale', loc)"
       @cloud-save-event="emit('cloud-save-event')"
+      @finish-event-early="emit('finish-event-early')"
     />
   </div>
   <!-- 게임 결과창(표) -->
@@ -1008,16 +1009,6 @@ const getSignColor = (sign: number, x: boolean) => {
             <span v-show="showEventTimer === false">X</span>
           </span>
         </div>
-      </div>
-      <!-- KNU-NPM 이벤트 전용: 경기 조기 종료 버튼 -->
-      <div v-if="eventMatchLabel" class="event_option_footer">
-        <button
-          type="button"
-          class="btn_event_early_finish"
-          @click.stop="emit('finish-event-early')"
-        >
-          🏁 {{ t('option.earlyFinish') }}
-        </button>
       </div>
       <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 (이벤트 모드에서는 숨김) -->
       <div v-if="!eventMatchLabel" style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
