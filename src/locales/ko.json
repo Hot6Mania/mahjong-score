@@ -46,7 +46,9 @@
         "submitEvent" : "대회 결과 제출",
         "submittingEvent" : "제출 중...",
         "submittedEvent" : "제출 완료 ✓",
-        "backToLeague" : "대회 페이지"
+        "backToLeague" : "대회 페이지",
+        "cloudSave" : "서버 임시저장",
+        "cloudSaving" : "저장 중..."
     },
     "resultSheet" : {
         "wind" : "자리",

@@ -115,7 +115,8 @@ body {
 }
 body.stats-mode,
 body:has(.stats-dashboard-container),
-body:has(.knu-event-page) {
+body:has(.knu-event-page),
+body:has(.live-monitor-page) {
   min-height: 100vh !important;
   height: auto !important;
 }

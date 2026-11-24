@@ -66,9 +66,29 @@ export function isKnuNpmSandboxMode(path?: string): boolean {
   return false;
 }
 
+export function isKnuNpmLiveMonitorPath(path?: string): boolean {
+  const targetPath =
+    path !== undefined
+      ? path
+      : typeof window !== 'undefined'
+        ? window.location.pathname
+        : '';
+  return (
+    targetPath === '/live' ||
+    targetPath === '/test/live' ||
+    targetPath === `${KNU_NPM_EVENT_PATH_PREFIX}/live` ||
+    targetPath === `${KNU_NPM_EVENT_PATH_PREFIX}/test/live`
+  );
+}
+
 export function getKnuNpmBasePath(sandbox = false): string {
   if (isKnuNpmEventHost()) {
     return sandbox ? '/test' : '';
   }
   return sandbox ? `${KNU_NPM_EVENT_PATH_PREFIX}/test` : KNU_NPM_EVENT_PATH_PREFIX;
+}
+
+export function getKnuNpmLiveMonitorPath(sandbox = false): string {
+  const base = getKnuNpmBasePath(sandbox);
+  return `${base}/live`;
 }

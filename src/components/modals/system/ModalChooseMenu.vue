@@ -15,7 +15,8 @@ type Props = {
   currentSessionSheetName?: string,
   isSessionClosed?: boolean,
   eventMatchLabel?: string,
-  eventLocale?: 'en' | 'ja' | 'ko'
+  eventLocale?: 'en' | 'ja' | 'ko',
+  isCloudSaving?: boolean
 }
 const props = defineProps<Props>()
 
@@ -25,7 +26,8 @@ type Emits = {
   (e: 'start-new-game'): void,
   (e: 'sync-local-to-google'): void,
   (e: 'back-to-event-dashboard'): void,
-  (e: 'change-event-locale', loc: 'en' | 'ja' | 'ko'): void
+  (e: 'change-event-locale', loc: 'en' | 'ja' | 'ko'): void,
+  (e: 'cloud-save-event'): void
 }
 const emit = defineEmits<Emits>()
 
@@ -54,8 +56,8 @@ const handleSyncClick = () => {
 </script>
 
 <template>
-<div v-if="eventMatchLabel" class="menu_wrapper">
-  <div class="session_status_bar">
+<div v-if="eventMatchLabel" class="menu_wrapper event_menu_wrapper">
+  <div class="session_status_bar event_status_bar">
     <div class="session_badge_left">
       <span class="session_dot online"></span>
       <span class="session_name">{{ eventMatchLabel }}</span>
@@ -87,6 +89,14 @@ const handleSyncClick = () => {
       {{ t('menu.backToLeague') }}
     </div>
   </div>
+  <button
+    type="button"
+    class="btn_cloud_save_event"
+    :disabled="isCloudSaving"
+    @click.stop="emit('cloud-save-event')"
+  >
+    ☁️ {{ isCloudSaving ? t('menu.cloudSaving') : t('menu.cloudSave') }}
+  </button>
 </div>
 
 <div v-else class="menu_wrapper">
@@ -302,7 +312,56 @@ const handleSyncClick = () => {
   color: #fff;
   border-color: #2563eb;
 }
+.event_menu_wrapper {
+  width: min(440px, 82vw);
+  max-width: 100%;
+  padding: 2px 4px;
+  box-sizing: border-box;
+  white-space: normal;
+}
+.event_status_bar {
+  width: 100%;
+}
 .event_choose_menu {
-  grid-template-rows: repeat(2, 54px);
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(56px, auto));
+  gap: 8px;
+  margin: 10px 0;
+  font-size: clamp(13px, 3vmin, 16px);
+  line-height: 1.25;
+}
+.event_choose_menu > div {
+  padding: 8px 6px;
+  border-radius: 8px;
+  background: var(--color-input-bg, rgba(125, 125, 125, 0.08));
+  border: 1px solid var(--color-border, rgba(125, 125, 125, 0.2));
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  line-height: 1.25;
+}
+.btn_cloud_save_event {
+  width: 100%;
+  padding: 10px 12px;
+  margin-top: 2px;
+  border-radius: 8px;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.14);
+  color: var(--color-positive, #16a34a);
+  font-size: 13.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: normal;
+  line-height: 1.25;
+}
+.btn_cloud_save_event:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+@media (orientation: portrait) {
+  .event_menu_wrapper {
+    width: min(440px, 82vh);
+  }
 }
 </style>

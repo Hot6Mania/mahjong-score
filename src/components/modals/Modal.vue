@@ -69,6 +69,7 @@ interface Props {
   eventLocale?: 'en' | 'ja' | 'ko',
   isEventSubmitting?: boolean,
   isEventSubmitted?: boolean,
+  isEventCloudSaving?: boolean,
   eventPriorPoints?: number[],
   eventChomboPenalty?: number
 }
@@ -115,6 +116,7 @@ type Emits = {
   (e: 'submit-event-result'): void,
   (e: 'back-to-event-dashboard'): void,
   (e: 'change-event-locale', loc: 'en' | 'ja' | 'ko'): void,
+  (e: 'cloud-save-event'): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -510,6 +512,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :scoringState
       actionType="win"
+      :isEventMode="Boolean(eventMatchLabel)"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
     />
@@ -520,6 +523,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :scoringState
       actionType="lose"
+      :isEventMode="Boolean(eventMatchLabel)"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
     />
@@ -543,6 +547,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :scoringState
       actionType="fao"
+      :isEventMode="Boolean(eventMatchLabel)"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
     />
@@ -572,6 +577,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :scoringState
       actionType="tenpai"
+      :isEventMode="Boolean(eventMatchLabel)"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
       @go-to-nagashi="emit('show-modal', 'check_player_nagashi')"
@@ -583,6 +589,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :scoringState
       actionType="nagashi"
+      :isEventMode="Boolean(eventMatchLabel)"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
       @go-back-to-tenpai="emit('show-modal', 'check_player_tenpai')"
@@ -600,6 +607,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :scoringState
       actionType="cheat"
+      :isEventMode="Boolean(eventMatchLabel)"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
     />
@@ -610,6 +618,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :scoringState
       actionType="beolbu"
+      :isEventMode="Boolean(eventMatchLabel)"
       @set-arrow-button="(status, idx) => emit('set-arrow-button', status, idx)"
       @check-invalid-status="(status) => emit('check-invalid-status', status)"
     />
@@ -653,11 +662,13 @@ const getSignColor = (sign: number, x: boolean) => {
       :isSessionClosed="isSessionClosed"
       :eventMatchLabel="eventMatchLabel"
       :eventLocale="eventLocale"
+      :isCloudSaving="isEventCloudSaving"
       @show-modal="(type, status) => emit('show-modal', type, status)"
       @start-new-game="emit('start-new-game')"
       @sync-local-to-google="emit('sync-local-to-google')"
       @back-to-event-dashboard="emit('back-to-event-dashboard')"
       @change-event-locale="(loc) => emit('change-event-locale', loc)"
+      @cloud-save-event="emit('cloud-save-event')"
     />
   </div>
   <!-- 게임 결과창(표) -->
@@ -877,9 +888,9 @@ const getSignColor = (sign: number, x: boolean) => {
     />
   </div>
   <!-- 설정 창 -->
-  <div v-else-if="modalInfo.type==='set_options'" class="modal_content" @click.stop>
+  <div v-else-if="modalInfo.type==='set_options'" class="modal_content" :class="{ event_option_modal: Boolean(eventMatchLabel) }" @click.stop>
     <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%;">
-      <div class="container_option">
+      <div class="container_option" :class="{ event_option: Boolean(eventMatchLabel) }">
         <div
           v-for="(_, i) in arr_seat"
           :key="i"
@@ -929,16 +940,18 @@ const getSignColor = (sign: number, x: boolean) => {
         </div>
         <div style="grid-area: option4;">
           {{ t('option.rankUma') }} (1-2-3-4)<br>
-          <input
-            v-for="(_, i) in option.rankUma"
-            :key="i"
-            style="width: 51px;"
-            type="number"
-            v-model.number="option.rankUma[i]"
-            :placeholder="t('option.rank', {idx:i+1})"
-            :name="`uma${i+1}`"
-            :style="{ marginRight: i===option.rankUma.length-1 ? '0px' : '10px' }"
-          >
+          <div class="uma_inputs_row">
+            <input
+              v-for="(_, i) in option.rankUma"
+              :key="i"
+              style="width: 51px;"
+              type="number"
+              v-model.number="option.rankUma[i]"
+              :placeholder="t('option.rank', {idx:i+1})"
+              :name="`uma${i+1}`"
+              :style="{ marginRight: i===option.rankUma.length-1 ? '0px' : '10px' }"
+            >
+          </div>
         </div>  
         <div style="grid-area: option5;" @click.stop="eventMatchLabel ? null : emit('set-toggle-button', 'cheatscore')">
           {{ t('option.cheatScore') }}<br>
@@ -1255,6 +1268,68 @@ const getSignColor = (sign: number, x: boolean) => {
 .container_option {
   scrollbar-width: thin;
   scrollbar-color: #888888 var(--bg-stripe-dark);
+}
+.event_option_modal {
+  padding: 12px 14px;
+  white-space: normal;
+  width: min(620px, 92vw);
+  max-width: 94vw;
+}
+.container_option.event_option {
+  width: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: auto;
+  row-gap: 14px;
+  column-gap: 10px;
+  font-size: 13.5px;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: keep-all;
+  max-height: min(64vh, 360px);
+  padding: 4px 8px 6px 4px;
+  margin: 0;
+}
+.container_option.event_option > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+.container_option.event_option br {
+  display: none;
+}
+.container_option.event_option input[type="text"],
+.container_option.event_option input[type="number"] {
+  width: 100%;
+  max-width: 112px;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 4px 6px;
+}
+.uma_inputs_row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.container_option.event_option .uma_inputs_row {
+  width: 100%;
+  gap: 6px;
+}
+.container_option.event_option .uma_inputs_row input[type="number"] {
+  width: 48px !important;
+  max-width: 48px;
+  margin-right: 0 !important;
+}
+@media (orientation: portrait) {
+  .event_option_modal {
+    width: min(620px, 90vh);
+    max-width: 92vh;
+  }
+  .container_option.event_option {
+    max-height: min(62vw, 320px);
+  }
 }
 
 /* 게임 결과창(표) — 화면 비율을 넉넉하게 채워 가시성 극대화 */

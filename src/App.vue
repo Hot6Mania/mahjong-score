@@ -4,15 +4,16 @@ import Panel from "@/components/Panel.vue"
 import Modal from "@/components/modals/Modal.vue"
 import StatsDashboardView from "@/views/StatsDashboardView.vue"
 import KnuNpmEventView from "@/views/KnuNpmEventView.vue"
+import EventLiveMonitorView from "@/views/EventLiveMonitorView.vue"
 import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
-import { isKnuNpmEventMode, isKnuNpmSandboxMode, KNU_NPM_EVENT_TITLE } from "@/utils/eventMode"
+import { isKnuNpmEventMode, isKnuNpmLiveMonitorPath, isKnuNpmSandboxMode, KNU_NPM_EVENT_TITLE } from "@/utils/eventMode"
 import { EVENT_PLAYER_MAP, getMatchKey, type EventScoringConfig } from "@/data/knuNpm2026"
-import { submitTableResult } from "@/services/knuNpmEventService"
+import { clearLiveTableState, submitTableResult, upsertLiveTableState } from "@/services/knuNpmEventService"
 import type { EventLocale } from "@/locales/knuNpmEvent"
-import type { CompactRoundRecords } from "@/utils/knuNpmScoring"
+import type { CompactRoundRecords, LiveTableState } from "@/utils/knuNpmScoring"
 import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, hasPendingOAuthRedirectParams, startGoogleRedirectLogin, consumeGoogleRedirectCallback, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, isGoogleQuotaError, getSpreadsheetMetadataCached, batchGetSheetValues, getSheetValuesWithRetry, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
 import { calculateMatchRatings, normalizeRatingPlayerName, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
@@ -27,6 +28,9 @@ const router = useRouter()
 const route = useRoute()
 const isEventMode = computed(() => isKnuNpmEventMode(route.path));
 const isEventSandbox = computed(() => isKnuNpmSandboxMode(route.path));
+const isEventLiveMonitor = computed(() => isKnuNpmLiveMonitorPath(route.path));
+const isEventCloudSaving = ref(false);
+const EVENT_ACTIVE_SESSION_KEY = 'knu_npm_2026_active_session_v1';
 
 const resolveInitialEventLocale = (): EventLocale => {
   if (typeof window !== 'undefined') {
@@ -809,6 +813,7 @@ onMounted(async () => {
     isProcessingOAuthRedirect.value = false;
     setEventLocale(eventLocale.value);
     document.title = KNU_NPM_EVENT_TITLE;
+    restoreEventScorerSessionFromLocal();
     return;
   }
 
@@ -1072,6 +1077,10 @@ const toggleActiveRiichi = (seat: string) => {
     (players[idx] as any).riichiAngle = 0;
     (players[idx] as any).riichiOffsetX = 0;
     (players[idx] as any).riichiOffsetY = 0;
+  }
+  if (isEventMode.value && activeEventMatch.value) {
+    persistEventScorerSessionToLocal();
+    syncEventLiveCheckpoint(false);
   }
 }
 
@@ -1885,6 +1894,8 @@ const saveRound = () => {
               ? `촌보 기록: 누적 포인트 -${pen}pt 차감 (인게임 점수 변동 없음)`
               : `Chombo recorded: -${pen}pt from cumulative points (no table score change)`
         );
+        persistEventScorerSessionToLocal();
+        syncEventLiveCheckpoint(false);
       }
       console.log("촌보 무효국 처리: 국, 본장, 오야 위치를 그대로 유지합니다.");
       return;
@@ -1913,6 +1924,8 @@ const saveRound = () => {
           if (status === 'tsumo' || status === 'ron') {
             panelInfo.riichi = 0;
           }
+          persistEventScorerSessionToLocal();
+          syncEventLiveCheckpoint(false);
         } else {
           if (status === 'tsumo' || status === 'ron') {
             panelInfo.riichi = 0;
@@ -1920,6 +1933,8 @@ const saveRound = () => {
           if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
             records.time[records.time.length - 1] = '결과';
           }
+          persistEventScorerSessionToLocal();
+          syncEventLiveCheckpoint(false);
           showModal('result_sheet');
         }
       } else if (isRenchan) {
@@ -2018,6 +2033,10 @@ const saveRound = () => {
       if (status === 'tsumo' || status === 'ron') {
         panelInfo.riichi = 0;
       }
+      if (isEventMode.value && activeEventMatch.value) {
+        persistEventScorerSessionToLocal();
+        syncEventLiveCheckpoint(false);
+      }
     }
   });
 
@@ -2102,6 +2121,11 @@ const rollbackRecord = (idx: number) => {
     allWinds.unshift(allWinds.pop()!); // 현재 바람 세기
   players.forEach((x, idx) => {x.wind=allWinds[idx];}); // 개인 바람 설정
   panelInfo.riichi=Math.floor((option.startingScore*4-sumScore)/1000); // 리치봉 설정
+  riichiOrder.value = [];
+  if (isEventMode.value && activeEventMatch.value) {
+    persistEventScorerSessionToLocal();
+    syncEventLiveCheckpoint(false);
+  }
   hideModal(); // 모달 창 끄기
 }
 
@@ -2710,6 +2734,236 @@ const startGameWithSeats = (assignment: Record<string, string>) => {
   hideModal();
 };
 
+const buildCurrentEventRoundsSnapshot = (seatPlayerIds: [number, number, number, number]): CompactRoundRecords => ({
+  seatPlayerIds: [...seatPlayerIds] as [number, number, number, number],
+  time: [...records.time],
+  score: records.score.map((arr) => [...arr]),
+  riichi: records.riichi.map((arr) => [...arr]),
+  win: records.win.map((arr) => [...arr]),
+  lose: records.lose.map((arr) => [...arr]),
+  tenpai: (records.tenpai || []).map((arr) => [...arr]),
+  cheat: (records.cheat || []).map((arr) => [...arr]),
+  beolbu: (records.beolbu || []).map((arr) => [...arr]),
+  status: [...(records.status || [])],
+  riichiOrder: (records.riichiOrder || []).map((arr) => [...arr]),
+  dealer: [...(records.dealer || [])],
+});
+
+const persistEventScorerSessionToLocal = () => {
+  if (!isEventMode.value || !activeEventMatch.value) return;
+  try {
+    const payload = {
+      match: activeEventMatch.value,
+      isScorerVisible: isEventScorerVisible.value,
+      players: players.map((p) => ({ ...p })),
+      panelInfo: { ...panelInfo },
+      records: buildCurrentEventRoundsSnapshot(activeEventMatch.value.seatPlayerIds),
+      savedAt: Date.now(),
+    };
+    localStorage.setItem(EVENT_ACTIVE_SESSION_KEY, JSON.stringify(payload));
+  } catch {}
+};
+
+const clearEventScorerLocalSession = () => {
+  try {
+    localStorage.removeItem(EVENT_ACTIVE_SESSION_KEY);
+  } catch {}
+};
+
+const restoreEventScorerSessionFromLocal = () => {
+  try {
+    const raw = localStorage.getItem(EVENT_ACTIVE_SESSION_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.match || !Array.isArray(parsed.players) || parsed.players.length !== 4) return;
+    const match: ActiveEventMatch = parsed.match;
+    if (Boolean(match.sandbox) !== Boolean(isEventSandbox.value)) return;
+
+    option.startingScore = match.config.startingScore;
+    option.returnScore = match.config.returnScore;
+    option.rankUma = [...match.config.uma];
+    option.sekiOrder = match.config.tieBreak === 'seat';
+    option.roundMangan = match.config.roundMangan;
+    option.tobi = match.config.tobi;
+    option.riichiPayout = match.config.riichiPayout;
+    const savedEventPtDisplay = localStorage.getItem('knu_npm_2026_pt_display');
+    option.ratingDisplayMode =
+      savedEventPtDisplay === 'side' || savedEventPtDisplay === 'top' || savedEventPtDisplay === 'off'
+        ? savedEventPtDisplay
+        : 'top';
+
+    parsed.players.forEach((sp: any, idx: number) => {
+      Object.assign(players[idx], {
+        ...sp,
+        isCheat: Boolean(sp.isCheat),
+        beolbuCount: Number(sp.beolbuCount || 0),
+        effectScore: NaN,
+        gapScore: NaN,
+        deltaScore: 0,
+      });
+    });
+    Object.assign(panelInfo, parsed.panelInfo);
+    if (parsed.records) {
+      records.time.splice(0, records.time.length, ...(parsed.records.time || ['ㅤ']));
+      for (let i = 0; i < 4; i++) {
+        records.score[i].splice(0, records.score[i].length, ...(parsed.records.score?.[i] || [option.startingScore]));
+      }
+      records.riichi.splice(0, records.riichi.length, ...(parsed.records.riichi || [[false, false, false, false]]));
+      records.win.splice(0, records.win.length, ...(parsed.records.win || [[false, false, false, false]]));
+      records.lose.splice(0, records.lose.length, ...(parsed.records.lose || [[false, false, false, false]]));
+      records.tenpai = [...(parsed.records.tenpai || [[false, false, false, false]])];
+      records.cheat = [...(parsed.records.cheat || [[false, false, false, false]])];
+      records.beolbu = [...(parsed.records.beolbu || [[0, 0, 0, 0]])];
+      records.status = [...(parsed.records.status || ['initial'])];
+      records.riichiOrder = [...(parsed.records.riichiOrder || [[]])];
+      records.dealer = [...(parsed.records.dealer || [0])];
+    }
+    activeEventMatch.value = match;
+    riichiOrder.value = players
+      .map((p, idx) => (p.isRiichi ? idx : -1))
+      .filter((idx) => idx >= 0);
+    if (parsed.isScorerVisible && !isEventLiveMonitor.value) {
+      isEventScorerVisible.value = true;
+      if (records.time.length > 0 && records.time[records.time.length - 1] === '결과') {
+        showModal('result_sheet');
+      }
+      triggerToast(
+        eventLocale.value === 'ja'
+          ? `中断した対局を自動復元しました（${match.key} · ${panelInfo.wind}${panelInfo.round}局 ${panelInfo.renchan}本場）`
+          : eventLocale.value === 'ko'
+            ? `중단된 대국을 자동 복구했습니다 (${match.key} · ${panelInfo.wind}${panelInfo.round}국 ${panelInfo.renchan}본장)`
+            : `Auto-recovered interrupted game (${match.key} · ${panelInfo.wind}${panelInfo.round}, ${panelInfo.renchan}H)`
+      );
+    }
+  } catch (e) {
+    console.warn('Failed to restore event scorer session:', e);
+  }
+};
+
+const syncEventLiveCheckpoint = async (showFeedback = false) => {
+  const match = activeEventMatch.value;
+  if (!match) return;
+  if (showFeedback) isEventCloudSaving.value = true;
+  try {
+    await upsertLiveTableState(
+      {
+        round: match.round,
+        table: match.table,
+        seatPlayerIds: [...match.seatPlayerIds] as [number, number, number, number],
+        scores: [0, 1, 2, 3].map((i) => Number(players[i].displayScore)) as [number, number, number, number],
+        winds: [0, 1, 2, 3].map((i) => String(players[i].wind)) as [string, string, string, string],
+        riichiActive: [0, 1, 2, 3].map((i) => Boolean(players[i].isRiichi)) as [boolean, boolean, boolean, boolean],
+        chomboCounts: [...eventSeatChomboCounts.value] as [number, number, number, number],
+        wind: String(panelInfo.wind),
+        roundNum: Number(panelInfo.round),
+        renchan: Number(panelInfo.renchan),
+        riichiSticks: Number(panelInfo.riichi),
+        isFinished: Boolean(isGameFinished.value),
+        records: buildCurrentEventRoundsSnapshot(match.seatPlayerIds),
+      },
+      match.sandbox
+    );
+    if (showFeedback) {
+      triggerToast(
+        eventLocale.value === 'ja'
+          ? `サーバーに途中保存しました（${match.key}）— 他端末から引き継ぎ可能`
+          : eventLocale.value === 'ko'
+            ? `서버 임시저장 완료 (${match.key}) — 다른 기기에서 이어하기 가능`
+            : `Backed up to server (${match.key}) — Ready to continue on any device!`
+      );
+    }
+  } catch (err: any) {
+    if (showFeedback) {
+      triggerToast(err?.message || 'Cloud backup failed', 'error');
+    }
+  } finally {
+    if (showFeedback) isEventCloudSaving.value = false;
+  }
+};
+
+// 다른 디바이스에서 서버 라이브 체크포인트로 이어서 기록하기
+const continueLiveEventScorer = (payload: {
+  liveGame: LiveTableState;
+  config: EventScoringConfig;
+  sandbox: boolean;
+  priorPoints: [number, number, number, number];
+}) => {
+  const { liveGame, config, sandbox, priorPoints } = payload;
+  option.startingScore = config.startingScore;
+  option.returnScore = config.returnScore;
+  option.rankUma = [...config.uma];
+  option.sekiOrder = config.tieBreak === 'seat';
+  option.roundMangan = config.roundMangan;
+  option.tobi = config.tobi;
+  option.riichiPayout = config.riichiPayout;
+  const savedEventPtDisplay = localStorage.getItem('knu_npm_2026_pt_display');
+  option.ratingDisplayMode =
+    savedEventPtDisplay === 'side' || savedEventPtDisplay === 'top' || savedEventPtDisplay === 'off'
+      ? savedEventPtDisplay
+      : 'top';
+
+  resetAll();
+  hideModal();
+
+  const seatIds = liveGame.seatPlayerIds;
+  seatIds.forEach((pid, idx) => {
+    const ep = EVENT_PLAYER_MAP[pid];
+    players[idx].name = ep ? ep.compactName : `#${pid}`;
+    players[idx].displayScore = Number(liveGame.scores[idx] ?? config.startingScore);
+    players[idx].wind = liveGame.winds?.[idx] || ['東', '南', '西', '北'][idx];
+    players[idx].isRiichi = Boolean(liveGame.riichiActive?.[idx]);
+    delete players[idx].rating;
+  });
+
+  panelInfo.wind = liveGame.wind || '東';
+  panelInfo.round = Number(liveGame.roundNum || 1);
+  panelInfo.renchan = Number(liveGame.renchan || 0);
+  panelInfo.riichi = Number(liveGame.riichiSticks || 0);
+
+  if (liveGame.records && Array.isArray(liveGame.records.time) && liveGame.records.time.length >= 1) {
+    const rec = liveGame.records;
+    records.time.splice(0, records.time.length, ...rec.time);
+    for (let i = 0; i < 4; i++) {
+      records.score[i].splice(0, records.score[i].length, ...(rec.score?.[i] || [players[i].displayScore]));
+    }
+    records.riichi.splice(0, records.riichi.length, ...(rec.riichi || [[false, false, false, false]]));
+    records.win.splice(0, records.win.length, ...(rec.win || [[false, false, false, false]]));
+    records.lose.splice(0, records.lose.length, ...(rec.lose || [[false, false, false, false]]));
+    records.tenpai = [...(rec.tenpai || [[false, false, false, false]])];
+    records.cheat = [...(rec.cheat || [[false, false, false, false]])];
+    records.beolbu = [...(rec.beolbu || [[0, 0, 0, 0]])];
+    records.status = [...(rec.status || ['initial'])];
+    records.riichiOrder = [...(rec.riichiOrder || [[]])];
+    records.dealer = [...(rec.dealer || [0])];
+  }
+
+  activeEventMatch.value = {
+    round: liveGame.round,
+    table: liveGame.table,
+    key: liveGame.key,
+    seatPlayerIds: [...seatIds] as [number, number, number, number],
+    sandbox,
+    config,
+    priorPoints: [...priorPoints] as [number, number, number, number],
+  };
+  isEventSubmitted.value = false;
+  isEventScorerVisible.value = true;
+  riichiOrder.value = players
+    .map((p, idx) => (p.isRiichi ? idx : -1))
+    .filter((idx) => idx >= 0);
+  if (records.time.length > 0 && records.time[records.time.length - 1] === '결과') {
+    showModal('result_sheet');
+  }
+  persistEventScorerSessionToLocal();
+  triggerToast(
+    eventLocale.value === 'ja'
+      ? `${liveGame.key}（${panelInfo.wind}${panelInfo.round}局 ${panelInfo.renchan}本場）を引き継ぎました`
+      : eventLocale.value === 'ko'
+        ? `${liveGame.key} (${panelInfo.wind}${panelInfo.round}국 ${panelInfo.renchan}본장) 이어하기 완료!`
+        : `Resumed ${liveGame.key} (${panelInfo.wind} ${panelInfo.round}, ${panelInfo.renchan} Honba)`
+  );
+};
+
 // 이벤트 모드 전용 점수판 실행 / 제출 / 복귀 핸들러
 const launchEventScorer = (payload: {
   round: number;
@@ -2752,6 +3006,8 @@ const launchEventScorer = (payload: {
   };
   isEventSubmitted.value = false;
   isEventScorerVisible.value = true;
+  persistEventScorerSessionToLocal();
+  syncEventLiveCheckpoint(false);
 };
 
 const submitEventScorerResult = async () => {
@@ -2815,6 +3071,8 @@ const submitEventScorerResult = async () => {
 
     isEventSubmitted.value = true;
     isGameSaved.value = true;
+    clearEventScorerLocalSession();
+    clearLiveTableState(match.round, match.table, match.sandbox).catch(() => {});
     triggerToast(
       eventLocale.value === 'ja'
         ? `第${match.round}回戦 · ${match.table}番卓の結果を送信しました！`
@@ -2833,6 +3091,7 @@ const handleBackToEventDashboard = () => {
   hideModal();
   isPanelMenuOpen.value = false;
   isEventScorerVisible.value = false;
+  persistEventScorerSessionToLocal();
 };
 
 // 대국 완전 초기화 후 자리 설정 모달 켜기
@@ -2848,6 +3107,8 @@ const startNewGame = async (skipConfirm = false) => {
       resetAll();
       isEventSubmitted.value = false;
       hideModal();
+      persistEventScorerSessionToLocal();
+      syncEventLiveCheckpoint(false);
     }
     return;
   }
@@ -4291,6 +4552,12 @@ const addBackupGameToCurrent = (game: any) => {
     <div class="oauth-redirect-spinner"></div>
     <p class="oauth-redirect-text">구글 계정 인증 처리 중...</p>
   </div>
+  <EventLiveMonitorView
+    v-else-if="isEventMode && isEventLiveMonitor && !isEventScorerVisible"
+    :is-sandbox="isEventSandbox"
+    :event-locale="eventLocale"
+    @change-locale="setEventLocale"
+  />
   <KnuNpmEventView
     v-else-if="isEventMode && !isEventScorerVisible"
     :is-sandbox="isEventSandbox"
@@ -4298,6 +4565,7 @@ const addBackupGameToCurrent = (game: any) => {
     :active-scorer-key="activeEventMatch && activeEventMatch.sandbox === isEventSandbox ? activeEventMatch.key : null"
     @change-locale="setEventLocale"
     @launch-scorer="launchEventScorer"
+    @continue-live-scorer="continueLiveEventScorer"
     @resume-scorer="isEventScorerVisible = true"
   />
   <StatsDashboardView 
@@ -4370,6 +4638,7 @@ const addBackupGameToCurrent = (game: any) => {
       :eventLocale="eventLocale"
       :isEventSubmitting="isEventSubmitting"
       :isEventSubmitted="isEventSubmitted"
+      :isEventCloudSaving="isEventCloudSaving"
       :eventPriorPoints="isEventMode && activeEventMatch ? activeEventMatch.priorPoints : undefined"
       :eventChomboPenalty="isEventMode && activeEventMatch ? activeEventMatch.config.chomboPenalty : 20"
       @toggle-close-session="toggleCloseCurrentSession"
@@ -4410,6 +4679,7 @@ const addBackupGameToCurrent = (game: any) => {
       @submit-event-result="submitEventScorerResult"
       @back-to-event-dashboard="handleBackToEventDashboard"
       @change-event-locale="setEventLocale"
+      @cloud-save-event="syncEventLiveCheckpoint(true)"
     />
   </Transition>
 

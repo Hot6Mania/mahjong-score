@@ -46,7 +46,9 @@
         "submitEvent" : "Submit to League",
         "submittingEvent" : "Submitting...",
         "submittedEvent" : "Submitted ✓",
-        "backToLeague" : "Back to League"
+        "backToLeague" : "Back to League",
+        "cloudSave" : "Cloud Backup",
+        "cloudSaving" : "Backing up..."
     },
     "resultSheet" : {
         "wind" : "Seat",

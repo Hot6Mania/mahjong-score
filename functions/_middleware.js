@@ -14,6 +14,9 @@ const EVENT_DESC =
 const TEST_TITLE = '[TEST] 2026 KNU X NPM MAHJONG TEAM LEAGUE';
 const TEST_DESC =
   'Test Sandbox — 2026 KNU X NPM MAHJONG TEAM LEAGUE Live Scoreboard & Standings';
+const LIVE_TITLE = '[LIVE] 2026 KNU X NPM MAHJONG TEAM LEAGUE';
+const LIVE_DESC =
+  'Live 7-Table Projector Monitor — 2026 KNU X NPM MAHJONG TEAM LEAGUE';
 
 function isKnuNpmRequest(url) {
   const host = (url.hostname || '').toLowerCase();
@@ -92,8 +95,19 @@ export async function onRequest(context) {
   }
 
   const isTest = isSandboxRequest(url);
-  const title = isTest ? TEST_TITLE : EVENT_TITLE;
-  const description = isTest ? TEST_DESC : EVENT_DESC;
+  const isLive =
+    url.pathname === '/live' ||
+    url.pathname === '/test/live' ||
+    url.pathname === '/knu-npm-2026/live' ||
+    url.pathname === '/knu-npm-2026/test/live';
+  const title = isLive
+    ? isTest
+      ? `[TEST LIVE] ${EVENT_TITLE}`
+      : LIVE_TITLE
+    : isTest
+      ? TEST_TITLE
+      : EVENT_TITLE;
+  const description = isLive ? LIVE_DESC : isTest ? TEST_DESC : EVENT_DESC;
   const langParam = (url.searchParams.get('lang') || '').toLowerCase();
   const htmlLang = langParam === 'ja' || langParam === 'ko' ? langParam : 'en';
   const canonicalUrl = `${url.origin}${url.pathname === '/' ? '/' : url.pathname}`;

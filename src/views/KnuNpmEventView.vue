@@ -33,6 +33,8 @@ import {
   formatSignedPoint,
   normalizeConfig,
   type EventStatePayload,
+  type LiveStatePayload,
+  type LiveTableState,
   type PlayerStanding,
   type StoredTableResult,
   type TableScoreEntryInput,
@@ -47,17 +49,21 @@ import {
   deleteTableResult,
   fetchEventState,
   fetchEventStateIfChanged,
+  fetchLiveState,
+  fetchLiveStateIfChanged,
   getSavedStaffPin,
   resetSandboxData,
   rollbackAuditEntry,
   saveStaffPin,
   seedSandboxData,
+  seedSandboxLiveGames,
   submitTableResult,
   subscribeEventStateUpdates,
+  subscribeLiveStateUpdates,
   updateEventConfig,
   verifyStaffPin,
 } from '@/services/knuNpmEventService';
-import { getKnuNpmBasePath } from '@/utils/eventMode';
+import { getKnuNpmBasePath, getKnuNpmLiveMonitorPath } from '@/utils/eventMode';
 import EventSeatPickerModal from '@/components/event/EventSeatPickerModal.vue';
 import EventScoreModal from '@/components/event/EventScoreModal.vue';
 import EventPlayerModal from '@/components/event/EventPlayerModal.vue';
@@ -84,6 +90,15 @@ const emit = defineEmits<{
       round: number;
       table: number;
       seatPlayerIds: [number, number, number, number];
+      config: EventScoringConfig;
+      sandbox: boolean;
+      priorPoints: [number, number, number, number];
+    }
+  ): void;
+  (
+    e: 'continue-live-scorer',
+    payload: {
+      liveGame: LiveTableState;
       config: EventScoringConfig;
       sandbox: boolean;
       priorPoints: [number, number, number, number];
@@ -124,6 +139,11 @@ const state = ref<EventStatePayload>({
   config: normalizeConfig(DEFAULT_EVENT_CONFIG),
   results: {},
   auditLog: [],
+});
+
+const liveState = ref<LiveStatePayload>({
+  updatedAt: 0,
+  liveGames: {},
 });
 
 // Staff Auth
@@ -178,14 +198,24 @@ const loadState = async (silent = false, force = false) => {
   loadError.value = '';
   try {
     if (silent && !force) {
-      const res = await fetchEventStateIfChanged(props.isSandbox, state.value.updatedAt);
+      const [res, liveRes] = await Promise.all([
+        fetchEventStateIfChanged(props.isSandbox, state.value.updatedAt),
+        fetchLiveStateIfChanged(props.isSandbox, liveState.value.updatedAt).catch(() => null),
+      ]);
       lastCheckedAt.value = Date.now();
       if (!res.unchanged) {
         state.value = res.state;
       }
+      if (liveRes && !liveRes.unchanged) {
+        liveState.value = liveRes.liveState;
+      }
     } else {
-      const next = await fetchEventState(props.isSandbox, force);
+      const [next, nextLive] = await Promise.all([
+        fetchEventState(props.isSandbox, force),
+        fetchLiveState(props.isSandbox, force).catch(() => ({ updatedAt: 0, liveGames: {} })),
+      ]);
       state.value = next;
+      liveState.value = nextLive;
       lastCheckedAt.value = Date.now();
     }
   } catch (err: any) {
@@ -200,6 +230,7 @@ const loadState = async (silent = false, force = false) => {
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let unsubscribeBroadcast: (() => void) | null = null;
+let unsubscribeLiveBroadcast: (() => void) | null = null;
 let lastWakeSyncAt = 0;
 
 const handleVisibilityOrFocus = () => {
@@ -233,6 +264,14 @@ onMounted(async () => {
     }
   });
 
+  unsubscribeLiveBroadcast = subscribeLiveStateUpdates(({ liveState: incoming, sandbox }) => {
+    if (Boolean(sandbox) !== Boolean(props.isSandbox)) return;
+    if (Number(incoming.updatedAt || 0) >= Number(liveState.value.updatedAt || 0)) {
+      liveState.value = incoming;
+      lastCheckedAt.value = Date.now();
+    }
+  });
+
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
   }
@@ -252,6 +291,7 @@ onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
   if (toastTimer) clearTimeout(toastTimer);
   if (unsubscribeBroadcast) unsubscribeBroadcast();
+  if (unsubscribeLiveBroadcast) unsubscribeLiveBroadcast();
   if (typeof document !== 'undefined') {
     document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
   }
@@ -478,6 +518,39 @@ const handleLaunchScorer = (seatPlayerIds: [number, number, number, number]) => 
   });
 };
 
+const handleContinueLiveTable = (slot: EventMatchSlot) => {
+  if (isSlotLocked(slot)) {
+    showToast(tr('inputLockedNotice'));
+    return;
+  }
+  const liveGame = liveState.value.liveGames?.[slot.key];
+  if (!liveGame) return;
+  const existingMatch = standings.value.calculatedMatches[slot.key];
+  const priorPoints = liveGame.seatPlayerIds.map((pid) => {
+    const ps = standings.value.players.find((p) => p.player.id === pid);
+    const curTotal = ps ? ps.totalPoints : 0;
+    const prevEntry = existingMatch?.entries.find((e) => e.playerId === pid);
+    return prevEntry ? Number((curTotal - prevEntry.finalPoint).toFixed(1)) : curTotal;
+  }) as [number, number, number, number];
+
+  emit('continue-live-scorer', {
+    liveGame,
+    config: state.value.config,
+    sandbox: props.isSandbox,
+    priorPoints,
+  });
+};
+
+const openLiveMonitor = () => {
+  router.push({ path: getKnuNpmLiveMonitorPath(props.isSandbox), query: { lang: props.eventLocale } });
+};
+
+const handleSimulateSandboxLive = () => {
+  if (!props.isSandbox) return;
+  liveState.value = seedSandboxLiveGames(selectedRound.value);
+  showToast(`Simulated 6 live tables for Round ${selectedRound.value}!`);
+};
+
 const handleManualSubmit = async (payload: {
   entries: TableScoreEntryInput[];
   submittedBy: string;
@@ -672,6 +745,12 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
         <button type="button" class="sb-btn accent" @click="quickTestJpCR1T4">
           📝 {{ tr('sandboxTestJpC') }}
         </button>
+        <button type="button" class="sb-btn" @click="handleSimulateSandboxLive">
+          📡 {{ tr('sandboxSimLive') }}
+        </button>
+        <button type="button" class="sb-btn accent" @click="openLiveMonitor">
+          📺 {{ tr('sandboxOpenMonitor') }}
+        </button>
         <button type="button" class="sb-btn danger" @click="handleResetSandbox">
           🗑 {{ tr('sandboxReset') }}
         </button>
@@ -724,6 +803,14 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
             @click="emit('resume-scorer')"
           >
             🀄 {{ tr('resumeScorer') }} ({{ activeScorerKey }})
+          </button>
+
+          <button
+            type="button"
+            class="hdr-btn monitor-btn"
+            @click="openLiveMonitor"
+          >
+            📺 {{ tr('liveMonitorBtn') }}
           </button>
 
           <button
@@ -1196,6 +1283,9 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                 <span v-if="state.results[slot.key]" class="status-pill done">
                   ✓ {{ state.results[slot.key].source === 'scorer' ? tr('sourceScorer') : tr('sourceManual') }}
                 </span>
+                <span v-else-if="liveState.liveGames[slot.key]" class="status-pill live-now">
+                  ● {{ tr('liveInProgressTag') }} ({{ liveState.liveGames[slot.key].wind }}{{ liveState.liveGames[slot.key].roundNum }}局 {{ liveState.liveGames[slot.key].renchan }}本)
+                </span>
                 <span v-else-if="isSlotLocked(slot)" class="status-pill locked">🔒 {{ tr('statusLocked') }}</span>
                 <span v-else class="status-pill pending">{{ tr('statusPending') }}</span>
               </div>
@@ -1238,10 +1328,30 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                     </template>
                   </template>
                 </div>
+                <div v-else-if="liveState.liveGames[slot.key]" class="tp-score">
+                  <template
+                    v-for="lIdx in [liveState.liveGames[slot.key].seatPlayerIds.indexOf(pid)]"
+                    :key="pid"
+                  >
+                    <template v-if="lIdx >= 0">
+                      <span class="tp-wind-mini">{{ liveState.liveGames[slot.key].winds[lIdx] }}</span>
+                      <strong class="tp-live-score">{{ liveState.liveGames[slot.key].scores[lIdx].toLocaleString() }}</strong>
+                    </template>
+                  </template>
+                </div>
               </div>
             </div>
 
             <div class="table-card-actions">
+              <button
+                v-if="!state.results[slot.key] && liveState.liveGames[slot.key]"
+                type="button"
+                class="act-btn continue-btn"
+                :disabled="isSlotLocked(slot)"
+                @click="handleContinueLiveTable(slot)"
+              >
+                🔄 {{ tr('continueOnDevice') }}
+              </button>
               <!-- Table 4 (JP-C): emphasize Result Only first, still allow Scorer -->
               <template v-if="slot.isJpC">
                 <button
@@ -1765,6 +1875,11 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
   color: #fff;
   border-color: #16a34a;
 }
+.hdr-btn.monitor-btn {
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.45);
+}
 .hdr-btn.staff-btn.active {
   background: rgba(37, 99, 235, 0.16);
   border-color: rgba(37, 99, 235, 0.5);
@@ -2165,8 +2280,12 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
   border-radius: 999px;
 }
 .status-pill.done { background: rgba(16, 185, 129, 0.16); color: #10b981; }
+.status-pill.live-now { background: rgba(239, 68, 68, 0.16); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.45); }
 .status-pill.pending { background: var(--bg-card); color: var(--text-dimmed); }
 .status-pill.locked { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.tp-wind-mini { font-size: 11px; font-weight: 800; color: var(--color-east); }
+.tp-live-score { font-size: 13px; color: var(--text-color); }
+.act-btn.continue-btn { background: #16a34a; color: #fff; flex: 1 1 100%; }
 
 .table-players-list {
   display: flex;

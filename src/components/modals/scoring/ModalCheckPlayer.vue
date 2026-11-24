@@ -9,7 +9,8 @@ const { t } = useI18n()
 interface Props {
   players: Player[],
   scoringState: ScoringState,
-  actionType: 'win' | 'lose' | 'cheat' | 'fao' | 'tenpai' | 'nagashi' | 'beolbu'
+  actionType: 'win' | 'lose' | 'cheat' | 'fao' | 'tenpai' | 'nagashi' | 'beolbu',
+  isEventMode?: boolean
 }
 const props = defineProps<Props>()
 
@@ -76,7 +77,7 @@ const okButtonStyle = (status: string) => {
 
 <template>
 <!-- 인원 선택창 -->
-<div class="container_check">
+<div class="container_check" :class="{ 'event_check': Boolean(isEventMode) }">
   <div class="guide_message">
     {{ t(guideMessages[actionType]) }}
     <div
@@ -100,7 +101,7 @@ const okButtonStyle = (status: string) => {
   <div class="ok" :style="okButtonStyle(actionType)" @click.stop="emit('check-invalid-status', actionType)">
     OK
   </div>
-  <div v-if="actionType === 'tenpai'" class="nagashi" @click.stop="emit('go-to-nagashi')">
+  <div v-if="actionType === 'tenpai' && !isEventMode" class="nagashi" @click.stop="emit('go-to-nagashi')">
     {{ t('panel.nagashi') }}
   </div>
   <div v-else-if="actionType === 'nagashi'" class="nagashi" @click.stop="emit('go-back-to-tenpai')">
@@ -126,7 +127,24 @@ const okButtonStyle = (status: string) => {
 }
 .guide_message{
   grid-area: guide_message;
-  font-size: 20px;
+  font-size: 18px;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  width: 100%;
+  max-width: 100%;
+  padding: 0 8px 6px;
+  box-sizing: border-box;
+}
+.container_check.event_check {
+  width: min(340px, 100%);
+  grid-template-columns: repeat(3, minmax(84px, 1fr));
+  grid-template-rows: auto repeat(3, 92px);
+}
+.container_check.event_check .guide_message {
+  font-size: 16px;
+  font-weight: 700;
 }
 .beolbu_warning{
   font-size: 13px;

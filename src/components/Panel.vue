@@ -201,7 +201,7 @@ const emit = defineEmits<Emits>()
   pointer-events: none;
 }
 #Mid.event-mid {
-  width: min(500px, calc(100% - 170px));
+  width: min(520px, calc(100% - 160px));
   display: flex;
   justify-content: center;
 }
@@ -374,19 +374,17 @@ const emit = defineEmits<Emits>()
 }
 .menu_layout.event-menu-layout .btn_action {
   min-width: 0;
-  padding: 0 8px;
+  padding: 0 6px;
   overflow: hidden;
   line-height: 1.1;
+  font-size: clamp(18px, 6.2cqi, 34px);
 }
 .menu_layout.event-menu-layout .btn_action.win,
 .menu_layout.event-menu-layout .btn_action.draw {
-  flex: 1.38;
-  font-size: clamp(22px, 8.5cqi, 44px);
+  flex: 1.16;
 }
 .menu_layout.event-menu-layout .btn_action.cheat {
-  flex: 0.84;
-  padding: 0 6px;
-  font-size: clamp(13px, 4.2cqi, 22px);
+  flex: 0.96;
 }
 
 .menu_separator {

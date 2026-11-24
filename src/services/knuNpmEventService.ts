@@ -6,10 +6,13 @@ import {
 } from '@/data/knuNpm2026';
 import {
   generateSampleEventResults,
+  generateSampleLiveGames,
   normalizeConfig,
   type CompactRoundRecords,
   type EventAuditEntry,
   type EventStatePayload,
+  type LiveStatePayload,
+  type LiveTableState,
   type ResultSource,
   type StoredTableResult,
   type TableScoreEntryInput,
@@ -21,10 +24,54 @@ const API_PREFIX = '/api/event/knu-npm-2026';
 
 const STAFF_PIN_SESSION_KEY = 'knu_npm_2026_staff_pin';
 const SANDBOX_STATE_STORAGE_KEY = 'knu_npm_2026_sandbox_state_v1';
+const SANDBOX_LIVE_STORAGE_KEY = 'knu_npm_2026_sandbox_live_v1';
 const SANDBOX_PIN_STORAGE_KEY = 'knu_npm_2026_sandbox_pin_v1';
 const DEFAULT_SANDBOX_PIN = '20261128';
 const SYNC_CHANNEL_NAME = 'knu-npm-2026-sync';
 const SYNC_WINDOW_EVENT = 'knu-npm-2026-state-updated';
+const LIVE_WINDOW_EVENT = 'knu-npm-2026-live-updated';
+
+export function broadcastLiveStateUpdate(liveState: LiveStatePayload, sandbox: boolean): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(LIVE_WINDOW_EVENT, { detail: { liveState, sandbox } }));
+    }
+  } catch {}
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel(SYNC_CHANNEL_NAME);
+      ch.postMessage({ type: 'live', liveState, sandbox });
+      ch.close();
+    }
+  } catch {}
+}
+
+export function subscribeLiveStateUpdates(
+  onUpdate: (payload: { liveState: LiveStatePayload; sandbox: boolean }) => void
+): () => void {
+  const winHandler = (e: Event) => {
+    const detail = (e as CustomEvent)?.detail;
+    if (detail && detail.liveState) onUpdate(detail);
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener(LIVE_WINDOW_EVENT, winHandler);
+  }
+  let ch: BroadcastChannel | null = null;
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      ch = new BroadcastChannel(SYNC_CHANNEL_NAME);
+      ch.onmessage = (ev) => {
+        if (ev.data && ev.data.type === 'live' && ev.data.liveState) onUpdate(ev.data);
+      };
+    }
+  } catch {}
+  return () => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener(LIVE_WINDOW_EVENT, winHandler);
+    }
+    if (ch) ch.close();
+  };
+}
 
 export function broadcastEventStateUpdate(state: EventStatePayload, sandbox: boolean): void {
   try {
@@ -170,7 +217,9 @@ export function seedSandboxData(roundCount: number): EventStatePayload {
 export function resetSandboxData(): EventStatePayload {
   try {
     localStorage.removeItem(SANDBOX_STATE_STORAGE_KEY);
+    localStorage.removeItem(SANDBOX_LIVE_STORAGE_KEY);
   } catch {}
+  broadcastLiveStateUpdate({ updatedAt: Date.now(), liveGames: {}, serverTime: Date.now() }, true);
   return saveSandboxState({
     updatedAt: Date.now(),
     config: normalizeConfig(DEFAULT_EVENT_CONFIG),
@@ -178,6 +227,152 @@ export function resetSandboxData(): EventStatePayload {
     auditLog: [],
     serverTime: Date.now(),
   });
+}
+
+function loadSandboxLiveState(): LiveStatePayload {
+  try {
+    const raw = localStorage.getItem(SANDBOX_LIVE_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        updatedAt: Number(parsed.updatedAt || 0),
+        liveGames: parsed.liveGames && typeof parsed.liveGames === 'object' ? parsed.liveGames : {},
+        serverTime: Date.now(),
+      };
+    }
+  } catch {}
+  return { updatedAt: 0, liveGames: {}, serverTime: Date.now() };
+}
+
+function saveSandboxLiveState(liveState: LiveStatePayload): LiveStatePayload {
+  const next: LiveStatePayload = {
+    updatedAt: Math.max(Date.now(), Number(liveState.updatedAt || 0) + 1),
+    liveGames: liveState.liveGames && typeof liveState.liveGames === 'object' ? liveState.liveGames : {},
+    serverTime: Date.now(),
+  };
+  try {
+    localStorage.setItem(SANDBOX_LIVE_STORAGE_KEY, JSON.stringify(next));
+  } catch {}
+  broadcastLiveStateUpdate(next, true);
+  return next;
+}
+
+export function seedSandboxLiveGames(round = 1): LiveStatePayload {
+  const curState = loadSandboxState();
+  const sampleLive = generateSampleLiveGames(round, curState.config);
+  return saveSandboxLiveState({
+    updatedAt: Date.now(),
+    liveGames: sampleLive,
+    serverTime: Date.now(),
+  });
+}
+
+export function clearSandboxLiveGames(): LiveStatePayload {
+  return saveSandboxLiveState({ updatedAt: Date.now(), liveGames: {}, serverTime: Date.now() });
+}
+
+export async function fetchLiveState(sandbox = false, force = false): Promise<LiveStatePayload> {
+  if (sandbox) return loadSandboxLiveState();
+  const qs = force ? `?force=1&t=${Date.now()}` : `?t=${Date.now()}`;
+  const res = await fetch(`${getApiBase()}/live${qs}`, { method: 'GET', cache: 'no-store' });
+  if (!res.ok) throw new Error(`Failed to fetch live state (HTTP ${res.status})`);
+  const data = await res.json();
+  return {
+    updatedAt: Number(data.updatedAt || 0),
+    liveGames: data.liveGames && typeof data.liveGames === 'object' ? data.liveGames : {},
+    serverTime: Number(data.serverTime || Date.now()),
+  };
+}
+
+export async function fetchLiveStateIfChanged(
+  sandbox: boolean,
+  sinceUpdatedAt: number
+): Promise<{ unchanged: true; updatedAt: number } | { unchanged: false; liveState: LiveStatePayload }> {
+  if (sandbox) {
+    const cur = loadSandboxLiveState();
+    if (sinceUpdatedAt > 0 && cur.updatedAt <= sinceUpdatedAt) {
+      return { unchanged: true, updatedAt: cur.updatedAt };
+    }
+    return { unchanged: false, liveState: cur };
+  }
+  const qs = sinceUpdatedAt > 0 ? `?since=${sinceUpdatedAt}` : '';
+  const res = await fetch(`${getApiBase()}/live${qs}`, { method: 'GET', cache: 'no-store' });
+  if (!res.ok) throw new Error(`Failed to sync live state (HTTP ${res.status})`);
+  const data = await res.json();
+  if (data.unchanged === true) {
+    return { unchanged: true, updatedAt: Number(data.updatedAt || sinceUpdatedAt) };
+  }
+  return {
+    unchanged: false,
+    liveState: {
+      updatedAt: Number(data.updatedAt || 0),
+      liveGames: data.liveGames && typeof data.liveGames === 'object' ? data.liveGames : {},
+      serverTime: Number(data.serverTime || Date.now()),
+    },
+  };
+}
+
+export async function upsertLiveTableState(
+  snapshot: Omit<LiveTableState, 'key' | 'updatedAt'>,
+  sandbox = false
+): Promise<LiveStatePayload> {
+  const key = getMatchKey(snapshot.round, snapshot.table);
+  if (sandbox) {
+    const cur = loadSandboxLiveState();
+    const full: LiveTableState = {
+      ...snapshot,
+      key,
+      updatedAt: Date.now(),
+    };
+    return saveSandboxLiveState({
+      updatedAt: Date.now(),
+      liveGames: { ...cur.liveGames, [key]: full },
+    });
+  }
+  const res = await fetch(`${getApiBase()}/live`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(snapshot),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Failed to save live checkpoint (HTTP ${res.status})`);
+  }
+  const nextLive: LiveStatePayload = {
+    updatedAt: Number(data.liveState?.updatedAt || Date.now()),
+    liveGames: data.liveState?.liveGames || {},
+    serverTime: Date.now(),
+  };
+  broadcastLiveStateUpdate(nextLive, false);
+  return nextLive;
+}
+
+export async function clearLiveTableState(
+  round: number,
+  table: number,
+  sandbox = false
+): Promise<LiveStatePayload> {
+  const key = getMatchKey(round, table);
+  if (sandbox) {
+    const cur = loadSandboxLiveState();
+    const nextGames = { ...cur.liveGames };
+    delete nextGames[key];
+    return saveSandboxLiveState({ updatedAt: Date.now(), liveGames: nextGames });
+  }
+  const res = await fetch(`${getApiBase()}/live?round=${round}&table=${table}`, {
+    method: 'DELETE',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Failed to clear live checkpoint (HTTP ${res.status})`);
+  }
+  const nextLive: LiveStatePayload = {
+    updatedAt: Number(data.liveState?.updatedAt || Date.now()),
+    liveGames: data.liveState?.liveGames || {},
+    serverTime: Date.now(),
+  };
+  broadcastLiveStateUpdate(nextLive, false);
+  return nextLive;
 }
 
 // ================================

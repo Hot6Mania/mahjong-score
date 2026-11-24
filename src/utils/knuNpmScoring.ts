@@ -69,6 +69,30 @@ export interface EventStatePayload {
   serverTime?: number;
 }
 
+export interface LiveTableState {
+  key: string; // "R1-T1"
+  round: number;
+  table: number;
+  seatPlayerIds: [number, number, number, number];
+  scores: [number, number, number, number];
+  winds: [string, string, string, string];
+  riichiActive: [boolean, boolean, boolean, boolean];
+  chomboCounts: [number, number, number, number];
+  wind: string; // '東' | '南'
+  roundNum: number; // 1..4
+  renchan: number;
+  riichiSticks: number;
+  isFinished: boolean;
+  records: CompactRoundRecords | null;
+  updatedAt: number;
+}
+
+export interface LiveStatePayload {
+  updatedAt: number;
+  liveGames: Record<string, LiveTableState>;
+  serverTime?: number;
+}
+
 export interface CalculatedPlayerEntry {
   playerId: number;
   teamId: TeamId;
@@ -1381,5 +1405,83 @@ export function generateSampleEventResults(
     }
   }
 
+  return out;
+}
+
+/**
+ * 테스트 샌드박스용 진행중 라이브 6탁(1,2,3,5,6,7) 시뮬레이션 스냅샷 생성기
+ * - 빔프로젝터 라이브 모니터 화면 및 타 기기 이어서 기록(Continue on This Device) 기능 즉시 테스트용
+ */
+export function generateSampleLiveGames(
+  round: number,
+  config: EventScoringConfig = DEFAULT_EVENT_CONFIG
+): Record<string, LiveTableState> {
+  const out: Record<string, LiveTableState> = {};
+  const r = Math.min(6, Math.max(1, round));
+  const presetStates: {
+    wind: string;
+    roundNum: number;
+    renchan: number;
+    riichiSticks: number;
+    scores: [number, number, number, number];
+    riichiActive: [boolean, boolean, boolean, boolean];
+  }[] = [
+    { wind: '南', roundNum: 2, renchan: 1, riichiSticks: 1, scores: [36200, 27400, 21900, 13500], riichiActive: [false, true, false, false] },
+    { wind: '南', roundNum: 3, renchan: 0, riichiSticks: 0, scores: [18400, 41200, 24100, 16300], riichiActive: [false, false, false, false] },
+    { wind: '東', roundNum: 4, renchan: 2, riichiSticks: 2, scores: [29800, 25500, 24900, 17800], riichiActive: [true, false, true, false] },
+    { wind: '南', roundNum: 1, renchan: 0, riichiSticks: 0, scores: [25000, 25000, 25000, 25000], riichiActive: [false, false, false, false] },
+    { wind: '南', roundNum: 4, renchan: 1, riichiSticks: 1, scores: [31500, 30200, 22300, 15000], riichiActive: [false, false, false, true] },
+    { wind: '南', roundNum: 2, renchan: 0, riichiSticks: 0, scores: [44600, 22100, 19800, 13500], riichiActive: [false, false, false, false] },
+    { wind: '東', roundNum: 3, renchan: 0, riichiSticks: 1, scores: [28000, 26500, 25500, 19000], riichiActive: [false, true, false, false] },
+  ];
+
+  const baseWinds = ['東', '南', '西', '北'];
+  for (let t = 1; t <= 7; t++) {
+    if (t === 4) continue; // Table 4 is JP-C display table
+    const key = getMatchKey(r, t);
+    const slot = EVENT_MATCH_SCHEDULE.find((m) => m.key === key);
+    if (!slot) continue;
+    const preset = presetStates[t - 1];
+    const rot = (preset.roundNum - 1) % 4;
+    const winds = [0, 1, 2, 3].map((i) => baseWinds[(i - rot + 4) % 4]) as [string, string, string, string];
+    const start = config.startingScore;
+    const deltas = preset.scores.map((s) => s - start);
+
+    out[key] = {
+      key,
+      round: r,
+      table: t,
+      seatPlayerIds: [...slot.playerIds] as [number, number, number, number],
+      scores: [...preset.scores] as [number, number, number, number],
+      winds,
+      riichiActive: [...preset.riichiActive] as [boolean, boolean, boolean, boolean],
+      chomboCounts: [0, 0, 0, 0],
+      wind: preset.wind,
+      roundNum: preset.roundNum,
+      renchan: preset.renchan,
+      riichiSticks: preset.riichiSticks,
+      isFinished: false,
+      records: {
+        seatPlayerIds: [...slot.playerIds] as [number, number, number, number],
+        time: ['ㅤ', '東 1局 0本場', 'ㅤ'],
+        score: [
+          [start, deltas[0], preset.scores[0]],
+          [start, deltas[1], preset.scores[1]],
+          [start, deltas[2], preset.scores[2]],
+          [start, deltas[3], preset.scores[3]],
+        ],
+        riichi: [[false, false, false, false], [false, false, false, false]],
+        win: [[false, false, false, false], [true, false, false, false]],
+        lose: [[false, false, false, false], [false, false, false, true]],
+        tenpai: [[false, false, false, false], [false, false, false, false]],
+        cheat: [[false, false, false, false], [false, false, false, false]],
+        beolbu: [[0, 0, 0, 0], [0, 0, 0, 0]],
+        status: ['initial', 'ron'],
+        riichiOrder: [[], []],
+        dealer: [0, 0],
+      },
+      updatedAt: Date.now() - t * 12_000,
+    };
+  }
   return out;
 }

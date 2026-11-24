@@ -18,8 +18,18 @@ const routes = [
     redirect: '/dashboard',
   },
   {
+    path: '/knu-npm-2026/test/live',
+    name: 'knu-npm-event-test-live',
+    component: App,
+  },
+  {
     path: '/knu-npm-2026/test',
     name: 'knu-npm-event-test',
+    component: App,
+  },
+  {
+    path: '/knu-npm-2026/live',
+    name: 'knu-npm-event-live',
     component: App,
   },
   {
@@ -28,8 +38,18 @@ const routes = [
     component: App,
   },
   {
+    path: '/test/live',
+    name: 'event-host-test-live',
+    component: App,
+  },
+  {
     path: '/test',
     name: 'event-host-test',
+    component: App,
+  },
+  {
+    path: '/live',
+    name: 'event-host-live',
     component: App,
   },
   {
