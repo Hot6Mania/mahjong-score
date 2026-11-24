@@ -1902,7 +1902,24 @@ const saveRound = () => {
 
     // 3) 남4국 / 서풍전 연장 및 종료 조건 분기
     if (curWind === '南' && curRound === 4) {
-      if (isRenchan) {
+      if (isEventMode.value) {
+        // KNU-NPM 이벤트 규칙: 화료톱·텐파이톱 없음 & 서입 없음
+        // 오야 화료 / 오야 텐파이 / 도중유국 시 무조건 남4국 연장, 그 외에는 전원 25,000점이어도 즉시 종료
+        if (isRenchan) {
+          panelInfo.renchan++;
+          if (status === 'tsumo' || status === 'ron') {
+            panelInfo.riichi = 0;
+          }
+        } else {
+          if (status === 'tsumo' || status === 'ron') {
+            panelInfo.riichi = 0;
+          }
+          if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+            records.time[records.time.length - 1] = '결과';
+          }
+          showModal('result_sheet');
+        }
+      } else if (isRenchan) {
         // 오야 1위 & 반환점 이상 시 아가리야메/텐파이야메 종료 조건 검증 (단, 특수유국은 제외)
         let oyaRank = 1;
         if (option.sekiOrder) {

@@ -1456,6 +1456,10 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
               <span>{{ tr('rulesChombo') }}</span>
               <strong>-{{ state.config.chomboPenalty }} pt</strong>
             </div>
+            <div class="rule-item">
+              <span>{{ tr('rulesAllLast') }}</span>
+              <strong>{{ tr('rulesAllLastVal') }}</strong>
+            </div>
           </div>
 
           <div class="rule-note-box">
