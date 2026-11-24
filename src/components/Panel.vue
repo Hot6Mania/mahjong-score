@@ -92,7 +92,7 @@ const emit = defineEmits<Emits>()
 <div v-if="eventMatchLabel" id="EventMatchPill" @click="emit('open-dashboard')">
   <span>{{ eventMatchLabel }}</span>
 </div>
-<!-- 이벤트 라운드 타이머 (상단 중앙) -->
+<!-- 이벤트 라운드 타이머 (우하단 — 설정 버튼 대각선 반대, 점수 비가림) -->
 <div
   v-if="eventMatchLabel && eventTimerBadge"
   id="EventTimerPill"
@@ -132,20 +132,21 @@ const emit = defineEmits<Emits>()
 }
 #EventTimerPill {
   position: fixed;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: 10px;
+  right: 12px;
   z-index: 10;
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 14px;
-  border-radius: 999px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 5px 10px;
+  border-radius: 10px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 900;
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
-  background: rgba(15, 23, 42, 0.88);
+  background: rgba(15, 23, 42, 0.86);
   color: #f8fafc;
   border: 1.5px solid rgba(148, 163, 184, 0.45);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
@@ -173,8 +174,12 @@ const emit = defineEmits<Emits>()
   opacity: 0.78;
   animation: none;
 }
+.etp-main {
+  font-size: 15px;
+  letter-spacing: 0.3px;
+}
 .etp-sub {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 800;
   padding: 1px 6px;
   border-radius: 999px;

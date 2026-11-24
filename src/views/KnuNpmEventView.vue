@@ -356,7 +356,7 @@ onMounted(async () => {
 
   // Check initial tab / round / player / scorer deep-link from query
   applyQueryToDashboard();
-  if (route.query.view === 'scorer' && typeof route.query.match === 'string') {
+  if (!props.activeScorerKey && route.query.view === 'scorer' && typeof route.query.match === 'string') {
     const targetKey = route.query.match.trim().toUpperCase();
     const slot = EVENT_MATCH_MAP[targetKey];
     if (slot) {

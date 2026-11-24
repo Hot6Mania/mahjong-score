@@ -204,7 +204,7 @@ const syncEventTimerFromServer = async () => {
   } catch {}
 };
 
-const syncEventScorerUrlQuery = (matchKey: string | null, fallbackRound = 1) => {
+const syncEventScorerUrlQuery = async (matchKey: string | null, fallbackRound = 1) => {
   if (!isEventMode.value) return;
   const nextQuery: Record<string, string> = {};
   for (const [k, v] of Object.entries(route.query)) {
@@ -224,7 +224,7 @@ const syncEventScorerUrlQuery = (matchKey: string | null, fallbackRound = 1) => 
       nextQuery.round = String(fallbackRound);
     }
   }
-  router.replace({ path: route.path, query: nextQuery }).catch(() => {});
+  await router.replace({ path: route.path, query: nextQuery }).catch(() => {});
 };
 
 watch(
@@ -3371,12 +3371,12 @@ const resumeEventScorer = () => {
   syncEventScorerUrlQuery(activeEventMatch.value.key, activeEventMatch.value.round);
 };
 
-const handleBackToEventDashboard = () => {
+const handleBackToEventDashboard = async () => {
   hideModal();
   isPanelMenuOpen.value = false;
+  await syncEventScorerUrlQuery(null, activeEventMatch.value?.round || 1);
   isEventScorerVisible.value = false;
   persistEventScorerSessionToLocal();
-  syncEventScorerUrlQuery(null, activeEventMatch.value?.round || 1);
 };
 
 // 대국 완전 초기화 후 자리 설정 모달 켜기
