@@ -83,6 +83,7 @@
         "firstPlace" : "1위",
         "powerSaving" : "절전 모드",
         "ratingDisplay" : "레이팅 표기",
+        "pointDisplay" : "포인트 표기",
         "ratingDisplaySide" : "이름 옆",
         "ratingDisplayTop" : "이름 위",
         "ratingDisplayOff" : "표기 안함"

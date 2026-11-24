@@ -764,6 +764,9 @@ watch(records, (newVal) => {
 watch(option, (newVal) => {
   const key = isEventMode.value ? "knu_npm_2026_scorer_option" : "mahjong_option";
   localStorage.setItem(key, JSON.stringify(newVal));
+  if (isEventMode.value && newVal.ratingDisplayMode) {
+    localStorage.setItem("knu_npm_2026_pt_display", newVal.ratingDisplayMode);
+  }
 }, { deep: true });
 
 // 구글 스프레드시트 주소 유입 시 강제 ID 정제 감시자
@@ -2724,7 +2727,11 @@ const launchEventScorer = (payload: {
   option.roundMangan = config.roundMangan;
   option.tobi = config.tobi;
   option.riichiPayout = config.riichiPayout;
-  option.ratingDisplayMode = 'off';
+  const savedEventPtDisplay = localStorage.getItem('knu_npm_2026_pt_display');
+  option.ratingDisplayMode =
+    savedEventPtDisplay === 'side' || savedEventPtDisplay === 'top' || savedEventPtDisplay === 'off'
+      ? savedEventPtDisplay
+      : 'top';
 
   seatPlayerIds.forEach((pid, idx) => {
     const ep = EVENT_PLAYER_MAP[pid];

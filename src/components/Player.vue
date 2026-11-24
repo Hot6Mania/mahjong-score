@@ -141,9 +141,17 @@ const handleScoreClick = () => {
     </div>
   </div>
   <div class="score">
-    <!-- 이름 위 레이팅 뱃지 (리치봉 아래 배경처럼 렌더링) -->
+    <!-- 이름 위 레이팅 뱃지 (일반 모드) / 누적 포인트 뱃지 (이벤트 모드) -->
+    <div
+      v-if="isEventMode && option.ratingDisplayMode === 'top' && eventTotalPoints !== undefined && eventTotalPoints !== null"
+      class="player_rating_top_badge event-pt-top-badge"
+      :class="eventTotalPoints > 0 ? 'is-pos' : eventTotalPoints < 0 ? 'is-neg' : 'is-zero'"
+      :title="`Total Pt: ${eventTotalPoints > 0 ? '+' : ''}${eventTotalPoints.toFixed(1)}pt`"
+    >
+      {{ eventTotalPoints > 0 ? '+' : '' }}{{ eventTotalPoints.toFixed(1) }}pt
+    </div>
     <div 
-      v-if="option.ratingDisplayMode === 'top' && player.rating" 
+      v-else-if="!isEventMode && option.ratingDisplayMode === 'top' && player.rating" 
       class="player_rating_top_badge" 
       :title="'레이팅(R): ' + player.rating + 'pt'"
       :style="{
@@ -158,7 +166,7 @@ const handleScoreClick = () => {
       <template v-if="isEventMode">
         <span>{{ player.name }}</span>
         <span
-          v-if="eventTotalPoints !== undefined && eventTotalPoints !== null"
+          v-if="option.ratingDisplayMode === 'side' && eventTotalPoints !== undefined && eventTotalPoints !== null"
           class="player_event_pt_pill"
           :class="eventTotalPoints > 0 ? 'is-pos' : eventTotalPoints < 0 ? 'is-neg' : 'is-zero'"
           :title="`Total Pt: ${eventTotalPoints > 0 ? '+' : ''}${eventTotalPoints.toFixed(1)}pt`"
@@ -375,6 +383,30 @@ const handleScoreClick = () => {
   color: #fff;
   background-color: #dc2626;
   line-height: 1.1;
+}
+.player_rating_top_badge.event-pt-top-badge {
+  left: 162px !important;
+  bottom: 89px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+.player_rating_top_badge.event-pt-top-badge.is-pos {
+  color: #16a34a;
+  border-color: rgba(22, 163, 74, 0.45);
+}
+.player_rating_top_badge.event-pt-top-badge.is-neg {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.45);
+}
+.player_rating_top_badge.event-pt-top-badge.is-zero {
+  color: var(--text-dimmed);
+  border-color: var(--border-color);
+}
+:global(.dark) .player_rating_top_badge.event-pt-top-badge.is-pos {
+  color: #4ade80;
+}
+:global(.dark) .player_rating_top_badge.event-pt-top-badge.is-neg {
+  color: #f87171;
 }
 .player_rating_pill {
   font-size: 9px;

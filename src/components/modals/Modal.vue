@@ -979,7 +979,7 @@ const getSignColor = (sign: number, x: boolean) => {
           </span>
         </div>
         <div style="grid-area: option10;" @click.stop="emit('set-toggle-button', 'ratingdisplay')">
-          {{ t('option.ratingDisplay') }}<br>
+          {{ eventMatchLabel ? t('option.pointDisplay') : t('option.ratingDisplay') }}<br>
           <span :style="toggleButtonStyle('ratingdisplay')">
             <span v-show="option.ratingDisplayMode==='side'">{{ t('option.ratingDisplaySide') }}</span>
             <span v-show="option.ratingDisplayMode==='top'">{{ t('option.ratingDisplayTop') }}</span>
