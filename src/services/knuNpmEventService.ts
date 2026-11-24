@@ -2,6 +2,7 @@ import {
   DEFAULT_EVENT_CONFIG,
   getMatchKey,
   getMatchSlot,
+  type EventRoundTimer,
   type EventScoringConfig,
 } from '@/data/knuNpm2026';
 import {
@@ -30,6 +31,27 @@ const DEFAULT_SANDBOX_PIN = '20261128';
 const SYNC_CHANNEL_NAME = 'knu-npm-2026-sync';
 const SYNC_WINDOW_EVENT = 'knu-npm-2026-state-updated';
 const LIVE_WINDOW_EVENT = 'knu-npm-2026-live-updated';
+
+let serverClockOffsetMs = 0;
+
+function recordServerTime(serverTime?: number | null): void {
+  if (serverTime && Number.isFinite(Number(serverTime))) {
+    serverClockOffsetMs = Number(serverTime) - Date.now();
+  }
+}
+
+export function getSyncedNowMs(sandbox = false): number {
+  return sandbox ? Date.now() : Date.now() + serverClockOffsetMs;
+}
+
+export function updateSandboxQuickTimer(timer: EventRoundTimer): EventStatePayload {
+  const cur = loadSandboxState();
+  const nextConfig = normalizeConfig({ ...cur.config, roundTimer: timer });
+  return saveSandboxState({
+    ...cur,
+    config: nextConfig,
+  });
+}
 
 export function broadcastLiveStateUpdate(liveState: LiveStatePayload, sandbox: boolean): void {
   try {
@@ -393,6 +415,7 @@ export async function fetchEventState(sandbox = false, force = false): Promise<E
     throw new Error(err.error || `Failed to fetch event state (HTTP ${res.status})`);
   }
   const data = await res.json();
+  recordServerTime(data.serverTime);
   return {
     updatedAt: Number(data.updatedAt || 0),
     config: normalizeConfig(data.config),
@@ -426,6 +449,7 @@ export async function fetchEventStateIfChanged(
     throw new Error(err.error || `Failed to sync event state (HTTP ${res.status})`);
   }
   const data = await res.json();
+  recordServerTime(data.serverTime);
   if (data.unchanged === true) {
     return { unchanged: true, updatedAt: Number(data.updatedAt || sinceUpdatedAt) };
   }

@@ -1,11 +1,13 @@
 import {
   DEFAULT_EVENT_CONFIG,
+  DEFAULT_ROUND_TIMER,
   EVENT_MATCH_SCHEDULE,
   EVENT_PLAYERS,
   EVENT_PLAYER_MAP,
   EVENT_TEAMS,
   getMatchKey,
   type EventPlayer,
+  type EventRoundTimer,
   type EventScoringConfig,
   type EventTeam,
   type TeamId,
@@ -254,6 +256,7 @@ export interface EventMetricDistribution {
   rank: number;
   totalCount: number;
   topPct: number;
+  bottomPct: number;
   isUpperHalf: boolean;
   isUnrecorded: boolean;
   line30X: number;
@@ -263,6 +266,80 @@ export interface EventMetricDistribution {
 
 export function round1(val: number): number {
   return Math.round((val + Number.EPSILON) * 10) / 10;
+}
+
+export function normalizeRoundTimer(raw?: Partial<EventRoundTimer> | null): EventRoundTimer {
+  const t = raw || {};
+  const round = Math.min(6, Math.max(1, Math.floor(Number(t.round) || DEFAULT_ROUND_TIMER.round)));
+  const durationMinutes = Math.min(
+    180,
+    Math.max(1, Math.floor(Number(t.durationMinutes) || DEFAULT_ROUND_TIMER.durationMinutes))
+  );
+  const extraHands: 0 | 1 = Number(t.extraHands) === 1 ? 1 : 0;
+  const status: EventRoundTimer['status'] =
+    t.status === 'running' || t.status === 'paused' ? t.status : 'idle';
+  const endsAt = status === 'running' && Number.isFinite(Number(t.endsAt)) ? Number(t.endsAt) : null;
+  const pausedRemainingMs =
+    status === 'paused' && Number.isFinite(Number(t.pausedRemainingMs))
+      ? Math.max(0, Number(t.pausedRemainingMs))
+      : null;
+  const updatedAt = Number.isFinite(Number(t.updatedAt)) ? Number(t.updatedAt) : 0;
+  return { round, durationMinutes, extraHands, status, endsAt, pausedRemainingMs, updatedAt };
+}
+
+export function formatCountdownMs(ms: number): string {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+export interface RoundTimerDisplayState {
+  round: number;
+  status: EventRoundTimer['status'];
+  extraHands: 0 | 1;
+  ruleTag: string; // e.g. "50+0" or "50+1"
+  remainingMs: number;
+  formatted: string; // "MM:SS"
+  isExpired: boolean;
+  severity: 'idle' | 'normal' | 'warn' | 'critical' | 'expired';
+}
+
+export function computeRoundTimerDisplay(
+  timer: EventRoundTimer | null | undefined,
+  nowMs: number
+): RoundTimerDisplayState {
+  const t = normalizeRoundTimer(timer);
+  const ruleTag = `${t.durationMinutes}+${t.extraHands}`;
+  let remainingMs = t.durationMinutes * 60_000;
+  let isExpired = false;
+
+  if (t.status === 'running' && t.endsAt !== null) {
+    remainingMs = Math.max(0, t.endsAt - nowMs);
+    isExpired = nowMs >= t.endsAt;
+  } else if (t.status === 'paused') {
+    remainingMs = Math.max(0, t.pausedRemainingMs ?? 0);
+    isExpired = remainingMs <= 0;
+  }
+
+  let severity: RoundTimerDisplayState['severity'] = 'idle';
+  if (t.status !== 'idle') {
+    if (isExpired) severity = 'expired';
+    else if (remainingMs <= 5 * 60_000) severity = 'critical';
+    else if (remainingMs <= 10 * 60_000) severity = 'warn';
+    else severity = 'normal';
+  }
+
+  return {
+    round: t.round,
+    status: t.status,
+    extraHands: t.extraHands,
+    ruleTag,
+    remainingMs,
+    formatted: formatCountdownMs(remainingMs),
+    isExpired,
+    severity,
+  };
 }
 
 export function normalizeConfig(partial?: Partial<EventScoringConfig> | null): EventScoringConfig {
@@ -282,6 +359,7 @@ export function normalizeConfig(partial?: Partial<EventScoringConfig> | null): E
     allowParticipantInput: c.allowParticipantInput !== undefined ? Boolean(c.allowParticipantInput) : DEFAULT_EVENT_CONFIG.allowParticipantInput,
     lockedRounds: Array.isArray(c.lockedRounds) ? c.lockedRounds.map(Number).filter((n) => n >= 1 && n <= 6) : [],
     lockedTables: Array.isArray(c.lockedTables) ? c.lockedTables.map(String) : [],
+    roundTimer: normalizeRoundTimer(c.roundTimer),
   };
 }
 
@@ -1049,6 +1127,7 @@ export function calculateEventMetricDistribution(
       rank: 1,
       totalCount: 0,
       topPct: 100,
+      bottomPct: 100,
       isUpperHalf: false,
       isUnrecorded: true,
       line30X: 48,
@@ -1057,8 +1136,8 @@ export function calculateEventMetricDistribution(
     };
   }
 
-  // Sort ascending by value (or descending if lower is better so right = better visually!)
-  const sorted = [...valid].sort((a, b) => (higherIsBetter ? a.val - b.val : b.val - a.val));
+  // Always sort ascending by actual value so higher numeric values appear taller & further right
+  const sorted = [...valid].sort((a, b) => a.val - b.val);
   const values = sorted.map((s) => s.val);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -1066,13 +1145,18 @@ export function calculateEventMetricDistribution(
   const avg = unit === '%' ? Number(avgRaw.toFixed(2)) : Number(avgRaw.toFixed(1));
 
   let rank = 1;
+  let reverseRank = 1;
   if (currentValue !== null) {
     for (const v of values) {
       if (higherIsBetter ? v > currentValue : v < currentValue) rank++;
+      if (higherIsBetter ? v < currentValue : v > currentValue) reverseRank++;
     }
     rank = Math.min(rank, valid.length);
+    reverseRank = Math.min(reverseRank, valid.length);
   }
   const topPct = currentValue !== null ? Math.min(100, Number(((rank / valid.length) * 100).toFixed(2))) : 100;
+  const bottomPct =
+    currentValue !== null ? Math.min(100, Number(((reverseRank / valid.length) * 100).toFixed(2))) : 100;
   const isUpperHalf = currentValue !== null && rank <= Math.ceil(valid.length / 2);
 
   const svgW = 160;
@@ -1085,7 +1169,7 @@ export function calculateEventMetricDistribution(
   const span = max - min;
 
   const bars: EventHistogramBar[] = sorted.map((item, idx) => {
-    const norm = span > 0 ? (higherIsBetter ? (item.val - min) / span : (max - item.val) / span) : 0.55;
+    const norm = span > 0 ? (item.val - min) / span : 0.55;
     const h = Math.max(4, Math.min(svgH - 7, 4 + norm * (svgH - 12)));
     return {
       playerId: item.playerId,
@@ -1110,6 +1194,7 @@ export function calculateEventMetricDistribution(
     rank,
     totalCount: valid.length,
     topPct,
+    bottomPct,
     isUpperHalf,
     isUnrecorded,
     line30X: Number((padX + usableW * 0.3).toFixed(2)),

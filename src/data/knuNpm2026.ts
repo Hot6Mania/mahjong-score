@@ -33,6 +33,26 @@ export interface EventMatchSlot {
   proPlayerId: number | null; // Tables 1..5 have fixed NPM Pro
 }
 
+export interface EventRoundTimer {
+  round: number; // 1..6
+  durationMinutes: number; // default 50
+  extraHands: 0 | 1; // 0 = 50+0 (current hand ends), 1 = 50+1 (current + 1 hand)
+  status: 'idle' | 'running' | 'paused';
+  endsAt: number | null; // epoch ms when countdown hits 0 (server-synced)
+  pausedRemainingMs: number | null; // remaining ms when paused
+  updatedAt: number;
+}
+
+export const DEFAULT_ROUND_TIMER: EventRoundTimer = {
+  round: 1,
+  durationMinutes: 50,
+  extraHands: 0,
+  status: 'idle',
+  endsAt: null,
+  pausedRemainingMs: null,
+  updatedAt: 0,
+};
+
 export interface EventScoringConfig {
   startingScore: number;
   returnScore: number;
@@ -45,6 +65,7 @@ export interface EventScoringConfig {
   allowParticipantInput: boolean;
   lockedRounds: number[];
   lockedTables: string[];
+  roundTimer: EventRoundTimer;
 }
 
 export const EVENT_META = {
@@ -69,6 +90,7 @@ export const DEFAULT_EVENT_CONFIG: EventScoringConfig = {
   allowParticipantInput: true,
   lockedRounds: [],
   lockedTables: [],
+  roundTimer: { ...DEFAULT_ROUND_TIMER },
 };
 
 export const EVENT_TEAMS: EventTeam[] = [

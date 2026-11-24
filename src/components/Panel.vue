@@ -11,7 +11,13 @@ interface Props {
   panelInfo: PanelInfo,
   isMenuOpen: boolean,
   isGameFinished?: boolean,
-  eventMatchLabel?: string
+  eventMatchLabel?: string,
+  eventTimerBadge?: {
+    text: string;
+    sub?: string;
+    severity: 'idle' | 'normal' | 'warn' | 'critical' | 'expired';
+    paused?: boolean;
+  } | null
 }
 defineProps<Props>()
 
@@ -86,6 +92,15 @@ const emit = defineEmits<Emits>()
 <div v-if="eventMatchLabel" id="EventMatchPill" @click="emit('open-dashboard')">
   <span>{{ eventMatchLabel }}</span>
 </div>
+<!-- 이벤트 라운드 타이머 (상단 중앙) -->
+<div
+  v-if="eventMatchLabel && eventTimerBadge"
+  id="EventTimerPill"
+  :class="[`sev-${eventTimerBadge.severity}`, { paused: eventTimerBadge.paused }]"
+>
+  <span class="etp-main">{{ eventTimerBadge.text }}</span>
+  <span v-if="eventTimerBadge.sub" class="etp-sub">{{ eventTimerBadge.sub }}</span>
+</div>
 <!-- 대시보드 바로가기 버튼 (우상단) -->
 <button id="DashboardQuick" @click="emit('open-dashboard')" :title="t('menu.dashboard')">
   <svg class="dashboard-icon-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -104,9 +119,9 @@ const emit = defineEmits<Emits>()
   top: 10px;
   left: 52px;
   z-index: 10;
-  padding: 4px 10px;
+  padding: 5px 11px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 800;
   color: #fff;
   background: #2563eb;
@@ -114,6 +129,60 @@ const emit = defineEmits<Emits>()
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+}
+#EventTimerPill {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
+  font-size: 15px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  background: rgba(15, 23, 42, 0.88);
+  color: #f8fafc;
+  border: 1.5px solid rgba(148, 163, 184, 0.45);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  user-select: none;
+  white-space: nowrap;
+  pointer-events: none;
+}
+#EventTimerPill.sev-normal {
+  border-color: rgba(16, 185, 129, 0.65);
+  color: #ecfdf5;
+}
+#EventTimerPill.sev-warn {
+  background: rgba(180, 83, 9, 0.92);
+  border-color: rgba(251, 191, 36, 0.75);
+  color: #fef3c7;
+}
+#EventTimerPill.sev-critical,
+#EventTimerPill.sev-expired {
+  background: rgba(185, 28, 28, 0.94);
+  border-color: rgba(252, 165, 165, 0.85);
+  color: #fff;
+  animation: timerPillPulse 1.1s ease-in-out infinite;
+}
+#EventTimerPill.paused {
+  opacity: 0.78;
+  animation: none;
+}
+.etp-sub {
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+@keyframes timerPillPulse {
+  0%, 100% { box-shadow: 0 2px 10px rgba(220, 38, 38, 0.35); }
+  50% { box-shadow: 0 2px 18px rgba(239, 68, 68, 0.8); }
 }
 
 /* 대시보드 바로가기 버튼 (우상단) */
@@ -377,14 +446,17 @@ const emit = defineEmits<Emits>()
   padding: 0 6px;
   overflow: hidden;
   line-height: 1.1;
-  font-size: clamp(18px, 6.2cqi, 34px);
+  font-size: clamp(22px, 7.2cqi, 40px);
+}
+:global(html[lang="ko"]) .menu_layout.event-menu-layout .btn_action {
+  font-size: clamp(26px, 8.4cqi, 46px);
 }
 .menu_layout.event-menu-layout .btn_action.win,
 .menu_layout.event-menu-layout .btn_action.draw {
-  flex: 1.16;
+  flex: 1.14;
 }
 .menu_layout.event-menu-layout .btn_action.cheat {
-  flex: 0.96;
+  flex: 0.98;
 }
 
 .menu_separator {

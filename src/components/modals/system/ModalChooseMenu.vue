@@ -313,7 +313,7 @@ const handleSyncClick = () => {
   border-color: #2563eb;
 }
 .event_menu_wrapper {
-  width: min(440px, 82vw);
+  width: 100%;
   max-width: 100%;
   padding: 2px 4px;
   box-sizing: border-box;
@@ -321,21 +321,27 @@ const handleSyncClick = () => {
 }
 .event_status_bar {
   width: 100%;
+  font-size: 14.5px;
+  padding: 9px 12px;
+}
+.event_status_bar .event_lang_inline button {
+  padding: 4px 9px;
+  font-size: 13px;
 }
 .event_choose_menu {
   width: 100%;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(56px, auto));
-  gap: 8px;
-  margin: 10px 0;
-  font-size: clamp(13px, 3vmin, 16px);
+  grid-template-rows: repeat(2, minmax(66px, auto));
+  gap: 10px;
+  margin: 12px 0;
+  font-size: 19px;
   line-height: 1.25;
 }
 .event_choose_menu > div {
-  padding: 8px 6px;
-  border-radius: 8px;
+  padding: 10px 8px;
+  border-radius: 9px;
   background: var(--color-input-bg, rgba(125, 125, 125, 0.08));
-  border: 1px solid var(--color-border, rgba(125, 125, 125, 0.2));
+  border: 1px solid var(--color-border, rgba(125, 125, 125, 0.22));
   white-space: normal;
   word-break: keep-all;
   overflow-wrap: break-word;
@@ -343,13 +349,13 @@ const handleSyncClick = () => {
 }
 .btn_cloud_save_event {
   width: 100%;
-  padding: 10px 12px;
+  padding: 12px 14px;
   margin-top: 2px;
-  border-radius: 8px;
+  border-radius: 9px;
   border: 1px solid rgba(16, 185, 129, 0.45);
   background: rgba(16, 185, 129, 0.14);
   color: var(--color-positive, #16a34a);
-  font-size: 13.5px;
+  font-size: 16px;
   font-weight: 800;
   cursor: pointer;
   white-space: normal;
@@ -361,7 +367,7 @@ const handleSyncClick = () => {
 }
 @media (orientation: portrait) {
   .event_menu_wrapper {
-    width: min(440px, 82vh);
+    width: 100%;
   }
 }
 </style>

@@ -71,7 +71,8 @@ interface Props {
   isEventSubmitted?: boolean,
   isEventCloudSaving?: boolean,
   eventPriorPoints?: number[],
-  eventChomboPenalty?: number
+  eventChomboPenalty?: number,
+  showEventTimer?: boolean
 }
 const props = defineProps<Props>()
 
@@ -655,7 +656,7 @@ const getSignColor = (sign: number, x: boolean) => {
     />
   </div>
   <!-- 메뉴 선택창 -->
-  <div v-else-if="modalInfo.type==='choose_menu_kind'" class="modal_content" @click.stop>
+  <div v-else-if="modalInfo.type==='choose_menu_kind'" class="modal_content" :class="{ event_menu_modal: Boolean(eventMatchLabel) }" @click.stop>
     <ModalChooseMenu
       :googleInfo
       :currentSessionSheetName="currentSessionSheetName"
@@ -999,6 +1000,13 @@ const getSignColor = (sign: number, x: boolean) => {
             <span v-show="option.ratingDisplayMode==='off'">{{ t('option.ratingDisplayOff') }}</span>
           </span>
         </div>
+        <div v-if="eventMatchLabel" style="grid-area: option11;" @click.stop="emit('set-toggle-button', 'showeventtimer')">
+          {{ t('option.showTimer') }}<br>
+          <span :style="{ color: showEventTimer !== false ? 'var(--color-toggle-on)' : 'var(--color-toggle-off)' }">
+            <span v-show="showEventTimer !== false">O</span>
+            <span v-show="showEventTimer === false">X</span>
+          </span>
+        </div>
       </div>
       <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 (이벤트 모드에서는 숨김) -->
       <div v-if="!eventMatchLabel" style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
@@ -1269,24 +1277,48 @@ const getSignColor = (sign: number, x: boolean) => {
   scrollbar-width: thin;
   scrollbar-color: #888888 var(--bg-stripe-dark);
 }
+.event_menu_modal {
+  padding: 12px 14px !important;
+  white-space: normal !important;
+  width: min(520px, 90%) !important;
+  max-width: 94% !important;
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  margin: 0 !important;
+  border-radius: 12px;
+}
 .event_option_modal {
-  padding: 12px 14px;
-  white-space: normal;
-  width: min(620px, 92vw);
-  max-width: 94vw;
+  padding: 14px 16px !important;
+  white-space: normal !important;
+  width: min(680px, 92%) !important;
+  max-width: 94% !important;
+  max-height: 90% !important;
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  margin: 0 !important;
+  border-radius: 12px;
 }
 .container_option.event_option {
   width: 100%;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-rows: auto;
-  row-gap: 14px;
-  column-gap: 10px;
-  font-size: 13.5px;
-  line-height: 1.35;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  grid-template-rows: auto !important;
+  grid-template-areas:
+    'input_name0 input_name1 input_name2 input_name3'
+    'option0 option1 option2 option3'
+    'option4 option4 option5 option6'
+    'option7 option7 option8 option8'
+    'option9 option10 option11 option11' !important;
+  row-gap: 16px;
+  column-gap: 12px;
+  font-size: 17px !important;
+  font-weight: 600;
+  line-height: 1.3;
   white-space: normal;
   word-break: keep-all;
-  max-height: min(64vh, 360px);
-  padding: 4px 8px 6px 4px;
+  max-height: min(70vh, 410px);
+  padding: 6px 10px 8px 6px;
   margin: 0;
 }
 .container_option.event_option > div {
@@ -1295,7 +1327,11 @@ const getSignColor = (sign: number, x: boolean) => {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 4px;
+  gap: 5px;
+}
+.container_option.event_option > div > span {
+  font-size: 19px;
+  font-weight: 800;
 }
 .container_option.event_option br {
   display: none;
@@ -1303,10 +1339,10 @@ const getSignColor = (sign: number, x: boolean) => {
 .container_option.event_option input[type="text"],
 .container_option.event_option input[type="number"] {
   width: 100%;
-  max-width: 112px;
+  max-width: 132px;
   box-sizing: border-box;
-  font-size: 13px;
-  padding: 4px 6px;
+  font-size: 16px;
+  padding: 5px 7px;
 }
 .uma_inputs_row {
   display: inline-flex;
@@ -1318,17 +1354,15 @@ const getSignColor = (sign: number, x: boolean) => {
   gap: 6px;
 }
 .container_option.event_option .uma_inputs_row input[type="number"] {
-  width: 48px !important;
-  max-width: 48px;
+  width: 54px !important;
+  max-width: 54px;
   margin-right: 0 !important;
+  font-size: 15px;
 }
 @media (orientation: portrait) {
-  .event_option_modal {
-    width: min(620px, 90vh);
-    max-width: 92vh;
-  }
   .container_option.event_option {
-    max-height: min(62vw, 320px);
+    max-height: 70vw !important;
+    font-size: 16px !important;
   }
 }
 

@@ -29,6 +29,7 @@ import {
 import {
   buildEventCsv,
   computeLeagueStandings,
+  computeRoundTimerDisplay,
   formatDualMetric,
   formatSignedPoint,
   normalizeConfig,
@@ -52,6 +53,7 @@ import {
   fetchLiveState,
   fetchLiveStateIfChanged,
   getSavedStaffPin,
+  getSyncedNowMs,
   resetSandboxData,
   rollbackAuditEntry,
   saveStaffPin,
@@ -61,6 +63,7 @@ import {
   subscribeEventStateUpdates,
   subscribeLiveStateUpdates,
   updateEventConfig,
+  updateSandboxQuickTimer,
   verifyStaffPin,
 } from '@/services/knuNpmEventService';
 import { getKnuNpmBasePath, getKnuNpmLiveMonitorPath } from '@/utils/eventMode';
@@ -181,6 +184,108 @@ const showToast = (msg: string) => {
 };
 
 const lastCheckedAt = ref<number>(0);
+const timerNowTick = ref<number>(Date.now());
+let timerTickHandle: ReturnType<typeof setInterval> | null = null;
+
+const dashboardTimerDisplay = computed(() => {
+  void timerNowTick.value;
+  const tmr = state.value.config.roundTimer;
+  if (!tmr || tmr.status === 'idle') return null;
+  return computeRoundTimerDisplay(tmr, getSyncedNowMs(props.isSandbox));
+});
+
+const handleStartSandboxTimer = (durationMinutes: number) => {
+  if (!props.isSandbox) return;
+  const now = Date.now();
+  state.value = updateSandboxQuickTimer({
+    round: selectedRound.value,
+    durationMinutes,
+    extraHands: state.value.config.roundTimer?.extraHands ?? 0,
+    status: 'running',
+    endsAt: now + durationMinutes * 60_000,
+    pausedRemainingMs: null,
+    updatedAt: now,
+  });
+  showToast(`Started R${selectedRound.value} timer (${durationMinutes}+${state.value.config.roundTimer.extraHands})`);
+};
+
+// URL query parameter synchronization (tab, round, view, player, match)
+const isApplyingRouteQuery = ref(false);
+
+const applyQueryToDashboard = () => {
+  isApplyingRouteQuery.value = true;
+  try {
+    const qTab = String(route.query.tab || '').trim();
+    if (['standings', 'stats', 'schedule', 'rosters', 'rules'].includes(qTab)) {
+      activeTab.value = qTab as EventTab;
+    }
+    const qRound = Number(route.query.round);
+    if (Number.isInteger(qRound) && qRound >= 1 && qRound <= 6) {
+      selectedRound.value = qRound;
+    }
+    const qView = String(route.query.view || '').trim();
+    if (qView === 'cards' || qView === 'matrix') {
+      scheduleViewMode.value = qView;
+    }
+    const qPlayer = Number(route.query.player);
+    if (Number.isInteger(qPlayer) && EVENT_PLAYER_MAP[qPlayer]) {
+      selectedPlayerId.value = qPlayer;
+    } else if (!route.query.player && selectedPlayerId.value !== null) {
+      selectedPlayerId.value = null;
+    }
+    const qMatch = String(route.query.match || '').trim();
+    if (qMatch && qView !== 'scorer' && state.value.results[qMatch]) {
+      matchLogKey.value = qMatch;
+    }
+  } finally {
+    isApplyingRouteQuery.value = false;
+  }
+};
+
+const syncDashboardUrlQuery = () => {
+  if (isApplyingRouteQuery.value) return;
+  if (route.query.view === 'scorer') return;
+  const nextQuery: Record<string, string> = {};
+  for (const [k, v] of Object.entries(route.query)) {
+    if (typeof v === 'string' && v && !['tab', 'round', 'view', 'player', 'match'].includes(k)) {
+      nextQuery[k] = v;
+    }
+  }
+  nextQuery.tab = activeTab.value;
+  if (activeTab.value === 'schedule') {
+    nextQuery.round = String(selectedRound.value);
+    if (scheduleViewMode.value === 'matrix') {
+      nextQuery.view = 'matrix';
+    }
+  }
+  if (selectedPlayerId.value !== null) {
+    nextQuery.player = String(selectedPlayerId.value);
+  }
+  if (matchLogKey.value) {
+    nextQuery.match = matchLogKey.value;
+  }
+  const curKeys = Object.keys(route.query).sort();
+  const nextKeys = Object.keys(nextQuery).sort();
+  const same =
+    curKeys.length === nextKeys.length &&
+    curKeys.every((k, i) => k === nextKeys[i] && String(route.query[k] ?? '') === nextQuery[k]);
+  if (!same) {
+    router.replace({ path: route.path, query: nextQuery }).catch(() => {});
+  }
+};
+
+watch([activeTab, selectedRound, scheduleViewMode, selectedPlayerId, matchLogKey], () => {
+  syncDashboardUrlQuery();
+});
+
+watch(
+  () => route.query,
+  () => {
+    if (route.query.view !== 'scorer') {
+      applyQueryToDashboard();
+    }
+  }
+);
 
 const lastCheckedText = computed(() => {
   const ts = lastCheckedAt.value || state.value.updatedAt;
@@ -249,11 +354,29 @@ onMounted(async () => {
   }
   await loadState(false, false);
 
-  // Check initial tab from query
-  const qTab = String(route.query.tab || '').trim();
-  if (['standings', 'stats', 'schedule', 'rosters', 'rules'].includes(qTab)) {
-    activeTab.value = qTab as EventTab;
+  // Check initial tab / round / player / scorer deep-link from query
+  applyQueryToDashboard();
+  if (route.query.view === 'scorer' && typeof route.query.match === 'string') {
+    const targetKey = route.query.match.trim().toUpperCase();
+    const slot = EVENT_MATCH_MAP[targetKey];
+    if (slot) {
+      activeTab.value = 'schedule';
+      selectedRound.value = slot.round;
+      if (liveState.value.liveGames?.[slot.key]) {
+        handleContinueLiveTable(slot);
+      } else if (!isSlotLocked(slot)) {
+        openSeatPicker(slot);
+      }
+    }
+  } else {
+    syncDashboardUrlQuery();
   }
+
+  timerTickHandle = setInterval(() => {
+    if (state.value.config.roundTimer?.status !== 'idle') {
+      timerNowTick.value = Date.now();
+    }
+  }, 1000);
 
   // 동일 기기/브라우저 내 다른 탭·점수판 제출 시 0ms 즉시 반영
   unsubscribeBroadcast = subscribeEventStateUpdates(({ state: incoming, sandbox }) => {
@@ -289,6 +412,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
+  if (timerTickHandle) clearInterval(timerTickHandle);
   if (toastTimer) clearTimeout(toastTimer);
   if (unsubscribeBroadcast) unsubscribeBroadcast();
   if (unsubscribeLiveBroadcast) unsubscribeLiveBroadcast();
@@ -751,6 +875,12 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
         <button type="button" class="sb-btn accent" @click="openLiveMonitor">
           📺 {{ tr('sandboxOpenMonitor') }}
         </button>
+        <button type="button" class="sb-btn" @click="handleStartSandboxTimer(50)">
+          ⏱ {{ tr('sandboxStartTimerBtn') }}
+        </button>
+        <button type="button" class="sb-btn" @click="handleStartSandboxTimer(1)">
+          ⏱ {{ tr('sandboxStartShortTimerBtn') }}
+        </button>
         <button type="button" class="sb-btn danger" @click="handleResetSandbox">
           🗑 {{ tr('sandboxReset') }}
         </button>
@@ -777,6 +907,18 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
               <span class="live-dot" :class="{ syncing: isSyncing }"></span>
               <span>{{ tr('liveAutoSyncLabel') }}</span>
               <span v-if="lastCheckedText" class="live-ts">{{ lastCheckedText }}</span>
+            </span>
+            <span
+              v-if="dashboardTimerDisplay"
+              class="hdr-timer-pill"
+              :class="`sev-${dashboardTimerDisplay.severity}`"
+            >
+              {{
+                dashboardTimerDisplay.isExpired
+                  ? '⏰ 00:00'
+                  : (dashboardTimerDisplay.status === 'paused' ? '⏸ ' : '⏱ ') + dashboardTimerDisplay.formatted
+              }}
+              <small>R{{ dashboardTimerDisplay.round }} · {{ dashboardTimerDisplay.ruleTag }}</small>
             </span>
           </div>
         </div>
@@ -1632,6 +1774,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
       :config="state.config"
       :audit-log="state.auditLog"
       :is-busy="isBusy"
+      :is-sandbox="isSandbox"
       :tr="tr"
       @close="isStaffModalOpen = false"
       @login="handleStaffLogin"
@@ -1653,6 +1796,34 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
   padding-bottom: 48px;
 }
 
+.hdr-timer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  color: #16a34a;
+}
+.hdr-timer-pill small {
+  font-size: 10.5px;
+  opacity: 0.85;
+}
+.hdr-timer-pill.sev-warn {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #d97706;
+}
+.hdr-timer-pill.sev-critical,
+.hdr-timer-pill.sev-expired {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #ef4444;
+}
 .ev-toast {
   position: fixed;
   bottom: 24px;

@@ -86,6 +86,7 @@
         "powerSaving" : "Power Saving",
         "ratingDisplay" : "Rating Display",
         "pointDisplay" : "Point Display",
+        "showTimer" : "Show Timer",
         "ratingDisplaySide" : "Side",
         "ratingDisplayTop" : "Top",
         "ratingDisplayOff" : "Off"

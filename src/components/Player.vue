@@ -339,15 +339,15 @@ const handleScoreClick = () => {
 .player_name_badge.event-name-badge {
   left: 162px !important;
   bottom: 68px;
-  font-size: 10.5px;
-  padding: 1px 5px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  padding: 2px 6px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
 }
 .player_event_pt_pill {
-  font-size: 9.5px;
+  font-size: 12px;
   font-weight: 800;
-  padding: 0.5px 4px;
-  border-radius: 3px;
+  padding: 1px 5px;
+  border-radius: 4px;
   letter-spacing: -0.2px;
   line-height: 1.15;
   font-variant-numeric: tabular-nums;
@@ -386,8 +386,10 @@ const handleScoreClick = () => {
 }
 .player_rating_top_badge.event-pt-top-badge {
   left: 162px !important;
-  bottom: 89px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  bottom: 93px;
+  font-size: 12.5px;
+  padding: 1.5px 6px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
   font-variant-numeric: tabular-nums;
 }
 .player_rating_top_badge.event-pt-top-badge.is-pos {

@@ -86,6 +86,7 @@
         "powerSaving" : "省電力モード",
         "ratingDisplay" : "レート表示",
         "pointDisplay" : "ポイント表示",
+        "showTimer" : "残り時間表示",
         "ratingDisplaySide" : "名前の横",
         "ratingDisplayTop" : "名前の上",
         "ratingDisplayOff" : "非表示"

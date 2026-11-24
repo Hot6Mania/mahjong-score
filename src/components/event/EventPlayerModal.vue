@@ -193,7 +193,11 @@ const onBarClick = (bar: EventHistogramBar) => {
         <div class="dp-head-r">
           <span v-if="activeDist.isUnrecorded" class="dp-chip muted">{{ tr('distUnrecorded') }}</span>
           <span v-else class="dp-chip" :class="activeDist.isUpperHalf ? 'pos' : 'neg'">
-            {{ tr('distTopPct', { pct: activeDist.topPct.toFixed(1) }) }}
+            {{
+              activeDist.isUpperHalf
+                ? tr('distTopPct', { pct: activeDist.topPct.toFixed(1) })
+                : tr('distBottomPct', { pct: activeDist.bottomPct.toFixed(1) })
+            }}
           </span>
           <button v-if="isDistPinned" type="button" class="dp-close" @click.stop="closePopover">✕</button>
         </div>

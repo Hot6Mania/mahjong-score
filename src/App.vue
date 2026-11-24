@@ -5,15 +5,27 @@ import Modal from "@/components/modals/Modal.vue"
 import StatsDashboardView from "@/views/StatsDashboardView.vue"
 import KnuNpmEventView from "@/views/KnuNpmEventView.vue"
 import EventLiveMonitorView from "@/views/EventLiveMonitorView.vue"
-import { reactive, onMounted, watch, ref, computed } from "vue"
+import { reactive, onMounted, onUnmounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
 import { isKnuNpmEventMode, isKnuNpmLiveMonitorPath, isKnuNpmSandboxMode, KNU_NPM_EVENT_TITLE } from "@/utils/eventMode"
-import { EVENT_PLAYER_MAP, getMatchKey, type EventScoringConfig } from "@/data/knuNpm2026"
-import { clearLiveTableState, submitTableResult, upsertLiveTableState } from "@/services/knuNpmEventService"
+import { DEFAULT_ROUND_TIMER, EVENT_PLAYER_MAP, getMatchKey, type EventRoundTimer, type EventScoringConfig } from "@/data/knuNpm2026"
+import {
+  clearLiveTableState,
+  fetchEventStateIfChanged,
+  getSyncedNowMs,
+  submitTableResult,
+  subscribeEventStateUpdates,
+  upsertLiveTableState,
+} from "@/services/knuNpmEventService"
 import type { EventLocale } from "@/locales/knuNpmEvent"
-import type { CompactRoundRecords, LiveTableState } from "@/utils/knuNpmScoring"
+import {
+  computeRoundTimerDisplay,
+  normalizeRoundTimer,
+  type CompactRoundRecords,
+  type LiveTableState,
+} from "@/utils/knuNpmScoring"
 import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, hasPendingOAuthRedirectParams, startGoogleRedirectLogin, consumeGoogleRedirectCallback, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, isGoogleQuotaError, getSpreadsheetMetadataCached, batchGetSheetValues, getSheetValuesWithRetry, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
 import { calculateMatchRatings, normalizeRatingPlayerName, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
@@ -90,6 +102,206 @@ const eventMatchLabel = computed(() => {
   const m = activeEventMatch.value;
   if (!m) return '';
   return m.sandbox ? `[TEST] R${m.round} · T${m.table}` : `R${m.round} · T${m.table}`;
+});
+
+// KNU-NPM 라운드 제한시간 동기화 상태 (기본 표기 ON, 기본 50+0국)
+const showEventTimer = ref<boolean>(
+  typeof window !== 'undefined' ? localStorage.getItem('knu_npm_2026_show_timer') !== 'false' : true
+);
+const activeEventTimer = ref<EventRoundTimer>({ ...DEFAULT_ROUND_TIMER });
+const eventTimerStateUpdatedAt = ref<number>(0);
+const eventTimerNowTick = ref<number>(Date.now());
+const eventTimeUpAtHandCount = ref<number | null>(null);
+const eventTimeUpTimerId = ref<number>(0);
+
+const getCompletedNonChomboHandsCount = (): number => {
+  if (!Array.isArray(records.status) || records.status.length <= 1) return 0;
+  let cnt = 0;
+  for (let i = 1; i < records.status.length; i++) {
+    const st = records.status[i];
+    if (st && st !== 'cheat' && st !== 'beolbu') cnt++;
+  }
+  return cnt;
+};
+
+const eventTimerComputed = computed(() => {
+  void eventTimerNowTick.value;
+  const m = activeEventMatch.value;
+  if (!isEventMode.value || !m) return null;
+  const tmr = normalizeRoundTimer(activeEventTimer.value);
+  if (tmr.status === 'idle') return null;
+  if (tmr.round !== m.round) return null;
+  return computeRoundTimerDisplay(tmr, getSyncedNowMs(m.sandbox));
+});
+
+const eventTimerBadge = computed(() => {
+  if (!showEventTimer.value) return null;
+  const disp = eventTimerComputed.value;
+  if (!disp) return null;
+  const loc = eventLocale.value;
+  if (disp.isExpired) {
+    const completed = getCompletedNonChomboHandsCount();
+    const base = eventTimeUpAtHandCount.value ?? completed;
+    const elapsedHands = Math.max(0, completed - base);
+    if (disp.extraHands === 1 && elapsedHands === 0) {
+      return {
+        text: '⏰ 00:00',
+        sub: loc === 'ja' ? 'あと1局 (50+1)' : loc === 'ko' ? '+1국 남음' : '+1 HAND',
+        severity: 'expired' as const,
+        paused: disp.status === 'paused',
+      };
+    }
+    return {
+      text: '⏰ 00:00',
+      sub: loc === 'ja' ? '最終局' : loc === 'ko' ? '마지막 국' : 'FINAL HAND',
+      severity: 'expired' as const,
+      paused: disp.status === 'paused',
+    };
+  }
+  return {
+    text: `${disp.status === 'paused' ? '⏸' : '⏱'} ${disp.formatted}`,
+    sub: disp.ruleTag,
+    severity: disp.severity,
+    paused: disp.status === 'paused',
+  };
+});
+
+const shouldEndEventByTimeLimit = (): boolean => {
+  if (!isEventMode.value || !activeEventMatch.value) return false;
+  const tmr = normalizeRoundTimer(activeEventTimer.value);
+  if (tmr.status !== 'running' || tmr.round !== activeEventMatch.value.round || tmr.endsAt === null) {
+    return false;
+  }
+  const nowMs = getSyncedNowMs(activeEventMatch.value.sandbox);
+  if (nowMs < tmr.endsAt) return false;
+  const completedNow = getCompletedNonChomboHandsCount();
+  if (eventTimeUpAtHandCount.value === null) {
+    eventTimeUpAtHandCount.value = Math.max(0, completedNow - 1);
+    eventTimeUpTimerId.value = tmr.updatedAt;
+  }
+  const handsFinishedAfterExpiry = completedNow - eventTimeUpAtHandCount.value;
+  const requiredHands = tmr.extraHands === 1 ? 2 : 1;
+  return handsFinishedAfterExpiry >= requiredHands;
+};
+
+let eventTimerTickInterval: ReturnType<typeof setInterval> | null = null;
+let eventTimerSyncInterval: ReturnType<typeof setInterval> | null = null;
+let unsubscribeEventTimerBroadcast: (() => void) | null = null;
+
+const syncEventTimerFromServer = async () => {
+  const m = activeEventMatch.value;
+  if (!isEventMode.value || !isEventScorerVisible.value || !m) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
+  try {
+    const res = await fetchEventStateIfChanged(m.sandbox, eventTimerStateUpdatedAt.value);
+    if (!res.unchanged) {
+      eventTimerStateUpdatedAt.value = res.state.updatedAt;
+      activeEventTimer.value = normalizeRoundTimer(res.state.config.roundTimer);
+      if (activeEventMatch.value) {
+        activeEventMatch.value = { ...activeEventMatch.value, config: res.state.config };
+      }
+    }
+  } catch {}
+};
+
+const syncEventScorerUrlQuery = (matchKey: string | null, fallbackRound = 1) => {
+  if (!isEventMode.value) return;
+  const nextQuery: Record<string, string> = {};
+  for (const [k, v] of Object.entries(route.query)) {
+    if (typeof v === 'string' && v) nextQuery[k] = v;
+  }
+  if (matchKey) {
+    delete nextQuery.tab;
+    delete nextQuery.round;
+    delete nextQuery.player;
+    nextQuery.view = 'scorer';
+    nextQuery.match = matchKey;
+  } else {
+    delete nextQuery.view;
+    delete nextQuery.match;
+    if (!nextQuery.tab) nextQuery.tab = 'schedule';
+    if (nextQuery.tab === 'schedule' && !nextQuery.round) {
+      nextQuery.round = String(fallbackRound);
+    }
+  }
+  router.replace({ path: route.path, query: nextQuery }).catch(() => {});
+};
+
+watch(
+  () => [isEventMode.value, isEventScorerVisible.value, activeEventMatch.value?.key] as const,
+  ([evMode, visible]) => {
+    if (eventTimerTickInterval) {
+      clearInterval(eventTimerTickInterval);
+      eventTimerTickInterval = null;
+    }
+    if (eventTimerSyncInterval) {
+      clearInterval(eventTimerSyncInterval);
+      eventTimerSyncInterval = null;
+    }
+    if (evMode && visible && activeEventMatch.value) {
+      eventTimerNowTick.value = Date.now();
+      syncEventTimerFromServer();
+      eventTimerTickInterval = setInterval(() => {
+        eventTimerNowTick.value = Date.now();
+        const disp = eventTimerComputed.value;
+        if (!disp) {
+          if (eventTimeUpAtHandCount.value !== null) {
+            eventTimeUpAtHandCount.value = null;
+            eventTimeUpTimerId.value = 0;
+          }
+          return;
+        }
+        if (!disp.isExpired) {
+          if (eventTimeUpAtHandCount.value !== null) {
+            eventTimeUpAtHandCount.value = null;
+            eventTimeUpTimerId.value = 0;
+            persistEventScorerSessionToLocal();
+          }
+          return;
+        }
+        if (
+          disp.status === 'running' &&
+          disp.isExpired &&
+          !isGameFinished.value &&
+          (eventTimeUpAtHandCount.value === null || eventTimeUpTimerId.value !== activeEventTimer.value.updatedAt)
+        ) {
+          eventTimeUpAtHandCount.value = getCompletedNonChomboHandsCount();
+          eventTimeUpTimerId.value = activeEventTimer.value.updatedAt;
+          persistEventScorerSessionToLocal();
+          const msg =
+            disp.extraHands === 1
+              ? eventLocale.value === 'ja'
+                ? '⏰ 制限時間終了！現在の局＋次の1局が最終局です（+1局）'
+                : eventLocale.value === 'ko'
+                  ? '⏰ 시간 종료! 현재 국 종료 후 +1국이 마지막 국입니다.'
+                  : '⏰ Time up! +1 more hand after this hand (50+1).'
+              : eventLocale.value === 'ja'
+                ? '⏰ 制限時間終了！現在進行中の局が最終局です（+0局）'
+                : eventLocale.value === 'ko'
+                  ? '⏰ 시간 종료! 현재 진행 중인 국이 마지막 국입니다.'
+                  : '⏰ Time up! This hand is the final hand (50+0).';
+          triggerToast(msg);
+        }
+      }, 1000);
+      eventTimerSyncInterval = setInterval(syncEventTimerFromServer, 15000);
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => route.query.view,
+  (v) => {
+    if (isEventMode.value && isEventScorerVisible.value && v !== 'scorer') {
+      isEventScorerVisible.value = false;
+    }
+  }
+);
+
+onUnmounted(() => {
+  if (eventTimerTickInterval) clearInterval(eventTimerTickInterval);
+  if (eventTimerSyncInterval) clearInterval(eventTimerSyncInterval);
+  if (unsubscribeEventTimerBroadcast) unsubscribeEventTimerBroadcast();
 });
 
 const setEventLocale = (loc: EventLocale) => {
@@ -814,6 +1026,14 @@ onMounted(async () => {
     setEventLocale(eventLocale.value);
     document.title = KNU_NPM_EVENT_TITLE;
     restoreEventScorerSessionFromLocal();
+    unsubscribeEventTimerBroadcast = subscribeEventStateUpdates(({ state: incoming, sandbox }) => {
+      if (Boolean(sandbox) !== Boolean(isEventSandbox.value)) return;
+      eventTimerStateUpdatedAt.value = Math.max(eventTimerStateUpdatedAt.value, Number(incoming.updatedAt || 0));
+      activeEventTimer.value = normalizeRoundTimer(incoming.config?.roundTimer);
+      if (activeEventMatch.value) {
+        activeEventMatch.value = { ...activeEventMatch.value, config: incoming.config };
+      }
+    });
     return;
   }
 
@@ -1506,6 +1726,12 @@ const setToggleButton = (status: string) => {
       option.ratingDisplayMode = 'side';
     }
   }
+  else if (status==='showeventtimer') { // KNU-NPM 남은시간 표기 토글 (기본 ON)
+    showEventTimer.value = !showEventTimer.value;
+    try {
+      localStorage.setItem('knu_npm_2026_show_timer', showEventTimer.value ? 'true' : 'false');
+    } catch {}
+  }
 }
 
 /**판/부 버튼 동작 설정*/
@@ -1917,9 +2143,25 @@ const saveRound = () => {
     // 3) 남4국 / 서풍전 연장 및 종료 조건 분기
     if (curWind === '南' && curRound === 4) {
       if (isEventMode.value) {
-        // KNU-NPM 이벤트 규칙: 화료톱·텐파이톱 없음 & 서입 없음
-        // 오야 화료 / 오야 텐파이 / 도중유국 시 무조건 남4국 연장, 그 외에는 전원 25,000점이어도 즉시 종료
-        if (isRenchan) {
+        // KNU-NPM 이벤트 규칙: 화료톱·텐파이톱 없음 & 서입 없음 (+ 제한시간 50+0 / 50+1 종료 체크)
+        if (shouldEndEventByTimeLimit()) {
+          if (status === 'tsumo' || status === 'ron') {
+            panelInfo.riichi = 0;
+          }
+          if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+            records.time[records.time.length - 1] = '결과';
+          }
+          persistEventScorerSessionToLocal();
+          syncEventLiveCheckpoint(false);
+          triggerToast(
+            eventLocale.value === 'ja'
+              ? '⏰ 時間制限ルールにより対局終了となりました'
+              : eventLocale.value === 'ko'
+                ? '⏰ 제한시간 규칙에 따라 대국이 종료되었습니다'
+                : '⏰ Game ended by time limit rule'
+          );
+          showModal('result_sheet');
+        } else if (isRenchan) {
           panelInfo.renchan++;
           if (status === 'tsumo' || status === 'ron') {
             panelInfo.riichi = 0;
@@ -2024,6 +2266,25 @@ const saveRound = () => {
       }
     } else {
       // 일반적인 국 (동풍전 및 남1~남3국)
+      if (isEventMode.value && shouldEndEventByTimeLimit()) {
+        if (status === 'tsumo' || status === 'ron') {
+          panelInfo.riichi = 0;
+        }
+        if (records.time.length > 0 && records.time[records.time.length - 1] === 'ㅤ') {
+          records.time[records.time.length - 1] = '결과';
+        }
+        persistEventScorerSessionToLocal();
+        syncEventLiveCheckpoint(false);
+        triggerToast(
+          eventLocale.value === 'ja'
+            ? '⏰ 時間制限ルールにより対局終了となりました'
+            : eventLocale.value === 'ko'
+              ? '⏰ 제한시간 규칙에 따라 대국이 종료되었습니다'
+              : '⏰ Game ended by time limit rule'
+        );
+        showModal('result_sheet');
+        return;
+      }
       if (isRenchan) {
         panelInfo.renchan++;
       } else {
@@ -2758,6 +3019,8 @@ const persistEventScorerSessionToLocal = () => {
       players: players.map((p) => ({ ...p })),
       panelInfo: { ...panelInfo },
       records: buildCurrentEventRoundsSnapshot(activeEventMatch.value.seatPlayerIds),
+      timeUpAtHandCount: eventTimeUpAtHandCount.value,
+      timeUpTimerId: eventTimeUpTimerId.value,
       savedAt: Date.now(),
     };
     localStorage.setItem(EVENT_ACTIVE_SESSION_KEY, JSON.stringify(payload));
@@ -2819,11 +3082,17 @@ const restoreEventScorerSessionFromLocal = () => {
       records.dealer = [...(parsed.records.dealer || [0])];
     }
     activeEventMatch.value = match;
+    activeEventTimer.value = normalizeRoundTimer(match.config?.roundTimer);
+    eventTimeUpAtHandCount.value =
+      typeof parsed.timeUpAtHandCount === 'number' ? parsed.timeUpAtHandCount : null;
+    eventTimeUpTimerId.value = Number(parsed.timeUpTimerId || 0);
     riichiOrder.value = players
       .map((p, idx) => (p.isRiichi ? idx : -1))
       .filter((idx) => idx >= 0);
-    if (parsed.isScorerVisible && !isEventLiveMonitor.value) {
+    const wantsDashboardTab = Boolean(route.query.tab && route.query.view !== 'scorer');
+    if ((parsed.isScorerVisible || route.query.view === 'scorer') && !isEventLiveMonitor.value && !wantsDashboardTab) {
       isEventScorerVisible.value = true;
+      syncEventScorerUrlQuery(match.key, match.round);
       if (records.time.length > 0 && records.time[records.time.length - 1] === '결과') {
         showModal('result_sheet');
       }
@@ -2946,6 +3215,9 @@ const continueLiveEventScorer = (payload: {
     config,
     priorPoints: [...priorPoints] as [number, number, number, number],
   };
+  activeEventTimer.value = normalizeRoundTimer(config.roundTimer);
+  eventTimeUpAtHandCount.value = null;
+  eventTimeUpTimerId.value = 0;
   isEventSubmitted.value = false;
   isEventScorerVisible.value = true;
   riichiOrder.value = players
@@ -2955,6 +3227,7 @@ const continueLiveEventScorer = (payload: {
     showModal('result_sheet');
   }
   persistEventScorerSessionToLocal();
+  syncEventScorerUrlQuery(liveGame.key, liveGame.round);
   triggerToast(
     eventLocale.value === 'ja'
       ? `${liveGame.key}（${panelInfo.wind}${panelInfo.round}局 ${panelInfo.renchan}本場）を引き継ぎました`
@@ -3004,10 +3277,14 @@ const launchEventScorer = (payload: {
     config,
     priorPoints: [...priorPoints] as [number, number, number, number],
   };
+  activeEventTimer.value = normalizeRoundTimer(config.roundTimer);
+  eventTimeUpAtHandCount.value = null;
+  eventTimeUpTimerId.value = 0;
   isEventSubmitted.value = false;
   isEventScorerVisible.value = true;
   persistEventScorerSessionToLocal();
   syncEventLiveCheckpoint(false);
+  syncEventScorerUrlQuery(getMatchKey(round, table), round);
 };
 
 const submitEventScorerResult = async () => {
@@ -3087,11 +3364,19 @@ const submitEventScorerResult = async () => {
   }
 };
 
+const resumeEventScorer = () => {
+  if (!activeEventMatch.value) return;
+  isEventScorerVisible.value = true;
+  persistEventScorerSessionToLocal();
+  syncEventScorerUrlQuery(activeEventMatch.value.key, activeEventMatch.value.round);
+};
+
 const handleBackToEventDashboard = () => {
   hideModal();
   isPanelMenuOpen.value = false;
   isEventScorerVisible.value = false;
   persistEventScorerSessionToLocal();
+  syncEventScorerUrlQuery(null, activeEventMatch.value?.round || 1);
 };
 
 // 대국 완전 초기화 후 자리 설정 모달 켜기
@@ -3106,6 +3391,8 @@ const startNewGame = async (skipConfirm = false) => {
     if (skipConfirm || (await showConfirm(msg))) {
       resetAll();
       isEventSubmitted.value = false;
+      eventTimeUpAtHandCount.value = null;
+      eventTimeUpTimerId.value = 0;
       hideModal();
       persistEventScorerSessionToLocal();
       syncEventLiveCheckpoint(false);
@@ -4566,7 +4853,7 @@ const addBackupGameToCurrent = (game: any) => {
     @change-locale="setEventLocale"
     @launch-scorer="launchEventScorer"
     @continue-live-scorer="continueLiveEventScorer"
-    @resume-scorer="isEventScorerVisible = true"
+    @resume-scorer="resumeEventScorer"
   />
   <StatsDashboardView 
     v-else-if="isStatsRoute" 
@@ -4602,6 +4889,7 @@ const addBackupGameToCurrent = (game: any) => {
       :isMenuOpen="isPanelMenuOpen"
       :isGameFinished="isGameFinished"
       :eventMatchLabel="isEventMode ? eventMatchLabel : ''"
+      :eventTimerBadge="isEventMode ? eventTimerBadge : null"
       @show-modal="showModal"
       @toggle-menu="isPanelMenuOpen = !isPanelMenuOpen"
       @close-menu="isPanelMenuOpen = false"
@@ -4641,6 +4929,7 @@ const addBackupGameToCurrent = (game: any) => {
       :isEventCloudSaving="isEventCloudSaving"
       :eventPriorPoints="isEventMode && activeEventMatch ? activeEventMatch.priorPoints : undefined"
       :eventChomboPenalty="isEventMode && activeEventMatch ? activeEventMatch.config.chomboPenalty : 20"
+      :showEventTimer="showEventTimer"
       @toggle-close-session="toggleCloseCurrentSession"
       @show-modal="showModal"
       @hide-modal="hideModal"

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import {
   DEFAULT_EVENT_CONFIG,
   EVENT_PLAYER_MAP,
@@ -13,6 +13,7 @@ import {
 import {
   calculateTableScoring,
   computeLeagueStandings,
+  computeRoundTimerDisplay,
   formatSignedPoint,
   normalizeConfig,
   round1,
@@ -30,9 +31,12 @@ import {
   fetchEventStateIfChanged,
   fetchLiveState,
   fetchLiveStateIfChanged,
+  getSyncedNowMs,
   seedSandboxLiveGames,
   subscribeEventStateUpdates,
   subscribeLiveStateUpdates,
+  updateSandboxQuickTimer,
+  upsertLiveTableState,
 } from '@/services/knuNpmEventService';
 import { getKnuNpmBasePath } from '@/utils/eventMode';
 
@@ -49,6 +53,7 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+const route = useRoute();
 const tr = createEventTranslator(() => props.eventLocale);
 
 const state = ref<EventStatePayload>({
@@ -63,11 +68,59 @@ const liveState = ref<LiveStatePayload>({
   liveGames: {},
 });
 
-const selectedRoundMode = ref<'auto' | number>('auto');
+const parseInitialRoundMode = (): 'auto' | number => {
+  const r = Number(route.query.round);
+  return Number.isInteger(r) && r >= 1 && r <= 6 ? r : 'auto';
+};
+
+const selectedRoundMode = ref<'auto' | number>(parseInitialRoundMode());
 const showProjectedPoints = ref(true);
 const isFullscreen = ref(false);
 const lastSyncAt = ref(Date.now());
 const nowTick = ref(Date.now());
+
+const selectRoundMode = (mode: 'auto' | number) => {
+  selectedRoundMode.value = mode;
+  const nextQuery: Record<string, string> = {};
+  for (const [k, v] of Object.entries(route.query)) {
+    if (typeof v === 'string' && v) nextQuery[k] = v;
+  }
+  if (mode === 'auto') delete nextQuery.round;
+  else nextQuery.round = String(mode);
+  router.replace({ path: route.path, query: nextQuery }).catch(() => {});
+};
+
+const monitorTimerDisplay = computed(() => {
+  void nowTick.value;
+  const tmr = state.value.config.roundTimer;
+  if (!tmr || tmr.status === 'idle') return null;
+  return computeRoundTimerDisplay(tmr, getSyncedNowMs(props.isSandbox));
+});
+
+const handleToggleSandboxTimer = () => {
+  if (!props.isSandbox) return;
+  const cur = state.value.config.roundTimer;
+  const now = Date.now();
+  if (cur && cur.status === 'running') {
+    state.value = updateSandboxQuickTimer({
+      ...cur,
+      status: 'idle',
+      endsAt: null,
+      pausedRemainingMs: null,
+      updatedAt: now,
+    });
+  } else {
+    state.value = updateSandboxQuickTimer({
+      round: activeRound.value,
+      durationMinutes: 50,
+      extraHands: 0,
+      status: 'running',
+      endsAt: now + 50 * 60_000,
+      pausedRemainingMs: null,
+      updatedAt: now,
+    });
+  }
+};
 
 const loadInitial = async (force = false) => {
   try {
@@ -131,11 +184,11 @@ onMounted(async () => {
     lastSyncAt.value = Date.now();
   });
 
-  liveTimer = setInterval(pollLive, 8000);
-  stateTimer = setInterval(pollState, 20000);
+  liveTimer = setInterval(pollLive, 4000);
+  stateTimer = setInterval(pollState, 15000);
   clockTimer = setInterval(() => {
     nowTick.value = Date.now();
-  }, 5000);
+  }, 1000);
 
   if (typeof document !== 'undefined') {
     document.addEventListener('fullscreenchange', onFullscreenChange);
@@ -146,6 +199,8 @@ onUnmounted(() => {
   if (liveTimer) clearInterval(liveTimer);
   if (stateTimer) clearInterval(stateTimer);
   if (clockTimer) clearInterval(clockTimer);
+  if (demoInterval) clearInterval(demoInterval);
+  Object.values(scoreAnimHandles).forEach((id) => cancelAnimationFrame(id));
   if (unsubState) unsubState();
   if (unsubLive) unsubLive();
   if (typeof document !== 'undefined') {
@@ -370,6 +425,237 @@ const handleSimulateLive = () => {
   lastSyncAt.value = Date.now();
 };
 
+// Real-time Score Rolling + Delta Popups + Riichi Flash Detection
+const animatedScores = ref<Record<string, number>>({});
+const deltaFlashes = ref<Record<string, { delta: number; ts: number }>>({});
+const riichiFlashes = ref<Record<string, number>>({});
+const prevScoreSnapshot: Record<string, number> = {};
+const prevRiichiSnapshot: Record<string, boolean> = {};
+const scoreAnimHandles: Record<string, number> = {};
+
+const animateScoreValue = (cellKey: string, from: number, to: number) => {
+  if (scoreAnimHandles[cellKey]) {
+    cancelAnimationFrame(scoreAnimHandles[cellKey]);
+  }
+  const start = performance.now();
+  const duration = 650;
+  const step = (now: number) => {
+    const p = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - p, 3);
+    const cur = Math.round((from + (to - from) * eased) / 100) * 100;
+    animatedScores.value = { ...animatedScores.value, [cellKey]: p >= 1 ? to : cur };
+    if (p < 1) {
+      scoreAnimHandles[cellKey] = requestAnimationFrame(step);
+    } else {
+      delete scoreAnimHandles[cellKey];
+    }
+  };
+  scoreAnimHandles[cellKey] = requestAnimationFrame(step);
+};
+
+watch(
+  tableCards,
+  (cards) => {
+    const now = Date.now();
+    const nextDeltas = { ...deltaFlashes.value };
+    const nextRiichi = { ...riichiFlashes.value };
+    let deltaChanged = false;
+    let riichiChanged = false;
+
+    for (const card of cards) {
+      if (card.status === 'waiting') continue;
+      for (const p of card.players) {
+        const ck = `${card.slot.key}:${p.playerId}`;
+        const prevScore = prevScoreSnapshot[ck];
+        if (prevScore !== undefined && prevScore !== p.score) {
+          const diff = p.score - prevScore;
+          nextDeltas[ck] = { delta: diff, ts: now };
+          deltaChanged = true;
+          animateScoreValue(ck, prevScore, p.score);
+        } else if (animatedScores.value[ck] === undefined) {
+          animatedScores.value = { ...animatedScores.value, [ck]: p.score };
+        }
+        prevScoreSnapshot[ck] = p.score;
+
+        const prevR = prevRiichiSnapshot[ck];
+        if (p.isRiichi && prevR === false) {
+          nextRiichi[ck] = now;
+          riichiChanged = true;
+        }
+        prevRiichiSnapshot[ck] = p.isRiichi;
+      }
+    }
+
+    if (deltaChanged) deltaFlashes.value = nextDeltas;
+    if (riichiChanged) riichiFlashes.value = nextRiichi;
+  },
+  { immediate: true }
+);
+
+const getDisplayScore = (matchKey: string, playerId: number, actualScore: number) => {
+  const ck = `${matchKey}:${playerId}`;
+  return animatedScores.value[ck] ?? actualScore;
+};
+
+const getActiveDelta = (matchKey: string, playerId: number): number | null => {
+  void nowTick.value;
+  const ck = `${matchKey}:${playerId}`;
+  const entry = deltaFlashes.value[ck];
+  if (!entry) return null;
+  if (Date.now() - entry.ts > 4500) return null;
+  return entry.delta;
+};
+
+const isRiichiFresh = (matchKey: string, playerId: number): boolean => {
+  void nowTick.value;
+  const ck = `${matchKey}:${playerId}`;
+  const ts = riichiFlashes.value[ck];
+  return Boolean(ts && Date.now() - ts <= 3500);
+};
+
+// Sandbox Interactive Live Broadcast Demo (simulates Riichi, Ron/Tsumo, Rank Sliding, Round Progression!)
+const isDemoRunning = ref(false);
+const demoSpeed = ref<'normal' | 'fast' | 'turbo'>('fast');
+let demoInterval: ReturnType<typeof setInterval> | null = null;
+let demoStepCursor = 0;
+
+const DEMO_SPEED_MS: Record<'normal' | 'fast' | 'turbo', number> = {
+  normal: 2200,
+  fast: 850,
+  turbo: 320,
+};
+
+const runSandboxDemoStep = async () => {
+  if (!props.isSandbox) return;
+  const existingKeys = Object.keys(liveState.value.liveGames || {}).filter((k) =>
+    k.startsWith(`R${activeRound.value}-`)
+  );
+  if (existingKeys.length === 0) {
+    liveState.value = seedSandboxLiveGames(activeRound.value);
+    lastSyncAt.value = Date.now();
+    return;
+  }
+
+  // Turbo mode updates 2 tables at once for blazing-fast broadcast stress test!
+  const batchCount = demoSpeed.value === 'turbo' ? 2 : 1;
+  for (let b = 0; b < batchCount; b++) {
+    const pickKey = existingKeys[demoStepCursor % existingKeys.length];
+    demoStepCursor++;
+    const lg = liveState.value.liveGames[pickKey];
+    if (!lg) continue;
+
+    const scores = [...lg.scores] as [number, number, number, number];
+    const winds = [...lg.winds] as [string, string, string, string];
+    const riichiActive = [...lg.riichiActive] as [boolean, boolean, boolean, boolean];
+    let riichiSticks = Number(lg.riichiSticks || 0);
+    let wind = lg.wind || '東';
+    let roundNum = Number(lg.roundNum || 1);
+    let renchan = Number(lg.renchan || 0);
+
+    const activeRiichiCount = riichiActive.filter(Boolean).length;
+
+    // Alternate between Riichi declaration and Big Hand Resolution so user sees BOTH animations!
+    if (activeRiichiCount < 2 && demoStepCursor % 2 === 1) {
+      const candidates = [0, 1, 2, 3].filter((i) => !riichiActive[i]);
+      const rIdx = candidates[Math.floor(Math.random() * candidates.length)] ?? 0;
+      riichiActive[rIdx] = true;
+      scores[rIdx] -= 1000;
+      riichiSticks += 1;
+    } else {
+      const winnerIdx = riichiActive.findIndex(Boolean) >= 0 ? riichiActive.findIndex(Boolean) : (demoStepCursor % 4);
+      const dealerIdx = winds.indexOf('東');
+      const isTsumo = demoStepCursor % 3 === 0;
+      const isOyaWin = winnerIdx === dealerIdx;
+      const potBonus = riichiSticks * 1000 + renchan * 300;
+
+      if (isTsumo) {
+        const eachPay = isOyaWin ? 4000 : 2000;
+        const oyaPay = 4000;
+        let gain = potBonus;
+        for (let i = 0; i < 4; i++) {
+          if (i === winnerIdx) continue;
+          const pay = (i === dealerIdx ? oyaPay : eachPay) + renchan * 100;
+          scores[i] -= pay;
+          gain += pay;
+        }
+        scores[winnerIdx] += gain - renchan * 300;
+      } else {
+        const loserCandidates = [0, 1, 2, 3].filter((i) => i !== winnerIdx);
+        const loserIdx = loserCandidates[demoStepCursor % loserCandidates.length];
+        const basePts = [5200, 8000, 12000][demoStepCursor % 3];
+        scores[loserIdx] -= basePts + renchan * 300;
+        scores[winnerIdx] += basePts + potBonus;
+      }
+
+      for (let i = 0; i < 4; i++) riichiActive[i] = false;
+      riichiSticks = 0;
+
+      if (isOyaWin && renchan < 2) {
+        renchan += 1;
+      } else {
+        renchan = 0;
+        const rotated = [winds[3], winds[0], winds[1], winds[2]] as [string, string, string, string];
+        winds.splice(0, 4, ...rotated);
+        if (roundNum < 4) {
+          roundNum += 1;
+        } else if (wind === '東') {
+          wind = '南';
+          roundNum = 1;
+        } else {
+          wind = '東';
+          roundNum = 1;
+        }
+      }
+    }
+
+    liveState.value = await upsertLiveTableState(
+      {
+        round: lg.round,
+        table: lg.table,
+        seatPlayerIds: [...lg.seatPlayerIds] as [number, number, number, number],
+        scores,
+        winds,
+        riichiActive,
+        chomboCounts: [...(lg.chomboCounts || [0, 0, 0, 0])] as [number, number, number, number],
+        wind,
+        roundNum,
+        renchan,
+        riichiSticks,
+        isFinished: false,
+        records: lg.records,
+      },
+      true
+    );
+  }
+  lastSyncAt.value = Date.now();
+};
+
+const startDemoLoop = () => {
+  if (demoInterval) clearInterval(demoInterval);
+  demoInterval = setInterval(runSandboxDemoStep, DEMO_SPEED_MS[demoSpeed.value]);
+};
+
+const cycleDemoSpeed = () => {
+  demoSpeed.value =
+    demoSpeed.value === 'normal' ? 'fast' : demoSpeed.value === 'fast' ? 'turbo' : 'normal';
+  if (isDemoRunning.value) startDemoLoop();
+};
+
+const toggleSandboxDemo = () => {
+  if (!props.isSandbox) return;
+  if (isDemoRunning.value) {
+    isDemoRunning.value = false;
+    if (demoInterval) {
+      clearInterval(demoInterval);
+      demoInterval = null;
+    }
+  } else {
+    isDemoRunning.value = true;
+    runSandboxDemoStep();
+    startDemoLoop();
+  }
+};
+
 const formatAgo = (ts: number | null) => {
   if (!ts) return '';
   const diffSec = Math.max(0, Math.floor((nowTick.value - ts) / 1000));
@@ -401,18 +687,35 @@ const lastSyncText = computed(() => {
           {{ tr('roundLabel', { n: activeRound }) }} ·
           {{ tr('monitorLiveCount', { live: liveTableCount, done: finalTableCount }) }}
         </span>
+        <div
+          v-if="monitorTimerDisplay"
+          class="lm-timer-pill"
+          :class="[`sev-${monitorTimerDisplay.severity}`, { paused: monitorTimerDisplay.status === 'paused' }]"
+        >
+          <span class="lmt-clock">
+            {{ monitorTimerDisplay.isExpired ? '⏰ 00:00' : (monitorTimerDisplay.status === 'paused' ? '⏸ ' : '⏱ ') + monitorTimerDisplay.formatted }}
+          </span>
+          <span class="lmt-meta">
+            R{{ monitorTimerDisplay.round }} ·
+            {{
+              monitorTimerDisplay.isExpired
+                ? (monitorTimerDisplay.extraHands === 1 ? tr('timerPlusOneLabel') : tr('timerLastHandLabel'))
+                : monitorTimerDisplay.ruleTag
+            }}
+          </span>
+        </div>
       </div>
 
       <div class="lm-controls">
         <div class="lm-round-select">
-          <button :class="{ active: selectedRoundMode === 'auto' }" @click="selectedRoundMode = 'auto'">
+          <button :class="{ active: selectedRoundMode === 'auto' }" @click="selectRoundMode('auto')">
             AUTO
           </button>
           <button
             v-for="r in [1, 2, 3, 4, 5, 6]"
             :key="r"
             :class="{ active: selectedRoundMode === r }"
-            @click="selectedRoundMode = r"
+            @click="selectRoundMode(r)"
           >
             R{{ r }}
           </button>
@@ -429,6 +732,24 @@ const lastSyncText = computed(() => {
 
         <button v-if="isSandbox" type="button" class="lm-btn accent" @click="handleSimulateLive">
           🧪 {{ tr('sandboxSimLive') }}
+        </button>
+        <button
+          v-if="isSandbox"
+          type="button"
+          class="lm-btn"
+          :class="{ 'demo-active': isDemoRunning }"
+          @click="toggleSandboxDemo"
+        >
+          {{ isDemoRunning ? '⏹ Stop Demo' : '▶ Live Demo' }}
+        </button>
+        <button v-if="isSandbox" type="button" class="lm-btn" @click="cycleDemoSpeed">
+          {{ demoSpeed === 'turbo' ? '🚀 6x Turbo' : demoSpeed === 'fast' ? '⚡ 3x Fast' : '▶ 1x' }}
+        </button>
+        <button v-if="isSandbox" type="button" class="lm-btn" @click="runSandboxDemoStep">
+          +1 Step
+        </button>
+        <button v-if="isSandbox" type="button" class="lm-btn" @click="handleToggleSandboxTimer">
+          ⏱ {{ monitorTimerDisplay ? tr('timerResetBtn') : '50+0' }}
         </button>
 
         <div class="lm-lang">
@@ -453,7 +774,7 @@ const lastSyncText = computed(() => {
     </header>
 
     <!-- 4-Team Live Standings Strip -->
-    <section class="lm-team-strip">
+    <TransitionGroup name="lm-team-move" tag="section" class="lm-team-strip">
       <div
         v-for="ts in liveTeamStandings"
         :key="ts.team.id"
@@ -473,7 +794,7 @@ const lastSyncText = computed(() => {
           </span>
         </div>
       </div>
-    </section>
+    </TransitionGroup>
 
     <!-- 7-Table Broadcast Grid (Fits 16:9 Projector in 1 View!) -->
     <main class="lm-grid">
@@ -502,12 +823,18 @@ const lastSyncText = computed(() => {
           </div>
         </div>
 
-        <div class="lmc-players">
+        <TransitionGroup name="lm-row-move" tag="div" class="lmc-players">
           <div
             v-for="p in card.players"
             :key="p.playerId"
             class="lmc-row"
-            :class="{ 'is-riichi': p.isRiichi, 'is-first': card.status !== 'waiting' && p.rank === 1 }"
+            :class="{
+              'is-riichi': p.isRiichi,
+              'is-riichi-fresh': isRiichiFresh(card.slot.key, p.playerId),
+              'is-first': card.status !== 'waiting' && p.rank === 1,
+              'row-gain': (getActiveDelta(card.slot.key, p.playerId) ?? 0) > 0,
+              'row-loss': (getActiveDelta(card.slot.key, p.playerId) ?? 0) < 0,
+            }"
           >
             <div class="lmc-team-bar" :style="{ backgroundColor: EVENT_TEAM_MAP[p.teamId].color }"></div>
             <span class="lmc-rank" :class="card.status !== 'waiting' ? `rk-${p.rank}` : 'rk-wait'">
@@ -523,7 +850,14 @@ const lastSyncText = computed(() => {
             </div>
 
             <div class="lmc-score-wrap">
-              <span class="lmc-score">{{ p.score.toLocaleString() }}</span>
+              <span
+                v-if="getActiveDelta(card.slot.key, p.playerId) !== null"
+                class="lmc-delta-pop"
+                :class="(getActiveDelta(card.slot.key, p.playerId) ?? 0) > 0 ? 'pos' : 'neg'"
+              >
+                {{ (getActiveDelta(card.slot.key, p.playerId) ?? 0) > 0 ? '+' : '' }}{{ getActiveDelta(card.slot.key, p.playerId)?.toLocaleString() }}
+              </span>
+              <span class="lmc-score">{{ getDisplayScore(card.slot.key, p.playerId, p.score).toLocaleString() }}</span>
               <span
                 v-if="card.status !== 'waiting'"
                 class="lmc-pt"
@@ -533,7 +867,7 @@ const lastSyncText = computed(() => {
               </span>
             </div>
           </div>
-        </div>
+        </TransitionGroup>
       </article>
     </main>
   </div>
@@ -567,6 +901,45 @@ const lastSyncText = computed(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+}
+.lm-timer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1.5px solid rgba(16, 185, 129, 0.55);
+  color: #ecfdf5;
+  font-variant-numeric: tabular-nums;
+}
+.lm-timer-pill.sev-warn {
+  background: rgba(180, 83, 9, 0.35);
+  border-color: rgba(251, 191, 36, 0.7);
+  color: #fde68a;
+}
+.lm-timer-pill.sev-critical,
+.lm-timer-pill.sev-expired {
+  background: rgba(220, 38, 38, 0.35);
+  border-color: rgba(248, 113, 113, 0.85);
+  color: #fee2e2;
+  animation: lmPulse 1.1s ease-in-out infinite;
+}
+.lm-timer-pill.paused {
+  opacity: 0.75;
+  animation: none;
+}
+.lmt-clock {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+}
+.lmt-meta {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
 }
 .lm-live-badge {
   display: inline-flex;
@@ -792,6 +1165,18 @@ const lastSyncText = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  position: relative;
+}
+.lm-row-move-move {
+  transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lm-team-move-move {
+  transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lm-btn.demo-active {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(248, 113, 113, 0.75);
+  color: #fecaca;
 }
 .lmc-row {
   display: flex;
@@ -800,13 +1185,49 @@ const lastSyncText = computed(() => {
   padding: 7px 8px;
   border-radius: 8px;
   background: rgba(30, 41, 59, 0.55);
+  transition: background-color 0.45s ease, box-shadow 0.45s ease;
 }
 .lmc-row.is-first {
   background: rgba(245, 158, 11, 0.1);
 }
+.lmc-row.row-gain {
+  background: rgba(16, 185, 129, 0.22) !important;
+  box-shadow: inset 0 0 0 1.5px rgba(52, 211, 153, 0.75);
+}
+.lmc-row.row-loss {
+  background: rgba(239, 68, 68, 0.18) !important;
+  box-shadow: inset 0 0 0 1.5px rgba(248, 113, 113, 0.6);
+}
 .lmc-row.is-riichi {
   box-shadow: inset 0 0 0 1.5px rgba(239, 68, 68, 0.75);
   background: rgba(239, 68, 68, 0.1);
+}
+.lmc-row.is-riichi-fresh {
+  animation: lmRiichiFlash 0.85s ease-in-out 3;
+}
+.lmc-delta-pop {
+  font-size: 12px;
+  font-weight: 900;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+  animation: lmDeltaPop 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lmc-delta-pop.pos {
+  background: rgba(16, 185, 129, 0.26);
+  color: #4ade80;
+}
+.lmc-delta-pop.neg {
+  background: rgba(239, 68, 68, 0.26);
+  color: #f87171;
+}
+@keyframes lmDeltaPop {
+  0% { opacity: 0; transform: translateY(6px) scale(0.85); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes lmRiichiFlash {
+  0%, 100% { box-shadow: inset 0 0 0 1.5px rgba(239, 68, 68, 0.75), 0 0 0 rgba(239, 68, 68, 0); }
+  50% { box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.95), 0 0 16px rgba(239, 68, 68, 0.65); }
 }
 .lmc-team-bar {
   width: 4px;

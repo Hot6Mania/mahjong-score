@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue';
-import type { EventScoringConfig } from '@/data/knuNpm2026';
-import type { EventAuditEntry } from '@/utils/knuNpmScoring';
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
+import type { EventRoundTimer, EventScoringConfig } from '@/data/knuNpm2026';
+import { computeRoundTimerDisplay, normalizeRoundTimer, type EventAuditEntry } from '@/utils/knuNpmScoring';
+import { getSyncedNowMs } from '@/services/knuNpmEventService';
 
 interface Props {
   isStaff: boolean;
   config: EventScoringConfig;
   auditLog: EventAuditEntry[];
   isBusy?: boolean;
+  isSandbox?: boolean;
   tr: (key: string, params?: Record<string, string | number>) => string;
 }
 const props = defineProps<Props>();
@@ -24,8 +26,121 @@ const emit = defineEmits<{
 
 const pinInput = ref('');
 const loginError = ref('');
-const activeTab = ref<'locks' | 'rules' | 'audit' | 'export'>('locks');
+const activeTab = ref<'timer' | 'locks' | 'rules' | 'audit' | 'export'>('timer');
 const newPinInput = ref('');
+const nowTick = ref(Date.now());
+let tickHandle: ReturnType<typeof setInterval> | null = null;
+
+onMounted(() => {
+  tickHandle = setInterval(() => {
+    nowTick.value = Date.now();
+  }, 500);
+});
+onUnmounted(() => {
+  if (tickHandle) clearInterval(tickHandle);
+});
+
+const timerForm = reactive({
+  round: props.config.roundTimer?.round ?? 1,
+  durationMinutes: props.config.roundTimer?.durationMinutes ?? 50,
+  extraHands: (props.config.roundTimer?.extraHands ?? 0) as 0 | 1,
+});
+
+const liveTimer = computed(() => normalizeRoundTimer(props.config.roundTimer));
+const timerDisplay = computed(() => {
+  void nowTick.value;
+  return computeRoundTimerDisplay(liveTimer.value, getSyncedNowMs(Boolean(props.isSandbox)));
+});
+
+const emitTimerUpdate = (nextTimer: EventRoundTimer) => {
+  emit('save-config', { roundTimer: nextTimer });
+};
+
+const handleStartTimer = () => {
+  const now = getSyncedNowMs(Boolean(props.isSandbox));
+  const mins = Math.min(180, Math.max(1, Math.floor(Number(timerForm.durationMinutes) || 50)));
+  emitTimerUpdate({
+    round: timerForm.round,
+    durationMinutes: mins,
+    extraHands: timerForm.extraHands,
+    status: 'running',
+    endsAt: now + mins * 60_000,
+    pausedRemainingMs: null,
+    updatedAt: now,
+  });
+};
+
+const handlePauseOrResumeTimer = () => {
+  const now = getSyncedNowMs(Boolean(props.isSandbox));
+  const cur = liveTimer.value;
+  if (cur.status === 'running') {
+    const rem = cur.endsAt !== null ? Math.max(0, cur.endsAt - now) : 0;
+    emitTimerUpdate({
+      ...cur,
+      extraHands: timerForm.extraHands,
+      status: 'paused',
+      endsAt: null,
+      pausedRemainingMs: rem,
+      updatedAt: now,
+    });
+  } else if (cur.status === 'paused') {
+    const rem = Math.max(0, cur.pausedRemainingMs ?? cur.durationMinutes * 60_000);
+    emitTimerUpdate({
+      ...cur,
+      extraHands: timerForm.extraHands,
+      status: 'running',
+      endsAt: now + rem,
+      pausedRemainingMs: null,
+      updatedAt: now,
+    });
+  }
+};
+
+const handleAdjustTimer = (deltaMinutes: number) => {
+  const now = getSyncedNowMs(Boolean(props.isSandbox));
+  const cur = liveTimer.value;
+  const deltaMs = deltaMinutes * 60_000;
+  if (cur.status === 'running' && cur.endsAt !== null) {
+    emitTimerUpdate({
+      ...cur,
+      extraHands: timerForm.extraHands,
+      endsAt: Math.max(now, cur.endsAt + deltaMs),
+      updatedAt: now,
+    });
+  } else if (cur.status === 'paused') {
+    emitTimerUpdate({
+      ...cur,
+      extraHands: timerForm.extraHands,
+      pausedRemainingMs: Math.max(0, (cur.pausedRemainingMs ?? 0) + deltaMs),
+      updatedAt: now,
+    });
+  }
+};
+
+const handleSwitchExtraHands = (mode: 0 | 1) => {
+  timerForm.extraHands = mode;
+  const cur = liveTimer.value;
+  if (cur.status !== 'idle') {
+    emitTimerUpdate({
+      ...cur,
+      extraHands: mode,
+      updatedAt: getSyncedNowMs(Boolean(props.isSandbox)),
+    });
+  }
+};
+
+const handleResetTimer = () => {
+  const now = getSyncedNowMs(Boolean(props.isSandbox));
+  emitTimerUpdate({
+    round: timerForm.round,
+    durationMinutes: Math.min(180, Math.max(1, Math.floor(Number(timerForm.durationMinutes) || 50))),
+    extraHands: timerForm.extraHands,
+    status: 'idle',
+    endsAt: null,
+    pausedRemainingMs: null,
+    updatedAt: now,
+  });
+};
 
 const form = reactive({
   startingScore: props.config.startingScore,
@@ -59,6 +174,11 @@ watch(
     form.chomboPenalty = c.chomboPenalty;
     form.allowParticipantInput = c.allowParticipantInput;
     form.lockedRounds = [...c.lockedRounds];
+    if (c.roundTimer) {
+      timerForm.round = c.roundTimer.round;
+      timerForm.durationMinutes = c.roundTimer.durationMinutes;
+      timerForm.extraHands = c.roundTimer.extraHands;
+    }
   },
   { deep: true }
 );
@@ -142,6 +262,9 @@ const formatTime = (ts: number) => {
       <!-- Logged In -->
       <template v-else>
         <div class="staff-tabs">
+          <button :class="{ active: activeTab === 'timer' }" @click="activeTab = 'timer'">
+            {{ tr('staffTabTimer') }}
+          </button>
           <button :class="{ active: activeTab === 'locks' }" @click="activeTab = 'locks'">
             {{ tr('staffTabLocks') }}
           </button>
@@ -157,8 +280,113 @@ const formatTime = (ts: number) => {
         </div>
 
         <div class="staff-body">
+          <!-- Round Timer Tab -->
+          <div v-if="activeTab === 'timer'" class="panel-stack">
+            <p class="login-desc">{{ tr('timerControlDesc') }}</p>
+
+            <div class="timer-preview-box" :class="timerDisplay.severity">
+              <div class="tp-top">
+                <span class="tp-round-chip">R{{ liveTimer.round }} · {{ timerDisplay.ruleTag }}</span>
+                <span class="tp-status-chip">
+                  {{
+                    timerDisplay.isExpired
+                      ? tr('timerStatusExpired')
+                      : liveTimer.status === 'running'
+                        ? tr('timerStatusRunning')
+                        : liveTimer.status === 'paused'
+                          ? tr('timerStatusPaused')
+                          : tr('timerStatusIdle')
+                  }}
+                </span>
+              </div>
+              <div class="tp-clock">{{ timerDisplay.formatted }}</div>
+            </div>
+
+            <div class="form-grid-2">
+              <label class="field">
+                <span>{{ tr('timerRoundLabel') }}</span>
+                <select v-model.number="timerForm.round">
+                  <option v-for="r in [1, 2, 3, 4, 5, 6]" :key="r" :value="r">
+                    {{ tr('roundLabel', { n: r }) }}
+                  </option>
+                </select>
+              </label>
+              <label class="field">
+                <span>{{ tr('timerDurationLabel') }}</span>
+                <div class="duration-input-row">
+                  <input type="number" min="1" max="180" v-model.number="timerForm.durationMinutes" />
+                  <button type="button" class="mini-preset" @click="timerForm.durationMinutes = 50">50m</button>
+                  <button type="button" class="mini-preset" @click="timerForm.durationMinutes = 1">1m</button>
+                </div>
+              </label>
+            </div>
+
+            <div class="section-label">{{ tr('timerRuleLabel') }}</div>
+            <div class="rule-radio-row">
+              <button
+                type="button"
+                class="rule-choice-btn"
+                :class="{ active: timerForm.extraHands === 0 }"
+                @click="handleSwitchExtraHands(0)"
+              >
+                <strong>{{ timerForm.durationMinutes }}+0</strong>
+                <span>{{ tr('timerRule500') }}</span>
+              </button>
+              <button
+                type="button"
+                class="rule-choice-btn"
+                :class="{ active: timerForm.extraHands === 1 }"
+                @click="handleSwitchExtraHands(1)"
+              >
+                <strong>{{ timerForm.durationMinutes }}+1</strong>
+                <span>{{ tr('timerRule501') }}</span>
+              </button>
+            </div>
+
+            <div class="timer-action-grid">
+              <button type="button" class="btn-timer-start" :disabled="isBusy" @click="handleStartTimer">
+                ▶ {{ tr('timerStartBtn') }} (R{{ timerForm.round }})
+              </button>
+              <button
+                v-if="liveTimer.status !== 'idle'"
+                type="button"
+                class="btn-timer-sec"
+                :disabled="isBusy"
+                @click="handlePauseOrResumeTimer"
+              >
+                {{ liveTimer.status === 'running' ? '⏸ ' + tr('timerPauseBtn') : '▶ ' + tr('timerResumeBtn') }}
+              </button>
+              <button
+                v-if="liveTimer.status !== 'idle'"
+                type="button"
+                class="btn-timer-sec"
+                :disabled="isBusy"
+                @click="handleAdjustTimer(-1)"
+              >
+                -1m
+              </button>
+              <button
+                v-if="liveTimer.status !== 'idle'"
+                type="button"
+                class="btn-timer-sec"
+                :disabled="isBusy"
+                @click="handleAdjustTimer(1)"
+              >
+                +1m
+              </button>
+              <button
+                type="button"
+                class="btn-danger-ghost"
+                :disabled="isBusy"
+                @click="handleResetTimer"
+              >
+                ↺ {{ tr('timerResetBtn') }}
+              </button>
+            </div>
+          </div>
+
           <!-- Locks Tab -->
-          <div v-if="activeTab === 'locks'" class="panel-stack">
+          <div v-else-if="activeTab === 'locks'" class="panel-stack">
             <label class="switch-card">
               <div>
                 <strong>{{ tr('staffAllowParticipant') }}</strong>
@@ -523,6 +751,121 @@ const formatTime = (ts: number) => {
   background: rgba(239, 68, 68, 0.1);
   color: #ef4444;
   font-weight: 700;
+  cursor: pointer;
+}
+
+/* Round Timer Panel */
+.timer-preview-box {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  text-align: center;
+}
+.timer-preview-box.normal {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.08);
+}
+.timer-preview-box.warn {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.1);
+}
+.timer-preview-box.critical,
+.timer-preview-box.expired {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.12);
+}
+.tp-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11.5px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+.tp-round-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.15);
+  color: #3b82f6;
+}
+.tp-status-chip {
+  color: var(--text-dimmed);
+}
+.tp-clock {
+  font-size: 40px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.05;
+  letter-spacing: 1px;
+}
+.duration-input-row {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.mini-preset {
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-color);
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rule-radio-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.rule-choice-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-color);
+  cursor: pointer;
+  text-align: left;
+}
+.rule-choice-btn strong { font-size: 14px; font-weight: 900; }
+.rule-choice-btn span { font-size: 11px; color: var(--text-dimmed); line-height: 1.25; }
+.rule-choice-btn.active {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.14);
+}
+.rule-choice-btn.active strong { color: #3b82f6; }
+.timer-action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.btn-timer-start {
+  flex: 1 1 180px;
+  padding: 10px 14px;
+  border-radius: 9px;
+  border: none;
+  background: #16a34a;
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.btn-timer-start:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-timer-sec {
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-color);
+  font-size: 12.5px;
+  font-weight: 800;
   cursor: pointer;
 }
 </style>
