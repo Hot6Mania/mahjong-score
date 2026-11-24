@@ -199,10 +199,10 @@ const dashboardTimerDisplay = computed(() => {
   return computeRoundTimerDisplay(tmr, getSyncedNowMs(props.isSandbox));
 });
 
-const handleStartSandboxTimer = (durationMinutes: number) => {
+const handleStartSandboxTimer = async (durationMinutes: number) => {
   if (!props.isSandbox) return;
-  const now = Date.now();
-  state.value = updateSandboxQuickTimer({
+  const now = getSyncedNowMs(true);
+  state.value = await updateSandboxQuickTimer({
     round: selectedRound.value,
     durationMinutes,
     extraHands: state.value.config.roundTimer?.extraHands ?? 0,
@@ -211,7 +211,7 @@ const handleStartSandboxTimer = (durationMinutes: number) => {
     pausedRemainingMs: null,
     updatedAt: now,
   });
-  showToast(`Started R${selectedRound.value} timer (${durationMinutes}+${state.value.config.roundTimer.extraHands})`);
+  showToast(`⏱ R${selectedRound.value} 타이머 시작 (${durationMinutes}+${state.value.config.roundTimer.extraHands}) — 전 기기 동기화됨!`);
 };
 
 // URL query parameter synchronization (tab, round, view, player, match)
@@ -308,9 +308,12 @@ const loadState = async (silent = false, force = false) => {
   loadError.value = '';
   try {
     if (silent && !force) {
+      const shouldPollLive = props.isSandbox || activeTab.value === 'schedule';
       const [res, liveRes] = await Promise.all([
         fetchEventStateIfChanged(props.isSandbox, state.value.updatedAt),
-        fetchLiveStateIfChanged(props.isSandbox, liveState.value.updatedAt).catch(() => null),
+        shouldPollLive
+          ? fetchLiveStateIfChanged(props.isSandbox, liveState.value.updatedAt).catch(() => null)
+          : Promise.resolve(null),
       ]);
       lastCheckedAt.value = Date.now();
       if (!res.unchanged) {
@@ -407,12 +410,12 @@ onMounted(async () => {
     window.addEventListener('focus', handleVisibilityOrFocus);
   }
 
-  // 20초 주기 초경량 조건부 폴링(?since=updatedAt — 변경 없을 시 ~50B 응답, Worker 5초 메모리 캐시로 KV 부하 최소화)
+  // 초경량 조건부 폴링(?since=updatedAt — 변경 없을 시 ~60B 응답, Edge Cache 우선으로 무료 티어 한도 절감)
   pollTimer = setInterval(() => {
     if (!document.hidden && !isSyncing.value && !isBusy.value) {
       loadState(true, false);
     }
-  }, 20000);
+  }, props.isSandbox ? 6000 : 25000);
 });
 
 onUnmounted(() => {
@@ -674,9 +677,9 @@ const openLiveMonitor = () => {
   router.push({ path: getKnuNpmLiveMonitorPath(props.isSandbox), query: { lang: props.eventLocale } });
 };
 
-const handleSimulateSandboxLive = () => {
+const handleSimulateSandboxLive = async () => {
   if (!props.isSandbox) return;
-  liveState.value = seedSandboxLiveGames(selectedRound.value);
+  liveState.value = await seedSandboxLiveGames(selectedRound.value);
   showToast(`Simulated 6 live tables for Round ${selectedRound.value}!`);
 };
 
@@ -752,7 +755,20 @@ const handleSaveConfig = async (patch: Partial<EventScoringConfig> & { newStaffP
   isBusy.value = true;
   try {
     state.value = await updateEventConfig(patch, props.isSandbox);
-    showToast(patch.newStaffPin ? tr('staffPinUpdated') : tr('staffConfigSaved'));
+    if (patch.newStaffPin) {
+      showToast(tr('staffPinUpdated'));
+    } else if (patch.roundTimer) {
+      const t = state.value.config.roundTimer;
+      const statusLabel =
+        t.status === 'running'
+          ? tr('timerStatusRunning')
+          : t.status === 'paused'
+            ? tr('timerStatusPaused')
+            : tr('timerStatusIdle');
+      showToast(`⏱ R${t.round} (${t.durationMinutes}+${t.extraHands}) · ${statusLabel}`);
+    } else {
+      showToast(tr('staffConfigSaved'));
+    }
   } catch (err: any) {
     showToast(err?.message || 'Update failed');
   } finally {
@@ -806,23 +822,39 @@ const copyEventLink = () => {
 // Sandbox Helpers
 const qaReport = ref<QaSelfTestReport | null>(null);
 
-const handleSeedSandbox = (rounds: number) => {
+const handleSeedSandbox = async (rounds: number) => {
   if (!props.isSandbox) return;
-  state.value = seedSandboxData(rounds);
-  showToast(`Seeded R1–R${rounds} (${rounds * 7} games: ${rounds * 6} Scorer + ${rounds} JP-C)`);
+  isBusy.value = true;
+  try {
+    state.value = await seedSandboxData(rounds);
+    showToast(`Seeded R1–R${rounds} (${rounds * 7} games: ${rounds * 6} Scorer + ${rounds} JP-C)`);
+  } finally {
+    isBusy.value = false;
+  }
 };
 
-const handleSeedEdgeCases = () => {
+const handleSeedEdgeCases = async () => {
   if (!props.isSandbox) return;
-  state.value = seedSandboxEdgeCases();
-  showToast('Seeded 4 edge cases: 2-way tie, 4-way 25k tie, negative+chombo, JP-C!');
+  isBusy.value = true;
+  try {
+    state.value = await seedSandboxEdgeCases();
+    showToast('Seeded 4 edge cases: 2-way tie, 4-way 25k tie, negative+chombo, JP-C!');
+  } finally {
+    isBusy.value = false;
+  }
 };
 
-const handleResetSandbox = () => {
+const handleResetSandbox = async () => {
   if (!props.isSandbox) return;
-  state.value = resetSandboxData();
-  qaReport.value = null;
-  showToast('Sandbox reset to 0 / 42 games.');
+  isBusy.value = true;
+  try {
+    state.value = await resetSandboxData();
+    liveState.value = { updatedAt: Date.now(), liveGames: {} };
+    qaReport.value = null;
+    showToast('Sandbox reset to 0 / 42 games.');
+  } finally {
+    isBusy.value = false;
+  }
 };
 
 const handleSandboxAutoStaffLogin = async () => {
@@ -868,9 +900,9 @@ const launchSandboxScenario = async (scenario: 'orasu25k' | 'timer500' | 'timer5
     return;
   }
   if (scenario === 'timer500' || scenario === 'timer501') {
-    const now = Date.now();
+    const now = getSyncedNowMs(true);
     const extraHands: 0 | 1 = scenario === 'timer501' ? 1 : 0;
-    state.value = updateSandboxQuickTimer({
+    state.value = await updateSandboxQuickTimer({
       round: r,
       durationMinutes: 50,
       extraHands,

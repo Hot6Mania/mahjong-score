@@ -100,12 +100,12 @@ const monitorTimerDisplay = computed(() => {
   return computeRoundTimerDisplay(tmr, getSyncedNowMs(props.isSandbox));
 });
 
-const handleToggleSandboxTimer = () => {
+const handleToggleSandboxTimer = async () => {
   if (!props.isSandbox) return;
   const cur = state.value.config.roundTimer;
-  const now = Date.now();
+  const now = getSyncedNowMs(true);
   if (cur && cur.status === 'running') {
-    state.value = updateSandboxQuickTimer({
+    state.value = await updateSandboxQuickTimer({
       ...cur,
       status: 'idle',
       endsAt: null,
@@ -113,7 +113,7 @@ const handleToggleSandboxTimer = () => {
       updatedAt: now,
     });
   } else {
-    state.value = updateSandboxQuickTimer({
+    state.value = await updateSandboxQuickTimer({
       round: activeRound.value,
       durationMinutes: 50,
       extraHands: 0,
@@ -123,6 +123,7 @@ const handleToggleSandboxTimer = () => {
       updatedAt: now,
     });
   }
+  lastSyncAt.value = Date.now();
 };
 
 const loadInitial = async (force = false) => {
@@ -162,10 +163,26 @@ const pollState = async () => {
 };
 
 let liveTimer: ReturnType<typeof setInterval> | null = null;
-let stateTimer: ReturnType<typeof setInterval> | null = null;
+let stateTimer: ReturnType<typeof setTimeout> | null = null;
 let clockTimer: ReturnType<typeof setInterval> | null = null;
 let unsubState: (() => void) | null = null;
 let unsubLive: (() => void) | null = null;
+
+const scheduleNextStatePoll = () => {
+  if (stateTimer) clearTimeout(stateTimer);
+  const timerStatus = state.value.config.roundTimer?.status || 'idle';
+  const delay = timerStatus === 'running' ? 10000 : 3000;
+  stateTimer = setTimeout(async () => {
+    await pollState();
+    scheduleNextStatePoll();
+  }, delay);
+};
+
+const handleMonitorWakeSync = () => {
+  if (typeof document !== 'undefined' && document.hidden) return;
+  pollState();
+  pollLive();
+};
 
 const onFullscreenChange = () => {
   if (typeof document !== 'undefined') {
@@ -187,20 +204,24 @@ onMounted(async () => {
     lastSyncAt.value = Date.now();
   });
 
-  liveTimer = setInterval(pollLive, 4000);
-  stateTimer = setInterval(pollState, 15000);
+  liveTimer = setInterval(pollLive, 5000);
+  scheduleNextStatePoll();
   clockTimer = setInterval(() => {
     nowTick.value = Date.now();
   }, 1000);
 
   if (typeof document !== 'undefined') {
     document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('visibilitychange', handleMonitorWakeSync);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', handleMonitorWakeSync);
   }
 });
 
 onUnmounted(() => {
   if (liveTimer) clearInterval(liveTimer);
-  if (stateTimer) clearInterval(stateTimer);
+  if (stateTimer) clearTimeout(stateTimer);
   if (clockTimer) clearInterval(clockTimer);
   if (demoInterval) clearInterval(demoInterval);
   Object.values(scoreAnimHandles).forEach((id) => cancelAnimationFrame(id));
@@ -208,6 +229,10 @@ onUnmounted(() => {
   if (unsubLive) unsubLive();
   if (typeof document !== 'undefined') {
     document.removeEventListener('fullscreenchange', onFullscreenChange);
+    document.removeEventListener('visibilitychange', handleMonitorWakeSync);
+  }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('focus', handleMonitorWakeSync);
   }
 });
 
@@ -422,9 +447,9 @@ const goBackToDashboard = () => {
   router.push({ path: dest, query: { lang: props.eventLocale } });
 };
 
-const handleSimulateLive = () => {
+const handleSimulateLive = async () => {
   if (!props.isSandbox) return;
-  liveState.value = seedSandboxLiveGames(activeRound.value);
+  liveState.value = await seedSandboxLiveGames(activeRound.value);
   lastSyncAt.value = Date.now();
 };
 
@@ -534,7 +559,7 @@ const runSandboxDemoStep = async () => {
     k.startsWith(`R${activeRound.value}-`)
   );
   if (existingKeys.length === 0) {
-    liveState.value = seedSandboxLiveGames(activeRound.value);
+    liveState.value = await seedSandboxLiveGames(activeRound.value);
     lastSyncAt.value = Date.now();
     return;
   }
@@ -650,6 +675,7 @@ const runSandboxDemoStep = async () => {
         isFinished: false,
         records: lg.records,
       },
+      true,
       true
     );
   }
@@ -667,11 +693,11 @@ const cycleDemoSpeed = () => {
   if (isDemoRunning.value) startDemoLoop();
 };
 
-const handleResetSandboxDemo = () => {
+const handleResetSandboxDemo = async () => {
   if (!props.isSandbox) return;
   if (isDemoRunning.value) toggleSandboxDemo();
-  state.value = resetSandboxData();
-  liveState.value = seedSandboxLiveGames(activeRound.value);
+  state.value = await resetSandboxData();
+  liveState.value = await seedSandboxLiveGames(activeRound.value);
   lastSyncAt.value = Date.now();
 };
 

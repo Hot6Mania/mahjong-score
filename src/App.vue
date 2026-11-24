@@ -139,6 +139,8 @@ const eventTimerBadge = computed(() => {
   const disp = eventTimerComputed.value;
   if (!disp) return null;
   const loc = eventLocale.value;
+  const matchRound = activeEventMatch.value?.round;
+  const ruleLabel = matchRound && disp.round !== matchRound ? `R${disp.round} · ${disp.ruleTag}` : disp.ruleTag;
   if (disp.isExpired) {
     const completed = getCompletedNonChomboHandsCount();
     const base = eventTimeUpAtHandCount.value ?? completed;
@@ -160,7 +162,7 @@ const eventTimerBadge = computed(() => {
   }
   return {
     text: `${disp.status === 'paused' ? '⏸' : '⏱'} ${disp.formatted}`,
-    sub: disp.ruleTag,
+    sub: ruleLabel,
     severity: disp.severity,
     paused: disp.status === 'paused',
   };
@@ -251,23 +253,81 @@ const handleFinishEventEarly = async () => {
 };
 
 let eventTimerTickInterval: ReturnType<typeof setInterval> | null = null;
-let eventTimerSyncInterval: ReturnType<typeof setInterval> | null = null;
+let eventTimerSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 let unsubscribeEventTimerBroadcast: (() => void) | null = null;
+let isSyncingEventTimer = false;
+let lastAnnouncedTimerStartId = 0;
+
+const applyIncomingEventTimer = (rawTimer: EventRoundTimer | undefined, nextConfig?: EventScoringConfig) => {
+  const prev = normalizeRoundTimer(activeEventTimer.value);
+  const next = normalizeRoundTimer(rawTimer);
+  activeEventTimer.value = next;
+  eventTimerNowTick.value = Date.now();
+  if (nextConfig && activeEventMatch.value) {
+    activeEventMatch.value = { ...activeEventMatch.value, config: nextConfig };
+  }
+  if (
+    isEventScorerVisible.value &&
+    next.status === 'running' &&
+    next.updatedAt > 0 &&
+    next.updatedAt !== lastAnnouncedTimerStartId &&
+    (prev.status !== 'running' || prev.updatedAt !== next.updatedAt)
+  ) {
+    lastAnnouncedTimerStartId = next.updatedAt;
+    const tag = `${next.durationMinutes}+${next.extraHands}`;
+    const msg =
+      eventLocale.value === 'ja'
+        ? `⏱ 第${next.round}回戦タイマー開始！（${tag}）`
+        : eventLocale.value === 'ko'
+          ? `⏱ R${next.round} 라운드 타이머 시작! (${tag})`
+          : `⏱ R${next.round} round timer started! (${tag})`;
+    triggerToast(msg);
+  }
+};
+
+const getEventTimerPollDelayMs = (): number => {
+  const st = normalizeRoundTimer(activeEventTimer.value).status;
+  // 대기/일시정지 상태에서는 운영진 시작을 즉시(최대 2.5초 내) 포착, 진행 중에는 로컬 카운트다운이 돌므로 10초 간격으로 무료 티어 한도 절감
+  return st === 'running' ? 10000 : 2500;
+};
+
+const clearEventTimerSyncSchedule = () => {
+  if (eventTimerSyncTimeout) {
+    clearTimeout(eventTimerSyncTimeout);
+    eventTimerSyncTimeout = null;
+  }
+};
+
+const scheduleNextEventTimerSync = () => {
+  clearEventTimerSyncSchedule();
+  if (!isEventMode.value || !isEventScorerVisible.value || !activeEventMatch.value) return;
+  eventTimerSyncTimeout = setTimeout(async () => {
+    await syncEventTimerFromServer();
+    scheduleNextEventTimerSync();
+  }, getEventTimerPollDelayMs());
+};
 
 const syncEventTimerFromServer = async () => {
   const m = activeEventMatch.value;
   if (!isEventMode.value || !isEventScorerVisible.value || !m) return;
   if (typeof document !== 'undefined' && document.hidden) return;
+  if (isSyncingEventTimer) return;
+  isSyncingEventTimer = true;
   try {
     const res = await fetchEventStateIfChanged(m.sandbox, eventTimerStateUpdatedAt.value);
     if (!res.unchanged) {
       eventTimerStateUpdatedAt.value = res.state.updatedAt;
-      activeEventTimer.value = normalizeRoundTimer(res.state.config.roundTimer);
-      if (activeEventMatch.value) {
-        activeEventMatch.value = { ...activeEventMatch.value, config: res.state.config };
-      }
+      applyIncomingEventTimer(res.state.config.roundTimer, res.state.config);
     }
-  } catch {}
+  } catch {} finally {
+    isSyncingEventTimer = false;
+  }
+};
+
+const handleEventScorerWakeSync = () => {
+  if (typeof document !== 'undefined' && document.hidden) return;
+  if (!isEventMode.value || !isEventScorerVisible.value || !activeEventMatch.value) return;
+  syncEventTimerFromServer();
 };
 
 const syncEventScorerUrlQuery = async (matchKey: string | null, fallbackRound = 1) => {
@@ -294,19 +354,53 @@ const syncEventScorerUrlQuery = async (matchKey: string | null, fallbackRound = 
 };
 
 watch(
-  () => [isEventMode.value, isEventScorerVisible.value, activeEventMatch.value?.key] as const,
+  isEventMode,
+  (evMode) => {
+    if (unsubscribeEventTimerBroadcast) {
+      unsubscribeEventTimerBroadcast();
+      unsubscribeEventTimerBroadcast = null;
+    }
+    if (evMode) {
+      unsubscribeEventTimerBroadcast = subscribeEventStateUpdates(({ state: incoming, sandbox }) => {
+        if (Boolean(sandbox) !== Boolean(isEventSandbox.value)) return;
+        eventTimerStateUpdatedAt.value = Math.max(eventTimerStateUpdatedAt.value, Number(incoming.updatedAt || 0));
+        applyIncomingEventTimer(incoming.config?.roundTimer, incoming.config);
+      });
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => [isEventMode.value, isEventScorerVisible.value, activeEventMatch.value?.key, activeEventMatch.value?.sandbox] as const,
   ([evMode, visible]) => {
     if (eventTimerTickInterval) {
       clearInterval(eventTimerTickInterval);
       eventTimerTickInterval = null;
     }
-    if (eventTimerSyncInterval) {
-      clearInterval(eventTimerSyncInterval);
-      eventTimerSyncInterval = null;
+    clearEventTimerSyncSchedule();
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleEventScorerWakeSync);
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', handleEventScorerWakeSync);
     }
     if (evMode && visible && activeEventMatch.value) {
+      eventTimerStateUpdatedAt.value = 0;
       eventTimerNowTick.value = Date.now();
-      syncEventTimerFromServer();
+      const initialTimer = normalizeRoundTimer(activeEventTimer.value);
+      if (initialTimer.status === 'running' && initialTimer.updatedAt > 0) {
+        lastAnnouncedTimerStartId = initialTimer.updatedAt;
+      }
+      syncEventTimerFromServer().finally(() => {
+        scheduleNextEventTimerSync();
+      });
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', handleEventScorerWakeSync);
+      }
+      if (typeof window !== 'undefined') {
+        window.addEventListener('focus', handleEventScorerWakeSync);
+      }
       eventTimerTickInterval = setInterval(() => {
         eventTimerNowTick.value = Date.now();
         const disp = eventTimerComputed.value;
@@ -349,7 +443,6 @@ watch(
           triggerToast(msg);
         }
       }, 1000);
-      eventTimerSyncInterval = setInterval(syncEventTimerFromServer, 15000);
     }
   },
   { immediate: true }
@@ -366,8 +459,14 @@ watch(
 
 onUnmounted(() => {
   if (eventTimerTickInterval) clearInterval(eventTimerTickInterval);
-  if (eventTimerSyncInterval) clearInterval(eventTimerSyncInterval);
+  clearEventTimerSyncSchedule();
   if (unsubscribeEventTimerBroadcast) unsubscribeEventTimerBroadcast();
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleEventScorerWakeSync);
+  }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('focus', handleEventScorerWakeSync);
+  }
 });
 
 const setEventLocale = (loc: EventLocale) => {
@@ -1092,14 +1191,6 @@ onMounted(async () => {
     setEventLocale(eventLocale.value);
     document.title = KNU_NPM_EVENT_TITLE;
     restoreEventScorerSessionFromLocal();
-    unsubscribeEventTimerBroadcast = subscribeEventStateUpdates(({ state: incoming, sandbox }) => {
-      if (Boolean(sandbox) !== Boolean(isEventSandbox.value)) return;
-      eventTimerStateUpdatedAt.value = Math.max(eventTimerStateUpdatedAt.value, Number(incoming.updatedAt || 0));
-      activeEventTimer.value = normalizeRoundTimer(incoming.config?.roundTimer);
-      if (activeEventMatch.value) {
-        activeEventMatch.value = { ...activeEventMatch.value, config: incoming.config };
-      }
-    });
     return;
   }
 
@@ -3411,7 +3502,7 @@ const resumeEventScorer = () => {
 
 const isSandboxQaMenuOpen = ref(false);
 
-const runSandboxScorerQa = (action: 'orasu25k' | 'orasuRiichi2' | 'timer10_0' | 'timer10_1' | 'reload' | 'openLive') => {
+const runSandboxScorerQa = async (action: 'orasu25k' | 'orasuRiichi2' | 'timer10_0' | 'timer10_1' | 'reload' | 'openLive') => {
   if (!isEventMode.value || !isEventSandbox.value || !activeEventMatch.value) return;
   isSandboxQaMenuOpen.value = false;
   if (action === 'orasu25k' || action === 'orasuRiichi2') {
@@ -3437,9 +3528,9 @@ const runSandboxScorerQa = (action: 'orasu25k' | 'orasuRiichi2' | 'timer10_0' | 
     return;
   }
   if (action === 'timer10_0' || action === 'timer10_1') {
-    const now = Date.now();
+    const now = getSyncedNowMs(true);
     const extraHands: 0 | 1 = action === 'timer10_1' ? 1 : 0;
-    const nextState = updateSandboxQuickTimer({
+    const nextState = await updateSandboxQuickTimer({
       round: activeEventMatch.value.round,
       durationMinutes: 50,
       extraHands,
@@ -3449,6 +3540,7 @@ const runSandboxScorerQa = (action: 'orasu25k' | 'orasuRiichi2' | 'timer10_0' | 
       updatedAt: now,
     });
     activeEventTimer.value = normalizeRoundTimer(nextState.config.roundTimer);
+    lastAnnouncedTimerStartId = activeEventTimer.value.updatedAt;
     eventTimeUpAtHandCount.value = null;
     eventTimeUpTimerId.value = 0;
     triggerToast(`🧪 QA: 10초 뒤 종료되는 50+${extraHands} 타이머 시작!`);
