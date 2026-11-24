@@ -312,8 +312,9 @@ const handleScoreClick = () => {
   gap: 4px;
 }
 .player_name_badge.event-name-badge {
-  left: 118px !important;
-  font-size: 10px;
+  left: 162px !important;
+  bottom: 68px;
+  font-size: 10.5px;
   padding: 1px 5px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
