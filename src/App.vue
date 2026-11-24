@@ -3,10 +3,16 @@ import Player from "@/components/Player.vue"
 import Panel from "@/components/Panel.vue"
 import Modal from "@/components/modals/Modal.vue"
 import StatsDashboardView from "@/views/StatsDashboardView.vue"
+import KnuNpmEventView from "@/views/KnuNpmEventView.vue"
 import { reactive, onMounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
+import { isKnuNpmEventMode, isKnuNpmSandboxMode, KNU_NPM_EVENT_TITLE } from "@/utils/eventMode"
+import { EVENT_PLAYER_MAP, getMatchKey, type EventScoringConfig } from "@/data/knuNpm2026"
+import { submitTableResult } from "@/services/knuNpmEventService"
+import type { EventLocale } from "@/locales/knuNpmEvent"
+import type { CompactRoundRecords } from "@/utils/knuNpmScoring"
 import { initGapi, initGis, initGisCodeClient, loginGoogle, loginGoogleWithCode, logoutGoogle, setGapiAccessToken, canUseGoogleRedirectFlow, shouldPreferGoogleRedirectFlow, hasPendingOAuthRedirectParams, startGoogleRedirectLogin, consumeGoogleRedirectCallback, fetchMemberList, fetchSessionMembers, saveSessionMembers, updateSessionMemberPoints, createSessionSheetIfNotExist, appendRoundRecords, appendSessionSummaryRecords, upsertSessionUmaHistory, getNextSessionSheetName, compareSessionDesc, addNewMembersToDb, deleteMemberFromDb, fetchMemberStats, verifySpreadsheetStructures, refreshAccessTokenViaWorker, migrateSessionSheetToNewMembers, backupSessionSheet, restoreSessionSheetFromBackup, syncSessionUmaToStatsSheet, syncStatsSheetFormatting, expandSessionSheetRowsIfNeeded, fetchRatingsFromSheet, updateMatchRatingsInSheet, recalculateAndSyncAllRatings, notifyWorkerCacheInvalidate, syncGamesToKmlViaWorker, isGoogleAuthError, isGoogleQuotaError, getSpreadsheetMetadataCached, batchGetSheetValues, getSheetValuesWithRetry, type SessionMigrationBackup, type KmlSyncGameInput } from "@/utils/googleSheets"
 import { calculateMatchRatings, normalizeRatingPlayerName, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { fetchPublicRatings } from "@/services/publicStatsService"
@@ -19,7 +25,53 @@ const { t, locale } = useI18n()
 /**라우터 가져오기*/
 const router = useRouter()
 const route = useRoute()
+const isEventMode = computed(() => isKnuNpmEventMode(route.path));
+const isEventSandbox = computed(() => isKnuNpmSandboxMode(route.path));
+
+const resolveInitialEventLocale = (): EventLocale => {
+  if (typeof window !== 'undefined') {
+    const qLang = new URLSearchParams(window.location.search || '').get('lang');
+    if (qLang === 'en' || qLang === 'ja' || qLang === 'ko') return qLang;
+    const saved = localStorage.getItem('knu_npm_2026_lang');
+    if (saved === 'en' || saved === 'ja' || saved === 'ko') return saved;
+  }
+  return 'en';
+};
+
+const eventLocale = ref<EventLocale>(resolveInitialEventLocale());
+const isEventScorerVisible = ref(false);
+const isEventSubmitting = ref(false);
+const isEventSubmitted = ref(false);
+
+interface ActiveEventMatch {
+  round: number;
+  table: number;
+  key: string;
+  seatPlayerIds: [number, number, number, number];
+  sandbox: boolean;
+  config: EventScoringConfig;
+}
+const activeEventMatch = ref<ActiveEventMatch | null>(null);
+
+const eventMatchLabel = computed(() => {
+  const m = activeEventMatch.value;
+  if (!m) return '';
+  return m.sandbox ? `[TEST] R${m.round} · T${m.table}` : `R${m.round} · T${m.table}`;
+});
+
+const setEventLocale = (loc: EventLocale) => {
+  eventLocale.value = loc;
+  locale.value = loc;
+  if (typeof document !== 'undefined') {
+    document.documentElement.setAttribute('lang', loc);
+  }
+  try {
+    localStorage.setItem('knu_npm_2026_lang', loc);
+  } catch {}
+};
+
 const isStatsRoute = computed(() => {
+  if (isEventMode.value) return false;
   const path = route.path;
   const locPath = typeof window !== 'undefined' ? window.location.pathname : '';
   return (
@@ -28,10 +80,14 @@ const isStatsRoute = computed(() => {
   );
 });
 
-watch(isStatsRoute, (val) => {
+const shouldUseStatsBodyMode = computed(() => isStatsRoute.value || (isEventMode.value && !isEventScorerVisible.value));
+
+watch([shouldUseStatsBodyMode, isEventMode], ([bodyStats, evMode]) => {
   if (typeof document !== 'undefined') {
-    document.body.classList.toggle('stats-mode', !!val);
-    if (!val) {
+    document.body.classList.toggle('stats-mode', !!bodyStats);
+    if (evMode) {
+      document.title = KNU_NPM_EVENT_TITLE;
+    } else if (!bodyStats) {
       document.title = t('pageTitle');
     }
   }
@@ -660,21 +716,25 @@ watch([() => players.map(p => p.displayScore), () => option.sekiOrder], () => {
 }, { immediate: true, deep: true });
 
 
-// 대국 상태 로컬 스토리지 저장 감시자들
+// 대국 상태 로컬 스토리지 저장 감시자들 (이벤트 모드에서는 전용 프리픽스로 완전 격리)
 watch(players, (newVal) => {
-  localStorage.setItem("mahjong_players", JSON.stringify(newVal));
+  const key = isEventMode.value ? "knu_npm_2026_scorer_players" : "mahjong_players";
+  localStorage.setItem(key, JSON.stringify(newVal));
 }, { deep: true });
 
 watch(panelInfo, (newVal) => {
-  localStorage.setItem("mahjong_panelInfo", JSON.stringify(newVal));
+  const key = isEventMode.value ? "knu_npm_2026_scorer_panelInfo" : "mahjong_panelInfo";
+  localStorage.setItem(key, JSON.stringify(newVal));
 }, { deep: true });
 
 watch(records, (newVal) => {
-  localStorage.setItem("mahjong_records", JSON.stringify(newVal));
+  const key = isEventMode.value ? "knu_npm_2026_scorer_records" : "mahjong_records";
+  localStorage.setItem(key, JSON.stringify(newVal));
 }, { deep: true });
 
 watch(option, (newVal) => {
-  localStorage.setItem("mahjong_option", JSON.stringify(newVal));
+  const key = isEventMode.value ? "knu_npm_2026_scorer_option" : "mahjong_option";
+  localStorage.setItem(key, JSON.stringify(newVal));
 }, { deep: true });
 
 // 구글 스프레드시트 주소 유입 시 강제 ID 정제 감시자
@@ -702,6 +762,24 @@ onMounted(async () => {
   }
 
   await router.isReady();
+
+  // 테마 설정 초기화
+  const savedTheme = localStorage.getItem("theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  if (savedTheme === "dark" || (!savedTheme && prefersDark)) {
+    document.documentElement.classList.add("dark");
+  } else {
+    document.documentElement.classList.remove("dark");
+  }
+
+  // 이벤트 모드(knu-npm.kimk-house.party / /knu-npm-2026)에서는 김케하 OAuth·GAPI·레이팅 초기화를 완전히 생략
+  if (isEventMode.value) {
+    isProcessingOAuthRedirect.value = false;
+    setEventLocale(eventLocale.value);
+    document.title = KNU_NPM_EVENT_TITLE;
+    return;
+  }
+
   changeLocale();
   seatTile.value = secureShuffle(seatTile.value);
 
@@ -714,15 +792,6 @@ onMounted(async () => {
       await loadTodayMembers();
     }
   });
-  
-  // 테마 설정 초기화
-  const savedTheme = localStorage.getItem("theme");
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  if (savedTheme === "dark" || (!savedTheme && prefersDark)) {
-    document.documentElement.classList.add("dark");
-  } else {
-    document.documentElement.classList.remove("dark");
-  }
 
   // 구글 API 및 GIS 초기화 (동일 탭 OAuth 2.0 리디렉션 복귀 콜백을 GAPI 대기 없이 최우선 처리)
   let redirectLoginCompleted = false;
@@ -2573,8 +2642,140 @@ const startGameWithSeats = (assignment: Record<string, string>) => {
   hideModal();
 };
 
+// 이벤트 모드 전용 점수판 실행 / 제출 / 복귀 핸들러
+const launchEventScorer = (payload: {
+  round: number;
+  table: number;
+  seatPlayerIds: [number, number, number, number];
+  config: EventScoringConfig;
+  sandbox: boolean;
+}) => {
+  const { round, table, seatPlayerIds, config, sandbox } = payload;
+  option.startingScore = config.startingScore;
+  option.returnScore = config.returnScore;
+  option.rankUma = [...config.uma];
+  option.sekiOrder = config.tieBreak === 'seat';
+  option.roundMangan = config.roundMangan;
+  option.tobi = config.tobi;
+  option.riichiPayout = config.riichiPayout;
+  option.ratingDisplayMode = 'off';
+
+  seatPlayerIds.forEach((pid, idx) => {
+    const ep = EVENT_PLAYER_MAP[pid];
+    players[idx].name = ep ? ep.compactName : `#${pid}`;
+    delete players[idx].rating;
+  });
+
+  resetAll();
+  hideModal();
+  activeEventMatch.value = {
+    round,
+    table,
+    key: getMatchKey(round, table),
+    seatPlayerIds: [...seatPlayerIds] as [number, number, number, number],
+    sandbox,
+    config,
+  };
+  isEventSubmitted.value = false;
+  isEventScorerVisible.value = true;
+};
+
+const submitEventScorerResult = async () => {
+  const match = activeEventMatch.value;
+  if (!match || isEventSubmitting.value) return;
+  isEventSubmitting.value = true;
+  try {
+    // 1위 잔여 공탁금 처리 (Modal.vue scoreSheetInfo 로직과 동일)
+    const rawScores = players.map((p) => Number(p.displayScore));
+    if (option.riichiPayout && panelInfo.riichi > 0) {
+      const maxScore = Math.max(...rawScores);
+      const topIndices = rawScores
+        .map((s, idx) => ({ s, idx }))
+        .filter((x) => x.s === maxScore)
+        .map((x) => x.idx);
+      if (option.sekiOrder) {
+        rawScores[topIndices[0]] += panelInfo.riichi * 1000;
+      } else {
+        const share = Math.floor(((panelInfo.riichi * 1000) / topIndices.length) / 100) * 100;
+        topIndices.forEach((idx) => {
+          rawScores[idx] += share;
+        });
+      }
+    }
+
+    const entries = match.seatPlayerIds.map((pid, idx) => ({
+      playerId: pid,
+      rawScore: rawScores[idx],
+      penalty: 0,
+      seatIndex: idx,
+    }));
+
+    const roundsSnapshot: CompactRoundRecords = {
+      seatPlayerIds: [...match.seatPlayerIds] as [number, number, number, number],
+      time: [...records.time],
+      score: records.score.map((arr) => [...arr]),
+      riichi: records.riichi.map((arr) => [...arr]),
+      win: records.win.map((arr) => [...arr]),
+      lose: records.lose.map((arr) => [...arr]),
+      tenpai: (records.tenpai || []).map((arr) => [...arr]),
+      cheat: (records.cheat || []).map((arr) => [...arr]),
+      beolbu: (records.beolbu || []).map((arr) => [...arr]),
+      status: [...(records.status || [])],
+      riichiOrder: (records.riichiOrder || []).map((arr) => [...arr]),
+      dealer: [...(records.dealer || [])],
+    };
+
+    await submitTableResult(
+      {
+        round: match.round,
+        table: match.table,
+        source: 'scorer',
+        entries,
+        rounds: roundsSnapshot,
+        submittedBy: 'Live Scorer',
+      },
+      match.sandbox
+    );
+
+    isEventSubmitted.value = true;
+    isGameSaved.value = true;
+    triggerToast(
+      eventLocale.value === 'ja'
+        ? `第${match.round}回戦 · ${match.table}番卓の結果を送信しました！`
+        : eventLocale.value === 'ko'
+          ? `R${match.round} · ${match.table}번탁 결과가 제출되었습니다!`
+          : `Submitted R${match.round} · Table ${match.table} to League!`
+    );
+  } catch (err: any) {
+    triggerToast(err?.message || 'Submission failed', 'error');
+  } finally {
+    isEventSubmitting.value = false;
+  }
+};
+
+const handleBackToEventDashboard = () => {
+  hideModal();
+  isPanelMenuOpen.value = false;
+  isEventScorerVisible.value = false;
+};
+
 // 대국 완전 초기화 후 자리 설정 모달 켜기
 const startNewGame = async (skipConfirm = false) => {
+  if (isEventMode.value && activeEventMatch.value) {
+    const msg =
+      eventLocale.value === 'ja'
+        ? '現在の対局をリセットして東1局からやり直しますか？'
+        : eventLocale.value === 'ko'
+          ? '현재 진행 중인 대국을 초기화하고 동1국부터 다시 시작할까요?'
+          : 'Reset this table game back to East 1?';
+    if (skipConfirm || (await showConfirm(msg))) {
+      resetAll();
+      isEventSubmitted.value = false;
+      hideModal();
+    }
+    return;
+  }
+
   if (isGameFinished.value && !isGameSaved.value) {
     if (!await showConfirm("대국 결과가 아직 기록되지 않았습니다. 정말 새 게임을 시작하시겠습니까?")) {
       return;
@@ -4014,6 +4215,15 @@ const addBackupGameToCurrent = (game: any) => {
     <div class="oauth-redirect-spinner"></div>
     <p class="oauth-redirect-text">구글 계정 인증 처리 중...</p>
   </div>
+  <KnuNpmEventView
+    v-else-if="isEventMode && !isEventScorerVisible"
+    :is-sandbox="isEventSandbox"
+    :event-locale="eventLocale"
+    :active-scorer-key="activeEventMatch && activeEventMatch.sandbox === isEventSandbox ? activeEventMatch.key : null"
+    @change-locale="setEventLocale"
+    @launch-scorer="launchEventScorer"
+    @resume-scorer="isEventScorerVisible = true"
+  />
   <StatsDashboardView 
     v-else-if="isStatsRoute" 
     @go-to-scorer="router.push('/')" 
@@ -4035,6 +4245,7 @@ const addBackupGameToCurrent = (game: any) => {
       :modalInfo
       :animateRank="animateRank"
       :isGameFinished="isGameFinished"
+      :isEventMode="isEventMode"
       @toggle-active-riichi="toggleActiveRiichi"
       @start-show-gap="startShowGap"
       @end-show-gap="endShowGap"
@@ -4044,10 +4255,11 @@ const addBackupGameToCurrent = (game: any) => {
       :panelInfo
       :isMenuOpen="isPanelMenuOpen"
       :isGameFinished="isGameFinished"
+      :eventMatchLabel="isEventMode ? eventMatchLabel : ''"
       @show-modal="showModal"
       @toggle-menu="isPanelMenuOpen = !isPanelMenuOpen"
       @close-menu="isPanelMenuOpen = false"
-      @open-dashboard="router.push('/dashboard')"
+      @open-dashboard="isEventMode ? handleBackToEventDashboard() : router.push('/dashboard')"
     />
   </main>
   <!-- modal 컴포넌트 생성 (자연스러운 페이드인 효과를 위해 Transition 적용) -->
@@ -4076,6 +4288,10 @@ const addBackupGameToCurrent = (game: any) => {
       :showConfirm="showConfirm"
       :currentSessionSheetName="currentSessionSheetName"
       :isSessionClosed="isSessionClosed"
+      :eventMatchLabel="isEventMode ? eventMatchLabel : ''"
+      :eventLocale="eventLocale"
+      :isEventSubmitting="isEventSubmitting"
+      :isEventSubmitted="isEventSubmitted"
       @toggle-close-session="toggleCloseCurrentSession"
       @show-modal="showModal"
       @hide-modal="hideModal"
@@ -4111,6 +4327,9 @@ const addBackupGameToCurrent = (game: any) => {
       @restore-session-backup="handleRestoreSessionBackup"
       @manual-backup-session="handleManualBackupSession"
       @sync-all-ratings="handleSyncAllRatings"
+      @submit-event-result="submitEventScorerResult"
+      @back-to-event-dashboard="handleBackToEventDashboard"
+      @change-event-locale="setEventLocale"
     />
   </Transition>
 

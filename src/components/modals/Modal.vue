@@ -64,7 +64,11 @@ interface Props {
   chartRecords?: any,
   showConfirm: (message: string) => Promise<boolean>,
   currentSessionSheetName?: string,
-  isSessionClosed?: boolean
+  isSessionClosed?: boolean,
+  eventMatchLabel?: string,
+  eventLocale?: 'en' | 'ja' | 'ko',
+  isEventSubmitting?: boolean,
+  isEventSubmitted?: boolean
 }
 const props = defineProps<Props>()
 
@@ -106,6 +110,9 @@ type Emits = {
   (e: 'restore-session-backup', backup: any): void,
   (e: 'manual-backup-session'): void,
   (e: 'sync-all-ratings'): void,
+  (e: 'submit-event-result'): void,
+  (e: 'back-to-event-dashboard'): void,
+  (e: 'change-event-locale', loc: 'en' | 'ja' | 'ko'): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -630,9 +637,13 @@ const getSignColor = (sign: number, x: boolean) => {
       :googleInfo
       :currentSessionSheetName="currentSessionSheetName"
       :isSessionClosed="isSessionClosed"
+      :eventMatchLabel="eventMatchLabel"
+      :eventLocale="eventLocale"
       @show-modal="(type, status) => emit('show-modal', type, status)"
       @start-new-game="emit('start-new-game')"
       @sync-local-to-google="emit('sync-local-to-google')"
+      @back-to-event-dashboard="emit('back-to-event-dashboard')"
+      @change-event-locale="(loc) => emit('change-event-locale', loc)"
     />
   </div>
   <!-- 게임 결과창(표) -->
@@ -642,7 +653,11 @@ const getSignColor = (sign: number, x: boolean) => {
         <table class="resultsheet_table">
           <thead>
             <tr>
-              <th v-for="(labelKey, i) in arr_resultsheet" :key="i">
+              <th
+                v-for="(labelKey, i) in arr_resultsheet"
+                :key="i"
+                v-show="!(eventMatchLabel && labelKey === 'resultSheet.rating')"
+              >
                 {{ t(labelKey) }}
               </th>
             </tr>
@@ -653,7 +668,12 @@ const getSignColor = (sign: number, x: boolean) => {
                 {{ arr_wind[i] }}
               </td>
               <td class="rs-name">
-                {{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" class="rs-ellipsis">…</span>
+                <template v-if="eventMatchLabel">
+                  {{ player.name }}
+                </template>
+                <template v-else>
+                  {{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" class="rs-ellipsis">…</span>
+                </template>
               </td>
               <td class="rs-score">
                 <div class="rs-score-wrap">
@@ -661,7 +681,7 @@ const getSignColor = (sign: number, x: boolean) => {
                   <span class="rs-score-uma">(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span>)</span>
                 </div>
               </td>
-              <td class="rs-rating">
+              <td v-if="!eventMatchLabel" class="rs-rating">
                 <div v-if="resultRatingInfo[i]" class="rs-rating-wrap">
                   <span class="rs-rating-nums">
                     <span class="rs-rating-before" :style="{ color: getRatingColor(resultRatingInfo[i]!.oldOrdinal) }">{{ resultRatingInfo[i]!.oldOrdinal }}</span>
@@ -681,9 +701,33 @@ const getSignColor = (sign: number, x: boolean) => {
         </table>
       </div>
 
+      <!-- 이벤트 모드일 때: 리그 결과+국별스탯 제출 / 리그 페이지 복귀 -->
+      <div v-if="eventMatchLabel" class="result_sheet_actions is-local">
+        <button
+          @click.stop="isEventSubmitting ? null : emit('submit-event-result')"
+          :disabled="isEventSubmitting"
+          class="rs-btn rs-btn-record"
+          :class="isEventSubmitted ? 'saved-button' : 'sync-primary-btn'"
+        >
+          {{
+            isEventSubmitting
+              ? t('menu.submittingEvent')
+              : isEventSubmitted
+                ? t('menu.submittedEvent')
+                : `${t('menu.submitEvent')} (${eventMatchLabel})`
+          }}
+        </button>
+        <button
+          @click.stop="emit('back-to-event-dashboard')"
+          class="rs-btn rs-btn-new btn-new-game-modal"
+        >
+          {{ t('menu.backToLeague') }}
+        </button>
+      </div>
+
       <!-- 구글 연동 모드일 때: 기록 + 동기화 (주), 결과 기록 (보조), 새 게임 시작 -->
       <div
-        v-if="googleInfo.isLoggedIn && googleInfo.syncMode === 'google'"
+        v-else-if="googleInfo.isLoggedIn && googleInfo.syncMode === 'google'"
         class="result_sheet_actions is-google"
       >
         <button 
@@ -755,6 +799,7 @@ const getSignColor = (sign: number, x: boolean) => {
     <ModalRecordList
       :players
       :records
+      :isEventMode="Boolean(eventMatchLabel)"
       @show-modal="(type, status?) => emit('show-modal', type, status)"
       @copy-record="emit('copy-record')"
     />
@@ -823,6 +868,7 @@ const getSignColor = (sign: number, x: boolean) => {
             type="text"
             v-model="players[i].name"
             autocomplete="off"
+            :readonly="Boolean(eventMatchLabel)"
             :placeholder="t('option.name', {idx:i+1})"
             :name="`name${i+1}`"
           >
@@ -916,8 +962,8 @@ const getSignColor = (sign: number, x: boolean) => {
           </span>
         </div>
       </div>
-      <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 -->
-      <div style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
+      <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 (이벤트 모드에서는 숨김) -->
+      <div v-if="!eventMatchLabel" style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
         <!-- 왼쪽: 기존 회차 (1등 초록색) -->
         <button 
           type="button"

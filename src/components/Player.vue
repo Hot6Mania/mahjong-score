@@ -11,6 +11,7 @@ interface Props {
   modalInfo: ModalInfo,
   animateRank: boolean,
   isGameFinished: boolean,
+  isEventMode?: boolean,
 }
 const props = defineProps<Props>()
 
@@ -151,10 +152,15 @@ const handleScoreClick = () => {
       R{{ player.rating }}
     </div>
     <!-- 이름 배지를 score 상단에 직접 배치하여 고정 -->
-    <div class="player_name_badge">
-      <span>{{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
+    <div class="player_name_badge" :class="{ 'event-name-badge': isEventMode }">
+      <template v-if="isEventMode">
+        <span>{{ player.name }}</span>
+      </template>
+      <template v-else>
+        <span>{{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
+      </template>
       <span 
-        v-if="option.ratingDisplayMode === 'side' && player.rating" 
+        v-if="!isEventMode && option.ratingDisplayMode === 'side' && player.rating" 
         class="player_rating_pill" 
         :title="'레이팅(R): ' + player.rating + 'pt'"
         :style="{
@@ -304,6 +310,12 @@ const handleScoreClick = () => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+.player_name_badge.event-name-badge {
+  left: 118px !important;
+  font-size: 10px;
+  padding: 1px 5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 .player_rating_pill {
   font-size: 9px;

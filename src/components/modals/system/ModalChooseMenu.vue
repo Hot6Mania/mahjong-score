@@ -13,7 +13,9 @@ type Props = {
     syncMode: string
   },
   currentSessionSheetName?: string,
-  isSessionClosed?: boolean
+  isSessionClosed?: boolean,
+  eventMatchLabel?: string,
+  eventLocale?: 'en' | 'ja' | 'ko'
 }
 const props = defineProps<Props>()
 
@@ -21,7 +23,9 @@ const props = defineProps<Props>()
 type Emits = {
   (e: 'show-modal', type: string, status?: string): void,
   (e: 'start-new-game'): void,
-  (e: 'sync-local-to-google'): void
+  (e: 'sync-local-to-google'): void,
+  (e: 'back-to-event-dashboard'): void,
+  (e: 'change-event-locale', loc: 'en' | 'ja' | 'ko'): void
 }
 const emit = defineEmits<Emits>()
 
@@ -50,7 +54,42 @@ const handleSyncClick = () => {
 </script>
 
 <template>
-<div class="menu_wrapper">
+<div v-if="eventMatchLabel" class="menu_wrapper">
+  <div class="session_status_bar">
+    <div class="session_badge_left">
+      <span class="session_dot online"></span>
+      <span class="session_name">{{ eventMatchLabel }}</span>
+    </div>
+    <div class="event_lang_inline">
+      <button type="button" :class="{ active: eventLocale === 'en' }" @click.stop="emit('change-event-locale', 'en')">EN</button>
+      <button type="button" :class="{ active: eventLocale === 'ja' }" @click.stop="emit('change-event-locale', 'ja')">JA</button>
+      <button type="button" :class="{ active: eventLocale === 'ko' }" @click.stop="emit('change-event-locale', 'ko')">KO</button>
+    </div>
+  </div>
+
+  <div class="container_choose_menu event_choose_menu">
+    <div @click.stop="emit('show-modal', 'result_sheet')">
+      {{ t('menu.resultSheet') }}
+    </div>
+    <div @click.stop="emit('show-modal', 'show_record')">
+      {{ t('menu.record') }}
+    </div>
+    <div @click.stop="emit('show-modal', 'set_options')">
+      {{ t('menu.option') }}
+    </div>
+    <div @click.stop="toggleTheme()" class="theme_toggle">
+      <span>{{ t('menu.theme') }}</span>
+    </div>
+    <div @click.stop="emit('start-new-game')" style="color: var(--color-negative); font-weight: bold;">
+      {{ t('menu.newGame') }}
+    </div>
+    <div @click.stop="emit('back-to-event-dashboard')" style="color: var(--color-toggle-on); font-weight: bold;">
+      {{ t('menu.backToLeague') }}
+    </div>
+  </div>
+</div>
+
+<div v-else class="menu_wrapper">
   <!-- 상단 현재 회차 연동 정보 및 마감 상태 뱃지 -->
   <div class="session_status_bar">
     <div class="session_badge_left">
@@ -243,5 +282,27 @@ const handleSyncClick = () => {
 }
 .theme_svg {
   flex-shrink: 0;
+}
+.event_lang_inline {
+  display: inline-flex;
+  gap: 3px;
+}
+.event_lang_inline button {
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 800;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-dimmed);
+  cursor: pointer;
+}
+.event_lang_inline button.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+.event_choose_menu {
+  grid-template-rows: repeat(2, 54px);
 }
 </style>

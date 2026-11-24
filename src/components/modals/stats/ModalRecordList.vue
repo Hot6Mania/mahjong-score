@@ -4,7 +4,8 @@ import type { Player, Records } from "@/types/types.d"
 /**props 정의*/
 interface Props {
   players: Player[],
-  records: Records
+  records: Records,
+  isEventMode?: boolean
 }
 defineProps<Props>()
 
@@ -41,7 +42,12 @@ const getSignColor = (sign: number, x: number) => {
     :key="i"
     :class="class_name[i]"
   >
-    {{ players[i].name.length > 5 ? players[i].name.substring(0, 4) : players[i].name }}<span v-if="players[i].name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span>
+    <template v-if="isEventMode">
+      {{ players[i].name }}
+    </template>
+    <template v-else>
+      {{ players[i].name.length > 5 ? players[i].name.substring(0, 4) : players[i].name }}<span v-if="players[i].name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span>
+    </template>
   </div>
   <div class="container_record_scroll">
     <div class="when">

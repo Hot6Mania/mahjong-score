@@ -178,7 +178,23 @@
             gallery: '갤러리'
           };
           var pathname = window.location.pathname || '';
-          if (qState && qState.indexOf('mjoauth_') === 0) {
+          var hostname = (window.location.hostname || '').toLowerCase();
+          var isKnuNpmEvent =
+            hostname === 'knu-npm.kimk-house.party' ||
+            hostname.indexOf('knu-npm.') === 0 ||
+            hostname.indexOf('knu-npm-') === 0 ||
+            pathname === '/knu-npm-2026' ||
+            pathname.indexOf('/knu-npm-2026/') === 0 ||
+            params.get('event') === 'knu-npm-2026';
+
+          if (isKnuNpmEvent) {
+            document.title = '2026 KNU X NPM MAHJONG TEAM LEAGUE';
+            document.documentElement.lang = params.get('lang') || 'en';
+            var descMeta = document.querySelector('meta[name="description"]');
+            if (descMeta) descMeta.setAttribute('content', '2026 KNU X NPM MAHJONG TEAM LEAGUE — Live Scoreboard & Standings');
+            var appTitleMeta = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+            if (appTitleMeta) appTitleMeta.setAttribute('content', 'KNU X NPM 2026');
+          } else if (qState && qState.indexOf('mjoauth_') === 0) {
             document.title = '구글 인증 처리 중... | 김케이 하우스';
           } else if (qPlayer) {
             var sessLabel = qSession ? (/^\d+$/.test(qSession) ? '제' + qSession + '회' : qSession) : '';

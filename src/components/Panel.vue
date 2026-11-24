@@ -10,7 +10,8 @@ const { t } = useI18n()
 interface Props {
   panelInfo: PanelInfo,
   isMenuOpen: boolean,
-  isGameFinished?: boolean
+  isGameFinished?: boolean,
+  eventMatchLabel?: string
 }
 defineProps<Props>()
 
@@ -78,18 +79,40 @@ const emit = defineEmits<Emits>()
 <div id="Menu" @click="emit('show-modal', 'choose_menu_kind')">
   <Graphics kind="gear"/>
 </div>
+<!-- 이벤트 대국 진행 중 상단 배지 -->
+<div v-if="eventMatchLabel" id="EventMatchPill" @click="emit('open-dashboard')">
+  <span>{{ eventMatchLabel }}</span>
+</div>
 <!-- 대시보드 바로가기 버튼 (우상단) -->
-<button id="DashboardQuick" @click="emit('open-dashboard')" title="통계 대시보드">
+<button id="DashboardQuick" @click="emit('open-dashboard')" :title="t('menu.dashboard')">
   <svg class="dashboard-icon-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
     <line x1="18" y1="20" x2="18" y2="10"></line>
     <line x1="12" y1="20" x2="12" y2="4"></line>
     <line x1="6" y1="20" x2="6" y2="14"></line>
   </svg>
-  <span class="dashboard-quick-label">대시보드</span>
+  <span class="dashboard-quick-label">{{ t('menu.dashboard') }}</span>
 </button>
 </template>
 
 <style scoped>
+/* 이벤트 대국 진행 중 배지 */
+#EventMatchPill {
+  position: fixed;
+  top: 10px;
+  left: 52px;
+  z-index: 10;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #fff;
+  background: #2563eb;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
 /* 대시보드 바로가기 버튼 (우상단) */
 #DashboardQuick {
   position: fixed;

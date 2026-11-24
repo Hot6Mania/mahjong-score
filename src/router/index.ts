@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import App from '@/App.vue'
+import { isKnuNpmEventHost, isKnuNpmEventPath } from '@/utils/eventMode'
 
 const routes = [
   {
@@ -17,6 +18,21 @@ const routes = [
     redirect: '/dashboard',
   },
   {
+    path: '/knu-npm-2026/test',
+    name: 'knu-npm-event-test',
+    component: App,
+  },
+  {
+    path: '/knu-npm-2026/:tab?',
+    name: 'knu-npm-event',
+    component: App,
+  },
+  {
+    path: '/test',
+    name: 'event-host-test',
+    component: App,
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/'
   },
@@ -31,8 +47,13 @@ router.beforeEach((to, _from, next) => {
   // Canonical 태그 동적 업데이트
   const origin = window.location.origin;
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-  const isDashboard = to.path === '/dashboard' || to.path === '/stats';
-  const canonicalUrl = isDashboard ? `${origin}${base}/dashboard` : `${origin}${base}/`;
+  const isEvent = isKnuNpmEventHost() || isKnuNpmEventPath(to.path);
+  const isDashboard = !isEvent && (to.path === '/dashboard' || to.path === '/stats');
+  const canonicalUrl = isEvent
+    ? `${origin}${base}${to.path === '/' ? '/' : to.path}`
+    : isDashboard
+      ? `${origin}${base}/dashboard`
+      : `${origin}${base}/`;
   let link: HTMLLinkElement | null = document.querySelector("link[rel='canonical']");
   
   if (link) {

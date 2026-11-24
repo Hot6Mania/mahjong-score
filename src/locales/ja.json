@@ -1,0 +1,97 @@
+{
+    "pageTitle" : "2026 KNU X NPM MAHJONG TEAM LEAGUE",
+    "panel" : {
+        "win" : "和了",
+        "draw" : "流局",
+        "cheat" : "チョンボ",
+        "beolbu" : "罰符",
+        "nagashi" : "流し満貫"
+    },
+    "comments" : {
+        "checkPlayerWin" : "和了したプレイヤーを選択してください。",
+        "checkPlayerLose" : "放銃したプレイヤーを選択してください。",
+        "chooseScore" : "{name}の点数を入力してください。",
+        "checkPlayerFao" : "パオ(責任払い)の対象者を選択してください。",
+        "chooseScoreFao" : "パオの点数を入力してください。",
+        "checkPlayerTenpai" : "聴牌したプレイヤーを選択してください。",
+        "checkPlayerNagashi" : "流し満貫のプレイヤーを選択してください。",
+        "checkPlayerCheat" : "チョンボしたプレイヤーを選択してください。",
+        "checkPlayerBeolbu" : "罰符の対象者を選択してください。",
+        "rollbackRecord" : "{time}に戻しますか？",
+        "copyRecord" : "対局記録をコピーしました。",
+        "copyRoomCode" : "ルームコードをコピーしました。"
+    },
+    "score" : {
+        "fan" : "翻",
+        "bu" : "符",
+        "yakuman" : "役満",
+        "multipleYakuman" : "{num}倍役満",
+        "fao" : "パオ"
+    },
+    "drawKind" : {
+        "normalDraw" : "通常流局",
+        "specialDraw" : "途中流局"
+    },
+    "menu" : {
+        "resultSheet" : "対局結果",
+        "record" : "点数記録",
+        "option" : "設定",
+        "sync" : "同期",
+        "theme" : "テーマ",
+        "dashboard" : "リーグ",
+        "newGame" : "リセット",
+        "totalUma" : "総合ウマ",
+        "stats" : "スタッツ",
+        "language" : "言語",
+        "submitEvent" : "リーグへ送信",
+        "submittingEvent" : "送信中...",
+        "submittedEvent" : "送信完了 ✓",
+        "backToLeague" : "リーグへ戻る"
+    },
+    "resultSheet" : {
+        "wind" : "席",
+        "name" : "名前",
+        "score" : "点数",
+        "rating" : "レート",
+        "riichi" : "立直",
+        "win" : "和了",
+        "ron" : "ロン",
+        "tsumo" : "ツモ",
+        "lose" : "放銃"
+    },
+    "record" : {
+        "copy" : "コピー"
+    },
+    "option" : {
+        "east" : "東",
+        "south" : "南",
+        "west" : "西",
+        "north" : "北",
+        "name" : "名前 {idx}",
+        "startingScore" : "持ち点",
+        "returnScore" : "返し点",
+        "roundMangan" : "切り上げ満貫",
+        "alwaysShowRank" : "順位常時表示",
+        "sekiOrder" : "同点時席順",
+        "tobi" : "トビ終了",
+        "rankUma" : "順位ウマ",
+        "rank" : "{idx}位",
+        "cheatScore" : "チョンボ罰",
+        "mangan" : "満貫",
+        "riichiPayout" : "供託処理",
+        "firstPlace" : "トップ取り",
+        "powerSaving" : "省電力モード",
+        "ratingDisplay" : "レート表示",
+        "ratingDisplaySide" : "名前の横",
+        "ratingDisplayTop" : "名前の上",
+        "ratingDisplayOff" : "非表示"
+    },
+    "sync" : {
+        "online" : "オンライン",
+        "offline" : "オフライン",
+        "create" : "作成",
+        "join" : "参加",
+        "copy" : "コピー",
+        "roomCode" : "ルームコード"
+    }
+}

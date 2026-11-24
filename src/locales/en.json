@@ -1,0 +1,97 @@
+{
+    "pageTitle" : "2026 KNU X NPM MAHJONG TEAM LEAGUE",
+    "panel" : {
+        "win" : "Win",
+        "draw" : "Draw",
+        "cheat" : "Chombo",
+        "beolbu" : "Penalty",
+        "nagashi" : "Nagashi"
+    },
+    "comments" : {
+        "checkPlayerWin" : "Select the winning player(s).",
+        "checkPlayerLose" : "Select the player who dealt in (Ron).",
+        "chooseScore" : "Enter hand score for {name}.",
+        "checkPlayerFao" : "Select the Pao (liability) player.",
+        "chooseScoreFao" : "Enter Pao (liability) hand value.",
+        "checkPlayerTenpai" : "Select tenpai player(s).",
+        "checkPlayerNagashi" : "Select Nagashi Mangan player(s).",
+        "checkPlayerCheat" : "Select the player who committed Chombo.",
+        "checkPlayerBeolbu" : "Select the player receiving a penalty.",
+        "rollbackRecord" : "Roll back to {time}?",
+        "copyRecord" : "Game log copied to clipboard.",
+        "copyRoomCode" : "Room code copied to clipboard."
+    },
+    "score" : {
+        "fan" : "Han",
+        "bu" : "Fu",
+        "yakuman" : "Yakuman",
+        "multipleYakuman" : "{num}x Yakuman",
+        "fao" : "Pao"
+    },
+    "drawKind" : {
+        "normalDraw" : "Exhaustive Draw",
+        "specialDraw" : "Abortive Draw"
+    },
+    "menu" : {
+        "resultSheet" : "Result",
+        "record" : "Score Log",
+        "option" : "Settings",
+        "sync" : "Sync",
+        "theme" : "Theme",
+        "dashboard" : "League",
+        "newGame" : "Reset Game",
+        "totalUma" : "Total Uma",
+        "stats" : "Stats",
+        "language" : "Language",
+        "submitEvent" : "Submit to League",
+        "submittingEvent" : "Submitting...",
+        "submittedEvent" : "Submitted ✓",
+        "backToLeague" : "Back to League"
+    },
+    "resultSheet" : {
+        "wind" : "Seat",
+        "name" : "Player",
+        "score" : "Score",
+        "rating" : "Rating",
+        "riichi" : "Riichi",
+        "win" : "Win",
+        "ron" : "Ron",
+        "tsumo" : "Tsumo",
+        "lose" : "Deal-in"
+    },
+    "record" : {
+        "copy" : "Copy"
+    },
+    "option" : {
+        "east" : "East",
+        "south" : "South",
+        "west" : "West",
+        "north" : "North",
+        "name" : "Player {idx}",
+        "startingScore" : "Start Score",
+        "returnScore" : "Return Score",
+        "roundMangan" : "Kiriage Mangan",
+        "alwaysShowRank" : "Always Show Rank",
+        "sekiOrder" : "Seat Tie-break",
+        "tobi" : "Bust (Tobi)",
+        "rankUma" : "Rank Uma",
+        "rank" : "#{idx}",
+        "cheatScore" : "Chombo Rule",
+        "mangan" : "Mangan",
+        "riichiPayout" : "Leftover Riichi",
+        "firstPlace" : "1st Place",
+        "powerSaving" : "Power Saving",
+        "ratingDisplay" : "Rating Display",
+        "ratingDisplaySide" : "Side",
+        "ratingDisplayTop" : "Top",
+        "ratingDisplayOff" : "Off"
+    },
+    "sync" : {
+        "online" : "Online",
+        "offline" : "Offline",
+        "create" : "Create",
+        "join" : "Join",
+        "copy" : "Copy",
+        "roomCode" : "Room Code"
+    }
+}

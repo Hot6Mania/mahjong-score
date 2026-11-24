@@ -114,7 +114,8 @@ body {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 body.stats-mode,
-body:has(.stats-dashboard-container) {
+body:has(.stats-dashboard-container),
+body:has(.knu-event-page) {
   min-height: 100vh !important;
   height: auto !important;
 }
