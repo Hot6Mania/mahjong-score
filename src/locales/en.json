@@ -87,6 +87,7 @@
         "ratingDisplay" : "Rating Display",
         "pointDisplay" : "Point Display",
         "showTimer" : "Show Timer",
+        "earlyFinish" : "Finish Match Early",
         "ratingDisplaySide" : "Side",
         "ratingDisplayTop" : "Top",
         "ratingDisplayOff" : "Off"

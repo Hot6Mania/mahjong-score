@@ -71,8 +71,8 @@ const checkFao = () => {
 
 <template>
 <!-- 부/판 선택창 -->
-<div v-if="actionType==='fanbu'">
-  <div>
+<div v-if="actionType==='fanbu'" class="score_select_root">
+  <div class="score_select_guide">
     {{ t('comments.chooseScore', {name: players[scoringState.whoWin].name}) }}
   </div>
   <div class="container_check_fanbu">
@@ -133,8 +133,8 @@ const checkFao = () => {
   </div>
 </div>
 <!-- 책임지불 점수 선택창 -->
-<div v-else-if="actionType==='fao'">
-  <div>
+<div v-else-if="actionType==='fao'" class="score_select_root">
+  <div class="score_select_guide">
     {{ t('comments.chooseScoreFao') }}
   </div>
   <div class="container_choose_fao_score">
@@ -153,16 +153,33 @@ const checkFao = () => {
 </template>
 
 <style scoped>
+.score_select_root {
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 6px;
+}
+.score_select_guide {
+  font-size: clamp(14px, 3.8vmin, 19px);
+  font-weight: 700;
+  line-height: 1.3;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  padding: 2px 6px 6px;
+  box-sizing: border-box;
+}
 /* 부/판 선택창 */
 .container_check_fanbu{
   display: grid;
   grid-template-rows: repeat(2, auto);
-  grid-template-columns: 70px auto;
+  grid-template-columns: minmax(48px, auto) auto;
   grid-template-areas:
   'fan fan_check'
   'bu bu_check';
   text-align: center;
-  font-size: 30px;
+  font-size: clamp(22px, 5.8vmin, 30px);
+  gap: 2px 6px;
 }
 .fan{
   grid-area: fan;

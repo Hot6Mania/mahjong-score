@@ -468,17 +468,17 @@ const emit = defineEmits<Emits>()
   padding: 0 6px;
   overflow: hidden;
   line-height: 1.1;
-  font-size: clamp(22px, 7.2cqi, 40px);
+  font-size: clamp(16px, 5.2cqi, 30px);
 }
 :global(html[lang="ko"]) .menu_layout.event-menu-layout .btn_action {
-  font-size: clamp(26px, 8.4cqi, 46px);
+  font-size: clamp(24px, 7.6cqi, 42px);
 }
 .menu_layout.event-menu-layout .btn_action.win,
 .menu_layout.event-menu-layout .btn_action.draw {
-  flex: 1.14;
+  flex: 1;
 }
 .menu_layout.event-menu-layout .btn_action.cheat {
-  flex: 0.98;
+  flex: 1.08;
 }
 
 .menu_separator {

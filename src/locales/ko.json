@@ -87,6 +87,7 @@
         "ratingDisplay" : "레이팅 표기",
         "pointDisplay" : "포인트 표기",
         "showTimer" : "남은시간 표기",
+        "earlyFinish" : "경기 조기 종료",
         "ratingDisplaySide" : "이름 옆",
         "ratingDisplayTop" : "이름 위",
         "ratingDisplayOff" : "표기 안함"

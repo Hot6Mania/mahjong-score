@@ -118,6 +118,7 @@ type Emits = {
   (e: 'back-to-event-dashboard'): void,
   (e: 'change-event-locale', loc: 'en' | 'ja' | 'ko'): void,
   (e: 'cloud-save-event'): void,
+  (e: 'finish-event-early'): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -1008,6 +1009,16 @@ const getSignColor = (sign: number, x: boolean) => {
           </span>
         </div>
       </div>
+      <!-- KNU-NPM 이벤트 전용: 경기 조기 종료 버튼 -->
+      <div v-if="eventMatchLabel" class="event_option_footer">
+        <button
+          type="button"
+          class="btn_event_early_finish"
+          @click.stop="emit('finish-event-early')"
+        >
+          🏁 {{ t('option.earlyFinish') }}
+        </button>
+      </div>
       <!-- 기존 회차 이어하기 및 신규 회차 시작 수평 단축 영역 (이벤트 모드에서는 숨김) -->
       <div v-if="!eventMatchLabel" style="width: calc(100% - 10px); display: flex; gap: 8px; margin-top: 10px; margin-bottom: 5px; box-sizing: border-box; align-items: center; justify-content: space-between;">
         <!-- 왼쪽: 기존 회차 (1등 초록색) -->
@@ -1364,6 +1375,26 @@ const getSignColor = (sign: number, x: boolean) => {
     max-height: 70vw !important;
     font-size: 16px !important;
   }
+}
+.event_option_footer {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+.btn_event_early_finish {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 9px;
+  border: 1.5px solid rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.14);
+  color: var(--color-negative, #dc2626);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.btn_event_early_finish:hover {
+  background: rgba(239, 68, 68, 0.24);
 }
 
 /* 게임 결과창(표) — 화면 비율을 넉넉하게 채워 가시성 극대화 */

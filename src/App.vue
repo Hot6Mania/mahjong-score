@@ -233,6 +233,23 @@ const finishEventMatchManually = () => {
   showModal('result_sheet');
 };
 
+const handleFinishEventEarly = async () => {
+  if (!isEventMode.value || !activeEventMatch.value) return;
+  if (isGameFinished.value) {
+    showModal('result_sheet');
+    return;
+  }
+  const msg =
+    eventLocale.value === 'ja'
+      ? '現在の持ち点で対局を途中終了し、結果画面へ移動しますか？'
+      : eventLocale.value === 'ko'
+        ? '현재 점수로 경기를 조기 종료하고 결과 기록창으로 이동할까요?'
+        : 'Finish this match early with the current scores and open the Result Sheet?';
+  if (await showConfirm(msg)) {
+    finishEventMatchManually();
+  }
+};
+
 let eventTimerTickInterval: ReturnType<typeof setInterval> | null = null;
 let eventTimerSyncInterval: ReturnType<typeof setInterval> | null = null;
 let unsubscribeEventTimerBroadcast: (() => void) | null = null;
@@ -5079,6 +5096,7 @@ const addBackupGameToCurrent = (game: any) => {
       @back-to-event-dashboard="handleBackToEventDashboard"
       @change-event-locale="setEventLocale"
       @cloud-save-event="syncEventLiveCheckpoint(true)"
+      @finish-event-early="handleFinishEventEarly"
     />
   </Transition>
 

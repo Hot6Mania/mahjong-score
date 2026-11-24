@@ -942,8 +942,11 @@ const lastSyncText = computed(() => {
 .lm-timer-pill {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
+  min-width: 220px;
   padding: 5px 14px;
+  box-sizing: border-box;
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.9);
   border: 1.5px solid rgba(16, 185, 129, 0.55);
@@ -960,7 +963,11 @@ const lastSyncText = computed(() => {
   background: rgba(220, 38, 38, 0.35);
   border-color: rgba(248, 113, 113, 0.85);
   color: #fee2e2;
-  animation: lmPulse 1.1s ease-in-out infinite;
+  animation: lmTimerGlow 1.6s ease-in-out infinite;
+}
+@keyframes lmTimerGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.2); }
+  50% { box-shadow: 0 0 12px 2px rgba(239, 68, 68, 0.55); }
 }
 .lm-timer-pill.paused {
   opacity: 0.75;
