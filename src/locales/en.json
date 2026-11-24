@@ -53,6 +53,7 @@
         "name" : "Player",
         "score" : "Score",
         "rating" : "Rating",
+        "totalPt" : "Total Pt",
         "riichi" : "Riichi",
         "win" : "Win",
         "ron" : "Ron",

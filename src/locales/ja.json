@@ -53,6 +53,7 @@
         "name" : "名前",
         "score" : "点数",
         "rating" : "レート",
+        "totalPt" : "累計Pt",
         "riichi" : "立直",
         "win" : "和了",
         "ron" : "ロン",

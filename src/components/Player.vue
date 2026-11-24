@@ -12,6 +12,8 @@ interface Props {
   animateRank: boolean,
   isGameFinished: boolean,
   isEventMode?: boolean,
+  eventTotalPoints?: number | null,
+  eventChomboPenaltyPt?: number,
 }
 const props = defineProps<Props>()
 
@@ -155,6 +157,21 @@ const handleScoreClick = () => {
     <div class="player_name_badge" :class="{ 'event-name-badge': isEventMode }">
       <template v-if="isEventMode">
         <span>{{ player.name }}</span>
+        <span
+          v-if="eventTotalPoints !== undefined && eventTotalPoints !== null"
+          class="player_event_pt_pill"
+          :class="eventTotalPoints > 0 ? 'is-pos' : eventTotalPoints < 0 ? 'is-neg' : 'is-zero'"
+          :title="`Total Pt: ${eventTotalPoints > 0 ? '+' : ''}${eventTotalPoints.toFixed(1)}pt`"
+        >
+          {{ eventTotalPoints > 0 ? '+' : '' }}{{ eventTotalPoints.toFixed(1) }}pt
+        </span>
+        <span
+          v-if="eventChomboPenaltyPt && eventChomboPenaltyPt < 0"
+          class="player_event_chombo_pill"
+          title="Chombo Penalty"
+        >
+          {{ eventChomboPenaltyPt }}
+        </span>
       </template>
       <template v-else>
         <span>{{ player.name.length > 5 ? player.name.substring(0, 4) : player.name }}<span v-if="player.name.length > 5" style="vertical-align: bottom; line-height: 0.8; display: inline-block; transform: translateY(0.1em);">…</span></span>
@@ -317,6 +334,47 @@ const handleScoreClick = () => {
   font-size: 10.5px;
   padding: 1px 5px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.player_event_pt_pill {
+  font-size: 9.5px;
+  font-weight: 800;
+  padding: 0.5px 4px;
+  border-radius: 3px;
+  letter-spacing: -0.2px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.player_event_pt_pill.is-pos {
+  color: #16a34a;
+  background-color: rgba(22, 163, 74, 0.14);
+  border: 1px solid rgba(22, 163, 74, 0.35);
+}
+.player_event_pt_pill.is-neg {
+  color: #dc2626;
+  background-color: rgba(220, 38, 38, 0.14);
+  border: 1px solid rgba(220, 38, 38, 0.35);
+}
+.player_event_pt_pill.is-zero {
+  color: var(--text-dimmed);
+  background-color: rgba(148, 163, 184, 0.15);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+:global(.dark) .player_event_pt_pill.is-pos {
+  color: #4ade80;
+  background-color: rgba(74, 222, 128, 0.16);
+}
+:global(.dark) .player_event_pt_pill.is-neg {
+  color: #f87171;
+  background-color: rgba(248, 113, 113, 0.16);
+}
+.player_event_chombo_pill {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 0.5px 3px;
+  border-radius: 3px;
+  color: #fff;
+  background-color: #dc2626;
+  line-height: 1.1;
 }
 .player_rating_pill {
   font-size: 9px;

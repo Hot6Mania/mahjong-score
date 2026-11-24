@@ -68,7 +68,9 @@ interface Props {
   eventMatchLabel?: string,
   eventLocale?: 'en' | 'ja' | 'ko',
   isEventSubmitting?: boolean,
-  isEventSubmitted?: boolean
+  isEventSubmitted?: boolean,
+  eventPriorPoints?: number[],
+  eventChomboPenalty?: number
 }
 const props = defineProps<Props>()
 
@@ -222,7 +224,14 @@ const scoreSheetInfo = computed(() => {
         myScore+=Math.floor(((props.panelInfo.riichi*1000)/cnt)/100)*100;
     }
     uma/=cnt; // 동점자 수만큼 우마 나누기
-    point=(myScore-props.option.returnScore)/1000+uma;
+    let chomboCount = 0;
+    if (props.eventMatchLabel && Array.isArray(props.records.cheat)) {
+      for (let i = 1; i < props.records.cheat.length; i++) {
+        if (props.records.cheat[i]?.[idx] === true) chomboCount++;
+      }
+    }
+    const chomboPen = props.eventMatchLabel ? chomboCount * Math.abs(props.eventChomboPenalty ?? 20) : 0;
+    point=(myScore-props.option.returnScore)/1000+uma-chomboPen;
     let cntRiichi=0, cntRon=0, cntTsumo=0, cntLose=0;
     for (let i=0;i<props.records.riichi.length;i++){
       if (props.records.riichi[i][idx]===true)
@@ -245,10 +254,15 @@ const scoreSheetInfo = computed(() => {
       if (props.records.lose[i][idx]===true)
         cntLose++;
     }
+    const priorPt = props.eventMatchLabel ? Number(props.eventPriorPoints?.[idx] ?? 0) : 0;
+    const afterPt = Number((priorPt + point).toFixed(1));
     return {
       rank,
       score: myScore,
       point: point.toFixed(1),
+      chomboPen,
+      priorPt,
+      afterPt,
       cntRiichi,
       cntRon,
       cntTsumo,
@@ -656,9 +670,8 @@ const getSignColor = (sign: number, x: boolean) => {
               <th
                 v-for="(labelKey, i) in arr_resultsheet"
                 :key="i"
-                v-show="!(eventMatchLabel && labelKey === 'resultSheet.rating')"
               >
-                {{ t(labelKey) }}
+                {{ eventMatchLabel && labelKey === 'resultSheet.rating' ? t('resultSheet.totalPt') : t(labelKey) }}
               </th>
             </tr>
           </thead>
@@ -678,10 +691,19 @@ const getSignColor = (sign: number, x: boolean) => {
               <td class="rs-score">
                 <div class="rs-score-wrap">
                   <span class="rs-score-val">{{ scoreSheetInfo[i].score }}</span>
-                  <span class="rs-score-uma">(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span>)</span>
+                  <span class="rs-score-uma">(<span :style="getSignColor(Number(scoreSheetInfo[i].point), false)"><span v-show="Number(scoreSheetInfo[i].point)>0">+</span>{{ scoreSheetInfo[i].point }}</span><span v-if="scoreSheetInfo[i].chomboPen > 0" style="color: var(--color-negative); font-weight: 800; margin-left: 2px;">*</span>)</span>
                 </div>
               </td>
-              <td v-if="!eventMatchLabel" class="rs-rating">
+              <td v-if="eventMatchLabel" class="rs-rating">
+                <div class="rs-rating-wrap">
+                  <span class="rs-rating-nums">
+                    <span class="rs-rating-before" :style="getSignColor(scoreSheetInfo[i].priorPt, false)">{{ scoreSheetInfo[i].priorPt > 0 ? '+' : '' }}{{ scoreSheetInfo[i].priorPt.toFixed(1) }}</span>
+                    <span class="rs-rating-arrow">→</span>
+                    <span class="rs-rating-after" :style="getSignColor(scoreSheetInfo[i].afterPt, false)">{{ scoreSheetInfo[i].afterPt > 0 ? '+' : '' }}{{ scoreSheetInfo[i].afterPt.toFixed(1) }}</span>
+                  </span>
+                </div>
+              </td>
+              <td v-else class="rs-rating">
                 <div v-if="resultRatingInfo[i]" class="rs-rating-wrap">
                   <span class="rs-rating-nums">
                     <span class="rs-rating-before" :style="{ color: getRatingColor(resultRatingInfo[i]!.oldOrdinal) }">{{ resultRatingInfo[i]!.oldOrdinal }}</span>
@@ -918,9 +940,12 @@ const getSignColor = (sign: number, x: boolean) => {
             :style="{ marginRight: i===option.rankUma.length-1 ? '0px' : '10px' }"
           >
         </div>  
-        <div style="grid-area: option5;" @click.stop="emit('set-toggle-button', 'cheatscore')">
+        <div style="grid-area: option5;" @click.stop="eventMatchLabel ? null : emit('set-toggle-button', 'cheatscore')">
           {{ t('option.cheatScore') }}<br>
-          <span :style="toggleButtonStyle('cheatscore')">
+          <span v-if="eventMatchLabel" style="color: var(--color-negative); font-weight: bold;">
+            -{{ eventChomboPenalty ?? 20 }}pt
+          </span>
+          <span v-else :style="toggleButtonStyle('cheatscore')">
             <span v-show="option.cheatScore===true">{{ t('option.mangan') }}</span>
             <span v-show="option.cheatScore===false">3000 All</span>
           </span>

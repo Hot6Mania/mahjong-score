@@ -86,6 +86,7 @@ const emit = defineEmits<{
       seatPlayerIds: [number, number, number, number];
       config: EventScoringConfig;
       sandbox: boolean;
+      priorPoints: [number, number, number, number];
     }
   ): void;
   (e: 'resume-scorer'): void;
@@ -455,14 +456,25 @@ const openScoreModal = (slot: EventMatchSlot) => {
 
 const handleLaunchScorer = (seatPlayerIds: [number, number, number, number]) => {
   if (!seatPickerSlot.value) return;
-  const { round, table } = seatPickerSlot.value;
+  const { round, table, key } = seatPickerSlot.value;
   seatPickerSlot.value = null;
+
+  // 현재 매치(key) 이전까지의 각 선수 누적 포인트 계산 (재기록 시 중복 합산 방지)
+  const existingMatch = standings.value.calculatedMatches[key];
+  const priorPoints = seatPlayerIds.map((pid) => {
+    const ps = standings.value.players.find((p) => p.player.id === pid);
+    const curTotal = ps ? ps.totalPoints : 0;
+    const prevEntry = existingMatch?.entries.find((e) => e.playerId === pid);
+    return prevEntry ? Number((curTotal - prevEntry.finalPoint).toFixed(1)) : curTotal;
+  }) as [number, number, number, number];
+
   emit('launch-scorer', {
     round,
     table,
     seatPlayerIds,
     config: state.value.config,
     sandbox: props.isSandbox,
+    priorPoints,
   });
 };
 
@@ -1014,6 +1026,10 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <th>{{ tr('statAvgDealInScore') }}</th>
                   <th>{{ tr('statTsumoRate') }}</th>
                   <th>{{ tr('statDrawTenpaiRate') }}</th>
+                  <th>{{ tr('statYakitoriRate') }}</th>
+                  <th>{{ tr('statWinEfficiency') }}</th>
+                  <th>{{ tr('statDealInLoss') }}</th>
+                  <th>{{ tr('statNetWinEfficiency') }}</th>
                   <th class="sortable" @click="toggleStatsSort('roundSuji')">{{ tr('statRoundSuji') }}</th>
                 </tr>
               </thead>
@@ -1072,6 +1088,19 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <td class="num">{{ ps.detailed.avgDealInScore !== null ? ps.detailed.avgDealInScore.toLocaleString() : '-' }}</td>
                   <td class="num">{{ fmtPct(ps.detailed.tsumoRate) }}</td>
                   <td class="num">{{ fmtPct(ps.detailed.drawTenpaiRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.yakitoriRate) }}</td>
+                  <td class="num pos">{{ ps.detailed.winEfficiency !== null ? `+${ps.detailed.winEfficiency.toLocaleString()}` : '-' }}</td>
+                  <td class="num neg">{{ ps.detailed.dealInLoss !== null ? `-${ps.detailed.dealInLoss.toLocaleString()}` : '-' }}</td>
+                  <td
+                    class="num"
+                    :class="(ps.detailed.netWinEfficiency ?? 0) > 0 ? 'pos' : (ps.detailed.netWinEfficiency ?? 0) < 0 ? 'neg' : ''"
+                  >
+                    {{
+                      ps.detailed.netWinEfficiency !== null
+                        ? `${ps.detailed.netWinEfficiency > 0 ? '+' : ''}${ps.detailed.netWinEfficiency.toLocaleString()}`
+                        : '-'
+                    }}
+                  </td>
                   <td
                     class="num"
                     :class="(ps.detailed.roundSuji ?? 0) > 0 ? 'pos' : (ps.detailed.roundSuji ?? 0) < 0 ? 'neg' : ''"
@@ -1467,9 +1496,11 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
     <EventPlayerModal
       v-if="selectedPlayerStanding"
       :standing="selectedPlayerStanding"
+      :all-players="standings.players"
       :tr="tr"
       @close="selectedPlayerId = null"
       @open-match-log="(key) => (matchLogKey = key)"
+      @select-player="(id) => (selectedPlayerId = id)"
     />
 
     <EventMatchDetailModal

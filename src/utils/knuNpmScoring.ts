@@ -94,7 +94,9 @@ export interface DetailedRoundStats {
   trackedGames: number;
   trackedRounds: number;
   trackedTotalPoints: number;
+  trackedAvgPoint: number;
   trackedAvgRank: number;
+  trackedTop2Rate: number;
   trackedRankCounts: [number, number, number, number];
   winCount: number;
   ronCount: number;
@@ -106,11 +108,14 @@ export interface DetailedRoundStats {
   riichiDrawCount: number;
   firstRiichiCount: number;
   chaseRiichiCount: number;
+  chaseRiichiWinCount: number;
   chasedRiichiCount: number;
   drawCount: number;
   drawTenpaiCount: number;
   oyaKaburiCount: number;
-  dealInVsRiichiCount: number;
+  dealInWhileRiichiCount: number;
+  yakitoriCount: number;
+  tobiCount: number;
   cheatCount: number;
   beolbuCount: number;
   winRate: number | null; // %
@@ -118,8 +123,13 @@ export interface DetailedRoundStats {
   tsumoRate: number | null; // % of wins
   drawRate: number | null; // %
   drawTenpaiRate: number | null; // % of draws
+  tobiRate: number | null; // % of games
+  yakitoriRate: number | null; // % of tracked games
   avgWinScore: number | null;
   avgDealInScore: number | null;
+  winEfficiency: number | null;
+  dealInLoss: number | null;
+  netWinEfficiency: number | null;
   roundSuji: number | null;
   riichiRate: number | null; // %
   riichiWinRate: number | null; // %
@@ -127,13 +137,14 @@ export interface DetailedRoundStats {
   riichiDrawRate: number | null; // %
   firstRiichiRate: number | null; // % of riichis
   chaseRiichiRate: number | null; // % of riichis
+  chaseRiichiWinRate: number | null; // % of chase riichis
   chasedRiichiRate: number | null; // % of first riichis
   riichiIncome: number | null;
   riichiExpense: number | null;
   riichiSuji: number | null;
   oyaKaburiRate: number | null; // %
   oyaKaburiAvg: number | null;
-  dealInVsRiichiRate: number | null; // %
+  dealInRiichiRate: number | null; // % of deal-ins while in riichi
 }
 
 export interface PlayerRoundPerformance {
@@ -161,6 +172,7 @@ export interface PlayerStanding {
   topRate: number; // %
   top2Rate: number; // %
   lastAvoidRate: number; // %
+  tobiRate: number; // % overall (<0 rawScore)
   bestScore: number | null;
   worstScore: number | null;
   avgRawScore: number | null;
@@ -194,6 +206,35 @@ export interface LeagueStandingsSummary {
   teams: TeamStanding[];
   players: PlayerStanding[];
   calculatedMatches: Record<string, TableCalculationResult>;
+}
+
+export interface EventHistogramBar {
+  playerId: number;
+  playerName: string;
+  teamId: TeamId;
+  value: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  isCurrent: boolean;
+}
+
+export interface EventMetricDistribution {
+  metricName: string;
+  unit: string;
+  currentValue: number | null;
+  min: number;
+  max: number;
+  avg: number;
+  rank: number;
+  totalCount: number;
+  topPct: number;
+  isUpperHalf: boolean;
+  isUnrecorded: boolean;
+  line30X: number;
+  line70X: number;
+  bars: EventHistogramBar[];
 }
 
 export function round1(val: number): number {
@@ -300,7 +341,6 @@ export function calculateTableScoring(
 
 /**
  * 김케이 하우스 대시보드와 동일한 괄호 듀얼 표기 헬퍼
- * - overallVal과 trackedVal이 다르고 세부 스탯 집계 대국이 존재할 때: `overall(tracked)` 형식 반환
  */
 export function formatDualMetric(
   overallVal: number | undefined | null,
@@ -332,7 +372,9 @@ function createEmptyDetailedStats(): DetailedRoundStats {
     trackedGames: 0,
     trackedRounds: 0,
     trackedTotalPoints: 0,
+    trackedAvgPoint: 0,
     trackedAvgRank: 0,
+    trackedTop2Rate: 0,
     trackedRankCounts: [0, 0, 0, 0],
     winCount: 0,
     ronCount: 0,
@@ -344,11 +386,14 @@ function createEmptyDetailedStats(): DetailedRoundStats {
     riichiDrawCount: 0,
     firstRiichiCount: 0,
     chaseRiichiCount: 0,
+    chaseRiichiWinCount: 0,
     chasedRiichiCount: 0,
     drawCount: 0,
     drawTenpaiCount: 0,
     oyaKaburiCount: 0,
-    dealInVsRiichiCount: 0,
+    dealInWhileRiichiCount: 0,
+    yakitoriCount: 0,
+    tobiCount: 0,
     cheatCount: 0,
     beolbuCount: 0,
     winRate: null,
@@ -356,8 +401,13 @@ function createEmptyDetailedStats(): DetailedRoundStats {
     tsumoRate: null,
     drawRate: null,
     drawTenpaiRate: null,
+    tobiRate: null,
+    yakitoriRate: null,
     avgWinScore: null,
     avgDealInScore: null,
+    winEfficiency: null,
+    dealInLoss: null,
+    netWinEfficiency: null,
     roundSuji: null,
     riichiRate: null,
     riichiWinRate: null,
@@ -365,13 +415,14 @@ function createEmptyDetailedStats(): DetailedRoundStats {
     riichiDrawRate: null,
     firstRiichiRate: null,
     chaseRiichiRate: null,
+    chaseRiichiWinRate: null,
     chasedRiichiRate: null,
     riichiIncome: null,
     riichiExpense: null,
     riichiSuji: null,
     oyaKaburiRate: null,
     oyaKaburiAvg: null,
-    dealInVsRiichiRate: null,
+    dealInRiichiRate: null,
   };
 }
 
@@ -394,6 +445,7 @@ interface DetailedAccumulator {
   riichiDrawCount: number;
   firstRiichiCount: number;
   chaseRiichiCount: number;
+  chaseRiichiWinCount: number;
   chasedRiichiCount: number;
   riichiIncomeSum: number;
   riichiExpenseSum: number;
@@ -403,7 +455,9 @@ interface DetailedAccumulator {
   oyaRounds: number;
   oyaKaburiCount: number;
   oyaKaburiLossSum: number;
-  dealInVsRiichiCount: number;
+  dealInWhileRiichiCount: number;
+  yakitoriCount: number;
+  tobiCount: number;
   cheatCount: number;
   beolbuCount: number;
 }
@@ -428,6 +482,7 @@ function createAccumulator(): DetailedAccumulator {
     riichiDrawCount: 0,
     firstRiichiCount: 0,
     chaseRiichiCount: 0,
+    chaseRiichiWinCount: 0,
     chasedRiichiCount: 0,
     riichiIncomeSum: 0,
     riichiExpenseSum: 0,
@@ -437,7 +492,9 @@ function createAccumulator(): DetailedAccumulator {
     oyaRounds: 0,
     oyaKaburiCount: 0,
     oyaKaburiLossSum: 0,
-    dealInVsRiichiCount: 0,
+    dealInWhileRiichiCount: 0,
+    yakitoriCount: 0,
+    tobiCount: 0,
     cheatCount: 0,
     beolbuCount: 0,
   };
@@ -464,31 +521,48 @@ function accumulateGameRounds(
       acc.trackedRankSum += entry.effectiveRank;
       const rIdx = Math.min(4, Math.max(1, Math.round(entry.rank))) - 1;
       acc.trackedRankCounts[rIdx] += 1;
+      if (entry.rawScore < 0) {
+        acc.tobiCount += 1;
+      }
     }
   }
 
-  // In mahjong-score's Records format:
-  // index 0 = initial state (25000),
-  // odd index (1, 3, 5, ...) = delta for each round,
-  // even index (2, 4, 6, ...) = score snapshot after round,
-  // final odd/even with time === '결과' or 'Result' is end-of-game marker (skip if status === 'end')
+  // App.vue pushes 2 items per round into `time` and `score[seat]`,
+  // and 1 item per round into `riichi`, `win`, `lose`, `tenpai`, `cheat`, `beolbu`, `status`, `riichiOrder`, `dealer`.
+  // Detect whether event arrays are 1-per-round (App.vue standard) or 2-per-round (legacy).
   const roundStepCount = Math.floor((times.length - 1) / 2);
+  const isDoubleEventArrays =
+    Array.isArray(rounds.riichi) && rounds.riichi.length >= times.length && times.length > 3;
+
+  const wonInThisGame = [false, false, false, false];
+
   for (let step = 0; step < roundStepCount; step++) {
     const deltaIdx = step * 2 + 1;
+    const evIdx = isDoubleEventArrays ? deltaIdx : step + 1;
     const label = String(times[deltaIdx] || '');
-    const status = String(rounds.status?.[deltaIdx] || rounds.status?.[step + 1] || '');
+    const status = String(rounds.status?.[evIdx] || '');
     if (status === 'end' || status === 'initial' || label === '결과' || label === 'Result') {
       continue;
     }
 
-    const riichiRow = rounds.riichi?.[deltaIdx] || rounds.riichi?.[step + 1] || [false, false, false, false];
-    const winRow = rounds.win?.[deltaIdx] || rounds.win?.[step + 1] || [false, false, false, false];
-    const loseRow = rounds.lose?.[deltaIdx] || rounds.lose?.[step + 1] || [false, false, false, false];
-    const tenpaiRow = rounds.tenpai?.[deltaIdx] || rounds.tenpai?.[step + 1] || [false, false, false, false];
-    const cheatRow = rounds.cheat?.[deltaIdx] || rounds.cheat?.[step + 1] || [false, false, false, false];
-    const beolbuRow = rounds.beolbu?.[deltaIdx] || rounds.beolbu?.[step + 1] || [0, 0, 0, 0];
-    const riichiOrderRow = rounds.riichiOrder?.[deltaIdx] || rounds.riichiOrder?.[step + 1] || [];
-    const dealerIdx = rounds.dealer?.[deltaIdx] ?? rounds.dealer?.[step + 1] ?? -1;
+    const riichiRow = rounds.riichi?.[evIdx] || [false, false, false, false];
+    const winRow = rounds.win?.[evIdx] || [false, false, false, false];
+    const loseRow = rounds.lose?.[evIdx] || [false, false, false, false];
+    const tenpaiRow = rounds.tenpai?.[evIdx] || [false, false, false, false];
+    const cheatRow = rounds.cheat?.[evIdx] || [false, false, false, false];
+    const beolbuRow = rounds.beolbu?.[evIdx] || [0, 0, 0, 0];
+    const riichiOrderRow = rounds.riichiOrder?.[evIdx] || [];
+    const dealerIdx = rounds.dealer?.[evIdx] ?? -1;
+
+    // Chombo void hand: track cheatCount, do not distort normal round stats
+    if (status === 'cheat') {
+      for (let seat = 0; seat < 4; seat++) {
+        const pid = rounds.seatPlayerIds[seat];
+        const acc = accMap[pid];
+        if (acc && cheatRow[seat]) acc.cheatCount += 1;
+      }
+      continue;
+    }
 
     const isDraw =
       status === 'normal_draw' ||
@@ -524,10 +598,10 @@ function accumulateGameRounds(
       if (beolbuCnt > 0) acc.beolbuCount += beolbuCnt;
 
       if (didWin) {
+        wonInThisGame[seat] = true;
         acc.winCount += 1;
         if (isTsumoRound) acc.tsumoCount += 1;
         else if (isRonRound) acc.ronCount += 1;
-        // Include riichi stick refund for pure hand value approximation if delta > 0
         if (delta > 0) {
           acc.winScoreSum += delta + (didRiichi ? 1000 : 0);
         }
@@ -538,16 +612,18 @@ function accumulateGameRounds(
         if (delta < 0) {
           acc.dealInScoreSum += Math.abs(delta) - (didRiichi ? 1000 : 0);
         }
-        // Check if winner had riichi
-        const winnerHadRiichi = [0, 1, 2, 3].some((j) => j !== seat && winRow[j] && riichiRow[j]);
-        if (winnerHadRiichi) {
-          acc.dealInVsRiichiCount += 1;
+        if (didRiichi) {
+          acc.dealInWhileRiichiCount += 1;
         }
       }
 
+      // 아픈 오야카부리 (친 상태에서 타가 쯔모로 4,000점 이상 실점)
       if (isTsumoRound && seat === dealerIdx && !didWin && delta < 0) {
-        acc.oyaKaburiCount += 1;
-        acc.oyaKaburiLossSum += Math.abs(delta) - (didRiichi ? 1000 : 0);
+        const netLoss = Math.abs(delta) - (didRiichi ? 1000 : 0);
+        if (netLoss >= 4000) {
+          acc.oyaKaburiCount += 1;
+          acc.oyaKaburiLossSum += netLoss;
+        }
       }
 
       if (isDraw && !isPureSpecialDraw) {
@@ -576,11 +652,22 @@ function accumulateGameRounds(
           }
         } else if (orderPos > 0) {
           acc.chaseRiichiCount += 1;
+          if (didWin) acc.chaseRiichiWinCount += 1;
         } else {
-          // Fallback if riichiOrder wasn't recorded
           const riichiTotal = riichiRow.filter(Boolean).length;
           if (riichiTotal === 1) acc.firstRiichiCount += 1;
         }
+      }
+    }
+  }
+
+  // 야키토리 (한 반장 동안 1회도 화료하지 못함)
+  if (roundStepCount > 0) {
+    for (let seat = 0; seat < 4; seat++) {
+      const pid = rounds.seatPlayerIds[seat];
+      const acc = accMap[pid];
+      if (acc && !wonInThisGame[seat]) {
+        acc.yakitoriCount += 1;
       }
     }
   }
@@ -591,13 +678,26 @@ function finalizeDetailedStats(acc: DetailedAccumulator): DetailedRoundStats {
     return createEmptyDetailedStats();
   }
   const r = acc.trackedRounds;
+  const g = acc.trackedGames;
   const pct = (num: number, den: number) => (den > 0 ? Number(((num / den) * 100).toFixed(2)) : null);
 
+  const winRate = pct(acc.winCount, r);
+  const dealInRate = pct(acc.dealInCount, r);
+  const avgWinScore = acc.winCount > 0 ? Math.round(acc.winScoreSum / acc.winCount) : null;
+  const avgDealInScore = acc.dealInCount > 0 ? Math.round(acc.dealInScoreSum / acc.dealInCount) : null;
+  const winEfficiency =
+    winRate !== null && avgWinScore !== null ? Math.round((winRate / 100) * avgWinScore) : 0;
+  const dealInLoss =
+    dealInRate !== null && avgDealInScore !== null ? Math.round((dealInRate / 100) * avgDealInScore) : 0;
+  const netWinEfficiency = winEfficiency - dealInLoss;
+
   return {
-    trackedGames: acc.trackedGames,
+    trackedGames: g,
     trackedRounds: r,
     trackedTotalPoints: round1(acc.trackedTotalPoints),
-    trackedAvgRank: Number((acc.trackedRankSum / acc.trackedGames).toFixed(3)),
+    trackedAvgPoint: round1(acc.trackedTotalPoints / g),
+    trackedAvgRank: Number((acc.trackedRankSum / g).toFixed(3)),
+    trackedTop2Rate: Number((((acc.trackedRankCounts[0] + acc.trackedRankCounts[1]) / g) * 100).toFixed(2)),
     trackedRankCounts: [...acc.trackedRankCounts] as [number, number, number, number],
     winCount: acc.winCount,
     ronCount: acc.ronCount,
@@ -609,20 +709,28 @@ function finalizeDetailedStats(acc: DetailedAccumulator): DetailedRoundStats {
     riichiDrawCount: acc.riichiDrawCount,
     firstRiichiCount: acc.firstRiichiCount,
     chaseRiichiCount: acc.chaseRiichiCount,
+    chaseRiichiWinCount: acc.chaseRiichiWinCount,
     chasedRiichiCount: acc.chasedRiichiCount,
     drawCount: acc.drawCount,
     drawTenpaiCount: acc.drawTenpaiCount,
     oyaKaburiCount: acc.oyaKaburiCount,
-    dealInVsRiichiCount: acc.dealInVsRiichiCount,
+    dealInWhileRiichiCount: acc.dealInWhileRiichiCount,
+    yakitoriCount: acc.yakitoriCount,
+    tobiCount: acc.tobiCount,
     cheatCount: acc.cheatCount,
     beolbuCount: acc.beolbuCount,
-    winRate: pct(acc.winCount, r),
-    dealInRate: pct(acc.dealInCount, r),
+    winRate,
+    dealInRate,
     tsumoRate: pct(acc.tsumoCount, acc.winCount),
     drawRate: pct(acc.drawCount, r),
     drawTenpaiRate: pct(acc.drawTenpaiCount, acc.drawCount),
-    avgWinScore: acc.winCount > 0 ? Math.round(acc.winScoreSum / acc.winCount) : null,
-    avgDealInScore: acc.dealInCount > 0 ? Math.round(acc.dealInScoreSum / acc.dealInCount) : null,
+    tobiRate: pct(acc.tobiCount, g),
+    yakitoriRate: pct(acc.yakitoriCount, g),
+    avgWinScore,
+    avgDealInScore,
+    winEfficiency,
+    dealInLoss,
+    netWinEfficiency,
     roundSuji: Math.round(acc.roundNetDeltaSum / r),
     riichiRate: pct(acc.riichiCount, r),
     riichiWinRate: pct(acc.riichiWinCount, acc.riichiCount),
@@ -630,13 +738,14 @@ function finalizeDetailedStats(acc: DetailedAccumulator): DetailedRoundStats {
     riichiDrawRate: pct(acc.riichiDrawCount, acc.riichiCount),
     firstRiichiRate: pct(acc.firstRiichiCount, acc.riichiCount),
     chaseRiichiRate: pct(acc.chaseRiichiCount, acc.riichiCount),
+    chaseRiichiWinRate: pct(acc.chaseRiichiWinCount, acc.chaseRiichiCount),
     chasedRiichiRate: pct(acc.chasedRiichiCount, acc.firstRiichiCount),
     riichiIncome: acc.riichiWinCount > 0 ? Math.round(acc.riichiIncomeSum / acc.riichiWinCount) : null,
     riichiExpense: acc.riichiDealInCount > 0 ? Math.round(acc.riichiExpenseSum / acc.riichiDealInCount) : null,
     riichiSuji: acc.riichiCount > 0 ? Math.round(acc.riichiNetSum / acc.riichiCount) : null,
     oyaKaburiRate: pct(acc.oyaKaburiCount, acc.oyaRounds),
     oyaKaburiAvg: acc.oyaKaburiCount > 0 ? Math.round(acc.oyaKaburiLossSum / acc.oyaKaburiCount) : null,
-    dealInVsRiichiRate: pct(acc.dealInVsRiichiCount, acc.dealInCount),
+    dealInRiichiRate: pct(acc.dealInWhileRiichiCount, acc.dealInCount),
   };
 }
 
@@ -661,6 +770,7 @@ export function computeLeagueStandings(
       rankSum: number;
       rankCounts: [number, number, number, number];
       rawScores: number[];
+      tobiCount: number;
       penaltySum: number;
     }
   > = {};
@@ -674,6 +784,7 @@ export function computeLeagueStandings(
       rankSum: 0,
       rankCounts: [0, 0, 0, 0],
       rawScores: [],
+      tobiCount: 0,
       penaltySum: 0,
     };
   }
@@ -719,6 +830,7 @@ export function computeLeagueStandings(
         const rIdx = Math.min(4, Math.max(1, Math.round(entry.rank))) - 1;
         pt.rankCounts[rIdx] += 1;
         pt.rawScores.push(entry.rawScore);
+        if (entry.rawScore < 0) pt.tobiCount += 1;
         pt.penaltySum = round1(pt.penaltySum + entry.penalty);
 
         teamRoundPts[entry.teamId][slot.round - 1] = round1(
@@ -763,9 +875,10 @@ export function computeLeagueStandings(
       pt.rawScores.length > 0
         ? Math.round(pt.rawScores.reduce((a, b) => a + b, 0) / pt.rawScores.length)
         : null;
-    const topRate = g > 0 ? Number(((pt.rankCounts[0] / g) * 100).toFixed(1)) : 0;
-    const top2Rate = g > 0 ? Number((((pt.rankCounts[0] + pt.rankCounts[1]) / g) * 100).toFixed(1)) : 0;
-    const lastAvoidRate = g > 0 ? Number((((g - pt.rankCounts[3]) / g) * 100).toFixed(1)) : 0;
+    const topRate = g > 0 ? Number(((pt.rankCounts[0] / g) * 100).toFixed(2)) : 0;
+    const top2Rate = g > 0 ? Number((((pt.rankCounts[0] + pt.rankCounts[1]) / g) * 100).toFixed(2)) : 0;
+    const lastAvoidRate = g > 0 ? Number((((g - pt.rankCounts[3]) / g) * 100).toFixed(2)) : 0;
+    const tobiRate = g > 0 ? Number(((pt.tobiCount / g) * 100).toFixed(2)) : 0;
 
     return {
       player,
@@ -779,6 +892,7 @@ export function computeLeagueStandings(
       topRate,
       top2Rate,
       lastAvoidRate,
+      tobiRate,
       bestScore,
       worstScore,
       avgRawScore,
@@ -869,6 +983,114 @@ export function computeLeagueStandings(
     teams,
     players,
     calculatedMatches,
+  };
+}
+
+/**
+ * 스탯 호버/탭 계단형 히스토그램 분포 계산기 (최소 대국/국수 제한 없음 — 1국 이상 전원 포함)
+ */
+export function calculateEventMetricDistribution(
+  allPlayers: PlayerStanding[],
+  extractor: (p: PlayerStanding) => number | null | undefined,
+  currentPlayerId: number,
+  metricName: string,
+  unit: string,
+  higherIsBetter: boolean,
+  requireTracked = false
+): EventMetricDistribution {
+  const valid = allPlayers
+    .filter((p) => (requireTracked ? p.detailed.trackedRounds > 0 : p.gamesPlayed > 0))
+    .map((p) => ({
+      playerId: p.player.id,
+      playerName: p.player.name,
+      teamId: p.player.teamId,
+      val: extractor(p),
+    }))
+    .filter((item): item is { playerId: number; playerName: string; teamId: TeamId; val: number } =>
+      item.val !== null && item.val !== undefined && Number.isFinite(item.val)
+    );
+
+  const curItem = valid.find((v) => v.playerId === currentPlayerId);
+  const currentValue = curItem ? curItem.val : null;
+  const isUnrecorded = currentValue === null;
+
+  if (valid.length === 0) {
+    return {
+      metricName,
+      unit,
+      currentValue,
+      min: 0,
+      max: 0,
+      avg: 0,
+      rank: 1,
+      totalCount: 0,
+      topPct: 100,
+      isUpperHalf: false,
+      isUnrecorded: true,
+      line30X: 48,
+      line70X: 112,
+      bars: [],
+    };
+  }
+
+  // Sort ascending by value (or descending if lower is better so right = better visually!)
+  const sorted = [...valid].sort((a, b) => (higherIsBetter ? a.val - b.val : b.val - a.val));
+  const values = sorted.map((s) => s.val);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const avgRaw = values.reduce((a, b) => a + b, 0) / values.length;
+  const avg = unit === '%' ? Number(avgRaw.toFixed(2)) : Number(avgRaw.toFixed(1));
+
+  let rank = 1;
+  if (currentValue !== null) {
+    for (const v of values) {
+      if (higherIsBetter ? v > currentValue : v < currentValue) rank++;
+    }
+    rank = Math.min(rank, valid.length);
+  }
+  const topPct = currentValue !== null ? Math.min(100, Number(((rank / valid.length) * 100).toFixed(2))) : 100;
+  const isUpperHalf = currentValue !== null && rank <= Math.ceil(valid.length / 2);
+
+  const svgW = 160;
+  const svgH = 44;
+  const padX = 2;
+  const usableW = svgW - padX * 2;
+  const count = sorted.length;
+  const stepW = usableW / count;
+  const barW = Math.max(1.5, stepW - (count > 20 ? 0.9 : 1.4));
+  const span = max - min;
+
+  const bars: EventHistogramBar[] = sorted.map((item, idx) => {
+    const norm = span > 0 ? (higherIsBetter ? (item.val - min) / span : (max - item.val) / span) : 0.55;
+    const h = Math.max(4, Math.min(svgH - 7, 4 + norm * (svgH - 12)));
+    return {
+      playerId: item.playerId,
+      playerName: item.playerName,
+      teamId: item.teamId,
+      value: item.val,
+      x: Number((padX + idx * stepW).toFixed(2)),
+      y: Number((svgH - h).toFixed(2)),
+      width: Number(barW.toFixed(2)),
+      height: Number(h.toFixed(2)),
+      isCurrent: item.playerId === currentPlayerId,
+    };
+  });
+
+  return {
+    metricName,
+    unit,
+    currentValue,
+    min,
+    max,
+    avg,
+    rank,
+    totalCount: valid.length,
+    topPct,
+    isUpperHalf,
+    isUnrecorded,
+    line30X: Number((padX + usableW * 0.3).toFixed(2)),
+    line70X: Number((padX + usableW * 0.7).toFixed(2)),
+    bars,
   };
 }
 
@@ -975,9 +1197,7 @@ export function buildEventCsv(
 }
 
 /**
- * 테스트 샌드박스용 샘플 데이터 생성기
- * - Tables 1,2,3,5,6,7: 현실적인 국별 로그(rounds)가 포함된 'scorer' 결과 생성
- * - Table 4 (JP-C): 최종 결과만 기록된 'manual' (rounds: null) 결과 생성 → 괄호 표기 테스트 가능!
+ * 테스트 샌드박스용 샘플 데이터 생성기 (App.vue의 정확한 1-per-round 이벤트 배열 규격 준수)
  */
 export function generateSampleEventResults(
   roundCount: number,
@@ -997,10 +1217,9 @@ export function generateSampleEventResults(
       const slot = EVENT_MATCH_SCHEDULE.find((m) => m.key === key);
       if (!slot) continue;
       const pids = [...slot.playerIds] as [number, number, number, number];
-      const isManual = slot.isJpC; // Table 4 JP-C -> result-only
+      const isManual = slot.isJpC;
 
       if (isManual) {
-        // Generate 4 realistic scores summing to startingScore * 4
         const total = config.startingScore * 4;
         const s0 = 15000 + Math.floor(rand() * 300) * 100;
         const s1 = 15000 + Math.floor(rand() * 220) * 100;
@@ -1023,7 +1242,6 @@ export function generateSampleEventResults(
           submittedBy: 'Sandbox (JP-C)',
         };
       } else {
-        // Simulate 8 rounds (E1..E4, S1..S4) with realistic win/lose/riichi/draw logs
         const curScores = [config.startingScore, config.startingScore, config.startingScore, config.startingScore];
         const time: string[] = ['ㅤ'];
         const score: number[][] = [
@@ -1055,7 +1273,7 @@ export function generateSampleEventResults(
           const deltas = [0, 0, 0, 0];
 
           for (let s = 0; s < 4; s++) {
-            if (rand() < 0.22) {
+            if (rand() < 0.24) {
               rRow[s] = true;
               rOrd.push(s);
             }
@@ -1064,7 +1282,6 @@ export function generateSampleEventResults(
           const roll = rand();
           let st = 'ron';
           if (roll < 0.18) {
-            // Normal draw
             st = 'normal_draw';
             let tenpaiCnt = 0;
             for (let s = 0; s < 4; s++) {
@@ -1081,11 +1298,10 @@ export function generateSampleEventResults(
               }
             }
           } else if (roll < 0.50) {
-            // Tsumo
             st = 'tsumo';
             const winner = Math.floor(rand() * 4);
             wRow[winner] = true;
-            const unit = (1 + Math.floor(rand() * 3)) * 1000; // 1000..3000
+            const unit = [1000, 2000, 2000, 3000][Math.floor(rand() * 4)];
             for (let s = 0; s < 4; s++) {
               if (s === winner) continue;
               const pay = winner === dIdx || s === dIdx ? unit * 2 : unit;
@@ -1099,7 +1315,6 @@ export function generateSampleEventResults(
               }
             }
           } else {
-            // Ron
             st = 'ron';
             const winner = Math.floor(rand() * 4);
             const loser = (winner + 1 + Math.floor(rand() * 3)) % 4;
@@ -1118,20 +1333,20 @@ export function generateSampleEventResults(
 
           for (let s = 0; s < 4; s++) curScores[s] += deltas[s];
 
-          // Push odd (delta) + even (snapshot)
+          // App.vue standard: 2 entries in time/score, 1 entry in event arrays
           time.push(roundLabels[h], 'ㅤ');
           for (let s = 0; s < 4; s++) {
             score[s].push(deltas[s], curScores[s]);
           }
-          riichi.push(rRow, [false, false, false, false]);
-          win.push(wRow, [false, false, false, false]);
-          lose.push(lRow, [false, false, false, false]);
-          tenpai.push(tRow, [false, false, false, false]);
-          cheat.push(cRow, [false, false, false, false]);
-          beolbu.push(bRow, [0, 0, 0, 0]);
-          status.push(st, 'snapshot');
-          riichiOrder.push(rOrd, []);
-          dealer.push(dIdx, dIdx);
+          riichi.push(rRow);
+          win.push(wRow);
+          lose.push(lRow);
+          tenpai.push(tRow);
+          cheat.push(cRow);
+          beolbu.push(bRow);
+          status.push(st);
+          riichiOrder.push(rOrd);
+          dealer.push(dIdx);
         }
 
         out[key] = {

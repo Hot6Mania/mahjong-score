@@ -50,8 +50,37 @@ interface ActiveEventMatch {
   seatPlayerIds: [number, number, number, number];
   sandbox: boolean;
   config: EventScoringConfig;
+  priorPoints: [number, number, number, number];
 }
 const activeEventMatch = ref<ActiveEventMatch | null>(null);
+
+const eventSeatChomboCounts = computed<[number, number, number, number]>(() => {
+  const counts: [number, number, number, number] = [0, 0, 0, 0];
+  if (!isEventMode.value || !Array.isArray(records.cheat)) return counts;
+  for (let i = 1; i < records.cheat.length; i++) {
+    const row = records.cheat[i];
+    if (!Array.isArray(row)) continue;
+    for (let s = 0; s < 4; s++) {
+      if (row[s] === true) counts[s] += 1;
+    }
+  }
+  return counts;
+});
+
+const eventSeatDisplayTotalPoints = computed<[number, number, number, number]>(() => {
+  const m = activeEventMatch.value;
+  if (!m) return [0, 0, 0, 0];
+  const penUnit = Math.abs(m.config.chomboPenalty ?? 20);
+  return [0, 1, 2, 3].map((idx) =>
+    Number((Number(m.priorPoints[idx] || 0) - eventSeatChomboCounts.value[idx] * penUnit).toFixed(1))
+  ) as [number, number, number, number];
+});
+
+const eventSeatChomboPenalties = computed<[number, number, number, number]>(() => {
+  const m = activeEventMatch.value;
+  const penUnit = Math.abs(m?.config.chomboPenalty ?? 20);
+  return [0, 1, 2, 3].map((idx) => -(eventSeatChomboCounts.value[idx] * penUnit)) as [number, number, number, number];
+});
 
 const eventMatchLabel = computed(() => {
   const m = activeEventMatch.value;
@@ -1701,6 +1730,15 @@ const calculateNagashi = () => {
 
 /**촌보 점수계산*/
 const calculateCheat = () => {
+  // KNU-NPM 이벤트 전용: 인게임 점수(-3000올/만관)를 차감하지 않고 누적 포인트에서 -20pt 차감
+  if (isEventMode.value && activeEventMatch.value) {
+    for (let i = 0; i < players.length; i++) {
+      players[i].deltaScore = 0;
+    }
+    showModal('show_score', 'cheat');
+    return;
+  }
+
   if (option.cheatScore===true){ // 만관 지불
     for (let i=0;i<players.length;i++){
       if (scoringState.whoCheat===i){
@@ -1835,6 +1873,16 @@ const saveRound = () => {
   changeScores(targetRiichi, () => {
     // 0) 촌보(Chombo) 무효국 처리: 없었던 판으로 간주하므로 국, 오야, 본장 고정 및 게임 종료 조건(들통 포함) 일체 적용 배제!
     if (status === 'cheat') {
+      if (isEventMode.value && activeEventMatch.value) {
+        const pen = Math.abs(activeEventMatch.value.config.chomboPenalty ?? 20);
+        triggerToast(
+          eventLocale.value === 'ja'
+            ? `チョンボ記録：累計ポイントから -${pen}pt（持ち点変動なし）`
+            : eventLocale.value === 'ko'
+              ? `촌보 기록: 누적 포인트 -${pen}pt 차감 (인게임 점수 변동 없음)`
+              : `Chombo recorded: -${pen}pt from cumulative points (no table score change)`
+        );
+      }
       console.log("촌보 무효국 처리: 국, 본장, 오야 위치를 그대로 유지합니다.");
       return;
     }
@@ -2649,8 +2697,9 @@ const launchEventScorer = (payload: {
   seatPlayerIds: [number, number, number, number];
   config: EventScoringConfig;
   sandbox: boolean;
+  priorPoints: [number, number, number, number];
 }) => {
-  const { round, table, seatPlayerIds, config, sandbox } = payload;
+  const { round, table, seatPlayerIds, config, sandbox, priorPoints } = payload;
   option.startingScore = config.startingScore;
   option.returnScore = config.returnScore;
   option.rankUma = [...config.uma];
@@ -2675,6 +2724,7 @@ const launchEventScorer = (payload: {
     seatPlayerIds: [...seatPlayerIds] as [number, number, number, number],
     sandbox,
     config,
+    priorPoints: [...priorPoints] as [number, number, number, number],
   };
   isEventSubmitted.value = false;
   isEventScorerVisible.value = true;
@@ -2703,10 +2753,12 @@ const submitEventScorerResult = async () => {
       }
     }
 
+    // KNU-NPM 이벤트 촌보 패널티(-20pt × 횟수)를 누적 포인트 차감으로 전송
+    const chomboPenalties = eventSeatChomboPenalties.value;
     const entries = match.seatPlayerIds.map((pid, idx) => ({
       playerId: pid,
       rawScore: rawScores[idx],
-      penalty: 0,
+      penalty: chomboPenalties[idx],
       seatIndex: idx,
     }));
 
@@ -4246,6 +4298,8 @@ const addBackupGameToCurrent = (game: any) => {
       :animateRank="animateRank"
       :isGameFinished="isGameFinished"
       :isEventMode="isEventMode"
+      :eventTotalPoints="isEventMode && activeEventMatch ? eventSeatDisplayTotalPoints[i] : null"
+      :eventChomboPenaltyPt="isEventMode && activeEventMatch ? eventSeatChomboPenalties[i] : 0"
       @toggle-active-riichi="toggleActiveRiichi"
       @start-show-gap="startShowGap"
       @end-show-gap="endShowGap"
@@ -4292,6 +4346,8 @@ const addBackupGameToCurrent = (game: any) => {
       :eventLocale="eventLocale"
       :isEventSubmitting="isEventSubmitting"
       :isEventSubmitted="isEventSubmitted"
+      :eventPriorPoints="isEventMode && activeEventMatch ? activeEventMatch.priorPoints : undefined"
+      :eventChomboPenalty="isEventMode && activeEventMatch ? activeEventMatch.config.chomboPenalty : 20"
       @toggle-close-session="toggleCloseCurrentSession"
       @show-modal="showModal"
       @hide-modal="hideModal"

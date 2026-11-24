@@ -53,6 +53,7 @@
         "name" : "이름",
         "score" : "점수",
         "rating" : "레이팅",
+        "totalPt" : "총 우마",
         "riichi" : "리치",
         "win" : "화료",
         "ron" : "론",
