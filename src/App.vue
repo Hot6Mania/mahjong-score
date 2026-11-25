@@ -471,7 +471,7 @@ onUnmounted(() => {
   }
 });
 
-const setEventLocale = (loc: EventLocale) => {
+const setEventLocale = (loc: EventLocale, syncUrl = true) => {
   eventLocale.value = loc;
   locale.value = loc;
   if (typeof document !== 'undefined') {
@@ -485,7 +485,23 @@ const setEventLocale = (loc: EventLocale) => {
       players[idx].name = formatEventPlayerName(EVENT_PLAYER_MAP[pid] ?? pid, loc, 'compact');
     });
   }
+  if (syncUrl && isEventMode.value && route.query.lang !== loc) {
+    router.replace({
+      path: route.path,
+      query: { ...route.query, lang: loc },
+    }).catch(() => {});
+  }
 };
+
+watch(
+  () => route.query.lang,
+  (qLang) => {
+    if (!isEventMode.value) return;
+    if ((qLang === 'en' || qLang === 'ja' || qLang === 'ko') && qLang !== eventLocale.value) {
+      setEventLocale(qLang, false);
+    }
+  }
+);
 
 const isStatsRoute = computed(() => {
   if (isEventMode.value) return false;
@@ -1195,7 +1211,7 @@ onMounted(async () => {
   // 이벤트 모드(knu-npm.kimk-house.party / /knu-npm-2026)에서는 김케하 OAuth·GAPI·레이팅 초기화를 완전히 생략
   if (isEventMode.value) {
     isProcessingOAuthRedirect.value = false;
-    setEventLocale(eventLocale.value);
+    setEventLocale(eventLocale.value, false);
     document.title = KNU_NPM_EVENT_TITLE;
     restoreEventScorerSessionFromLocal();
     return;

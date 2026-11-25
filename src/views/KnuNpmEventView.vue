@@ -260,10 +260,11 @@ const syncDashboardUrlQuery = () => {
   if (route.query.view === 'scorer') return;
   const nextQuery: Record<string, string> = {};
   for (const [k, v] of Object.entries(route.query)) {
-    if (typeof v === 'string' && v && !['tab', 'round', 'view', 'player', 'match'].includes(k)) {
+    if (typeof v === 'string' && v && !['tab', 'round', 'view', 'player', 'match', 'lang'].includes(k)) {
       nextQuery[k] = v;
     }
   }
+  nextQuery.lang = props.eventLocale;
   nextQuery.tab = activeTab.value;
   if (activeTab.value === 'schedule') {
     nextQuery.round = String(selectedRound.value);
@@ -287,7 +288,7 @@ const syncDashboardUrlQuery = () => {
   }
 };
 
-watch([activeTab, selectedRound, scheduleViewMode, selectedPlayerId, matchLogKey], () => {
+watch([activeTab, selectedRound, scheduleViewMode, selectedPlayerId, matchLogKey, () => props.eventLocale], () => {
   syncDashboardUrlQuery();
 });
 
