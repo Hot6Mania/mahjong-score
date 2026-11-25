@@ -15,13 +15,21 @@ import {
   type TableScoreEntryInput,
 } from '@/utils/knuNpmScoring';
 
+interface ScoreModalPreset {
+  scores: [number, number, number, number];
+  riichiSticks: number;
+  note?: string;
+}
+
 interface Props {
   slot: EventMatchSlot;
   config: EventScoringConfig;
   existingResult?: StoredTableResult | null;
+  preset?: ScoreModalPreset | null;
   isStaff: boolean;
   isSubmitting?: boolean;
   eventLocale: EventNameLocale;
+  showNameParentheses?: boolean;
   tr: (key: string, params?: Record<string, string | number>) => string;
 }
 const props = defineProps<Props>();
@@ -61,7 +69,19 @@ const winds = ['東', '南', '西', '北'];
 const initForm = () => {
   validationError.value = '';
   allowSumMismatch.value = false;
-  if (props.existingResult && props.existingResult.entries.length === 4) {
+  if (props.preset) {
+    rows.value = props.slot.playerIds.map((pid, idx) => ({
+      playerId: pid,
+      scoreInput: shortInputMode.value
+        ? Math.round(props.preset!.scores[idx] / 100)
+        : props.preset!.scores[idx],
+      penalty: 0,
+      seatIndex: idx,
+    }));
+    riichiSticks.value = Math.max(0, Math.floor(Number(props.preset.riichiSticks || 0)));
+    submittedBy.value = 'QA Test';
+    note.value = props.preset.note || '';
+  } else if (props.existingResult && props.existingResult.entries.length === 4) {
     const ordered = [...props.existingResult.entries].sort(
       (a, b) => (a.seatIndex ?? 0) - (b.seatIndex ?? 0)
     );
@@ -88,7 +108,7 @@ const initForm = () => {
 };
 
 watch(
-  () => [props.slot.key, props.existingResult?.submittedAt],
+  () => [props.slot.key, props.existingResult?.submittedAt, props.preset],
   () => initForm(),
   { immediate: true }
 );
@@ -296,7 +316,7 @@ const handleDelete = () => {
                       {{ EVENT_PLAYER_MAP[row.playerId].teamId }}
                     </span>
                     <span class="p-id">#{{ row.playerId }}</span>
-                    <span class="p-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[row.playerId], eventLocale, 'full') }}</span>
+                    <span class="p-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[row.playerId], eventLocale, 'full', showNameParentheses) }}</span>
                     <span v-if="EVENT_PLAYER_MAP[row.playerId].isPro" class="pro-tag">{{ tr('proBadge') }}</span>
                   </div>
                 </td>

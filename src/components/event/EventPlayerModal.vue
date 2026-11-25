@@ -20,6 +20,7 @@ interface Props {
   standing: PlayerStanding;
   allPlayers: PlayerStanding[];
   eventLocale: EventNameLocale;
+  showNameParentheses?: boolean;
   tr: (key: string, params?: Record<string, string | number>) => string;
 }
 const props = defineProps<Props>();
@@ -283,7 +284,7 @@ const onBarClick = (bar: EventHistogramBar) => {
             <span class="pid-badge">#{{ standing.player.id }}</span>
             <span v-if="standing.player.isPro" class="pro-badge">{{ tr('proBadge') }}</span>
           </div>
-          <h3 class="player-title">{{ formatEventPlayerName(standing.player, eventLocale, 'full') }}</h3>
+          <h3 class="player-title">{{ formatEventPlayerName(standing.player, eventLocale, 'full', showNameParentheses) }}</h3>
         </div>
         <button class="ev-icon-close" @click="emit('close')" aria-label="Close">✕</button>
       </div>

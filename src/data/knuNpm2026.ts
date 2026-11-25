@@ -70,6 +70,7 @@ export interface EventScoringConfig {
   riichiPayout: boolean;
   chomboPenalty: number;
   allowParticipantInput: boolean;
+  nameParenthesesLocales: EventNameLocale[];
   lockedRounds: number[];
   lockedTables: string[];
   roundTimer: EventRoundTimer;
@@ -95,6 +96,7 @@ export const DEFAULT_EVENT_CONFIG: EventScoringConfig = {
   riichiPayout: true,
   chomboPenalty: 20,
   allowParticipantInput: true,
+  nameParenthesesLocales: ['ko', 'ja'],
   lockedRounds: [],
   lockedTables: [],
   roundTimer: { ...DEFAULT_ROUND_TIMER },
@@ -184,10 +186,19 @@ export function getEventPlayer(id: number): EventPlayer | undefined {
   return EVENT_PLAYER_MAP[id];
 }
 
+export function shouldShowNameParentheses(
+  config: Pick<EventScoringConfig, 'nameParenthesesLocales'> | null | undefined,
+  locale: EventNameLocale
+): boolean {
+  const list = config?.nameParenthesesLocales ?? DEFAULT_EVENT_CONFIG.nameParenthesesLocales;
+  return Array.isArray(list) ? list.includes(locale) : locale !== 'en';
+}
+
 export function formatEventPlayerName(
   playerOrId: EventPlayer | number | undefined | null,
   locale: EventNameLocale = 'en',
-  style: EventNameStyle = 'full'
+  style: EventNameStyle = 'full',
+  showParentheses?: boolean
 ): string {
   const player = typeof playerOrId === 'number' ? EVENT_PLAYER_MAP[playerOrId] : playerOrId;
   if (!player) {
@@ -198,12 +209,16 @@ export function formatEventPlayerName(
     if (locale === 'ja') return player.compactJaName;
     return player.compactName;
   }
+  const primaryName =
+    locale === 'ko' ? player.koName : locale === 'ja' ? player.jaName : player.name;
   if (style === 'primary') {
-    if (locale === 'ko') return player.koName;
-    if (locale === 'ja') return player.jaName;
-    return player.name;
+    return primaryName;
   }
   // style === 'full'
+  const withParens = showParentheses !== undefined ? showParentheses : locale !== 'en';
+  if (!withParens) {
+    return primaryName;
+  }
   if (locale === 'ko') {
     return player.isPro
       ? `${player.koName} (${player.jaName})`
@@ -214,7 +229,10 @@ export function formatEventPlayerName(
       ? `${player.jaName} (${player.name})`
       : `${player.name} (${player.koName})`;
   }
-  return player.name;
+  // locale === 'en' with parentheses enabled
+  return player.isPro
+    ? `${player.name} (${player.jaName})`
+    : `${player.name} (${player.koName})`;
 }
 
 export function matchesEventPlayerQuery(player: EventPlayer, rawQuery: string): boolean {

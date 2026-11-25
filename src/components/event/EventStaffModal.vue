@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
-import type { EventRoundTimer, EventScoringConfig } from '@/data/knuNpm2026';
+import {
+  EVENT_PLAYER_MAP,
+  formatEventPlayerName,
+  type EventNameLocale,
+  type EventRoundTimer,
+  type EventScoringConfig,
+} from '@/data/knuNpm2026';
 import { computeRoundTimerDisplay, normalizeRoundTimer, type EventAuditEntry } from '@/utils/knuNpmScoring';
 import { getSyncedNowMs } from '@/services/knuNpmEventService';
 
@@ -155,6 +161,7 @@ const form = reactive({
   riichiPayout: props.config.riichiPayout,
   chomboPenalty: props.config.chomboPenalty,
   allowParticipantInput: props.config.allowParticipantInput,
+  nameParenthesesLocales: [...(props.config.nameParenthesesLocales || ['ko', 'ja'])] as EventNameLocale[],
   lockedRounds: [...props.config.lockedRounds],
 });
 
@@ -173,6 +180,7 @@ watch(
     form.riichiPayout = c.riichiPayout;
     form.chomboPenalty = c.chomboPenalty;
     form.allowParticipantInput = c.allowParticipantInput;
+    form.nameParenthesesLocales = [...(c.nameParenthesesLocales || ['ko', 'ja'])];
     form.lockedRounds = [...c.lockedRounds];
     if (c.roundTimer) {
       timerForm.round = c.roundTimer.round;
@@ -188,6 +196,25 @@ const toggleRoundLock = (r: number) => {
   if (idx >= 0) form.lockedRounds.splice(idx, 1);
   else form.lockedRounds.push(r);
   form.lockedRounds.sort((a, b) => a - b);
+};
+
+const localeOptions: { code: EventNameLocale; label: string }[] = [
+  { code: 'en', label: 'EN (English)' },
+  { code: 'ja', label: '日本語' },
+  { code: 'ko', label: '한국어' },
+];
+
+const toggleNameParenLocale = (loc: EventNameLocale) => {
+  const idx = form.nameParenthesesLocales.indexOf(loc);
+  if (idx >= 0) form.nameParenthesesLocales.splice(idx, 1);
+  else form.nameParenthesesLocales.push(loc);
+};
+
+const getNameParenPreview = (loc: EventNameLocale) => {
+  const show = form.nameParenthesesLocales.includes(loc);
+  const proSample = formatEventPlayerName(EVENT_PLAYER_MAP[1], loc, 'full', show);
+  const playerSample = formatEventPlayerName(EVENT_PLAYER_MAP[6], loc, 'full', show);
+  return `${proSample} · ${playerSample}`;
 };
 
 const submitLogin = () => {
@@ -207,6 +234,7 @@ const saveConfig = () => {
     riichiPayout: form.riichiPayout,
     chomboPenalty: Math.abs(Number(form.chomboPenalty)),
     allowParticipantInput: form.allowParticipantInput,
+    nameParenthesesLocales: [...form.nameParenthesesLocales],
     lockedRounds: [...form.lockedRounds],
   });
 };
@@ -394,6 +422,27 @@ const formatTime = (ts: number) => {
               </div>
               <input type="checkbox" v-model="form.allowParticipantInput" />
             </label>
+
+            <div class="paren-config-card">
+              <div class="section-label">{{ tr('staffNameParenthesesTitle') }}</div>
+              <p class="paren-desc">{{ tr('staffNameParenthesesDesc') }}</p>
+              <div class="paren-locale-list">
+                <button
+                  v-for="opt in localeOptions"
+                  :key="opt.code"
+                  type="button"
+                  class="paren-locale-row"
+                  :class="{ active: form.nameParenthesesLocales.includes(opt.code) }"
+                  @click="toggleNameParenLocale(opt.code)"
+                >
+                  <div class="plr-top">
+                    <strong>{{ opt.label }}</strong>
+                    <span class="plr-state">{{ form.nameParenthesesLocales.includes(opt.code) ? 'ON (괄호)' : 'OFF' }}</span>
+                  </div>
+                  <div class="plr-preview">{{ getNameParenPreview(opt.code) }}</div>
+                </button>
+              </div>
+            </div>
 
             <div class="section-label">{{ tr('staffRoundLocks') }}</div>
             <div class="round-locks-grid">
@@ -628,6 +677,66 @@ const formatTime = (ts: number) => {
 }
 .switch-card p { margin: 3px 0 0; font-size: 12px; color: var(--text-dimmed); }
 .section-label { font-size: 12px; font-weight: 800; color: var(--text-dimmed); }
+
+.paren-config-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+.paren-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dimmed);
+  line-height: 1.4;
+}
+.paren-locale-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.paren-locale-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg-color);
+  color: var(--text-color);
+  text-align: left;
+  cursor: pointer;
+}
+.paren-locale-row.active {
+  border-color: rgba(37, 99, 235, 0.55);
+  background: rgba(37, 99, 235, 0.08);
+}
+.plr-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12.5px;
+}
+.plr-state {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.2);
+  color: var(--text-dimmed);
+}
+.paren-locale-row.active .plr-state {
+  background: rgba(37, 99, 235, 0.18);
+  color: #2563eb;
+}
+.plr-preview {
+  font-size: 11.5px;
+  color: var(--text-dimmed);
+  word-break: break-word;
+}
 
 .round-locks-grid {
   display: grid;

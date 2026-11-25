@@ -364,6 +364,15 @@ export function normalizeConfig(partial?: Partial<EventScoringConfig> | null): E
     riichiPayout: c.riichiPayout !== undefined ? Boolean(c.riichiPayout) : DEFAULT_EVENT_CONFIG.riichiPayout,
     chomboPenalty: Number.isFinite(Number(c.chomboPenalty)) ? Math.abs(Number(c.chomboPenalty)) : DEFAULT_EVENT_CONFIG.chomboPenalty,
     allowParticipantInput: c.allowParticipantInput !== undefined ? Boolean(c.allowParticipantInput) : DEFAULT_EVENT_CONFIG.allowParticipantInput,
+    nameParenthesesLocales: Array.isArray(c.nameParenthesesLocales)
+      ? Array.from(
+          new Set(
+            c.nameParenthesesLocales.filter(
+              (l): l is EventNameLocale => l === 'en' || l === 'ja' || l === 'ko'
+            )
+          )
+        )
+      : [...DEFAULT_EVENT_CONFIG.nameParenthesesLocales],
     lockedRounds: Array.isArray(c.lockedRounds) ? c.lockedRounds.map(Number).filter((n) => n >= 1 && n <= 6) : [],
     lockedTables: Array.isArray(c.lockedTables) ? c.lockedTables.map(String) : [],
     roundTimer: normalizeRoundTimer(c.roundTimer),
@@ -1736,6 +1745,7 @@ export function generateEdgeCaseEventResults(
     table: number;
     source: ResultSource;
     scores: [number, number, number, number];
+    riichiSticks?: number;
     penalties: [number, number, number, number];
     chomboIdx: number | null;
     note: string;
@@ -1771,10 +1781,11 @@ export function generateEdgeCaseEventResults(
       key: 'R1-T4',
       table: 4,
       source: 'manual',
-      scores: [38400, 26600, 22500, 12500],
+      scores: [25000, 25000, 25000, 23000],
+      riichiSticks: 2,
       penalties: [0, 0, 0, 0],
       chomboIdx: null,
-      note: 'QA Edge: Table 4 JP-C manual result',
+      note: 'QA Edge: Table 4 JP-C 3-way 1st tie + 2 leftover riichi sticks (800/600/600 → +12.6/+12.2/+12.2/-37.0)',
     },
   ];
 
@@ -1793,6 +1804,7 @@ export function generateEdgeCaseEventResults(
         penalty: s.penalties[idx],
         seatIndex: idx,
       })),
+      riichiSticks: s.riichiSticks ?? 0,
       rounds: s.source === 'scorer' ? buildSimpleRounds(pids, s.scores, s.chomboIdx) : null,
       submittedAt: Date.now() - (5 - s.table) * 60_000,
       submittedBy: 'QA Edge Seed',

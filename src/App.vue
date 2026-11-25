@@ -3499,16 +3499,21 @@ const resumeEventScorer = () => {
 
 const isSandboxQaMenuOpen = ref(false);
 
-const runSandboxScorerQa = async (action: 'orasu25k' | 'orasuRiichi2' | 'timer10_0' | 'timer10_1' | 'reload' | 'openLive') => {
+const runSandboxScorerQa = async (action: 'orasu25k' | 'orasuRiichi2' | 'orasu3TieRiichi2' | 'timer10_0' | 'timer10_1' | 'reload' | 'openLive') => {
   if (!isEventMode.value || !isEventSandbox.value || !activeEventMatch.value) return;
   isSandboxQaMenuOpen.value = false;
-  if (action === 'orasu25k' || action === 'orasuRiichi2') {
+  if (action === 'orasu25k' || action === 'orasuRiichi2' || action === 'orasu3TieRiichi2') {
     panelInfo.wind = '南';
     panelInfo.round = 4;
     panelInfo.renchan = 0;
-    panelInfo.riichi = action === 'orasuRiichi2' ? 2 : 0;
+    panelInfo.riichi = action === 'orasu25k' ? 0 : 2;
     const winds = ['南', '西', '北', '東']; // seat 3 is South 4 dealer
-    const scores = action === 'orasuRiichi2' ? [26000, 25000, 24000, 23000] : [25000, 25000, 25000, 25000];
+    const scores =
+      action === 'orasu3TieRiichi2'
+        ? [25000, 25000, 25000, 23000]
+        : action === 'orasuRiichi2'
+          ? [26000, 25000, 24000, 23000]
+          : [25000, 25000, 25000, 25000];
     players.forEach((p, idx) => {
       p.wind = winds[idx];
       p.displayScore = scores[idx];
@@ -3518,9 +3523,11 @@ const runSandboxScorerQa = async (action: 'orasu25k' | 'orasuRiichi2' | 'timer10
     persistEventScorerSessionToLocal();
     syncEventLiveCheckpoint(false);
     triggerToast(
-      action === 'orasuRiichi2'
-        ? '🧪 QA: 남4국 + 공탁봉 2개 상태로 점프!'
-        : '🧪 QA: 남4국 전원 25,000 상태로 점프! (오야 노텐 종료 / 오야 텐파이 연장 테스트)'
+      action === 'orasu3TieRiichi2'
+        ? '🧪 QA: 남4국 3인 공동 1위(25k×3 / 23k) + 공탁봉 2개 점프! (유국→전원 노텐으로 800/600/600 검증)'
+        : action === 'orasuRiichi2'
+          ? '🧪 QA: 남4국 + 공탁봉 2개 상태로 점프!'
+          : '🧪 QA: 남4국 전원 25,000 상태로 점프! (오야 노텐 종료 / 오야 텐파이 연장 테스트)'
     );
     return;
   }
@@ -5115,6 +5122,7 @@ const addBackupGameToCurrent = (game: any) => {
       <div v-if="isSandboxQaMenuOpen" class="ssqa-popover">
         <button type="button" @click="runSandboxScorerQa('orasu25k')">⏩ 남4국 점프 (전원 25k)</button>
         <button type="button" @click="runSandboxScorerQa('orasuRiichi2')">⏩ 남4국 (공탁봉 2개)</button>
+        <button type="button" @click="runSandboxScorerQa('orasu3TieRiichi2')">⚖️ 남4국 3인동점+공탁2</button>
         <button type="button" @click="runSandboxScorerQa('timer10_0')">⏰ 10초 타이머 (50+0)</button>
         <button type="button" @click="runSandboxScorerQa('timer10_1')">⏰ 10초 타이머 (50+1)</button>
         <button type="button" @click="runSandboxScorerQa('reload')">💥 새로고침 복구 테스트</button>

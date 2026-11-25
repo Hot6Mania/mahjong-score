@@ -12,6 +12,7 @@ import { secureShuffle } from '@/utils/random';
 interface Props {
   slot: EventMatchSlot;
   eventLocale: EventNameLocale;
+  showNameParentheses?: boolean;
   tr: (key: string, params?: Record<string, string | number>) => string;
 }
 const props = defineProps<Props>();
@@ -76,7 +77,7 @@ const launch = () => {
               :style="{ backgroundColor: EVENT_TEAM_MAP[EVENT_PLAYER_MAP[pid].teamId].color }"
             ></span>
             <span class="seat-pid">#{{ pid }}</span>
-            <span class="seat-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'full') }}</span>
+            <span class="seat-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'full', showNameParentheses) }}</span>
             <span v-if="EVENT_PLAYER_MAP[pid].isPro" class="pro-chip">{{ tr('proBadge') }}</span>
             <span
               class="team-chip"

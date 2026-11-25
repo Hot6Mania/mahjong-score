@@ -24,6 +24,7 @@ import {
   getMatchKey,
   getRoundMatches,
   matchesEventPlayerQuery,
+  shouldShowNameParentheses,
   type EventMatchSlot,
   type EventScoringConfig,
   type TeamId,
@@ -163,6 +164,11 @@ const isStaffModalOpen = ref(false);
 // Modals
 const seatPickerSlot = ref<EventMatchSlot | null>(null);
 const scoreModalSlot = ref<EventMatchSlot | null>(null);
+const scoreModalPreset = ref<{
+  scores: [number, number, number, number];
+  riichiSticks: number;
+  note?: string;
+} | null>(null);
 const selectedPlayerId = ref<number | null>(null);
 const matchLogKey = ref<string | null>(null);
 
@@ -445,6 +451,9 @@ watch(
 
 // Standings calculation
 const standings = computed(() => computeLeagueStandings(state.value.results, state.value.config));
+const showNameParens = computed(() =>
+  shouldShowNameParentheses(state.value.config, props.eventLocale)
+);
 
 const filteredPlayers = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
@@ -617,11 +626,15 @@ const openSeatPicker = (slot: EventMatchSlot) => {
   seatPickerSlot.value = slot;
 };
 
-const openScoreModal = (slot: EventMatchSlot) => {
+const openScoreModal = (
+  slot: EventMatchSlot,
+  preset: { scores: [number, number, number, number]; riichiSticks: number; note?: string } | null = null
+) => {
   if (isSlotLocked(slot)) {
     showToast(tr('inputLockedNotice'));
     return;
   }
+  scoreModalPreset.value = preset;
   scoreModalSlot.value = slot;
 };
 
@@ -708,6 +721,7 @@ const handleManualSubmit = async (payload: {
       props.isSandbox
     );
     scoreModalSlot.value = null;
+    scoreModalPreset.value = null;
     showToast(tr('scoreSavedToast', { r: round, t: table }));
   } catch (err: any) {
     showToast(err?.message || 'Save failed');
@@ -723,6 +737,7 @@ const handleDeleteResult = async () => {
     const { round, table } = scoreModalSlot.value;
     state.value = await deleteTableResult(round, table, props.isSandbox);
     scoreModalSlot.value = null;
+    scoreModalPreset.value = null;
     showToast(tr('scoreDeletedToast', { r: round, t: table }));
   } catch (err: any) {
     showToast(err?.message || 'Delete failed');
@@ -965,7 +980,17 @@ const quickTestScorerR1T1 = () => {
 
 const quickTestJpCR1T4 = () => {
   const slot = EVENT_MATCH_MAP['R1-T4'];
-  if (slot) openScoreModal(slot);
+  if (slot) openScoreModal(slot, null);
+};
+
+const quickTestJpC3WayTieRiichi2 = () => {
+  const slot = EVENT_MATCH_MAP['R1-T4'];
+  if (!slot) return;
+  openScoreModal(slot, {
+    scores: [25000, 25000, 25000, 23000],
+    riichiSticks: 2,
+    note: 'QA: 3인 공동 1위 + 공탁 2개 (800/600/600 → +12.6/+12.2/+12.2/-37.0)',
+  });
 };
 
 const formatOka = computed(() => {
@@ -1015,6 +1040,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
             <button type="button" class="sb-btn accent" @click="launchSandboxScenario('timer501')">⏰ 50+1 (10초 테스트)</button>
             <button type="button" class="sb-btn" @click="launchSandboxScenario('handoff')">💥 이어하기·촌보 시드</button>
             <button type="button" class="sb-btn accent" @click="quickTestJpCR1T4">📝 {{ tr('sandboxTestJpC') }}</button>
+            <button type="button" class="sb-btn accent" @click="quickTestJpC3WayTieRiichi2">⚖️ 3인동점+공탁2 (JP-C 테스트)</button>
           </div>
         </div>
         <div class="sb-group">
@@ -1320,7 +1346,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <td class="left">
                     <div class="tbl-player">
                       <span class="tbl-id">#{{ ps.player.id }}</span>
-                      <span class="tbl-name">{{ formatEventPlayerName(ps.player, eventLocale, 'full') }}</span>
+                      <span class="tbl-name">{{ formatEventPlayerName(ps.player, eventLocale, 'full', showNameParens) }}</span>
                       <span v-if="ps.player.isPro" class="pro-mini">{{ tr('proBadge') }}</span>
                     </div>
                   </td>
@@ -1436,7 +1462,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <td class="left">
                     <div class="tbl-player">
                       <span class="tbl-id">#{{ ps.player.id }}</span>
-                      <span class="tbl-name">{{ formatEventPlayerName(ps.player, eventLocale, 'full') }}</span>
+                      <span class="tbl-name">{{ formatEventPlayerName(ps.player, eventLocale, 'full', showNameParens) }}</span>
                       <span v-if="ps.player.isPro" class="pro-mini">{{ tr('proBadge') }}</span>
                     </div>
                   </td>
@@ -1533,7 +1559,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
             <select v-model="highlightPlayerId" class="find-player-select" :aria-label="tr('findMyTable')">
               <option value="">🔍 {{ tr('findMyTable') }} — {{ tr('allPlayersOption') }}</option>
               <option v-for="p in EVENT_PLAYERS" :key="p.id" :value="p.id">
-                #{{ p.id }} {{ formatEventPlayerName(p, eventLocale, 'full') }} (Team {{ p.teamId }}{{ p.isPro ? ' · PRO' : '' }})
+                #{{ p.id }} {{ formatEventPlayerName(p, eventLocale, 'full', showNameParens) }} (Team {{ p.teamId }}{{ p.isPro ? ' · PRO' : '' }})
               </option>
             </select>
 
@@ -1616,7 +1642,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                     {{ EVENT_PLAYER_MAP[pid].teamId }}
                   </span>
                   <span class="tp-id">#{{ pid }}</span>
-                  <span class="tp-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'full') }}</span>
+                  <span class="tp-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'full', showNameParens) }}</span>
                   <span v-if="EVENT_PLAYER_MAP[pid].isPro" class="pro-mini">{{ tr('proBadge') }}</span>
                 </div>
 
@@ -1794,7 +1820,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
               >
                 <div class="rc-m-left">
                   <span class="tbl-id">#{{ m.player.id }}</span>
-                  <strong>{{ formatEventPlayerName(m.player, eventLocale, 'full') }}</strong>
+                  <strong>{{ formatEventPlayerName(m.player, eventLocale, 'full', showNameParens) }}</strong>
                   <span class="pro-mini">{{ tr('proBadge') }}</span>
                 </div>
                 <div class="rc-m-right">
@@ -1816,7 +1842,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
               >
                 <div class="rc-m-left">
                   <span class="tbl-id">#{{ m.player.id }}</span>
-                  <span>{{ formatEventPlayerName(m.player, eventLocale, 'full') }}</span>
+                  <span>{{ formatEventPlayerName(m.player, eventLocale, 'full', showNameParens) }}</span>
                 </div>
                 <div class="rc-m-right">
                   <span class="dim">{{ m.gamesPlayed }}/6</span>
@@ -1901,6 +1927,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
       v-if="seatPickerSlot"
       :slot="seatPickerSlot"
       :event-locale="eventLocale"
+      :show-name-parentheses="showNameParens"
       :tr="tr"
       @close="seatPickerSlot = null"
       @launch="handleLaunchScorer"
@@ -1911,11 +1938,13 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
       :slot="scoreModalSlot"
       :config="state.config"
       :existing-result="state.results[scoreModalSlot.key] || null"
+      :preset="scoreModalPreset"
       :is-staff="isStaff"
       :is-submitting="isBusy"
       :event-locale="eventLocale"
+      :show-name-parentheses="showNameParens"
       :tr="tr"
-      @close="scoreModalSlot = null"
+      @close="scoreModalSlot = null; scoreModalPreset = null"
       @submit="handleManualSubmit"
       @delete="handleDeleteResult"
     />
@@ -1925,6 +1954,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
       :standing="selectedPlayerStanding"
       :all-players="standings.players"
       :event-locale="eventLocale"
+      :show-name-parentheses="showNameParens"
       :tr="tr"
       @close="selectedPlayerId = null"
       @open-match-log="(key) => (matchLogKey = key)"
