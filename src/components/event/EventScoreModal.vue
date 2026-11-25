@@ -3,7 +3,9 @@ import { ref, computed, watch } from 'vue';
 import {
   EVENT_PLAYER_MAP,
   EVENT_TEAM_MAP,
+  formatEventPlayerName,
   type EventMatchSlot,
+  type EventNameLocale,
   type EventScoringConfig,
 } from '@/data/knuNpm2026';
 import {
@@ -19,6 +21,7 @@ interface Props {
   existingResult?: StoredTableResult | null;
   isStaff: boolean;
   isSubmitting?: boolean;
+  eventLocale: EventNameLocale;
   tr: (key: string, params?: Record<string, string | number>) => string;
 }
 const props = defineProps<Props>();
@@ -29,6 +32,7 @@ const emit = defineEmits<{
     e: 'submit',
     payload: {
       entries: TableScoreEntryInput[];
+      riichiSticks: number;
       submittedBy: string;
       note: string;
       allowScoreSumMismatch: boolean;
@@ -46,6 +50,7 @@ interface EditableRow {
 
 const shortInputMode = ref(false); // true => ×100 mode (e.g. 324 -> 32400)
 const rows = ref<EditableRow[]>([]);
+const riichiSticks = ref<number>(0);
 const submittedBy = ref('');
 const note = ref('');
 const allowSumMismatch = ref(false);
@@ -66,6 +71,7 @@ const initForm = () => {
       penalty: Number(e.penalty || 0),
       seatIndex: e.seatIndex !== undefined ? e.seatIndex : idx,
     }));
+    riichiSticks.value = Math.max(0, Math.floor(Number(props.existingResult.riichiSticks || 0)));
     submittedBy.value = props.existingResult.submittedBy || '';
     note.value = props.existingResult.note || '';
   } else {
@@ -75,6 +81,7 @@ const initForm = () => {
       penalty: 0,
       seatIndex: idx,
     }));
+    riichiSticks.value = 0;
     submittedBy.value = '';
     note.value = '';
   }
@@ -112,7 +119,32 @@ const previewEntries = computed<TableScoreEntryInput[]>(() =>
   }))
 );
 
-const previewCalc = computed(() => calculateTableScoring(previewEntries.value, props.config));
+const normalizedRiichiSticks = computed(() =>
+  Math.max(0, Math.floor(Number(riichiSticks.value) || 0))
+);
+
+const previewCalc = computed(() =>
+  calculateTableScoring(previewEntries.value, props.config, normalizedRiichiSticks.value)
+);
+
+const suggestedRiichiSticks = computed(() => {
+  if (filledCount.value !== 4) return 0;
+  const deficit = previewCalc.value.expectedSum - previewCalc.value.scoreSum;
+  if (deficit > 0 && deficit % 1000 === 0 && deficit / 1000 !== normalizedRiichiSticks.value) {
+    return deficit / 1000;
+  }
+  return 0;
+});
+
+const adjustRiichiSticks = (delta: number) => {
+  riichiSticks.value = Math.max(0, normalizedRiichiSticks.value + delta);
+};
+
+const applySuggestedRiichi = () => {
+  if (suggestedRiichiSticks.value > 0) {
+    riichiSticks.value = suggestedRiichiSticks.value;
+  }
+};
 
 const filledCount = computed(
   () => rows.value.filter((r) => r.scoreInput !== null && r.scoreInput !== ('' as any) && !Number.isNaN(Number(r.scoreInput))).length
@@ -125,7 +157,7 @@ const autoFillFourth = () => {
     (r) => r.scoreInput === null || r.scoreInput === ('' as any) || Number.isNaN(Number(r.scoreInput))
   );
   if (emptyIdx === -1) return;
-  const expected = props.config.startingScore * 4;
+  const expected = props.config.startingScore * 4 - normalizedRiichiSticks.value * 1000;
   let othersSum = 0;
   rows.value.forEach((r, idx) => {
     if (idx !== emptyIdx) othersSum += toRawScore(r.scoreInput);
@@ -165,6 +197,7 @@ const handleSubmit = () => {
   }
   emit('submit', {
     entries: previewEntries.value,
+    riichiSticks: normalizedRiichiSticks.value,
     submittedBy: submittedBy.value.trim(),
     note: note.value.trim(),
     allowScoreSumMismatch: allowSumMismatch.value,
@@ -263,7 +296,7 @@ const handleDelete = () => {
                       {{ EVENT_PLAYER_MAP[row.playerId].teamId }}
                     </span>
                     <span class="p-id">#{{ row.playerId }}</span>
-                    <span class="p-name">{{ EVENT_PLAYER_MAP[row.playerId].name }}</span>
+                    <span class="p-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[row.playerId], eventLocale, 'full') }}</span>
                     <span v-if="EVENT_PLAYER_MAP[row.playerId].isPro" class="pro-tag">{{ tr('proBadge') }}</span>
                   </div>
                 </td>
@@ -278,6 +311,10 @@ const handleDelete = () => {
                       class="score-num-input"
                     />
                     <span v-if="shortInputMode" class="unit-suffix">00</span>
+                  </div>
+                  <div v-if="filledCount > 0 && previewCalc.entries[idx].riichiBonus > 0" class="riichi-bonus-chip">
+                    {{ tr('riichiBonusBadge', { pts: previewCalc.entries[idx].riichiBonus.toLocaleString() }) }}
+                    → {{ previewCalc.entries[idx].finalScore.toLocaleString() }}
                   </div>
                 </td>
                 <td class="col-penalty">
@@ -321,10 +358,48 @@ const handleDelete = () => {
           </table>
         </div>
 
+        <!-- Leftover Riichi Sticks (Kyotaku) Bar -->
+        <div class="riichi-bar">
+          <div class="riichi-bar-top">
+            <div class="riichi-label-group">
+              <span class="riichi-stick-icon" aria-hidden="true"></span>
+              <strong>{{ tr('leftoverRiichiLabel') }}</strong>
+              <span class="seat-tie-hint">{{ tr('seatOrderTieHint') }}</span>
+            </div>
+            <div class="riichi-stepper">
+              <button type="button" class="step-btn" :disabled="normalizedRiichiSticks <= 0" @click="adjustRiichiSticks(-1)">−</button>
+              <input
+                type="number"
+                min="0"
+                max="20"
+                step="1"
+                v-model.number="riichiSticks"
+                class="riichi-num-input"
+              />
+              <button type="button" class="step-btn" @click="adjustRiichiSticks(1)">+</button>
+              <span class="riichi-unit">{{ tr('leftoverRiichiUnit') }} ({{ (normalizedRiichiSticks * 1000).toLocaleString() }})</span>
+            </div>
+          </div>
+          <div class="riichi-bar-sub">
+            <span>{{ tr('leftoverRiichiHint') }}</span>
+            <button
+              v-if="suggestedRiichiSticks > 0"
+              type="button"
+              class="btn-suggest-riichi"
+              @click="applySuggestedRiichi"
+            >
+              ⚡ {{ tr('autoFillRiichiBtn', { count: suggestedRiichiSticks, pts: (suggestedRiichiSticks * 1000).toLocaleString() }) }}
+            </button>
+          </div>
+        </div>
+
         <div class="sum-bar" :class="{ ok: previewCalc.scoreDiff === 0 && filledCount === 4, warn: previewCalc.scoreDiff !== 0 }">
           <div class="sum-left">
             <span>{{ tr('scoreSumLabel') }}:</span>
-            <strong>{{ previewCalc.scoreSum.toLocaleString() }}</strong>
+            <strong>{{ (previewCalc.scoreSum + previewCalc.riichiTotal).toLocaleString() }}</strong>
+            <span v-if="previewCalc.riichiTotal > 0" class="sum-expected">
+              ({{ previewCalc.scoreSum.toLocaleString() }} + {{ previewCalc.riichiTotal.toLocaleString() }})
+            </span>
             <span class="sum-expected">/ {{ previewCalc.expectedSum.toLocaleString() }}</span>
           </div>
           <div class="sum-right">
@@ -639,6 +714,120 @@ const handleDelete = () => {
   font-size: 12px;
   font-weight: 700;
   color: var(--text-dimmed);
+}
+.riichi-bonus-chip {
+  margin-top: 3px;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #d97706;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.riichi-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+}
+.riichi-bar-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.riichi-label-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.riichi-stick-icon {
+  display: inline-block;
+  width: 18px;
+  height: 6px;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 1px solid #94a3b8;
+  position: relative;
+}
+.riichi-stick-icon::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+.seat-tie-hint {
+  font-size: 11px;
+  color: var(--text-dimmed);
+}
+.riichi-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.step-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg-color);
+  color: var(--text-color);
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+}
+.step-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.riichi-num-input {
+  width: 44px !important;
+  padding: 4px 4px !important;
+  font-size: 13px !important;
+  font-weight: 800;
+  text-align: center !important;
+  border-radius: 6px !important;
+  border: 1px solid var(--input-border-color) !important;
+  background: var(--input-bg-color) !important;
+  color: var(--text-color) !important;
+}
+.riichi-unit {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dimmed);
+  white-space: nowrap;
+}
+.riichi-bar-sub {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-dimmed);
+  line-height: 1.4;
+}
+.btn-suggest-riichi {
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.16);
+  color: #d97706;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 .penalty-wrap {

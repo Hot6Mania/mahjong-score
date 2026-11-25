@@ -654,6 +654,7 @@ export interface SubmitTableResultPayload {
   table: number;
   source: ResultSource;
   entries: TableScoreEntryInput[];
+  riichiSticks?: number;
   rounds?: CompactRoundRecords | null;
   submittedBy?: string;
   note?: string;
@@ -721,6 +722,7 @@ export async function submitTableResult(
         penalty: Number(e.penalty || 0),
         seatIndex: e.seatIndex !== undefined ? Number(e.seatIndex) : idx,
       })),
+      riichiSticks: Math.max(0, Math.floor(Number(payload.riichiSticks) || 0)),
       rounds: payload.source === 'scorer' ? payload.rounds || null : null,
       submittedAt: Date.now(),
       submittedBy: payload.submittedBy?.trim() || (isStaff ? 'Staff' : 'Table'),

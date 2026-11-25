@@ -6,6 +6,7 @@ import {
   EVENT_PLAYER_MAP,
   EVENT_TEAMS,
   EVENT_TEAM_MAP,
+  formatEventPlayerName,
   getRoundMatches,
   type EventMatchSlot,
   type TeamId,
@@ -306,13 +307,13 @@ const tableCards = computed<TableMonitorCard[]>(() => {
           const ep = EVENT_PLAYER_MAP[e.playerId];
           return {
             playerId: e.playerId,
-            name: ep?.name || `#${e.playerId}`,
+            name: formatEventPlayerName(ep ?? e.playerId, props.eventLocale, 'primary'),
             teamId: ep?.teamId || 'A',
             isPro: Boolean(ep?.isPro),
             wind: windsDefault[e.seatIndex] || '',
             isDealer: false,
             rank: e.rank,
-            score: e.rawScore,
+            score: e.finalScore,
             projectedPt: e.finalPoint,
             isRiichi: false,
             chomboPen: e.penalty,
@@ -337,7 +338,7 @@ const tableCards = computed<TableMonitorCard[]>(() => {
         penalty: -(Number(liveGame.chomboCounts?.[idx] || 0) * penUnit),
         seatIndex: idx,
       }));
-      const liveCalc = calculateTableScoring(calcInput, cfg);
+      const liveCalc = calculateTableScoring(calcInput, cfg, liveGame.riichiSticks || 0);
 
       const players: TableDisplayPlayer[] = liveCalc.entries
         .map((e, idx) => {
@@ -345,7 +346,7 @@ const tableCards = computed<TableMonitorCard[]>(() => {
           const w = liveGame.winds?.[idx] || windsDefault[idx];
           return {
             playerId: e.playerId,
-            name: ep?.name || `#${e.playerId}`,
+            name: formatEventPlayerName(ep ?? e.playerId, props.eventLocale, 'primary'),
             teamId: ep?.teamId || 'A',
             isPro: Boolean(ep?.isPro),
             wind: w,
@@ -374,7 +375,7 @@ const tableCards = computed<TableMonitorCard[]>(() => {
       const ep = EVENT_PLAYER_MAP[pid];
       return {
         playerId: pid,
-        name: ep?.name || `#${pid}`,
+        name: formatEventPlayerName(ep ?? pid, props.eventLocale, 'primary'),
         teamId: ep?.teamId || 'A',
         isPro: Boolean(ep?.isPro),
         wind: windsDefault[idx],

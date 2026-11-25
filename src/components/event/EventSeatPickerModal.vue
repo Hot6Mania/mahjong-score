@@ -3,12 +3,15 @@ import { ref, watch } from 'vue';
 import {
   EVENT_PLAYER_MAP,
   EVENT_TEAM_MAP,
+  formatEventPlayerName,
   type EventMatchSlot,
+  type EventNameLocale,
 } from '@/data/knuNpm2026';
 import { secureShuffle } from '@/utils/random';
 
 interface Props {
   slot: EventMatchSlot;
+  eventLocale: EventNameLocale;
   tr: (key: string, params?: Record<string, string | number>) => string;
 }
 const props = defineProps<Props>();
@@ -73,7 +76,7 @@ const launch = () => {
               :style="{ backgroundColor: EVENT_TEAM_MAP[EVENT_PLAYER_MAP[pid].teamId].color }"
             ></span>
             <span class="seat-pid">#{{ pid }}</span>
-            <span class="seat-name">{{ EVENT_PLAYER_MAP[pid].name }}</span>
+            <span class="seat-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'full') }}</span>
             <span v-if="EVENT_PLAYER_MAP[pid].isPro" class="pro-chip">{{ tr('proBadge') }}</span>
             <span
               class="team-chip"

@@ -10,7 +10,7 @@ import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
 import { getShortNames } from "@/utils/nameAbbreviation"
 import { isKnuNpmEventMode, isKnuNpmLiveMonitorPath, isKnuNpmSandboxMode, KNU_NPM_EVENT_TITLE } from "@/utils/eventMode"
-import { DEFAULT_ROUND_TIMER, EVENT_PLAYER_MAP, getMatchKey, type EventRoundTimer, type EventScoringConfig } from "@/data/knuNpm2026"
+import { DEFAULT_ROUND_TIMER, EVENT_PLAYER_MAP, formatEventPlayerName, getMatchKey, type EventRoundTimer, type EventScoringConfig } from "@/data/knuNpm2026"
 import {
   clearLiveTableState,
   fetchEventStateIfChanged,
@@ -23,7 +23,9 @@ import {
 import type { EventLocale } from "@/locales/knuNpmEvent"
 import {
   computeRoundTimerDisplay,
+  distributeLeftoverRiichi,
   normalizeRoundTimer,
+  splitPointTenths,
   type CompactRoundRecords,
   type LiveTableState,
 } from "@/utils/knuNpmScoring"
@@ -478,6 +480,11 @@ const setEventLocale = (loc: EventLocale) => {
   try {
     localStorage.setItem('knu_npm_2026_lang', loc);
   } catch {}
+  if (activeEventMatch.value) {
+    activeEventMatch.value.seatPlayerIds.forEach((pid, idx) => {
+      players[idx].name = formatEventPlayerName(EVENT_PLAYER_MAP[pid] ?? pid, loc, 'compact');
+    });
+  }
 };
 
 const isStatsRoute = computed(() => {
@@ -3185,8 +3192,10 @@ const restoreEventScorerSessionFromLocal = () => {
         : 'top';
 
     parsed.players.forEach((sp: any, idx: number) => {
+      const pid = match.seatPlayerIds?.[idx];
       Object.assign(players[idx], {
         ...sp,
+        name: pid !== undefined ? formatEventPlayerName(EVENT_PLAYER_MAP[pid] ?? pid, eventLocale.value, 'compact') : sp.name,
         isCheat: Boolean(sp.isCheat),
         beolbuCount: Number(sp.beolbuCount || 0),
         effectScore: NaN,
@@ -3306,7 +3315,7 @@ const continueLiveEventScorer = (payload: {
   const seatIds = liveGame.seatPlayerIds;
   seatIds.forEach((pid, idx) => {
     const ep = EVENT_PLAYER_MAP[pid];
-    players[idx].name = ep ? ep.compactName : `#${pid}`;
+    players[idx].name = formatEventPlayerName(ep ?? pid, eventLocale.value, 'compact');
     players[idx].displayScore = Number(liveGame.scores[idx] ?? config.startingScore);
     players[idx].wind = liveGame.winds?.[idx] || ['東', '南', '西', '北'][idx];
     players[idx].isRiichi = Boolean(liveGame.riichiActive?.[idx]);
@@ -3391,7 +3400,7 @@ const launchEventScorer = (payload: {
 
   seatPlayerIds.forEach((pid, idx) => {
     const ep = EVENT_PLAYER_MAP[pid];
-    players[idx].name = ep ? ep.compactName : `#${pid}`;
+    players[idx].name = formatEventPlayerName(ep ?? pid, eventLocale.value, 'compact');
     delete players[idx].rating;
   });
 
@@ -3421,23 +3430,10 @@ const submitEventScorerResult = async () => {
   if (!match || isEventSubmitting.value) return;
   isEventSubmitting.value = true;
   try {
-    // 1위 잔여 공탁금 처리 (Modal.vue scoreSheetInfo 로직과 동일)
+    // 공탁 배분 전 실제 보유 소점(rawScore)과 잔여 공탁봉(riichiSticks)을 분리 전송
+    // -> calculateTableScoring에서 공탁 배분 전 소점으로 순위/동점을 확정한 뒤 M리그 공식 분배(3인 동점 400/300/300 등배·기가 우선) 적용
     const rawScores = players.map((p) => Number(p.displayScore));
-    if (option.riichiPayout && panelInfo.riichi > 0) {
-      const maxScore = Math.max(...rawScores);
-      const topIndices = rawScores
-        .map((s, idx) => ({ s, idx }))
-        .filter((x) => x.s === maxScore)
-        .map((x) => x.idx);
-      if (option.sekiOrder) {
-        rawScores[topIndices[0]] += panelInfo.riichi * 1000;
-      } else {
-        const share = Math.floor(((panelInfo.riichi * 1000) / topIndices.length) / 100) * 100;
-        topIndices.forEach((idx) => {
-          rawScores[idx] += share;
-        });
-      }
-    }
+    const leftoverRiichiSticks = Math.max(0, Math.floor(Number(panelInfo.riichi) || 0));
 
     // KNU-NPM 이벤트 촌보 패널티(-20pt × 횟수)를 누적 포인트 차감으로 전송
     const chomboPenalties = eventSeatChomboPenalties.value;
@@ -3469,6 +3465,7 @@ const submitEventScorerResult = async () => {
         table: match.table,
         source: 'scorer',
         entries,
+        riichiSticks: leftoverRiichiSticks,
         rounds: roundsSnapshot,
         submittedBy: 'Live Scorer',
       },
@@ -3620,29 +3617,39 @@ const saveGameToSheet = async (silent: boolean = false, skipSheetRatingUpdate: b
   try {
     const pointsDelta: Record<string, number> = {};
 
-    // 1~4위 랭크 정산 데이터 추출
-    const scoreSheet = players.map((p, idx) => {
-      let myScore = p.displayScore;
-      let oka = (option.returnScore * 4 - option.startingScore * 4) / 1000; // 오카
-      let uma = 0; // 우마
-      let rank = players.filter((x, j) => {
+    // 1~4위 랭크 정산 데이터 추출 (공탁금 및 동점 끝수 M리그 공식 기가 우선 분배 적용)
+    const oka = (option.returnScore * 4 - option.startingScore * 4) / 1000;
+    const playerRanks = players.map((p, idx) => {
+      const myScore = p.displayScore;
+      return players.filter((x, j) => {
         if (x.displayScore > myScore) return true;
         if (option.sekiOrder && x.displayScore === myScore && j < idx) return true;
         return false;
-      }).length + 1; // 순위
-      let cnt = option.sekiOrder ? 1 : players.filter(x => x.displayScore === myScore).length; // 동점자 수
-      
+      }).length + 1;
+    });
+    const scoreSheet = players.map((p, idx) => {
+      let myScore = p.displayScore;
+      const rank = playerRanks[idx];
+      const tiedIndices = option.sekiOrder
+        ? [idx]
+        : players.map((_, j) => j).filter((j) => playerRanks[j] === rank);
+      const cnt = tiedIndices.length;
+      const posInGroup = Math.max(0, tiedIndices.indexOf(idx));
+
+      let umaSum = 0;
       for (let i = 0; i < cnt; i++) {
-        uma += Number(option.rankUma[rank + i - 1]);
+        umaSum += Number(option.rankUma[rank + i - 1]);
       }
       if (rank === 1) {
-        uma += oka;
-        if (option.riichiPayout) {
-          myScore += Math.floor(((panelInfo.riichi * 1000) / cnt) / 100) * 100;
+        umaSum += oka;
+        if (option.riichiPayout && panelInfo.riichi > 0) {
+          const riichiShares = distributeLeftoverRiichi(panelInfo.riichi, cnt);
+          myScore += riichiShares[posInGroup] ?? 0;
         }
       }
-      uma /= cnt;
-      let point = (myScore - option.returnScore) / 1000 + uma;
+      const umaShares = splitPointTenths(umaSum, cnt);
+      const uma = umaShares[posInGroup] ?? 0;
+      const point = (myScore - option.returnScore) / 1000 + uma;
 
       // 이번 판 획득 포인트를 기록
       pointsDelta[p.name] = parseFloat(point.toFixed(1));

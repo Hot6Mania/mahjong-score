@@ -5,7 +5,9 @@ import {
   EVENT_PLAYERS,
   EVENT_PLAYER_MAP,
   EVENT_TEAMS,
+  formatEventPlayerName,
   getMatchKey,
+  type EventNameLocale,
   type EventPlayer,
   type EventRoundTimer,
   type EventScoringConfig,
@@ -43,6 +45,7 @@ export interface StoredTableResult {
   table: number;
   source: ResultSource;
   entries: TableScoreEntryInput[];
+  riichiSticks?: number; // leftover riichi sticks at game end (each 1,000 pts)
   rounds?: CompactRoundRecords | null;
   submittedAt: number;
   submittedBy?: string;
@@ -99,7 +102,9 @@ export interface CalculatedPlayerEntry {
   playerId: number;
   teamId: TeamId;
   seatIndex: number;
-  rawScore: number;
+  rawScore: number; // pre-kyotaku score (used to determine rank & ties)
+  riichiBonus: number; // leftover riichi stick points awarded (e.g. 800 / 600 / 600)
+  finalScore: number; // rawScore + riichiBonus
   penalty: number;
   rank: number; // display rank (1..4, tied players share top rank in split mode)
   effectiveRank: number; // e.g. 1.5 for 2-way tie at 1st
@@ -110,9 +115,11 @@ export interface CalculatedPlayerEntry {
 
 export interface TableCalculationResult {
   entries: CalculatedPlayerEntry[];
-  scoreSum: number;
+  scoreSum: number; // sum of rawScores (before kyotaku)
+  riichiSticks: number;
+  riichiTotal: number; // riichiSticks * 1000
   expectedSum: number;
-  scoreDiff: number;
+  scoreDiff: number; // (scoreSum + riichiTotal) - expectedSum
   oka: number;
 }
 
@@ -364,17 +371,66 @@ export function normalizeConfig(partial?: Partial<EventScoringConfig> | null): E
 }
 
 /**
- * 4인 최종 소점 + 패널티 → M리그/설정 규칙 기준 순위·오카·우마·최종 포인트 계산
+ * M리그 공식 규정 기반 잔여 공탁봉(리치봉) 동점 1위 분배 (기가 우선 순서로 배열 반환)
+ * - 1명: 전액 (R × 1,000)
+ * - 2명: 균등 (R × 500씩)
+ * - 3명: 1,000점을 400 / 300 / 300으로 나누고 나누어떨어지지 않으면 등배 (예: 2,000점 → 800 / 600 / 600, 기가 우선)
+ * - 4명: 100점 단위 균등 분배 후 잔여 100점씩 기가 우선
+ */
+export function distributeLeftoverRiichi(riichiSticks: number, tiedCount: number): number[] {
+  const sticks = Math.max(0, Math.floor(Number(riichiSticks) || 0));
+  if (sticks === 0 || tiedCount <= 0) {
+    return Array(Math.max(0, tiedCount)).fill(0);
+  }
+  if (tiedCount === 1) return [sticks * 1000];
+  if (tiedCount === 2) return [sticks * 500, sticks * 500];
+  if (tiedCount === 3) {
+    const fullSets = Math.floor(sticks / 3);
+    const remSticks = sticks % 3;
+    const base = fullSets * 1000;
+    return [
+      base + remSticks * 400,
+      base + remSticks * 300,
+      base + remSticks * 300,
+    ];
+  }
+  const totalHundreds = sticks * 10;
+  const baseH = Math.floor(totalHundreds / tiedCount);
+  const remH = totalHundreds - baseH * tiedCount;
+  return Array.from({ length: tiedCount }, (_, i) => (baseH + (i < remH ? 1 : 0)) * 100);
+}
+
+/**
+ * M리그 공식 규정 기반 동점 순위점(우마+오카) 0.1pt 단위 정확 분할 (기가 우선 끝수 집중)
+ * - 예: +50.0 / 3 → [+16.8, +16.6, +16.6] (합계 +50.0, 제로섬 유지)
+ * - 예: -30.0 / 3 → [-10.0, -10.0, -10.0] (합계 -30.0)
+ */
+export function splitPointTenths(totalPoints: number, tiedCount: number): number[] {
+  if (tiedCount <= 0) return [];
+  if (tiedCount === 1) return [round1(totalPoints)];
+  const totalTenths = Math.round(totalPoints * 10);
+  const floorUnit = Math.floor(totalTenths / tiedCount);
+  const rem = totalTenths - floorUnit * tiedCount;
+  return Array.from({ length: tiedCount }, (_, i) => (floorUnit + (i === 0 ? rem : 0)) / 10);
+}
+
+/**
+ * 4인 최종 소점(공탁 배분 전) + 잔여 공탁봉 + 패널티 → M리그/설정 규칙 기준 순위·공탁·오카·우마·최종 포인트 계산
+ * - 반드시 공탁 배분 전 rawScore로 순위와 동점 그룹을 확정한 뒤 공탁금과 순위점을 배분함
  */
 export function calculateTableScoring(
   entries: TableScoreEntryInput[],
-  rawConfig?: Partial<EventScoringConfig>
+  rawConfig?: Partial<EventScoringConfig>,
+  rawRiichiSticks = 0
 ): TableCalculationResult {
   const config = normalizeConfig(rawConfig);
   const expectedSum = config.startingScore * 4;
   const oka = ((config.returnScore - config.startingScore) * 4) / 1000;
+  const riichiSticks = Math.max(0, Math.floor(Number(rawRiichiSticks) || 0));
+  const riichiTotal = riichiSticks * 1000;
 
   const indexed = entries.map((e, idx) => ({
+    origIdx: idx,
     playerId: Number(e.playerId),
     rawScore: Number(e.rawScore) || 0,
     penalty: Number(e.penalty) || 0,
@@ -382,12 +438,10 @@ export function calculateTableScoring(
   }));
 
   const scoreSum = indexed.reduce((acc, e) => acc + e.rawScore, 0);
-  const scoreDiff = scoreSum - expectedSum;
+  const scoreDiff = scoreSum + riichiTotal - expectedSum;
 
-  const calculated: CalculatedPlayerEntry[] = indexed.map((item) => {
-    const player = EVENT_PLAYER_MAP[item.playerId];
-    const teamId: TeamId = player ? player.teamId : 'A';
-
+  // Step 1: 공탁 배분 전 rawScore 기준으로 순위 확정
+  const ranks = indexed.map((item) => {
     const higherCount = indexed.filter((other) => {
       if (other.rawScore > item.rawScore) return true;
       if (config.tieBreak === 'seat' && other.rawScore === item.rawScore && other.seatIndex < item.seatIndex) {
@@ -395,12 +449,28 @@ export function calculateTableScoring(
       }
       return false;
     }).length;
+    return higherCount + 1;
+  });
 
-    const rank = higherCount + 1;
-    const tiedCount =
-      config.tieBreak === 'seat'
-        ? 1
-        : indexed.filter((other) => other.rawScore === item.rawScore).length;
+  // Step 2: 동점 그룹별(seatIndex 오름차순 = 기가 우선) 순위점 & 잔여 공탁금 배분
+  const groupMap = new Map<number, number[]>();
+  indexed.forEach((_, idx) => {
+    const r = ranks[idx];
+    const list = groupMap.get(r) || [];
+    list.push(idx);
+    groupMap.set(r, list);
+  });
+
+  const umaAndOkaArr = new Array<number>(indexed.length).fill(0);
+  const effectiveRankArr = new Array<number>(indexed.length).fill(1);
+  const riichiBonusArr = new Array<number>(indexed.length).fill(0);
+
+  for (const [rank, memberIndices] of groupMap.entries()) {
+    // 기가(東=0) 우선 정렬
+    const ordered = [...memberIndices].sort(
+      (a, b) => indexed[a].seatIndex - indexed[b].seatIndex || a - b
+    );
+    const tiedCount = ordered.length;
 
     let umaSum = 0;
     let rankSum = 0;
@@ -413,9 +483,27 @@ export function calculateTableScoring(
       umaSum += oka;
     }
 
-    const umaAndOka = umaSum / tiedCount;
-    const effectiveRank = rankSum / tiedCount;
-    const basePoint = (item.rawScore - config.returnScore) / 1000;
+    const umaShares = splitPointTenths(umaSum, tiedCount);
+    const effRank = rankSum / tiedCount;
+    const riichiShares =
+      rank === 1 && config.riichiPayout && riichiSticks > 0
+        ? distributeLeftoverRiichi(riichiSticks, tiedCount)
+        : Array(tiedCount).fill(0);
+
+    ordered.forEach((memberIdx, pos) => {
+      umaAndOkaArr[memberIdx] = umaShares[pos];
+      effectiveRankArr[memberIdx] = effRank;
+      riichiBonusArr[memberIdx] = riichiShares[pos];
+    });
+  }
+
+  const calculated: CalculatedPlayerEntry[] = indexed.map((item, idx) => {
+    const player = EVENT_PLAYER_MAP[item.playerId];
+    const teamId: TeamId = player ? player.teamId : 'A';
+    const riichiBonus = riichiBonusArr[idx];
+    const finalScore = item.rawScore + riichiBonus;
+    const umaAndOka = umaAndOkaArr[idx];
+    const basePoint = (finalScore - config.returnScore) / 1000;
     const finalPoint = round1(basePoint + umaAndOka + item.penalty);
 
     return {
@@ -423,9 +511,11 @@ export function calculateTableScoring(
       teamId,
       seatIndex: item.seatIndex,
       rawScore: item.rawScore,
+      riichiBonus,
+      finalScore,
       penalty: item.penalty,
-      rank,
-      effectiveRank,
+      rank: ranks[idx],
+      effectiveRank: effectiveRankArr[idx],
       basePoint: round1(basePoint),
       umaAndOka: round1(umaAndOka),
       finalPoint,
@@ -435,6 +525,8 @@ export function calculateTableScoring(
   return {
     entries: calculated,
     scoreSum,
+    riichiSticks,
+    riichiTotal,
     expectedSum,
     scoreDiff,
     oka: round1(oka),
@@ -905,7 +997,7 @@ export function computeLeagueStandings(
   for (const slot of EVENT_MATCH_SCHEDULE) {
     const stored = results[slot.key];
     if (stored && Array.isArray(stored.entries) && stored.entries.length === 4) {
-      const calc = calculateTableScoring(stored.entries, config);
+      const calc = calculateTableScoring(stored.entries, config, stored.riichiSticks ?? 0);
       calculatedMatches[slot.key] = calc;
       completedGames += 1;
       roundCompletedCounts[slot.round - 1] += 1;
@@ -931,7 +1023,7 @@ export function computeLeagueStandings(
         pt.rankSum += entry.effectiveRank;
         const rIdx = Math.min(4, Math.max(1, Math.round(entry.rank))) - 1;
         pt.rankCounts[rIdx] += 1;
-        pt.rawScores.push(entry.rawScore);
+        pt.rawScores.push(entry.finalScore);
         if (entry.rawScore < 0) pt.tobiCount += 1;
         pt.penaltySum = round1(pt.penaltySum + entry.penalty);
 
@@ -946,7 +1038,7 @@ export function computeLeagueStandings(
           played: true,
           source: stored.source,
           rank: entry.rank,
-          rawScore: entry.rawScore,
+          rawScore: entry.finalScore,
           penalty: entry.penalty,
           finalPoint: entry.finalPoint,
           hasRounds,
@@ -1098,13 +1190,14 @@ export function calculateEventMetricDistribution(
   metricName: string,
   unit: string,
   higherIsBetter: boolean,
-  requireTracked = false
+  requireTracked = false,
+  locale: EventNameLocale = 'en'
 ): EventMetricDistribution {
   const valid = allPlayers
     .filter((p) => (requireTracked ? p.detailed.trackedRounds > 0 : p.gamesPlayed > 0))
     .map((p) => ({
       playerId: p.player.id,
-      playerName: p.player.name,
+      playerName: formatEventPlayerName(p.player, locale, 'compact'),
       teamId: p.player.teamId,
       val: extractor(p),
     }))
@@ -1241,7 +1334,7 @@ export function buildEventCsv(
   lines.push('=== INDIVIDUAL STANDINGS ===');
   lines.push(
     [
-      'Rank', 'ID', 'Player', 'Team', 'Role', 'Total Pt', 'Games', 'Tracked Games',
+      'Rank', 'ID', 'Player', 'Korean Name', 'Japanese Name', 'Team', 'Role', 'Total Pt', 'Games', 'Tracked Games',
       'Avg Rank', '1st', '2nd', '3rd', '4th', 'Best Score', 'Win%', 'Deal-in%', 'Riichi%',
       'R1', 'R2', 'R3', 'R4', 'R5', 'R6',
     ].join(',')
@@ -1252,6 +1345,8 @@ export function buildEventCsv(
         p.rank,
         p.player.id,
         p.player.name,
+        p.player.koName,
+        p.player.jaName,
         `Team ${p.player.teamId}`,
         p.player.isPro ? 'PRO' : 'Player',
         p.totalPoints.toFixed(1),
@@ -1272,7 +1367,7 @@ export function buildEventCsv(
 
   lines.push('');
   lines.push('=== MATCH RESULTS (42 GAMES) ===');
-  lines.push(['Match', 'Round', 'Table', 'Source', 'Seat', 'ID', 'Player', 'Team', 'Raw Score', 'Penalty', 'Rank', 'Final Pt', 'Submitted At'].join(','));
+  lines.push(['Match', 'Round', 'Table', 'Source', 'Riichi Sticks', 'Seat', 'ID', 'Player', 'Korean Name', 'Team', 'Raw Score', 'Riichi Bonus', 'Final Score', 'Penalty', 'Rank', 'Final Pt', 'Submitted At'].join(','));
   const winds = ['East', 'South', 'West', 'North'];
   for (const slot of EVENT_MATCH_SCHEDULE) {
     const stored = results[slot.key];
@@ -1286,11 +1381,15 @@ export function buildEventCsv(
           slot.round,
           slot.table,
           stored.source,
+          calc.riichiSticks,
           winds[e.seatIndex] || e.seatIndex,
           e.playerId,
           pl?.name || `#${e.playerId}`,
+          pl?.koName || '',
           `Team ${e.teamId}`,
           e.rawScore,
+          e.riichiBonus,
+          e.finalScore,
           e.penalty,
           e.rank,
           e.finalPoint.toFixed(1),
@@ -1848,13 +1947,23 @@ export function runEventQaSelfTest(currentState: EventStatePayload): QaSelfTestR
     detail: `42,000 → ${stdTop}pt (expected +62.0), Zero-sum=${stdSum}`,
   });
 
-  // 4. Tie-break split check (2-way tie & 4-way 25,000 tie)
+  // 4. Tie-break split check (2-way tie, 3-way tie + 2 riichi sticks, & 4-way 25,000 tie)
   const tie2 = calculateTableScoring([
     { playerId: 1, rawScore: 35000, seatIndex: 0 },
     { playerId: 6, rawScore: 35000, seatIndex: 1 },
     { playerId: 7, rawScore: 20000, seatIndex: 2 },
     { playerId: 8, rawScore: 10000, seatIndex: 3 },
   ]);
+  const tie3Kyotaku = calculateTableScoring(
+    [
+      { playerId: 1, rawScore: 25000, seatIndex: 0 },
+      { playerId: 6, rawScore: 25000, seatIndex: 1 },
+      { playerId: 7, rawScore: 25000, seatIndex: 2 },
+      { playerId: 8, rawScore: 23000, seatIndex: 3 },
+    ],
+    DEFAULT_EVENT_CONFIG,
+    2
+  );
   const tie4 = calculateTableScoring([
     { playerId: 1, rawScore: 25000, seatIndex: 0 },
     { playerId: 6, rawScore: 25000, seatIndex: 1 },
@@ -1862,11 +1971,22 @@ export function runEventQaSelfTest(currentState: EventStatePayload): QaSelfTestR
     { playerId: 8, rawScore: 25000, seatIndex: 3 },
   ]);
   const tie2Pts = tie2.entries.map((e) => e.finalPoint);
+  const tie3Pts = tie3Kyotaku.entries.map((e) => e.finalPoint);
+  const tie3Ok =
+    tie3Kyotaku.scoreDiff === 0 &&
+    tie3Kyotaku.entries[0].rank === 1 &&
+    tie3Kyotaku.entries[1].rank === 1 &&
+    tie3Kyotaku.entries[2].rank === 1 &&
+    tie3Pts[0] === 12.6 &&
+    tie3Pts[1] === 12.2 &&
+    tie3Pts[2] === 12.2 &&
+    tie3Pts[3] === -37 &&
+    round1(tie3Pts.reduce((a, b) => a + b, 0)) === 0;
   const tie4Ok = tie4.entries.every((e) => e.finalPoint === 0 && e.rank === 1);
   checks.push({
-    name: 'Split Tie-Break (2-Way & 4-Way 25k)',
-    ok: tie2Pts[0] === 35 && tie2Pts[1] === 35 && tie4Ok,
-    detail: `2-way=[${tie2Pts.join(', ')}], 4-way all 0.0pt=${tie4Ok}`,
+    name: 'Split Tie-Break (2-Way, 3-Way+2 Riichi, 4-Way 25k)',
+    ok: tie2Pts[0] === 35 && tie2Pts[1] === 35 && tie3Ok && tie4Ok,
+    detail: `2-way=[${tie2Pts.join(', ')}], 3-way+2R=[${tie3Pts.join(', ')}], 4-way=${tie4Ok}`,
   });
 
   // 5. Chombo -20pt off cumulative only

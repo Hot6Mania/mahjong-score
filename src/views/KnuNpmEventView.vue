@@ -20,8 +20,10 @@ import {
   EVENT_PLAYER_MAP,
   EVENT_TEAMS,
   EVENT_TEAM_MAP,
+  formatEventPlayerName,
   getMatchKey,
   getRoundMatches,
+  matchesEventPlayerQuery,
   type EventMatchSlot,
   type EventScoringConfig,
   type TeamId,
@@ -450,10 +452,7 @@ const filteredPlayers = computed(() => {
     if (teamFilter.value !== 'ALL' && p.player.teamId !== teamFilter.value) return false;
     if (roleFilter.value === 'PRO' && !p.player.isPro) return false;
     if (roleFilter.value === 'PLAYER' && p.player.isPro) return false;
-    if (q) {
-      const hay = `${p.player.id} ${p.player.name} team ${p.player.teamId}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
+    if (q && !matchesEventPlayerQuery(p.player, q)) return false;
     return true;
   });
 
@@ -685,6 +684,7 @@ const handleSimulateSandboxLive = async () => {
 
 const handleManualSubmit = async (payload: {
   entries: TableScoreEntryInput[];
+  riichiSticks: number;
   submittedBy: string;
   note: string;
   allowScoreSumMismatch: boolean;
@@ -699,6 +699,7 @@ const handleManualSubmit = async (payload: {
         table,
         source: 'manual',
         entries: payload.entries,
+        riichiSticks: payload.riichiSticks,
         rounds: null,
         submittedBy: payload.submittedBy,
         note: payload.note,
@@ -1319,7 +1320,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <td class="left">
                     <div class="tbl-player">
                       <span class="tbl-id">#{{ ps.player.id }}</span>
-                      <span class="tbl-name">{{ ps.player.name }}</span>
+                      <span class="tbl-name">{{ formatEventPlayerName(ps.player, eventLocale, 'full') }}</span>
                       <span v-if="ps.player.isPro" class="pro-mini">{{ tr('proBadge') }}</span>
                     </div>
                   </td>
@@ -1435,7 +1436,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <td class="left">
                     <div class="tbl-player">
                       <span class="tbl-id">#{{ ps.player.id }}</span>
-                      <span class="tbl-name">{{ ps.player.name }}</span>
+                      <span class="tbl-name">{{ formatEventPlayerName(ps.player, eventLocale, 'full') }}</span>
                       <span v-if="ps.player.isPro" class="pro-mini">{{ tr('proBadge') }}</span>
                     </div>
                   </td>
@@ -1532,7 +1533,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
             <select v-model="highlightPlayerId" class="find-player-select" :aria-label="tr('findMyTable')">
               <option value="">🔍 {{ tr('findMyTable') }} — {{ tr('allPlayersOption') }}</option>
               <option v-for="p in EVENT_PLAYERS" :key="p.id" :value="p.id">
-                #{{ p.id }} {{ p.name }} (Team {{ p.teamId }}{{ p.isPro ? ' · PRO' : '' }})
+                #{{ p.id }} {{ formatEventPlayerName(p, eventLocale, 'full') }} (Team {{ p.teamId }}{{ p.isPro ? ' · PRO' : '' }})
               </option>
             </select>
 
@@ -1615,7 +1616,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                     {{ EVENT_PLAYER_MAP[pid].teamId }}
                   </span>
                   <span class="tp-id">#{{ pid }}</span>
-                  <span class="tp-name">{{ EVENT_PLAYER_MAP[pid].name }}</span>
+                  <span class="tp-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'full') }}</span>
                   <span v-if="EVENT_PLAYER_MAP[pid].isPro" class="pro-mini">{{ tr('proBadge') }}</span>
                 </div>
 
@@ -1626,7 +1627,12 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   >
                     <template v-if="ce">
                       <span class="tp-rank">#{{ ce.rank }}</span>
-                      <span class="tp-raw">{{ ce.rawScore.toLocaleString() }}</span>
+                      <span
+                        class="tp-raw"
+                        :title="ce.riichiBonus > 0 ? `${ce.rawScore.toLocaleString()} + ${ce.riichiBonus.toLocaleString()}` : ''"
+                      >
+                        {{ ce.finalScore.toLocaleString() }}
+                      </span>
                       <strong class="tp-pt" :class="ce.finalPoint > 0 ? 'pos' : ce.finalPoint < 0 ? 'neg' : ''">
                         {{ formatSignedPoint(ce.finalPoint) }}
                       </strong>
@@ -1746,7 +1752,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                       }"
                     >
                       <span class="mc-id">{{ pid }}</span>
-                      <span>{{ EVENT_PLAYER_MAP[pid].name }}</span>
+                      <span>{{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'compact') }}</span>
                       <span
                         class="mc-team"
                         :style="{ color: EVENT_TEAM_MAP[EVENT_PLAYER_MAP[pid].teamId].color }"
@@ -1788,7 +1794,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
               >
                 <div class="rc-m-left">
                   <span class="tbl-id">#{{ m.player.id }}</span>
-                  <strong>{{ m.player.name }}</strong>
+                  <strong>{{ formatEventPlayerName(m.player, eventLocale, 'full') }}</strong>
                   <span class="pro-mini">{{ tr('proBadge') }}</span>
                 </div>
                 <div class="rc-m-right">
@@ -1810,7 +1816,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
               >
                 <div class="rc-m-left">
                   <span class="tbl-id">#{{ m.player.id }}</span>
-                  <span>{{ m.player.name }}</span>
+                  <span>{{ formatEventPlayerName(m.player, eventLocale, 'full') }}</span>
                 </div>
                 <div class="rc-m-right">
                   <span class="dim">{{ m.gamesPlayed }}/6</span>
@@ -1894,6 +1900,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
     <EventSeatPickerModal
       v-if="seatPickerSlot"
       :slot="seatPickerSlot"
+      :event-locale="eventLocale"
       :tr="tr"
       @close="seatPickerSlot = null"
       @launch="handleLaunchScorer"
@@ -1906,6 +1913,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
       :existing-result="state.results[scoreModalSlot.key] || null"
       :is-staff="isStaff"
       :is-submitting="isBusy"
+      :event-locale="eventLocale"
       :tr="tr"
       @close="scoreModalSlot = null"
       @submit="handleManualSubmit"
@@ -1916,6 +1924,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
       v-if="selectedPlayerStanding"
       :standing="selectedPlayerStanding"
       :all-players="standings.players"
+      :event-locale="eventLocale"
       :tr="tr"
       @close="selectedPlayerId = null"
       @open-match-log="(key) => (matchLogKey = key)"
@@ -1927,6 +1936,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
       :result="activeMatchLogResult"
       :config="state.config"
       :is-dark="isDark"
+      :event-locale="eventLocale"
       :tr="tr"
       @close="matchLogKey = null"
     />

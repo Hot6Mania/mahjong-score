@@ -20,9 +20,16 @@ export interface EventPlayer {
   id: number;
   name: string;
   compactName: string;
+  koName: string;
+  jaName: string;
+  compactKoName: string;
+  compactJaName: string;
   teamId: TeamId;
   isPro: boolean;
 }
+
+export type EventNameLocale = 'en' | 'ja' | 'ko';
+export type EventNameStyle = 'full' | 'compact' | 'primary';
 
 export interface EventMatchSlot {
   key: string; // e.g. "R1-T1"
@@ -137,36 +144,36 @@ export const EVENT_TEAM_MAP: Record<TeamId, EventTeam> = {
  */
 export const EVENT_PLAYERS: EventPlayer[] = [
   // Professionals (1..5)
-  { id: 1, name: 'Gotanji Seiichiro', compactName: 'Gotanji S.', teamId: 'A', isPro: true },
-  { id: 2, name: 'Saito Shun', compactName: 'Saito Shun', teamId: 'B', isPro: true },
-  { id: 3, name: 'Yanagita Noriaki', compactName: 'Yanagita N.', teamId: 'C', isPro: true },
-  { id: 4, name: 'Minase Chihiro', compactName: 'Minase C.', teamId: 'D', isPro: true },
-  { id: 5, name: 'Osaka Sora', compactName: 'Osaka Sora', teamId: 'A', isPro: true },
+  { id: 1, name: 'Gotanji Seiichiro', compactName: 'Gotanji S.', koName: '고탄지 세이이치로', jaName: '五反地 清一郎', compactKoName: '고탄지', compactJaName: '五反地', teamId: 'A', isPro: true },
+  { id: 2, name: 'Saito Shun', compactName: 'Saito Shun', koName: '사이토 슌', jaName: '斎藤 俊', compactKoName: '사이토 슌', compactJaName: '斎藤 俊', teamId: 'B', isPro: true },
+  { id: 3, name: 'Yanagita Noriaki', compactName: 'Yanagita N.', koName: '야나기타 노리아키', jaName: '柳田 憲昭', compactKoName: '야나기타', compactJaName: '柳田 憲昭', teamId: 'C', isPro: true },
+  { id: 4, name: 'Minase Chihiro', compactName: 'Minase C.', koName: '미나세 치히로', jaName: '水瀬 千尋', compactKoName: '미나세', compactJaName: '水瀬 千尋', teamId: 'D', isPro: true },
+  { id: 5, name: 'Osaka Sora', compactName: 'Osaka Sora', koName: '오오사카 소라', jaName: '逢坂 そら', compactKoName: '오오사카 소라', compactJaName: '逢坂 そら', teamId: 'A', isPro: true },
 
   // Players (6..28)
-  { id: 6, name: 'Kim Jiyu', compactName: 'K. Jiyu', teamId: 'B', isPro: false },
-  { id: 7, name: 'Kim Minwoo', compactName: 'K. Minwoo', teamId: 'C', isPro: false },
-  { id: 8, name: 'Park Jihwan', compactName: 'P. Jihwan', teamId: 'D', isPro: false },
-  { id: 9, name: 'Lee Sangcheol', compactName: 'L. Sangch.', teamId: 'A', isPro: false },
-  { id: 10, name: 'Song Youngwook', compactName: 'S. Youngw.', teamId: 'B', isPro: false },
-  { id: 11, name: 'Choi Mingyu', compactName: 'C. Mingyu', teamId: 'C', isPro: false },
-  { id: 12, name: 'Shin Sangjae', compactName: 'S. Sangjae', teamId: 'D', isPro: false },
-  { id: 13, name: 'Kim Minseo', compactName: 'K. Minseo', teamId: 'A', isPro: false },
-  { id: 14, name: 'Kim Gyumin', compactName: 'K. Gyumin', teamId: 'B', isPro: false },
-  { id: 15, name: 'Song Gwanwoo', compactName: 'S. Gwanwoo', teamId: 'C', isPro: false },
-  { id: 16, name: 'Kim Doyoon', compactName: 'K. Doyoon', teamId: 'D', isPro: false },
-  { id: 17, name: 'Kwon Minsoo', compactName: 'Kw. Minsoo', teamId: 'A', isPro: false },
-  { id: 18, name: 'Kwon Minyoung', compactName: 'Kw. Miny.', teamId: 'B', isPro: false },
-  { id: 19, name: 'Lee Gyutae', compactName: 'L. Gyutae', teamId: 'C', isPro: false },
-  { id: 20, name: 'Lee Gyuho', compactName: 'L. Gyuho', teamId: 'D', isPro: false },
-  { id: 21, name: 'Kim Gyeonghun', compactName: 'K. Gyeongh.', teamId: 'A', isPro: false },
-  { id: 22, name: 'Kang Bogwon', compactName: 'K. Bogwon', teamId: 'B', isPro: false },
-  { id: 23, name: 'Hong Youngmin', compactName: 'H. Youngm.', teamId: 'C', isPro: false },
-  { id: 24, name: 'Lee Junhyeok', compactName: 'L. Junhy.', teamId: 'D', isPro: false },
-  { id: 25, name: 'Ryoo Younggyo', compactName: 'R. Youngg.', teamId: 'A', isPro: false },
-  { id: 26, name: 'Yoon Junseok', compactName: 'Y. Junseok', teamId: 'B', isPro: false },
-  { id: 27, name: 'Jun Hyunho', compactName: 'J. Hyunho', teamId: 'C', isPro: false },
-  { id: 28, name: 'Lee Jeonghun', compactName: 'L. Jeongh.', teamId: 'D', isPro: false },
+  { id: 6, name: 'Kim Jiyu', compactName: 'K. Jiyu', koName: '김지유', jaName: 'Kim Jiyu', compactKoName: '김지유', compactJaName: 'K. Jiyu', teamId: 'B', isPro: false },
+  { id: 7, name: 'Kim Minwoo', compactName: 'K. Minwoo', koName: '김민우', jaName: 'Kim Minwoo', compactKoName: '김민우', compactJaName: 'K. Minwoo', teamId: 'C', isPro: false },
+  { id: 8, name: 'Park Jihwan', compactName: 'P. Jihwan', koName: '박지환', jaName: 'Park Jihwan', compactKoName: '박지환', compactJaName: 'P. Jihwan', teamId: 'D', isPro: false },
+  { id: 9, name: 'Lee Sangcheol', compactName: 'L. Sangch.', koName: '이상철', jaName: 'Lee Sangcheol', compactKoName: '이상철', compactJaName: 'L. Sangch.', teamId: 'A', isPro: false },
+  { id: 10, name: 'Song Youngwook', compactName: 'S. Youngw.', koName: '송영욱', jaName: 'Song Youngwook', compactKoName: '송영욱', compactJaName: 'S. Youngw.', teamId: 'B', isPro: false },
+  { id: 11, name: 'Choi Mingyu', compactName: 'C. Mingyu', koName: '최민규', jaName: 'Choi Mingyu', compactKoName: '최민규', compactJaName: 'C. Mingyu', teamId: 'C', isPro: false },
+  { id: 12, name: 'Shin Sangjae', compactName: 'S. Sangjae', koName: '신상재', jaName: 'Shin Sangjae', compactKoName: '신상재', compactJaName: 'S. Sangjae', teamId: 'D', isPro: false },
+  { id: 13, name: 'Kim Minseo', compactName: 'K. Minseo', koName: '김민서', jaName: 'Kim Minseo', compactKoName: '김민서', compactJaName: 'K. Minseo', teamId: 'A', isPro: false },
+  { id: 14, name: 'Kim Gyumin', compactName: 'K. Gyumin', koName: '김규민', jaName: 'Kim Gyumin', compactKoName: '김규민', compactJaName: 'K. Gyumin', teamId: 'B', isPro: false },
+  { id: 15, name: 'Song Gwanwoo', compactName: 'S. Gwanwoo', koName: '송관우', jaName: 'Song Gwanwoo', compactKoName: '송관우', compactJaName: 'S. Gwanwoo', teamId: 'C', isPro: false },
+  { id: 16, name: 'Kim Doyoon', compactName: 'K. Doyoon', koName: '김도윤', jaName: 'Kim Doyoon', compactKoName: '김도윤', compactJaName: 'K. Doyoon', teamId: 'D', isPro: false },
+  { id: 17, name: 'Kwon Minsoo', compactName: 'Kw. Minsoo', koName: '권민수', jaName: 'Kwon Minsoo', compactKoName: '권민수', compactJaName: 'Kw. Minsoo', teamId: 'A', isPro: false },
+  { id: 18, name: 'Kwon Minyoung', compactName: 'Kw. Miny.', koName: '권민영', jaName: 'Kwon Minyoung', compactKoName: '권민영', compactJaName: 'Kw. Miny.', teamId: 'B', isPro: false },
+  { id: 19, name: 'Lee Gyutae', compactName: 'L. Gyutae', koName: '이규태', jaName: 'Lee Gyutae', compactKoName: '이규태', compactJaName: 'L. Gyutae', teamId: 'C', isPro: false },
+  { id: 20, name: 'Lee Gyuho', compactName: 'L. Gyuho', koName: '이규호', jaName: 'Lee Gyuho', compactKoName: '이규호', compactJaName: 'L. Gyuho', teamId: 'D', isPro: false },
+  { id: 21, name: 'Kim Gyeonghun', compactName: 'K. Gyeongh.', koName: '김경훈', jaName: 'Kim Gyeonghun', compactKoName: '김경훈', compactJaName: 'K. Gyeongh.', teamId: 'A', isPro: false },
+  { id: 22, name: 'Kang Bogwon', compactName: 'K. Bogwon', koName: '강보권', jaName: 'Kang Bogwon', compactKoName: '강보권', compactJaName: 'K. Bogwon', teamId: 'B', isPro: false },
+  { id: 23, name: 'Hong Youngmin', compactName: 'H. Youngm.', koName: '홍영민', jaName: 'Hong Youngmin', compactKoName: '홍영민', compactJaName: 'H. Youngm.', teamId: 'C', isPro: false },
+  { id: 24, name: 'Lee Junhyeok', compactName: 'L. Junhy.', koName: '이준혁', jaName: 'Lee Junhyeok', compactKoName: '이준혁', compactJaName: 'L. Junhy.', teamId: 'D', isPro: false },
+  { id: 25, name: 'Ryoo Younggyo', compactName: 'R. Youngg.', koName: '류영교', jaName: 'Ryoo Younggyo', compactKoName: '류영교', compactJaName: 'R. Youngg.', teamId: 'A', isPro: false },
+  { id: 26, name: 'Yoon Junseok', compactName: 'Y. Junseok', koName: '윤준석', jaName: 'Yoon Junseok', compactKoName: '윤준석', compactJaName: 'Y. Junseok', teamId: 'B', isPro: false },
+  { id: 27, name: 'Jun Hyunho', compactName: 'J. Hyunho', koName: '전현호', jaName: 'Jun Hyunho', compactKoName: '전현호', compactJaName: 'J. Hyunho', teamId: 'C', isPro: false },
+  { id: 28, name: 'Lee Jeonghun', compactName: 'L. Jeongh.', koName: '이정훈', jaName: 'Lee Jeonghun', compactKoName: '이정훈', compactJaName: 'L. Jeongh.', teamId: 'D', isPro: false },
 ];
 
 export const EVENT_PLAYER_MAP: Record<number, EventPlayer> = Object.fromEntries(
@@ -175,6 +182,59 @@ export const EVENT_PLAYER_MAP: Record<number, EventPlayer> = Object.fromEntries(
 
 export function getEventPlayer(id: number): EventPlayer | undefined {
   return EVENT_PLAYER_MAP[id];
+}
+
+export function formatEventPlayerName(
+  playerOrId: EventPlayer | number | undefined | null,
+  locale: EventNameLocale = 'en',
+  style: EventNameStyle = 'full'
+): string {
+  const player = typeof playerOrId === 'number' ? EVENT_PLAYER_MAP[playerOrId] : playerOrId;
+  if (!player) {
+    return typeof playerOrId === 'number' ? `#${playerOrId}` : '';
+  }
+  if (style === 'compact') {
+    if (locale === 'ko') return player.compactKoName;
+    if (locale === 'ja') return player.compactJaName;
+    return player.compactName;
+  }
+  if (style === 'primary') {
+    if (locale === 'ko') return player.koName;
+    if (locale === 'ja') return player.jaName;
+    return player.name;
+  }
+  // style === 'full'
+  if (locale === 'ko') {
+    return player.isPro
+      ? `${player.koName} (${player.jaName})`
+      : `${player.koName} (${player.name})`;
+  }
+  if (locale === 'ja') {
+    return player.isPro
+      ? `${player.jaName} (${player.name})`
+      : `${player.name} (${player.koName})`;
+  }
+  return player.name;
+}
+
+export function matchesEventPlayerQuery(player: EventPlayer, rawQuery: string): boolean {
+  const q = rawQuery.trim().toLowerCase();
+  if (!q) return true;
+  const hay = [
+    String(player.id),
+    `#${player.id}`,
+    player.name,
+    player.compactName,
+    player.koName,
+    player.compactKoName,
+    player.jaName,
+    player.compactJaName,
+    `team ${player.teamId}`,
+    player.teamId,
+  ]
+    .join(' ')
+    .toLowerCase();
+  return hay.includes(q);
 }
 
 export function getMatchKey(round: number, table: number): string {

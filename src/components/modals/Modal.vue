@@ -6,6 +6,7 @@ import { ModalRecordList, ModalRollback, ModalTotalUma, ModalStats, ModalInputMa
 import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, ModalInfo, GoogleInfo } from "@/types/types.d"
 import { compareSessionDesc, getSpreadsheetMetadataCached } from "@/utils/googleSheets"
 import { calculateMatchRatings, getRatingColor, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
+import { distributeLeftoverRiichi, splitPointTenths } from "@/utils/knuNpmScoring"
 import { computed, ref, watch, onMounted, onUnmounted } from "vue"
 import { useI18n } from "vue-i18n"
 import { Line as LineChart } from "vue-chartjs"
@@ -207,27 +208,40 @@ const arr_seat = ['option.east', 'option.south', 'option.west', 'option.north',]
 const arr_resultsheet = ['resultSheet.wind', 'resultSheet.name', 'resultSheet.score', 'resultSheet.rating', 'resultSheet.riichi', 'resultSheet.ron', 'resultSheet.tsumo', 'resultSheet.lose']
 const DEFAULT_PLACEHOLDER_NAMES = new Set(['▼', '▶', '▲', '◀'])
 
-/**순위표 정보 계산*/
+/**순위표 정보 계산 (M리그 공식 동점 끝수·공탁금 기가 우선 분배 일치)*/
 const scoreSheetInfo = computed(() => {
-  return props.players.map((_, idx) => {
-    let myScore=props.players[idx].displayScore;
-    let point=0 // 점수기반
-    let oka=(props.option.returnScore*4-props.option.startingScore*4)/1000; // 오카
-    let uma=0; // 우마
-    let rank = props.players.filter((x, j) => {
-      if (x.displayScore > myScore) return true;
-      if (props.option.sekiOrder && x.displayScore === myScore && j < idx) return true;
+  const oka = (props.option.returnScore * 4 - props.option.startingScore * 4) / 1000;
+  const ranks = props.players.map((_, idx) => {
+    const sc = props.players[idx].displayScore;
+    return props.players.filter((x, j) => {
+      if (x.displayScore > sc) return true;
+      if (props.option.sekiOrder && x.displayScore === sc && j < idx) return true;
       return false;
-    }).length + 1; // 순위
-    let cnt = props.option.sekiOrder ? 1 : props.players.filter(x => x.displayScore === myScore).length; // 동점자 수
-    for (let i=0;i<cnt;i++) // 동점자의 모든 우마 더하기
-      uma+=Number(props.option.rankUma[rank+i-1]);
-    if (rank===1){ // 1위라면 오카도 더하기
-      uma+=oka;
-      if (props.option.riichiPayout) // 1위에게 공탁금을 몰아주는 경우 (100점단위)
-        myScore+=Math.floor(((props.panelInfo.riichi*1000)/cnt)/100)*100;
+    }).length + 1;
+  });
+
+  return props.players.map((_, idx) => {
+    let myScore = props.players[idx].displayScore;
+    const rank = ranks[idx];
+    const tiedIndices = props.option.sekiOrder
+      ? [idx]
+      : props.players.map((_, j) => j).filter((j) => ranks[j] === rank);
+    const cnt = tiedIndices.length;
+    const posInGroup = Math.max(0, tiedIndices.indexOf(idx));
+
+    let umaSum = 0;
+    for (let i = 0; i < cnt; i++) {
+      umaSum += Number(props.option.rankUma[rank + i - 1]);
     }
-    uma/=cnt; // 동점자 수만큼 우마 나누기
+    if (rank === 1) {
+      umaSum += oka;
+      if (props.option.riichiPayout && props.panelInfo.riichi > 0) {
+        const riichiShares = distributeLeftoverRiichi(props.panelInfo.riichi, cnt);
+        myScore += riichiShares[posInGroup] ?? 0;
+      }
+    }
+    const umaShares = splitPointTenths(umaSum, cnt);
+    const uma = umaShares[posInGroup] ?? 0;
     let chomboCount = 0;
     if (props.eventMatchLabel && Array.isArray(props.records.cheat)) {
       for (let i = 1; i < props.records.cheat.length; i++) {
@@ -235,7 +249,7 @@ const scoreSheetInfo = computed(() => {
       }
     }
     const chomboPen = props.eventMatchLabel ? chomboCount * Math.abs(props.eventChomboPenalty ?? 20) : 0;
-    point=(myScore-props.option.returnScore)/1000+uma-chomboPen;
+    const point = (myScore - props.option.returnScore) / 1000 + uma - chomboPen;
     let cntRiichi=0, cntRon=0, cntTsumo=0, cntLose=0;
     for (let i=0;i<props.records.riichi.length;i++){
       if (props.records.riichi[i][idx]===true)

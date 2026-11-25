@@ -15,6 +15,8 @@ import {
 import {
   EVENT_PLAYER_MAP,
   EVENT_TEAM_MAP,
+  formatEventPlayerName,
+  type EventNameLocale,
   type EventScoringConfig,
 } from '@/data/knuNpm2026';
 import { type StoredTableResult } from '@/utils/knuNpmScoring';
@@ -25,6 +27,7 @@ interface Props {
   result: StoredTableResult;
   config: EventScoringConfig;
   isDark: boolean;
+  eventLocale: EventNameLocale;
   tr: (key: string, params?: Record<string, string | number>) => string;
 }
 const props = defineProps<Props>();
@@ -63,7 +66,7 @@ const chartData = computed(() => {
     const pl = EVENT_PLAYER_MAP[pid];
     const teamColor = pl ? EVENT_TEAM_MAP[pl.teamId].color : '#64748b';
     return {
-      label: pl ? `${pl.name} (${pl.teamId})` : `#${pid}`,
+      label: pl ? `${formatEventPlayerName(pl, props.eventLocale, 'primary')} (${pl.teamId})` : `#${pid}`,
       data: [props.config.startingScore, ...roundRows.value.map((row) => row.totals[idx])],
       borderColor: teamColor,
       backgroundColor: teamColor,
@@ -122,7 +125,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
                     class="th-dot"
                     :style="{ backgroundColor: EVENT_TEAM_MAP[EVENT_PLAYER_MAP[pid].teamId].color }"
                   ></span>
-                  {{ EVENT_PLAYER_MAP[pid].compactName }}
+                  {{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'compact') }}
                 </th>
               </tr>
             </thead>

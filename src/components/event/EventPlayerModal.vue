@@ -4,6 +4,8 @@ import {
   EVENT_MATCH_MAP,
   EVENT_PLAYER_MAP,
   EVENT_TEAM_MAP,
+  formatEventPlayerName,
+  type EventNameLocale,
 } from '@/data/knuNpm2026';
 import {
   calculateEventMetricDistribution,
@@ -17,6 +19,7 @@ import {
 interface Props {
   standing: PlayerStanding;
   allPlayers: PlayerStanding[];
+  eventLocale: EventNameLocale;
   tr: (key: string, params?: Record<string, string | number>) => string;
 }
 const props = defineProps<Props>();
@@ -109,7 +112,8 @@ const openDist = (
     props.tr(labelKey),
     unit,
     higherIsBetter,
-    requireTracked
+    requireTracked,
+    props.eventLocale
   );
   if (pin) {
     isDistPinned.value = true;
@@ -279,7 +283,7 @@ const onBarClick = (bar: EventHistogramBar) => {
             <span class="pid-badge">#{{ standing.player.id }}</span>
             <span v-if="standing.player.isPro" class="pro-badge">{{ tr('proBadge') }}</span>
           </div>
-          <h3 class="player-title">{{ standing.player.name }}</h3>
+          <h3 class="player-title">{{ formatEventPlayerName(standing.player, eventLocale, 'full') }}</h3>
         </div>
         <button class="ev-icon-close" @click="emit('close')" aria-label="Close">✕</button>
       </div>
@@ -795,7 +799,7 @@ const onBarClick = (bar: EventHistogramBar) => {
             <div class="mi-opponents">
               vs
               <span v-for="(oid, idx) in getOpponents(m.key)" :key="oid" class="opp-chip">
-                {{ EVENT_PLAYER_MAP[oid].name }} ({{ EVENT_PLAYER_MAP[oid].teamId }})<span v-if="idx < 2">,</span>
+                {{ formatEventPlayerName(EVENT_PLAYER_MAP[oid], eventLocale, 'primary') }} ({{ EVENT_PLAYER_MAP[oid].teamId }})<span v-if="idx < 2">,</span>
               </span>
             </div>
             <div v-if="m.played" class="mi-result">
