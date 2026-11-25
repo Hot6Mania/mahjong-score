@@ -104,9 +104,9 @@ export const EVENT_TEAMS: EventTeam[] = [
   {
     id: 'B',
     name: 'Team B',
-    color: '#10b981',
-    bgTint: 'rgba(16, 185, 129, 0.14)',
-    borderColor: 'rgba(16, 185, 129, 0.45)',
+    color: '#f43f5e',
+    bgTint: 'rgba(244, 63, 94, 0.14)',
+    borderColor: 'rgba(244, 63, 94, 0.45)',
   },
   {
     id: 'C',
@@ -118,9 +118,9 @@ export const EVENT_TEAMS: EventTeam[] = [
   {
     id: 'D',
     name: 'Team D',
-    color: '#ef4444',
-    bgTint: 'rgba(239, 68, 68, 0.14)',
-    borderColor: 'rgba(239, 68, 68, 0.45)',
+    color: '#22c55e',
+    bgTint: 'rgba(34, 197, 94, 0.14)',
+    borderColor: 'rgba(34, 197, 94, 0.45)',
   },
 ];
 
