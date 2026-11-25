@@ -27,6 +27,8 @@ export const KNU_NPM_TRANSLATIONS: Record<EventLocale, Record<string, string>> =
     monitorBackDashboard: 'Dashboard',
     monitorWaiting: 'Waiting',
     monitorLiveCount: '{live} Live · {done}/7 Done',
+    monitorParensOn: '() Names ON',
+    monitorParensOff: '() Names OFF',
     continueOnDevice: 'Continue Here',
     liveInProgressTag: 'LIVE',
 
@@ -290,6 +292,8 @@ export const KNU_NPM_TRANSLATIONS: Record<EventLocale, Record<string, string>> =
     monitorBackDashboard: 'ダッシュボード',
     monitorWaiting: '待機中',
     monitorLiveCount: '進行中 {live}卓 · 完了 {done}/7',
+    monitorParensOn: '() 併記 ON',
+    monitorParensOff: '() 併記 OFF',
     continueOnDevice: 'この端末で引き継ぐ',
     liveInProgressTag: '対局中',
 
@@ -553,6 +557,8 @@ export const KNU_NPM_TRANSLATIONS: Record<EventLocale, Record<string, string>> =
     monitorBackDashboard: '대시보드',
     monitorWaiting: '대기 중',
     monitorLiveCount: '진행중 {live}탁 · 완료 {done}/7',
+    monitorParensOn: '() 괄호 ON',
+    monitorParensOff: '() 괄호 OFF',
     continueOnDevice: '이 기기에서 이어하기',
     liveInProgressTag: '진행 중',
 

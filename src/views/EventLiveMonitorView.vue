@@ -8,6 +8,7 @@ import {
   EVENT_TEAM_MAP,
   formatEventPlayerName,
   getRoundMatches,
+  shouldShowNameParentheses,
   type EventMatchSlot,
   type TeamId,
 } from '@/data/knuNpm2026';
@@ -79,6 +80,21 @@ const parseInitialRoundMode = (): 'auto' | number => {
 
 const selectedRoundMode = ref<'auto' | number>(parseInitialRoundMode());
 const showProjectedPoints = ref(true);
+const localNameParensOverride = ref<boolean | null>(null);
+const showNameParens = computed(() =>
+  localNameParensOverride.value !== null
+    ? localNameParensOverride.value
+    : shouldShowNameParentheses(state.value.config, props.eventLocale)
+);
+const toggleNameParens = () => {
+  localNameParensOverride.value = !showNameParens.value;
+};
+watch(
+  () => JSON.stringify(state.value.config.nameParenthesesLocales || []),
+  () => {
+    localNameParensOverride.value = null;
+  }
+);
 const isFullscreen = ref(false);
 const lastSyncAt = ref(Date.now());
 const nowTick = ref(Date.now());
@@ -307,7 +323,7 @@ const tableCards = computed<TableMonitorCard[]>(() => {
           const ep = EVENT_PLAYER_MAP[e.playerId];
           return {
             playerId: e.playerId,
-            name: formatEventPlayerName(ep ?? e.playerId, props.eventLocale, 'primary'),
+            name: formatEventPlayerName(ep ?? e.playerId, props.eventLocale, 'full', showNameParens.value),
             teamId: ep?.teamId || 'A',
             isPro: Boolean(ep?.isPro),
             wind: windsDefault[e.seatIndex] || '',
@@ -346,7 +362,7 @@ const tableCards = computed<TableMonitorCard[]>(() => {
           const w = liveGame.winds?.[idx] || windsDefault[idx];
           return {
             playerId: e.playerId,
-            name: formatEventPlayerName(ep ?? e.playerId, props.eventLocale, 'primary'),
+            name: formatEventPlayerName(ep ?? e.playerId, props.eventLocale, 'full', showNameParens.value),
             teamId: ep?.teamId || 'A',
             isPro: Boolean(ep?.isPro),
             wind: w,
@@ -375,7 +391,7 @@ const tableCards = computed<TableMonitorCard[]>(() => {
       const ep = EVENT_PLAYER_MAP[pid];
       return {
         playerId: pid,
-        name: formatEventPlayerName(ep ?? pid, props.eventLocale, 'primary'),
+        name: formatEventPlayerName(ep ?? pid, props.eventLocale, 'full', showNameParens.value),
         teamId: ep?.teamId || 'A',
         isPro: Boolean(ep?.isPro),
         wind: windsDefault[idx],
@@ -789,6 +805,15 @@ const lastSyncText = computed(() => {
           @click="showProjectedPoints = !showProjectedPoints"
         >
           {{ showProjectedPoints ? '⚡ Live Pt ON' : 'Confirmed Pt' }}
+        </button>
+
+        <button
+          type="button"
+          class="lm-btn"
+          :class="{ active: showNameParens }"
+          @click="toggleNameParens"
+        >
+          {{ showNameParens ? tr('monitorParensOn') : tr('monitorParensOff') }}
         </button>
 
         <button v-if="isSandbox" type="button" class="lm-btn accent" @click="handleSimulateLive">
