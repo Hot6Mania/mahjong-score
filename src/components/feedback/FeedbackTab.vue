@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import {
   fetchFeedbackItems,
   createFeedbackItem,
@@ -8,11 +8,20 @@ import {
   deleteFeedbackItem,
   getLikedFeedbackIds,
   saveLikedFeedbackIds,
+  getFeedbackDisplayImages,
+  MAX_FEEDBACK_IMAGES_PER_POST,
   type FeedbackCategory,
   type FeedbackStatus,
-  type FeedbackItem
+  type FeedbackItem,
+  type FeedbackDisplayImage,
 } from '@/services/feedbackService';
 import { checkAdminStatus, getLastAttendeeName } from '@/services/scheduleService';
+
+interface PendingFeedbackImage {
+  key: string;
+  previewUrl: string;
+  file: File;
+}
 
 const items = ref<FeedbackItem[]>([]);
 const isLoading = ref(false);
@@ -26,6 +35,7 @@ const isFormOpen = ref(false);
 const isSubmitting = ref(false);
 const formError = ref('');
 const statusMessage = ref('');
+const isDragOverPhotos = ref(false);
 
 const form = ref<{
   category: FeedbackCategory;
@@ -40,6 +50,14 @@ const form = ref<{
   authorName: getLastAttendeeName() || '',
   pin: '',
 });
+
+const pendingImages = ref<PendingFeedbackImage[]>([]);
+const feedbackFileInputRef = ref<HTMLInputElement | null>(null);
+
+// 사진 크게 보기 라이트박스 상태
+const lightboxImages = ref<FeedbackDisplayImage[]>([]);
+const lightboxIndex = ref(0);
+const lightboxTitle = ref('');
 
 // 관리자 편집 상태
 const adminEditingId = ref<string>('');
@@ -78,6 +96,140 @@ const filteredItems = computed(() => {
     return true;
   });
 });
+
+const currentLightboxImage = computed<FeedbackDisplayImage | null>(() => {
+  if (lightboxImages.value.length === 0) return null;
+  return lightboxImages.value[lightboxIndex.value] || lightboxImages.value[0] || null;
+});
+
+const isImageFile = (file: File): boolean => {
+  if (!file) return false;
+  if (file.type && file.type.startsWith('image/')) return true;
+  return /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif)$/i.test(file.name || '');
+};
+
+const clearPendingImages = () => {
+  for (const img of pendingImages.value) {
+    if (img.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(img.previewUrl);
+    }
+  }
+  pendingImages.value = [];
+  if (feedbackFileInputRef.value) {
+    feedbackFileInputRef.value.value = '';
+  }
+};
+
+const appendImageFiles = (rawFiles: File[]) => {
+  const files = rawFiles.filter(isImageFile);
+  if (files.length === 0) {
+    if (rawFiles.length > 0) {
+      formError.value = '이미지 파일만 첨부할 수 있습니다.';
+    }
+    return;
+  }
+
+  const remaining = MAX_FEEDBACK_IMAGES_PER_POST - pendingImages.value.length;
+  if (remaining <= 0) {
+    showBriefMessage(`사진은 최대 ${MAX_FEEDBACK_IMAGES_PER_POST}장까지 첨부할 수 있습니다.`);
+    return;
+  }
+
+  const filesToAdd = files.slice(0, remaining);
+  if (files.length > remaining) {
+    showBriefMessage(`최대 ${MAX_FEEDBACK_IMAGES_PER_POST}장까지 첨부되어 초과된 ${files.length - remaining}장은 제외되었습니다.`);
+  }
+
+  for (const file of filesToAdd) {
+    const previewUrl = URL.createObjectURL(file);
+    pendingImages.value.push({
+      key: `fb_new_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      previewUrl,
+      file,
+    });
+  }
+  formError.value = '';
+};
+
+const handleFileSelect = (e: Event) => {
+  const input = e.target as HTMLInputElement;
+  const files = Array.from(input.files || []);
+  appendImageFiles(files);
+  input.value = '';
+};
+
+const handlePhotoDrop = (e: DragEvent) => {
+  isDragOverPhotos.value = false;
+  const files = Array.from(e.dataTransfer?.files || []);
+  appendImageFiles(files);
+};
+
+const triggerFilePicker = () => {
+  if (pendingImages.value.length >= MAX_FEEDBACK_IMAGES_PER_POST) return;
+  feedbackFileInputRef.value?.click();
+};
+
+const removePendingImage = (idx: number) => {
+  const target = pendingImages.value[idx];
+  if (!target) return;
+  if (target.previewUrl.startsWith('blob:')) {
+    URL.revokeObjectURL(target.previewUrl);
+  }
+  pendingImages.value.splice(idx, 1);
+};
+
+const movePendingImage = (idx: number, delta: number) => {
+  const nextIdx = idx + delta;
+  if (nextIdx < 0 || nextIdx >= pendingImages.value.length) return;
+  const arr = [...pendingImages.value];
+  const [moved] = arr.splice(idx, 1);
+  arr.splice(nextIdx, 0, moved);
+  pendingImages.value = arr;
+};
+
+const closeForm = () => {
+  clearPendingImages();
+  formError.value = '';
+  isFormOpen.value = false;
+};
+
+const openLightbox = (item: FeedbackItem, index: number) => {
+  const imgs = getFeedbackDisplayImages(item);
+  if (imgs.length === 0) return;
+  lightboxImages.value = imgs;
+  lightboxIndex.value = Math.max(0, Math.min(index, imgs.length - 1));
+  lightboxTitle.value = item.title || '';
+};
+
+const closeLightbox = () => {
+  lightboxImages.value = [];
+  lightboxIndex.value = 0;
+  lightboxTitle.value = '';
+};
+
+const stepLightbox = (delta: number) => {
+  const total = lightboxImages.value.length;
+  if (total <= 1) return;
+  lightboxIndex.value = (lightboxIndex.value + delta + total) % total;
+};
+
+const handleLightboxKeydown = (e: KeyboardEvent) => {
+  if (lightboxImages.value.length === 0) return;
+  if (e.key === 'Escape') {
+    closeLightbox();
+  } else if (e.key === 'ArrowLeft') {
+    stepLightbox(-1);
+  } else if (e.key === 'ArrowRight') {
+    stepLightbox(1);
+  }
+};
+
+const handleThumbError = (e: Event, fullUrl: string) => {
+  const img = e.target as HTMLImageElement | null;
+  if (img && fullUrl && img.src !== fullUrl) {
+    img.src = fullUrl;
+  }
+};
 
 const formatDateTime = (ts: number): string => {
   if (!ts) return '';
@@ -128,6 +280,7 @@ const handleSubmit = async () => {
       content: form.value.content,
       authorName: form.value.authorName || '익명',
       pin: form.value.pin,
+      imageFiles: pendingImages.value.map((it) => it.file),
     });
     if (res.success && res.items) {
       items.value = res.items;
@@ -135,6 +288,7 @@ const handleSubmit = async () => {
       form.value.title = '';
       form.value.content = '';
       form.value.pin = '';
+      clearPendingImages();
       isFormOpen.value = false;
       showBriefMessage('소중한 피드백이 등록되었습니다!');
     } else {
@@ -219,6 +373,7 @@ const handleDelete = async (item: FeedbackItem) => {
 };
 
 onMounted(async () => {
+  window.addEventListener('keydown', handleLightboxKeydown);
   loadFeedback();
   try {
     const adminInfo = await checkAdminStatus();
@@ -227,6 +382,11 @@ onMounted(async () => {
       form.value.authorName = adminInfo.attendeeName;
     }
   } catch {}
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleLightboxKeydown);
+  clearPendingImages();
 });
 </script>
 
@@ -243,7 +403,7 @@ onMounted(async () => {
           <button type="button" class="fb-btn-refresh" @click="loadFeedback(true)" :disabled="isLoading" title="새로고침">
             새로고침
           </button>
-          <button type="button" class="fb-btn-write" @click="isFormOpen = !isFormOpen">
+          <button type="button" class="fb-btn-write" @click="isFormOpen ? closeForm() : (isFormOpen = true)">
             {{ isFormOpen ? '작성 닫기' : '+ 피드백 작성' }}
           </button>
         </div>
@@ -359,12 +519,88 @@ onMounted(async () => {
         ></textarea>
       </div>
 
+      <!-- 다중 사진 첨부 -->
+      <div class="fb-form-row">
+        <label class="fb-label">
+          사진 첨부 (선택)
+          <span class="fb-sub-hint">({{ pendingImages.length }}/{{ MAX_FEEDBACK_IMAGES_PER_POST }}장 · 여러 장 선택 가능)</span>
+        </label>
+        <div
+          class="fb-photo-dropzone"
+          :class="{
+            'is-dragover': isDragOverPhotos,
+            'is-disabled': pendingImages.length >= MAX_FEEDBACK_IMAGES_PER_POST
+          }"
+          @click="triggerFilePicker"
+          @dragover.prevent="isDragOverPhotos = true"
+          @dragleave.prevent="isDragOverPhotos = false"
+          @drop.prevent="handlePhotoDrop"
+        >
+          <input
+            ref="feedbackFileInputRef"
+            type="file"
+            accept="image/*"
+            multiple
+            class="fb-file-input-hidden"
+            :disabled="pendingImages.length >= MAX_FEEDBACK_IMAGES_PER_POST"
+            @change="handleFileSelect"
+          />
+          <svg class="fb-photo-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+          <span class="fb-photo-dropzone-text">
+            {{
+              pendingImages.length >= MAX_FEEDBACK_IMAGES_PER_POST
+                ? `최대 ${MAX_FEEDBACK_IMAGES_PER_POST}장까지 첨부되었습니다`
+                : '클릭하거나 이미지를 끌어다 놓아 사진 추가 (복수 첨부 가능)'
+            }}
+          </span>
+        </div>
+
+        <div v-if="pendingImages.length > 0" class="fb-upload-preview-grid">
+          <div
+            v-for="(img, idx) in pendingImages"
+            :key="img.key"
+            class="fb-upload-preview-item"
+          >
+            <img :src="img.previewUrl" :alt="`첨부 미리보기 ${idx + 1}`" class="fb-upload-preview-img" />
+            <span class="fb-upload-order-badge" :class="{ 'is-cover': idx === 0 }">
+              {{ idx === 0 ? '대표' : idx + 1 }}
+            </span>
+            <button
+              type="button"
+              class="fb-upload-remove-btn"
+              title="사진 제거"
+              @click.stop="removePendingImage(idx)"
+            >✕</button>
+            <div v-if="pendingImages.length > 1" class="fb-upload-move-bar">
+              <button
+                type="button"
+                class="fb-upload-move-btn"
+                :disabled="idx === 0"
+                title="앞으로 이동"
+                @click.stop="movePendingImage(idx, -1)"
+              >◀</button>
+              <button
+                type="button"
+                class="fb-upload-move-btn"
+                :disabled="idx === pendingImages.length - 1"
+                title="뒤로 이동"
+                @click.stop="movePendingImage(idx, 1)"
+              >▶</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div v-if="formError" class="fb-error-text">{{ formError }}</div>
 
       <div class="fb-form-footer">
-        <button type="button" class="fb-btn-cancel" @click="isFormOpen = false">취소</button>
+        <button type="button" class="fb-btn-cancel" @click="closeForm">취소</button>
         <button type="button" class="fb-btn-submit" :disabled="isSubmitting" @click="handleSubmit">
-          {{ isSubmitting ? '등록 중...' : '피드백 등록' }}
+          {{ isSubmitting ? (pendingImages.length > 0 ? '사진 업로드 중...' : '등록 중...') : '피드백 등록' }}
         </button>
       </div>
     </div>
@@ -404,6 +640,9 @@ onMounted(async () => {
             <span class="fb-status-badge" :class="`status-${item.status}`">
               {{ STATUS_LABELS[item.status] || '접수됨' }}
             </span>
+            <span v-if="getFeedbackDisplayImages(item).length > 0" class="fb-photo-count-badge">
+              사진 {{ getFeedbackDisplayImages(item).length }}장
+            </span>
           </div>
           <div class="fb-item-meta">
             <span class="fb-author">{{ item.authorName || '익명' }}</span>
@@ -413,6 +652,27 @@ onMounted(async () => {
 
         <h3 class="fb-item-title">{{ item.title }}</h3>
         <p class="fb-item-content">{{ item.content }}</p>
+
+        <!-- 첨부 사진 썸네일 그리드 -->
+        <div v-if="getFeedbackDisplayImages(item).length > 0" class="fb-item-images-grid">
+          <button
+            v-for="(img, imgIdx) in getFeedbackDisplayImages(item)"
+            :key="img.key"
+            type="button"
+            class="fb-item-image-thumb-btn"
+            :title="`첨부 사진 ${imgIdx + 1} 크게 보기`"
+            @click="openLightbox(item, imgIdx)"
+          >
+            <img
+              :src="img.thumbUrl"
+              :alt="`${item.title} 첨부 사진 ${imgIdx + 1}`"
+              loading="lazy"
+              decoding="async"
+              class="fb-item-image-thumb"
+              @error="handleThumbError($event, img.fullUrl)"
+            />
+          </button>
+        </div>
 
         <!-- 관리자 답변 박스 -->
         <div v-if="item.adminReply" class="fb-admin-reply-box">
@@ -480,6 +740,62 @@ onMounted(async () => {
         </div>
       </article>
     </div>
+
+    <!-- 첨부 사진 라이트박스 -->
+    <Transition name="modal-fade">
+      <div
+        v-if="currentLightboxImage"
+        class="fb-lightbox-overlay"
+        v-backdrop-dismiss="closeLightbox"
+      >
+        <div class="fb-lightbox-card">
+          <div class="fb-lightbox-header">
+            <div class="fb-lightbox-title-wrap">
+              <span class="fb-lightbox-title">{{ lightboxTitle }}</span>
+              <span v-if="lightboxImages.length > 1" class="fb-lightbox-counter">
+                {{ lightboxIndex + 1 }} / {{ lightboxImages.length }}
+              </span>
+            </div>
+            <button type="button" class="fb-lightbox-close" @click="closeLightbox" title="닫기">✕</button>
+          </div>
+
+          <div class="fb-lightbox-stage">
+            <button
+              v-if="lightboxImages.length > 1"
+              type="button"
+              class="fb-lightbox-nav prev"
+              title="이전 사진"
+              @click.stop="stepLightbox(-1)"
+            >‹</button>
+            <img
+              :src="currentLightboxImage.fullUrl"
+              :alt="`${lightboxTitle} 사진 ${lightboxIndex + 1}`"
+              class="fb-lightbox-img"
+            />
+            <button
+              v-if="lightboxImages.length > 1"
+              type="button"
+              class="fb-lightbox-nav next"
+              title="다음 사진"
+              @click.stop="stepLightbox(1)"
+            >›</button>
+          </div>
+
+          <div v-if="lightboxImages.length > 1" class="fb-lightbox-strip">
+            <button
+              v-for="(img, idx) in lightboxImages"
+              :key="`lb-${img.key}`"
+              type="button"
+              class="fb-lightbox-strip-btn"
+              :class="{ active: idx === lightboxIndex }"
+              @click="lightboxIndex = idx"
+            >
+              <img :src="img.thumbUrl" :alt="`미리보기 ${idx + 1}`" @error="handleThumbError($event, img.fullUrl)" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -490,6 +806,7 @@ onMounted(async () => {
   gap: 14px;
   width: 100%;
   box-sizing: border-box;
+  font-size: 13.5px;
 }
 .fb-hero-card,
 .fb-form-card,
@@ -642,6 +959,12 @@ html.dark .fb-toast-banner {
   font-weight: 700;
   color: var(--text-color, #1e293b);
 }
+.fb-sub-hint {
+  font-weight: 500;
+  font-size: 11.5px;
+  color: var(--text-dimmed, #64748b);
+  margin-left: 4px;
+}
 .fb-category-chips {
   display: flex;
   flex-wrap: wrap;
@@ -680,6 +1003,7 @@ html.dark .fb-cat-chip.selected {
   font-size: 13.5px;
   font-family: inherit;
   outline: none;
+  text-align: left;
 }
 html.dark .fb-input,
 html.dark .fb-textarea,
@@ -697,6 +1021,142 @@ html.dark .fb-select {
   resize: vertical;
   line-height: 1.5;
 }
+
+/* 다중 사진 첨부 드롭존 & 미리보기 */
+.fb-file-input-hidden {
+  display: none;
+}
+.fb-photo-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 14px;
+  border-radius: 8px;
+  border: 1.5px dashed var(--border-color, #cbd5e1);
+  background: var(--bg-card, #f8fafc);
+  color: var(--text-dimmed, #64748b);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.fb-photo-dropzone:hover:not(.is-disabled),
+.fb-photo-dropzone.is-dragover {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+  color: #2563eb;
+}
+.fb-photo-dropzone.is-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+html.dark .fb-photo-dropzone {
+  background: #27272a;
+  border-color: #3f3f46;
+  color: #a1a1aa;
+}
+html.dark .fb-photo-dropzone:hover:not(.is-disabled),
+html.dark .fb-photo-dropzone.is-dragover {
+  border-color: #60a5fa;
+  background: rgba(59, 130, 246, 0.14);
+  color: #93c5fd;
+}
+.fb-photo-icon {
+  flex-shrink: 0;
+}
+.fb-photo-dropzone-text {
+  line-height: 1.35;
+}
+.fb-upload-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+.fb-upload-preview-item {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-color, #e2e8f0);
+  background: var(--bg-card, #f8fafc);
+}
+html.dark .fb-upload-preview-item {
+  border-color: #334155;
+  background: #18181b;
+}
+.fb-upload-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.fb-upload-order-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.fb-upload-order-badge.is-cover {
+  background: #2563eb;
+}
+.fb-upload-remove-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(220, 38, 38, 0.88);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.fb-upload-remove-btn:hover {
+  background: #dc2626;
+}
+.fb-upload-move-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  background: linear-gradient(transparent, rgba(15, 23, 42, 0.72));
+  padding: 6px 4px 3px;
+}
+.fb-upload-move-btn {
+  width: 24px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+  font-size: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.fb-upload-move-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 .fb-error-text {
   color: #dc2626;
   font-size: 12.5px;
@@ -784,14 +1244,24 @@ html.dark .fb-filter-pill {
 .fb-item-badges {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
 }
 .fb-cat-badge,
-.fb-status-badge {
+.fb-status-badge,
+.fb-photo-count-badge {
   padding: 3px 8px;
   border-radius: 6px;
   font-size: 11px;
   font-weight: 700;
+}
+.fb-photo-count-badge {
+  background: rgba(139, 92, 246, 0.12);
+  color: #7c3aed;
+}
+html.dark .fb-photo-count-badge {
+  background: rgba(139, 92, 246, 0.22);
+  color: #c4b5fd;
 }
 .fb-cat-badge.cat-feature { background: rgba(37, 99, 235, 0.12); color: #2563eb; }
 .fb-cat-badge.cat-bug { background: rgba(220, 38, 38, 0.12); color: #dc2626; }
@@ -836,6 +1306,39 @@ html.dark .fb-status-badge.status-declined { color: #94a3b8; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* 카드 내 첨부 사진 썸네일 그리드 */
+.fb-item-images-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+.fb-item-image-thumb-btn {
+  padding: 0;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-card, #f8fafc);
+  aspect-ratio: 4 / 3;
+  cursor: zoom-in;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.fb-item-image-thumb-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+html.dark .fb-item-image-thumb-btn {
+  border-color: #3f3f46;
+  background: #27272a;
+}
+.fb-item-image-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .fb-admin-reply-box {
   margin-top: 4px;
   padding: 10px 12px;
@@ -938,6 +1441,155 @@ html.dark .fb-admin-panel {
   gap: 5px;
 }
 
+/* 첨부 사진 라이트박스 모달 */
+.fb-lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2800;
+  background: rgba(10, 12, 18, 0.8);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.fb-lightbox-card {
+  width: min(900px, 96vw);
+  max-height: 92vh;
+  background: var(--card-bg-color, #ffffff);
+  color: var(--text-color, #0f172a);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+html.dark .fb-lightbox-card {
+  background: #18181b;
+  color: #f4f4f5;
+  border-color: #27272a;
+}
+.fb-lightbox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .fb-lightbox-header {
+  border-bottom-color: #27272a;
+}
+.fb-lightbox-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.fb-lightbox-title {
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fb-lightbox-counter {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.14);
+  color: #2563eb;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+html.dark .fb-lightbox-counter {
+  background: rgba(59, 130, 246, 0.22);
+  color: #93c5fd;
+}
+.fb-lightbox-close {
+  border: none;
+  background: transparent;
+  color: var(--text-dimmed, #64748b);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+}
+.fb-lightbox-stage {
+  position: relative;
+  background: #0f1219;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 260px;
+  max-height: 70vh;
+  overflow: hidden;
+}
+.fb-lightbox-img {
+  max-width: 100%;
+  max-height: 70vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.fb-lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(15, 23, 42, 0.65);
+  color: #ffffff;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0 2px;
+}
+.fb-lightbox-nav.prev { left: 10px; }
+.fb-lightbox-nav.next { right: 10px; }
+.fb-lightbox-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+html.dark .fb-lightbox-strip {
+  border-top-color: #27272a;
+}
+.fb-lightbox-strip-btn {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  background: transparent;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.fb-lightbox-strip-btn.active {
+  opacity: 1;
+  border-color: #2563eb;
+}
+.fb-lightbox-strip-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 @media (max-width: 640px) {
   .fb-hero-card,
   .fb-form-card,
@@ -949,6 +1601,14 @@ html.dark .fb-admin-panel {
   }
   .fb-form-grid-2 {
     grid-template-columns: 1fr;
+  }
+  .fb-upload-preview-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .fb-item-images-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
   }
 }
 </style>

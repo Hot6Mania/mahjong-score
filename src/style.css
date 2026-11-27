@@ -65,7 +65,8 @@ html.dark {
 /* 글자 드래그 방지 */
 *{
   margin: 0;
-  -webkit-text-size-adjust:none;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   -webkit-user-drag: none;
   -webkit-user-select: none;
   -moz-user-select: none;
@@ -91,6 +92,9 @@ html.dark {
 }
 
 html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   overflow-x: hidden;
   overflow-y: scroll !important;
   overscroll-behavior: auto;
