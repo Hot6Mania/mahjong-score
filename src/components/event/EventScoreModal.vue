@@ -505,8 +505,9 @@ const handleDelete = () => {
 
 .score-modal-card {
   width: 100%;
-  max-width: 720px;
+  max-width: 780px;
   max-height: 92vh;
+  max-height: 92dvh;
   display: flex;
   flex-direction: column;
   background: var(--card-bg-color);
@@ -515,6 +516,7 @@ const handleDelete = () => {
   border-radius: 14px;
   box-shadow: 0 22px 50px rgba(0, 0, 0, 0.35);
   overflow: hidden;
+  box-sizing: border-box;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', 'Noto Sans JP', sans-serif;
 }
 
@@ -720,9 +722,10 @@ const handleDelete = () => {
   gap: 2px;
 }
 .score-num-input {
-  width: 96px !important;
-  padding: 7px 8px !important;
-  font-size: 14px !important;
+  width: 112px !important;
+  box-sizing: border-box;
+  padding: 7px 9px !important;
+  font-size: 14.5px !important;
   font-weight: 700;
   border-radius: 7px !important;
   border: 1px solid var(--input-border-color) !important;
@@ -1024,12 +1027,124 @@ const handleDelete = () => {
   border-color: rgba(239, 68, 68, 0.4);
 }
 
-@media (max-width: 600px) {
-  .meta-inputs {
-    grid-template-columns: 1fr;
+@media (max-width: 640px) {
+  .ev-modal-backdrop {
+    padding: 6px;
+    align-items: flex-start;
+  }
+  .score-modal-card {
+    max-width: 100%;
+    max-height: calc(100dvh - 12px);
+    margin: auto 0;
+    border-radius: 12px;
+  }
+  .ev-modal-header {
+    padding: 12px 14px 10px;
+  }
+  .ev-modal-title {
+    font-size: 15px;
+  }
+  .score-modal-body {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+  .ev-modal-footer {
+    padding: 10px 14px 12px;
+  }
+  .score-table-wrap {
+    overflow-x: visible;
+  }
+  .score-entry-table,
+  .score-entry-table tbody {
+    display: block;
+    width: 100%;
+  }
+  .score-entry-table thead {
+    display: none;
+  }
+  .score-entry-table tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'seat player rank pt'
+      'input input penalty penalty';
+    align-items: center;
+    gap: 8px 6px;
+    padding: 10px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-card);
+  }
+  .score-entry-table tr:last-child {
+    margin-bottom: 0;
+  }
+  .score-entry-table td {
+    padding: 0;
+    border-bottom: none;
+  }
+  .col-seat {
+    grid-area: seat;
+  }
+  .col-player {
+    grid-area: player;
+    min-width: 0;
+  }
+  .col-rank {
+    grid-area: rank;
+  }
+  .col-pt {
+    grid-area: pt;
+    text-align: right;
+  }
+  .col-input {
+    grid-area: input;
+    min-width: 0;
+  }
+  .col-penalty {
+    grid-area: penalty;
+    justify-self: end;
+  }
+  .player-cell {
+    flex-wrap: wrap;
+    white-space: normal;
+    row-gap: 2px;
+  }
+  .p-name {
+    font-size: 13.5px;
+    word-break: keep-all;
+  }
+  .score-input-wrap {
+    justify-content: stretch;
+    width: 100%;
+    gap: 4px;
   }
   .score-num-input {
-    width: 78px !important;
+    width: 100% !important;
+    min-width: 0;
+    flex: 1;
+    padding: 9px 10px !important;
+    font-size: 16px !important;
+  }
+  .riichi-bonus-chip {
+    text-align: left;
+    white-space: normal;
+  }
+  .penalty-wrap {
+    justify-content: flex-end;
+    gap: 4px;
+  }
+  .btn-chombo-chip {
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+  .penalty-input {
+    width: 54px !important;
+    padding: 8px 4px !important;
+    font-size: 14px !important;
+  }
+  .meta-inputs {
+    grid-template-columns: 1fr;
   }
 }
 </style>
