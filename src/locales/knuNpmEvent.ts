@@ -44,6 +44,8 @@ export const KNU_NPM_TRANSLATIONS: Record<EventLocale, Record<string, string>> =
 
     tabStandings: 'Standings',
     tabDetailedStats: 'Detailed Stats',
+    tabGameLogs: 'Game Logs',
+    tabMvp: 'MVP Candidates',
     tabSchedule: 'Schedule & Record',
     tabRosters: 'Team Rosters',
     tabRules: 'Rules',
@@ -309,6 +311,8 @@ export const KNU_NPM_TRANSLATIONS: Record<EventLocale, Record<string, string>> =
 
     tabStandings: '総合順位',
     tabDetailedStats: '詳細スタッツ',
+    tabGameLogs: '局別対局ログ',
+    tabMvp: 'MVP候補',
     tabSchedule: '対戦表・結果入力',
     tabRosters: 'チーム編成',
     tabRules: '大会ルール',
@@ -574,6 +578,8 @@ export const KNU_NPM_TRANSLATIONS: Record<EventLocale, Record<string, string>> =
 
     tabStandings: '종합 순위',
     tabDetailedStats: '상세 스탯',
+    tabGameLogs: '국별 기록',
+    tabMvp: 'MVP 후보',
     tabSchedule: '대진표 · 점수 기록',
     tabRosters: '팀 로스터',
     tabRules: '대회 규정',

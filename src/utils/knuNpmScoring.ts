@@ -2071,3 +2071,737 @@ export function runEventQaSelfTest(currentState: EventStatePayload): QaSelfTestR
     checks,
   };
 }
+
+// ==========================================
+// 국별 점수 이동 파서 + 라운드별/전체 MVP 후보 엔진
+// ==========================================
+
+export type WinTier = 'normal' | 'mangan' | 'haneman' | 'baiman' | 'sanbaiman' | 'yakuman';
+
+export interface ParsedRoundPlayerMovement {
+  seatIdx: number;
+  playerId: number;
+  startWind: string;
+  handWind: string;
+  scoreBefore: number;
+  delta: number;
+  scoreAfter: number;
+  isRiichi: boolean;
+  isWin: boolean;
+  isLose: boolean;
+  isTenpai: boolean;
+  isCheat: boolean;
+  beolbuCount: number;
+  isDealer: boolean;
+  winValue: number;
+  winTier: WinTier;
+}
+
+export interface ParsedRoundMovement {
+  stepIndex: number;
+  label: string;
+  status: string; // 'tsumo' | 'ron' | 'normal_draw' | 'special_draw' | 'nagashi' | 'cheat' | 'beolbu'
+  dealerSeatIdx: number;
+  isSouthRound: boolean;
+  players: ParsedRoundPlayerMovement[];
+  winnerIds: number[];
+  loserIds: number[];
+  maxWinGain: number;
+  maxWinValue: number;
+  maxWinTier: WinTier;
+}
+
+export interface BigWinHighlight {
+  id: string;
+  matchKey: string;
+  round: number;
+  table: number;
+  handLabel: string;
+  winnerId: number;
+  loserIds: number[];
+  isTsumo: boolean;
+  isDealer: boolean;
+  isRiichi: boolean;
+  isSouthRound: boolean;
+  gain: number;
+  winValue: number;
+  tier: WinTier;
+  scoreBefore: number;
+  scoreAfter: number;
+}
+
+export interface ComebackHighlight {
+  id: string;
+  matchKey: string;
+  round: number;
+  table: number;
+  playerId: number;
+  minScore: number;
+  minScoreHandLabel: string;
+  worstRank: number;
+  maxDeficit: number;
+  finalScore: number;
+  finalRank: number;
+  finalPoint: number;
+  swing: number;
+  rankJump: number;
+  wasSouthComeback: boolean;
+  comebackScore: number;
+}
+
+export interface MvpReasonBadge {
+  kind: 'rank' | 'bigwin' | 'comeback' | 'clean' | 'score';
+  ko: string;
+  en: string;
+  ja: string;
+}
+
+export interface RoundMvpCandidate {
+  round: number;
+  table: number;
+  matchKey: string;
+  playerId: number;
+  finalRank: number;
+  finalScore: number;
+  finalPoint: number;
+  mvpScore: number;
+  bigWins: BigWinHighlight[];
+  comeback: ComebackHighlight | null;
+  dealInCount: number;
+  winCount: number;
+  hasTrackedRounds: boolean;
+  reasons: MvpReasonBadge[];
+}
+
+export interface OverallMvpCandidate {
+  playerId: number;
+  standingRank: number;
+  totalPoints: number;
+  gamesPlayed: number;
+  firstCount: number;
+  avgRank: number;
+  bestScore: number | null;
+  bestMatchKey: string | null;
+  mvpScore: number;
+  bigWins: BigWinHighlight[];
+  comebacks: ComebackHighlight[];
+  maxSingleWin: BigWinHighlight | null;
+  bestComeback: ComebackHighlight | null;
+  reasons: MvpReasonBadge[];
+}
+
+export interface MatchHighlightSummary {
+  maxTier: WinTier;
+  maxWinValue: number;
+  bigWinCount: number;
+  hasComeback: boolean;
+  bestComebackSwing: number;
+  handCount: number;
+}
+
+export interface EventMvpReport {
+  byRound: Record<number, {
+    candidates: RoundMvpCandidate[];
+    bigWins: BigWinHighlight[];
+    comebacks: ComebackHighlight[];
+    completedTables: number;
+    trackedTables: number;
+  }>;
+  overall: {
+    candidates: OverallMvpCandidate[];
+    bigWins: BigWinHighlight[];
+    comebacks: ComebackHighlight[];
+    topPointsLeader: PlayerStanding | null;
+    biggestWin: BigWinHighlight | null;
+    greatestComeback: ComebackHighlight | null;
+    highestGameScore: {
+      playerId: number;
+      score: number;
+      finalPoint: number;
+      matchKey: string;
+      round: number;
+      table: number;
+    } | null;
+  };
+  matchSummaries: Record<string, MatchHighlightSummary>;
+}
+
+const WIN_TIER_ORDER: Record<WinTier, number> = {
+  normal: 0,
+  mangan: 1,
+  haneman: 2,
+  baiman: 3,
+  sanbaiman: 4,
+  yakuman: 5,
+};
+
+export function classifyWinTier(winValue: number, isDealer: boolean): WinTier {
+  if (isDealer) {
+    if (winValue >= 48000) return 'yakuman';
+    if (winValue >= 36000) return 'sanbaiman';
+    if (winValue >= 24000) return 'baiman';
+    if (winValue >= 18000) return 'haneman';
+    if (winValue >= 12000) return 'mangan';
+    return 'normal';
+  }
+  if (winValue >= 32000) return 'yakuman';
+  if (winValue >= 24000) return 'sanbaiman';
+  if (winValue >= 16000) return 'baiman';
+  if (winValue >= 12000) return 'haneman';
+  if (winValue >= 8000) return 'mangan';
+  return 'normal';
+}
+
+export function formatWinTierLabel(tier: WinTier, locale: EventNameLocale): string {
+  const map: Record<EventNameLocale, Record<WinTier, string>> = {
+    ko: {
+      normal: '',
+      mangan: '만관급',
+      haneman: '하네만급',
+      baiman: '배만급',
+      sanbaiman: '삼배만급',
+      yakuman: '역만급',
+    },
+    en: {
+      normal: '',
+      mangan: 'Mangan+',
+      haneman: 'Haneman+',
+      baiman: 'Baiman+',
+      sanbaiman: 'Sanbaiman+',
+      yakuman: 'Yakuman+',
+    },
+    ja: {
+      normal: '',
+      mangan: '満貫級',
+      haneman: '跳満級',
+      baiman: '倍満級',
+      sanbaiman: '三倍満級',
+      yakuman: '役満級',
+    },
+  };
+  return map[locale]?.[tier] ?? '';
+}
+
+export function parseGameRoundMovements(
+  rounds: CompactRoundRecords | null | undefined,
+  startingScore = 25000
+): ParsedRoundMovement[] {
+  if (!rounds || !Array.isArray(rounds.seatPlayerIds) || rounds.seatPlayerIds.length !== 4) {
+    return [];
+  }
+  const times = Array.isArray(rounds.time) ? rounds.time : [];
+  const stepCount = Math.floor((times.length - 1) / 2);
+  if (stepCount <= 0) return [];
+
+  const isDoubleEventArrays =
+    Array.isArray(rounds.riichi) && rounds.riichi.length >= times.length && times.length > 3;
+  const winds = ['東', '南', '西', '北'];
+  const list: ParsedRoundMovement[] = [];
+
+  for (let step = 0; step < stepCount; step++) {
+    const beforeIdx = step * 2;
+    const deltaIdx = step * 2 + 1;
+    const afterIdx = step * 2 + 2;
+    const evIdx = isDoubleEventArrays ? deltaIdx : step + 1;
+    const label = String(times[deltaIdx] || '');
+    const rawStatus = String(rounds.status?.[evIdx] || '');
+    if (rawStatus === 'end' || rawStatus === 'initial' || label === '결과' || label === 'Result') {
+      continue;
+    }
+
+    const riichiRow = rounds.riichi?.[evIdx] || [false, false, false, false];
+    const winRow = rounds.win?.[evIdx] || [false, false, false, false];
+    const loseRow = rounds.lose?.[evIdx] || [false, false, false, false];
+    const tenpaiRow = rounds.tenpai?.[evIdx] || [false, false, false, false];
+    const cheatRow = rounds.cheat?.[evIdx] || [false, false, false, false];
+    const beolbuRow = rounds.beolbu?.[evIdx] || [0, 0, 0, 0];
+    const dealerSeatIdx =
+      typeof rounds.dealer?.[evIdx] === 'number' && rounds.dealer[evIdx] >= 0 && rounds.dealer[evIdx] <= 3
+        ? rounds.dealer[evIdx]
+        : -1;
+
+    let normalizedStatus = rawStatus;
+    if (!normalizedStatus) {
+      if (cheatRow.some(Boolean)) normalizedStatus = 'cheat';
+      else if (winRow.some(Boolean)) normalizedStatus = loseRow.some(Boolean) ? 'ron' : 'tsumo';
+      else normalizedStatus = 'normal_draw';
+    }
+
+    const players: ParsedRoundPlayerMovement[] = [0, 1, 2, 3].map((seatIdx) => {
+      const playerId = Number(rounds.seatPlayerIds[seatIdx]);
+      const scoreBefore = Number(rounds.score?.[seatIdx]?.[beforeIdx] ?? startingScore);
+      const delta = Number(rounds.score?.[seatIdx]?.[deltaIdx] ?? 0);
+      const scoreAfter = Number(rounds.score?.[seatIdx]?.[afterIdx] ?? scoreBefore + delta);
+      const isRiichi = Boolean(riichiRow[seatIdx]);
+      const isWin = Boolean(winRow[seatIdx]);
+      const isLose = Boolean(loseRow[seatIdx]);
+      const isTenpai = Boolean(tenpaiRow[seatIdx]);
+      const isCheat = Boolean(cheatRow[seatIdx]);
+      const beolbuCount = Number(beolbuRow[seatIdx] || 0);
+      const isDealer = dealerSeatIdx >= 0 ? seatIdx === dealerSeatIdx : false;
+      const handWind =
+        dealerSeatIdx >= 0 ? winds[(seatIdx - dealerSeatIdx + 4) % 4] : winds[seatIdx];
+      const winValue = isWin && delta > 0 ? delta + (isRiichi ? 1000 : 0) : 0;
+      const winTier = isWin && winValue > 0 ? classifyWinTier(winValue, isDealer) : 'normal';
+      return {
+        seatIdx,
+        playerId,
+        startWind: winds[seatIdx],
+        handWind,
+        scoreBefore,
+        delta,
+        scoreAfter,
+        isRiichi,
+        isWin,
+        isLose,
+        isTenpai,
+        isCheat,
+        beolbuCount,
+        isDealer,
+        winValue,
+        winTier,
+      };
+    });
+
+    const winnerIds = players.filter((p) => p.isWin).map((p) => p.playerId);
+    const loserIds = players.filter((p) => p.isLose).map((p) => p.playerId);
+    let maxWinGain = 0;
+    let maxWinValue = 0;
+    let maxWinTier: WinTier = 'normal';
+    for (const p of players) {
+      if (p.isWin && p.delta > maxWinGain) maxWinGain = p.delta;
+      if (p.isWin && p.winValue > maxWinValue) maxWinValue = p.winValue;
+      if (WIN_TIER_ORDER[p.winTier] > WIN_TIER_ORDER[maxWinTier]) maxWinTier = p.winTier;
+    }
+
+    list.push({
+      stepIndex: step,
+      label: label || `#${step + 1}`,
+      status: normalizedStatus,
+      dealerSeatIdx,
+      isSouthRound: label.startsWith('南') || label.startsWith('남') || label.startsWith('S'),
+      players,
+      winnerIds,
+      loserIds,
+      maxWinGain,
+      maxWinValue,
+      maxWinTier,
+    });
+  }
+
+  return list;
+}
+
+function computeRankAtSnapshot(scores: number[], seatIdx: number): number {
+  const my = scores[seatIdx];
+  let higher = 0;
+  for (let i = 0; i < scores.length; i++) {
+    if (scores[i] > my || (scores[i] === my && i < seatIdx)) higher++;
+  }
+  return higher + 1;
+}
+
+const BIG_WIN_BONUS: Record<WinTier, number> = {
+  normal: 0,
+  mangan: 9,
+  haneman: 17,
+  baiman: 26,
+  sanbaiman: 38,
+  yakuman: 58,
+};
+
+export function computeEventMvpCandidates(
+  results: Record<string, StoredTableResult>,
+  standings: LeagueStandingsSummary,
+  rawConfig?: Partial<EventScoringConfig>
+): EventMvpReport {
+  const config = normalizeConfig(rawConfig);
+  const byRound: EventMvpReport['byRound'] = {};
+  for (let r = 1; r <= 6; r++) {
+    byRound[r] = {
+      candidates: [],
+      bigWins: [],
+      comebacks: [],
+      completedTables: 0,
+      trackedTables: 0,
+    };
+  }
+
+  const allBigWins: BigWinHighlight[] = [];
+  const allComebacks: ComebackHighlight[] = [];
+  const matchSummaries: Record<string, MatchHighlightSummary> = {};
+  let highestGameScore: EventMvpReport['overall']['highestGameScore'] = null;
+
+  const playerBigWinsMap: Record<number, BigWinHighlight[]> = {};
+  const playerComebacksMap: Record<number, ComebackHighlight[]> = {};
+  const playerBestMatchKey: Record<number, { score: number; key: string }> = {};
+
+  for (const slot of EVENT_MATCH_SCHEDULE) {
+    const res = results[slot.key];
+    const calc = standings.calculatedMatches[slot.key];
+    if (!res || !calc) continue;
+
+    const rBucket = byRound[slot.round];
+    rBucket.completedTables += 1;
+
+    const movements = parseGameRoundMovements(res.rounds, config.startingScore);
+    const hasTracked = movements.length > 0;
+    if (hasTracked) rBucket.trackedTables += 1;
+
+    const matchBigWinsByPlayer: Record<number, BigWinHighlight[]> = {};
+    const matchComebackByPlayer: Record<number, ComebackHighlight> = {};
+    const matchWinsByPlayer: Record<number, number> = {};
+    const matchDealInsByPlayer: Record<number, number> = {};
+
+    let matchMaxTier: WinTier = 'normal';
+    let matchMaxWinValue = 0;
+    let matchBigWinCount = 0;
+    let matchBestComebackSwing = 0;
+
+    if (hasTracked) {
+      // 1) Detect big wins & per-player win/deal-in counts + lowest point/rank trajectory
+      const seatIds = res.rounds!.seatPlayerIds;
+      const minScoreArr = [config.startingScore, config.startingScore, config.startingScore, config.startingScore];
+      const minLabelArr = ['Start', 'Start', 'Start', 'Start'];
+      const worstRankArr = [1, 2, 3, 4];
+      const maxDeficitArr = [0, 0, 0, 0];
+      const southMinRankArr = [1, 1, 1, 1];
+      const southMaxDeficitArr = [0, 0, 0, 0];
+      let sawSouth = false;
+
+      for (const mv of movements) {
+        const scoresBefore = mv.players.map((p) => p.scoreBefore);
+        const scoresAfter = mv.players.map((p) => p.scoreAfter);
+        const leaderBefore = Math.max(...scoresBefore);
+        const leaderAfter = Math.max(...scoresAfter);
+        if (mv.isSouthRound) sawSouth = true;
+
+        for (let s = 0; s < 4; s++) {
+          const pm = mv.players[s];
+          const pid = pm.playerId;
+
+          // Track trajectory at start of South round (before) and after each hand (except final hand's after)
+          const rBefore = computeRankAtSnapshot(scoresBefore, s);
+          const defBefore = Math.max(0, leaderBefore - scoresBefore[s]);
+          if (mv.stepIndex > 0) {
+            if (scoresBefore[s] < minScoreArr[s]) {
+              minScoreArr[s] = scoresBefore[s];
+              minLabelArr[s] = mv.label;
+            }
+            if (rBefore > worstRankArr[s]) worstRankArr[s] = rBefore;
+            if (defBefore > maxDeficitArr[s]) maxDeficitArr[s] = defBefore;
+            if (mv.isSouthRound) {
+              if (rBefore > southMinRankArr[s]) southMinRankArr[s] = rBefore;
+              if (defBefore > southMaxDeficitArr[s]) southMaxDeficitArr[s] = defBefore;
+            }
+          }
+
+          const isLastHand = mv.stepIndex === movements[movements.length - 1].stepIndex;
+          if (!isLastHand) {
+            const rAfter = computeRankAtSnapshot(scoresAfter, s);
+            const defAfter = Math.max(0, leaderAfter - scoresAfter[s]);
+            if (scoresAfter[s] < minScoreArr[s]) {
+              minScoreArr[s] = scoresAfter[s];
+              minLabelArr[s] = mv.label;
+            }
+            if (rAfter > worstRankArr[s]) worstRankArr[s] = rAfter;
+            if (defAfter > maxDeficitArr[s]) maxDeficitArr[s] = defAfter;
+            if (mv.isSouthRound) {
+              if (rAfter > southMinRankArr[s]) southMinRankArr[s] = rAfter;
+              if (defAfter > southMaxDeficitArr[s]) southMaxDeficitArr[s] = defAfter;
+            }
+          }
+
+          if (pm.isWin) {
+            matchWinsByPlayer[pid] = (matchWinsByPlayer[pid] || 0) + 1;
+            if (pm.winTier !== 'normal') {
+              const bw: BigWinHighlight = {
+                id: `${slot.key}-bw-${mv.stepIndex}-${pid}`,
+                matchKey: slot.key,
+                round: slot.round,
+                table: slot.table,
+                handLabel: mv.label,
+                winnerId: pid,
+                loserIds: mv.loserIds,
+                isTsumo: mv.status === 'tsumo' || mv.loserIds.length === 0,
+                isDealer: pm.isDealer,
+                isRiichi: pm.isRiichi,
+                isSouthRound: mv.isSouthRound,
+                gain: pm.delta,
+                winValue: pm.winValue,
+                tier: pm.winTier,
+                scoreBefore: pm.scoreBefore,
+                scoreAfter: pm.scoreAfter,
+              };
+              allBigWins.push(bw);
+              rBucket.bigWins.push(bw);
+              if (!matchBigWinsByPlayer[pid]) matchBigWinsByPlayer[pid] = [];
+              matchBigWinsByPlayer[pid].push(bw);
+              if (!playerBigWinsMap[pid]) playerBigWinsMap[pid] = [];
+              playerBigWinsMap[pid].push(bw);
+              matchBigWinCount += 1;
+              if (pm.winValue > matchMaxWinValue) matchMaxWinValue = pm.winValue;
+              if (WIN_TIER_ORDER[pm.winTier] > WIN_TIER_ORDER[matchMaxTier]) matchMaxTier = pm.winTier;
+            }
+          }
+          if (pm.isLose) {
+            matchDealInsByPlayer[pid] = (matchDealInsByPlayer[pid] || 0) + 1;
+          }
+        }
+      }
+
+      // 2) Evaluate comebacks for each seat
+      for (let s = 0; s < 4; s++) {
+        const pid = seatIds[s];
+        const entry = calc.entries.find((e) => e.playerId === pid);
+        if (!entry) continue;
+        const swing = entry.finalScore - minScoreArr[s];
+        const rankJump = Math.max(0, worstRankArr[s] - entry.rank);
+        const wasSouthComeback =
+          sawSouth &&
+          entry.rank === 1 &&
+          (southMinRankArr[s] >= 3 || southMaxDeficitArr[s] >= 10000);
+
+        const qualifies =
+          (entry.rank === 1 && (worstRankArr[s] >= 3 || maxDeficitArr[s] >= 10000 || swing >= 18000)) ||
+          (entry.rank === 2 && worstRankArr[s] === 4 && swing >= 18000);
+
+        if (qualifies && swing >= 10000) {
+          const comebackScore = round1(
+            (entry.rank === 1 ? 25 : 10) +
+              rankJump * 10 +
+              Math.min(35, swing / 1000) +
+              Math.min(20, maxDeficitArr[s] / 1500) +
+              (wasSouthComeback ? 12 : 0)
+          );
+          const cb: ComebackHighlight = {
+            id: `${slot.key}-cb-${pid}`,
+            matchKey: slot.key,
+            round: slot.round,
+            table: slot.table,
+            playerId: pid,
+            minScore: minScoreArr[s],
+            minScoreHandLabel: minLabelArr[s],
+            worstRank: worstRankArr[s],
+            maxDeficit: maxDeficitArr[s],
+            finalScore: entry.finalScore,
+            finalRank: entry.rank,
+            finalPoint: entry.finalPoint,
+            swing,
+            rankJump,
+            wasSouthComeback,
+            comebackScore,
+          };
+          allComebacks.push(cb);
+          rBucket.comebacks.push(cb);
+          matchComebackByPlayer[pid] = cb;
+          if (!playerComebacksMap[pid]) playerComebacksMap[pid] = [];
+          playerComebacksMap[pid].push(cb);
+          if (swing > matchBestComebackSwing) matchBestComebackSwing = swing;
+        }
+      }
+    }
+
+    matchSummaries[slot.key] = {
+      maxTier: matchMaxTier,
+      maxWinValue: matchMaxWinValue,
+      bigWinCount: matchBigWinCount,
+      hasComeback: matchBestComebackSwing > 0,
+      bestComebackSwing: matchBestComebackSwing,
+      handCount: movements.length,
+    };
+
+    // 3) Build per-round MVP candidates from this table
+    for (const entry of calc.entries) {
+      const pid = entry.playerId;
+      if (!highestGameScore || entry.finalScore > highestGameScore.score) {
+        highestGameScore = {
+          playerId: pid,
+          score: entry.finalScore,
+          finalPoint: entry.finalPoint,
+          matchKey: slot.key,
+          round: slot.round,
+          table: slot.table,
+        };
+      }
+      if (!playerBestMatchKey[pid] || entry.finalScore > playerBestMatchKey[pid].score) {
+        playerBestMatchKey[pid] = { score: entry.finalScore, key: slot.key };
+      }
+
+      const pBigWins = (matchBigWinsByPlayer[pid] || []).sort((a, b) => b.winValue - a.winValue);
+      const pComeback = matchComebackByPlayer[pid] || null;
+      const dealIns = matchDealInsByPlayer[pid] || 0;
+      const wins = matchWinsByPlayer[pid] || 0;
+
+      let mvpScore = entry.finalPoint;
+      if (entry.rank === 1) mvpScore += 12;
+      else if (entry.rank === 2) mvpScore += 4;
+
+      const reasons: MvpReasonBadge[] = [];
+      if (entry.rank === 1) {
+        reasons.push({
+          kind: 'rank',
+          ko: `1위 (${formatSignedPoint(entry.finalPoint)}pt · ${entry.finalScore.toLocaleString()}점)`,
+          en: `1st (${formatSignedPoint(entry.finalPoint)}pt · ${entry.finalScore.toLocaleString()})`,
+          ja: `トップ (${formatSignedPoint(entry.finalPoint)}pt · ${entry.finalScore.toLocaleString()})`,
+        });
+      } else if (entry.finalPoint >= 15) {
+        reasons.push({
+          kind: 'score',
+          ko: `${entry.rank}위 (${formatSignedPoint(entry.finalPoint)}pt)`,
+          en: `#${entry.rank} (${formatSignedPoint(entry.finalPoint)}pt)`,
+          ja: `${entry.rank}着 (${formatSignedPoint(entry.finalPoint)}pt)`,
+        });
+      }
+
+      for (const bw of pBigWins) {
+        mvpScore += BIG_WIN_BONUS[bw.tier] + (bw.isSouthRound ? 4 : 0);
+      }
+      if (pBigWins.length > 0) {
+        const topBw = pBigWins[0];
+        const extra = pBigWins.length > 1 ? ` 외 ${pBigWins.length - 1}회` : '';
+        const extraEn = pBigWins.length > 1 ? ` +${pBigWins.length - 1} more` : '';
+        const extraJa = pBigWins.length > 1 ? ` 他${pBigWins.length - 1}回` : '';
+        reasons.push({
+          kind: 'bigwin',
+          ko: `🔥 ${formatWinTierLabel(topBw.tier, 'ko')} ${topBw.isTsumo ? '쯔모' : '론'} (+${topBw.gain.toLocaleString()})${extra}`,
+          en: `🔥 ${formatWinTierLabel(topBw.tier, 'en')} ${topBw.isTsumo ? 'Tsumo' : 'Ron'} (+${topBw.gain.toLocaleString()})${extraEn}`,
+          ja: `🔥 ${formatWinTierLabel(topBw.tier, 'ja')} ${topBw.isTsumo ? 'ツモ' : 'ロン'} (+${topBw.gain.toLocaleString()})${extraJa}`,
+        });
+      }
+
+      if (pComeback) {
+        mvpScore += Math.min(35, pComeback.comebackScore * 0.45);
+        reasons.push({
+          kind: 'comeback',
+          ko: `⚡ ${pComeback.worstRank}위→${pComeback.finalRank}위 역전 (+${pComeback.swing.toLocaleString()} 스윙)`,
+          en: `⚡ #${pComeback.worstRank}→#${pComeback.finalRank} Comeback (+${pComeback.swing.toLocaleString()})`,
+          ja: `⚡ ${pComeback.worstRank}着→${pComeback.finalRank}着 大逆転 (+${pComeback.swing.toLocaleString()})`,
+        });
+      }
+
+      if (hasTracked && entry.rank === 1 && dealIns === 0 && wins >= 2) {
+        mvpScore += 8;
+        reasons.push({
+          kind: 'clean',
+          ko: `🛡️ 무방총 완승 (${wins}화료)`,
+          en: `🛡️ 0 Deal-in Win (${wins} wins)`,
+          ja: `🛡️ 無放銃トップ (${wins}和了)`,
+        });
+      }
+
+      rBucket.candidates.push({
+        round: slot.round,
+        table: slot.table,
+        matchKey: slot.key,
+        playerId: pid,
+        finalRank: entry.rank,
+        finalScore: entry.finalScore,
+        finalPoint: entry.finalPoint,
+        mvpScore: round1(mvpScore),
+        bigWins: pBigWins,
+        comeback: pComeback,
+        dealInCount: dealIns,
+        winCount: wins,
+        hasTrackedRounds: hasTracked,
+        reasons,
+      });
+    }
+  }
+
+  // Sort per-round arrays
+  for (let r = 1; r <= 6; r++) {
+    byRound[r].candidates.sort((a, b) => b.mvpScore - a.mvpScore || b.finalPoint - a.finalPoint);
+    byRound[r].bigWins.sort((a, b) => b.winValue - a.winValue || b.gain - a.gain);
+    byRound[r].comebacks.sort((a, b) => b.comebackScore - a.comebackScore || b.swing - a.swing);
+  }
+
+  allBigWins.sort((a, b) => b.winValue - a.winValue || b.gain - a.gain);
+  allComebacks.sort((a, b) => b.comebackScore - a.comebackScore || b.swing - a.swing);
+
+  // Build Overall MVP Candidates across all 28 players
+  const overallCandidates: OverallMvpCandidate[] = standings.players
+    .filter((ps) => ps.gamesPlayed > 0)
+    .map((ps) => {
+      const pid = ps.player.id;
+      const bws = (playerBigWinsMap[pid] || []).sort((a, b) => b.winValue - a.winValue);
+      const cbs = (playerComebacksMap[pid] || []).sort((a, b) => b.comebackScore - a.comebackScore);
+      const bwPoints = bws.reduce((sum, bw) => sum + BIG_WIN_BONUS[bw.tier] * 0.75, 0);
+      const cbPoints = cbs.reduce((sum, cb) => sum + Math.min(28, cb.comebackScore * 0.35), 0);
+      const scoreBonus =
+        ps.bestScore !== null ? (ps.bestScore >= 55000 ? 12 : ps.bestScore >= 45000 ? 6 : 0) : 0;
+      const mvpScore = round1(
+        ps.totalPoints + ps.rankCounts[0] * 10 + bwPoints + cbPoints + scoreBonus
+      );
+
+      const reasons: MvpReasonBadge[] = [
+        {
+          kind: 'rank',
+          ko: `종합 ${ps.rank}위 (${formatSignedPoint(ps.totalPoints)}pt · 1위 ${ps.rankCounts[0]}회)`,
+          en: `Overall #${ps.rank} (${formatSignedPoint(ps.totalPoints)}pt · ${ps.rankCounts[0]} wins)`,
+          ja: `総合${ps.rank}位 (${formatSignedPoint(ps.totalPoints)}pt · トップ${ps.rankCounts[0]}回)`,
+        },
+      ];
+      if (bws.length > 0) {
+        const top = bws[0];
+        reasons.push({
+          kind: 'bigwin',
+          ko: `🔥 큰 화료 ${bws.length}회 (최대 ${formatWinTierLabel(top.tier, 'ko')} +${top.gain.toLocaleString()})`,
+          en: `🔥 ${bws.length} Big Win(s) (Best ${formatWinTierLabel(top.tier, 'en')} +${top.gain.toLocaleString()})`,
+          ja: `🔥 高打点 ${bws.length}回 (最大 ${formatWinTierLabel(top.tier, 'ja')} +${top.gain.toLocaleString()})`,
+        });
+      }
+      if (cbs.length > 0) {
+        const topCb = cbs[0];
+        reasons.push({
+          kind: 'comeback',
+          ko: `⚡ 대역전 ${cbs.length}회 (${topCb.matchKey} ${topCb.worstRank}위→${topCb.finalRank}위 +${topCb.swing.toLocaleString()})`,
+          en: `⚡ ${cbs.length} Comeback(s) (${topCb.matchKey} #${topCb.worstRank}→#${topCb.finalRank} +${topCb.swing.toLocaleString()})`,
+          ja: `⚡ 大逆転 ${cbs.length}回 (${topCb.matchKey} ${topCb.worstRank}着→${topCb.finalRank}着 +${topCb.swing.toLocaleString()})`,
+        });
+      }
+      if (ps.detailed.trackedGames >= 2 && ps.detailed.dealInRate !== null && ps.detailed.dealInRate <= 8) {
+        reasons.push({
+          kind: 'clean',
+          ko: `🛡️ 철벽 수비 (방총률 ${ps.detailed.dealInRate.toFixed(1)}%)`,
+          en: `🛡️ Iron Defense (Deal-in ${ps.detailed.dealInRate.toFixed(1)}%)`,
+          ja: `🛡️ 鉄壁守備 (放銃率 ${ps.detailed.dealInRate.toFixed(1)}%)`,
+        });
+      }
+
+      return {
+        playerId: pid,
+        standingRank: ps.rank,
+        totalPoints: ps.totalPoints,
+        gamesPlayed: ps.gamesPlayed,
+        firstCount: ps.rankCounts[0],
+        avgRank: ps.avgRank,
+        bestScore: ps.bestScore,
+        bestMatchKey: playerBestMatchKey[pid]?.key || null,
+        mvpScore,
+        bigWins: bws,
+        comebacks: cbs,
+        maxSingleWin: bws[0] || null,
+        bestComeback: cbs[0] || null,
+        reasons,
+      };
+    })
+    .sort((a, b) => b.mvpScore - a.mvpScore || b.totalPoints - a.totalPoints);
+
+  const topPointsLeader =
+    standings.players.find((p) => p.gamesPlayed > 0) || null;
+
+  return {
+    byRound,
+    overall: {
+      candidates: overallCandidates,
+      bigWins: allBigWins,
+      comebacks: allComebacks,
+      topPointsLeader,
+      biggestWin: allBigWins[0] || null,
+      greatestComeback: allComebacks[0] || null,
+      highestGameScore,
+    },
+    matchSummaries,
+  };
+}

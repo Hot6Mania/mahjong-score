@@ -19,7 +19,11 @@ import {
   type EventNameLocale,
   type EventScoringConfig,
 } from '@/data/knuNpm2026';
-import { type StoredTableResult } from '@/utils/knuNpmScoring';
+import {
+  formatWinTierLabel,
+  parseGameRoundMovements,
+  type StoredTableResult,
+} from '@/utils/knuNpmScoring';
 
 ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale);
 
@@ -40,34 +44,32 @@ const seatPlayerIds = computed(() => {
   return props.result.entries.map((e) => e.playerId);
 });
 
-const roundRows = computed(() => {
-  const r = props.result.rounds;
-  if (!r || !Array.isArray(r.time)) return [];
-  const list: { label: string; deltas: number[]; totals: number[] }[] = [];
-  const stepCount = Math.floor((r.time.length - 1) / 2);
-  for (let s = 0; s < stepCount; s++) {
-    const deltaIdx = s * 2 + 1;
-    const snapIdx = s * 2 + 2;
-    const label = String(r.time[deltaIdx] || '');
-    const st = String(r.status?.[deltaIdx] || '');
-    if (st === 'end' || label === '결과' || label === 'Result') continue;
-    list.push({
-      label: label || `#${s + 1}`,
-      deltas: [0, 1, 2, 3].map((i) => Number(r.score?.[i]?.[deltaIdx] ?? 0)),
-      totals: [0, 1, 2, 3].map((i) => Number(r.score?.[i]?.[snapIdx] ?? props.config.startingScore)),
-    });
-  }
-  return list;
-});
+const movements = computed(() =>
+  parseGameRoundMovements(props.result.rounds, props.config.startingScore)
+);
+
+const tLoc = (ko: string, en: string, ja: string) =>
+  props.eventLocale === 'ja' ? ja : props.eventLocale === 'ko' ? ko : en;
+
+const formatStatusLabel = (status: string): string => {
+  if (status === 'ron') return tLoc('론', 'Ron', 'ロン');
+  if (status === 'tsumo') return tLoc('쯔모', 'Tsumo', 'ツモ');
+  if (status === 'normal_draw') return tLoc('유국', 'Draw', '流局');
+  if (status === 'special_draw') return tLoc('도중유국', 'Abortive', '途中流局');
+  if (status === 'nagashi') return tLoc('유국만관', 'Nagashi', '流し満貫');
+  if (status === 'cheat') return tLoc('촌보', 'Chombo', 'チョンボ');
+  if (status === 'beolbu') return tLoc('벌부', 'Penalty', '罰符');
+  return status;
+};
 
 const chartData = computed(() => {
-  const labels = ['Start', ...roundRows.value.map((row) => row.label)];
+  const labels = ['Start', ...movements.value.map((row) => row.label)];
   const datasets = seatPlayerIds.value.map((pid, idx) => {
     const pl = EVENT_PLAYER_MAP[pid];
     const teamColor = pl ? EVENT_TEAM_MAP[pl.teamId].color : '#64748b';
     return {
       label: pl ? `${formatEventPlayerName(pl, props.eventLocale, 'primary')} (${pl.teamId})` : `#${pid}`,
-      data: [props.config.startingScore, ...roundRows.value.map((row) => row.totals[idx])],
+      data: [props.config.startingScore, ...movements.value.map((row) => row.players[idx]?.scoreAfter ?? props.config.startingScore)],
       borderColor: teamColor,
       backgroundColor: teamColor,
       borderWidth: 2.3,
@@ -115,35 +117,53 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
           <LineChart :data="chartData" :options="chartOptions" />
         </div>
 
-        <div class="table-wrap">
-          <table class="log-table">
-            <thead>
-              <tr>
-                <th>{{ tr('roundCol') }}</th>
-                <th v-for="pid in seatPlayerIds" :key="pid">
+        <div class="urm-list">
+          <div
+            v-for="mv in movements"
+            :key="mv.stepIndex"
+            class="urm-card"
+            :class="{ 'has-bigwin': mv.maxWinTier !== 'normal' }"
+          >
+            <div class="urm-header">
+              <div class="urm-title-group">
+                <span class="urm-title">{{ mv.label }}</span>
+                <span v-if="mv.maxWinTier !== 'normal'" class="urm-bigwin-badge">
+                  🔥 {{ formatWinTierLabel(mv.maxWinTier, eventLocale) }}
+                </span>
+              </div>
+              <span class="urm-status-badge">{{ formatStatusLabel(mv.status) }}</span>
+            </div>
+            <div class="urm-players">
+              <div
+                v-for="pm in mv.players"
+                :key="`${mv.stepIndex}-${pm.playerId}`"
+                class="urm-row"
+                :class="{ 'is-win': pm.isWin, 'is-lose': pm.isLose }"
+              >
+                <div class="urm-left">
+                  <span class="urm-seat" :class="{ 'is-east': pm.handWind === '東' }">{{ pm.handWind }}</span>
                   <span
                     class="th-dot"
-                    :style="{ backgroundColor: EVENT_TEAM_MAP[EVENT_PLAYER_MAP[pid].teamId].color }"
+                    :style="{ backgroundColor: EVENT_TEAM_MAP[EVENT_PLAYER_MAP[pm.playerId]?.teamId || 'A'].color }"
                   ></span>
-                  {{ formatEventPlayerName(EVENT_PLAYER_MAP[pid], eventLocale, 'compact') }}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, idx) in roundRows" :key="idx">
-                <td class="round-col">{{ row.label }}</td>
-                <td v-for="i in [0, 1, 2, 3]" :key="i" class="num-col">
-                  <div
-                    class="delta-line"
-                    :class="row.deltas[i] > 0 ? 'pos' : row.deltas[i] < 0 ? 'neg' : 'zero'"
-                  >
-                    {{ row.deltas[i] > 0 ? '+' : '' }}{{ row.deltas[i].toLocaleString() }}
-                  </div>
-                  <div class="total-line">{{ row.totals[i].toLocaleString() }}</div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                  <span class="urm-name">{{ formatEventPlayerName(EVENT_PLAYER_MAP[pm.playerId] ?? pm.playerId, eventLocale, 'compact') }}</span>
+                  <span v-if="pm.isRiichi" class="urm-tag riichi">{{ tLoc('리치', 'Riichi', '立直') }}</span>
+                  <span v-if="pm.isWin" class="urm-tag win">
+                    {{ mv.status === 'tsumo' || mv.loserIds.length === 0 ? tLoc('쯔모', 'Tsumo', 'ツモ') : tLoc('론', 'Ron', 'ロン') }}
+                  </span>
+                  <span v-if="pm.isLose" class="urm-tag lose">{{ tLoc('방총', 'Deal-in', '放銃') }}</span>
+                  <span v-if="!pm.isWin && pm.isTenpai" class="urm-tag tenpai">{{ tLoc('텐파이', 'Tenpai', '聴牌') }}</span>
+                  <span v-if="pm.isCheat" class="urm-tag lose">{{ tLoc('촌보', 'Chombo', 'チョンボ') }}</span>
+                </div>
+                <div class="urm-right">
+                  <span class="total-line">{{ pm.scoreBefore.toLocaleString() }} → {{ pm.scoreAfter.toLocaleString() }}</span>
+                  <span class="delta-line" :class="pm.delta > 0 ? 'pos' : pm.delta < 0 ? 'neg' : 'zero'">
+                    ({{ pm.delta > 0 ? '+' : '' }}{{ pm.delta.toLocaleString() }})
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -222,7 +242,82 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
 .delta-line.pos { color: var(--color-positive); }
 .delta-line.neg { color: var(--color-negative); }
 .delta-line.zero { color: var(--text-dimmed); }
-.total-line { font-size: 11px; color: var(--text-dimmed); font-variant-numeric: tabular-nums; }
+.total-line { font-size: 11.5px; color: var(--text-dimmed); font-variant-numeric: tabular-nums; }
+.urm-list { display: flex; flex-direction: column; gap: 8px; }
+.urm-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: rgba(125, 125, 125, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.urm-card.has-bigwin {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.07);
+}
+.urm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border-color);
+}
+.urm-title-group { display: flex; align-items: center; gap: 6px; }
+.urm-title { font-size: 13px; font-weight: 800; }
+.urm-bigwin-badge {
+  font-size: 10.5px;
+  font-weight: 900;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.22);
+  color: #d97706;
+}
+.urm-status-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.16);
+  color: #3b82f6;
+}
+.urm-players { display: flex; flex-direction: column; gap: 5px; }
+.urm-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--card-bg-color);
+  border: 1px solid transparent;
+  font-size: 12.5px;
+}
+.urm-row.is-win { border-color: rgba(16, 185, 129, 0.48); background: rgba(16, 185, 129, 0.09); }
+.urm-row.is-lose { border-color: rgba(239, 68, 68, 0.42); background: rgba(239, 68, 68, 0.08); }
+.urm-left { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.urm-right { display: flex; align-items: center; gap: 5px; }
+.urm-seat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  background: rgba(100, 116, 139, 0.16);
+}
+.urm-seat.is-east { background: rgba(239, 68, 68, 0.16); color: var(--color-east, #ef4444); }
+.urm-name { font-weight: 800; }
+.urm-tag { font-size: 10.5px; font-weight: 800; padding: 1px 5px; border-radius: 4px; }
+.urm-tag.riichi { background: rgba(245, 158, 11, 0.2); color: #d97706; }
+.urm-tag.win { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+.urm-tag.lose { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+.urm-tag.tenpai { background: rgba(59, 130, 246, 0.18); color: #3b82f6; }
 .ev-modal-footer {
   padding: 12px 18px;
   border-top: 1px solid var(--border-color);

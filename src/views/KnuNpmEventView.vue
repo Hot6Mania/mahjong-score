@@ -32,6 +32,7 @@ import {
 import {
   buildCustomSandboxLiveSnapshot,
   buildEventCsv,
+  computeEventMvpCandidates,
   computeLeagueStandings,
   computeRoundTimerDisplay,
   formatDualMetric,
@@ -80,6 +81,8 @@ import EventScoreModal from '@/components/event/EventScoreModal.vue';
 import EventPlayerModal from '@/components/event/EventPlayerModal.vue';
 import EventMatchDetailModal from '@/components/event/EventMatchDetailModal.vue';
 import EventStaffModal from '@/components/event/EventStaffModal.vue';
+import EventGameLogsTab from '@/components/event/EventGameLogsTab.vue';
+import EventMvpTab from '@/components/event/EventMvpTab.vue';
 
 ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale);
 
@@ -122,8 +125,13 @@ const router = useRouter();
 const route = useRoute();
 const tr = createEventTranslator(() => props.eventLocale);
 
-type EventTab = 'standings' | 'stats' | 'schedule' | 'rosters' | 'rules';
+type EventTab = 'standings' | 'stats' | 'gamelogs' | 'mvp' | 'schedule' | 'rosters' | 'rules';
 const activeTab = ref<EventTab>('standings');
+const focusGameLogKey = ref<string | null>(null);
+const openGameLogInTab = (matchKey: string) => {
+  focusGameLogKey.value = matchKey;
+  activeTab.value = 'gamelogs';
+};
 const selectedRound = ref<number>(1);
 const scheduleViewMode = ref<'cards' | 'matrix'>('cards');
 const highlightPlayerId = ref<number | ''>('');
@@ -284,7 +292,7 @@ const applyQueryToDashboard = () => {
   isApplyingRouteQuery.value = true;
   try {
     const qTab = String(route.query.tab || '').trim();
-    if (['standings', 'stats', 'schedule', 'rosters', 'rules'].includes(qTab)) {
+    if (['standings', 'stats', 'gamelogs', 'mvp', 'schedule', 'rosters', 'rules'].includes(qTab)) {
       activeTab.value = qTab as EventTab;
     }
     const qRound = Number(route.query.round);
@@ -507,6 +515,9 @@ watch(
 
 // Standings calculation
 const standings = computed(() => computeLeagueStandings(state.value.results, state.value.config));
+const mvpReport = computed(() =>
+  computeEventMvpCandidates(state.value.results, standings.value, state.value.config)
+);
 const showNameParens = computed(() =>
   shouldShowNameParentheses(state.value.config, props.eventLocale)
 );
@@ -1321,6 +1332,12 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
         <button :class="{ active: activeTab === 'stats' }" @click="activeTab = 'stats'">
           📊 {{ tr('tabDetailedStats') }}
         </button>
+        <button :class="{ active: activeTab === 'gamelogs' }" @click="activeTab = 'gamelogs'">
+          📋 {{ tr('tabGameLogs') }}
+        </button>
+        <button :class="{ active: activeTab === 'mvp' }" @click="activeTab = 'mvp'">
+          🏅 {{ tr('tabMvp') }}
+        </button>
         <button :class="{ active: activeTab === 'schedule' }" @click="activeTab = 'schedule'">
           🀄 {{ tr('tabSchedule') }}
         </button>
@@ -1769,6 +1786,34 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
             </table>
           </div>
         </div>
+      </section>
+
+      <!-- ============================ TAB 2-2: GAME LOGS (ROUND MOVEMENTS) ============================ -->
+      <section v-else-if="activeTab === 'gamelogs'" class="tab-section">
+        <EventGameLogsTab
+          :results="state.results"
+          :live-games="liveState.liveGames"
+          :standings="standings"
+          :mvp-report="mvpReport"
+          :config="state.config"
+          :is-dark="isDark"
+          :event-locale="eventLocale"
+          :show-name-parens="showNameParens"
+          :focus-match-key="focusGameLogKey"
+          @select-player="selectedPlayerId = $event"
+          @clear-focus-match="focusGameLogKey = null"
+        />
+      </section>
+
+      <!-- ============================ TAB 2-3: MVP CANDIDATES ============================ -->
+      <section v-else-if="activeTab === 'mvp'" class="tab-section">
+        <EventMvpTab
+          :mvp-report="mvpReport"
+          :event-locale="eventLocale"
+          :show-name-parens="showNameParens"
+          @open-game-log="openGameLogInTab"
+          @select-player="selectedPlayerId = $event"
+        />
       </section>
 
       <!-- ============================ TAB 3: SCHEDULE & RECORD ============================ -->
