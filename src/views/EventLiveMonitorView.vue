@@ -157,15 +157,20 @@ const loadInitial = async (force = false) => {
   }
 };
 
+let isPollingLive = false;
 const pollLive = async () => {
   if (typeof document !== 'undefined' && document.hidden) return;
+  if (isPollingLive) return;
+  isPollingLive = true;
   try {
     const res = await fetchLiveStateIfChanged(props.isSandbox, liveState.value.updatedAt);
     lastSyncAt.value = Date.now();
     if (!res.unchanged) {
       liveState.value = res.liveState;
     }
-  } catch {}
+  } catch {} finally {
+    isPollingLive = false;
+  }
 };
 
 const pollState = async () => {
@@ -221,7 +226,7 @@ onMounted(async () => {
     lastSyncAt.value = Date.now();
   });
 
-  liveTimer = setInterval(pollLive, 5000);
+  liveTimer = setInterval(pollLive, 3000);
   scheduleNextStatePoll();
   clockTimer = setInterval(() => {
     nowTick.value = Date.now();
