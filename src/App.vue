@@ -5,6 +5,7 @@ import Modal from "@/components/modals/Modal.vue"
 import StatsDashboardView from "@/views/StatsDashboardView.vue"
 import KnuNpmEventView from "@/views/KnuNpmEventView.vue"
 import EventLiveMonitorView from "@/views/EventLiveMonitorView.vue"
+import SeatEditPreviewView from "@/views/SeatEditPreviewView.vue"
 import { reactive, onMounted, onUnmounted, watch, ref, computed } from "vue"
 import { useRouter, useRoute } from "vue-router"
 import { useI18n } from "vue-i18n"
@@ -44,6 +45,9 @@ const route = useRoute()
 const isEventMode = computed(() => isKnuNpmEventMode(route.path));
 const isEventSandbox = computed(() => isKnuNpmSandboxMode(route.path));
 const isEventLiveMonitor = computed(() => isKnuNpmLiveMonitorPath(route.path));
+const isSeatEditPreview = computed(
+  () => route.path === '/preview/seat-edit' || route.path === '/knu-npm-2026/preview/seat-edit'
+);
 const isEventCloudSaving = ref(false);
 const eventLiveSyncStatus = ref<'idle' | 'syncing' | 'synced' | 'error'>('idle');
 const eventLiveLastSyncedAt = ref<number>(0);
@@ -3271,7 +3275,7 @@ const restoreEventScorerSessionFromLocal = () => {
       .map((p, idx) => (p.isRiichi ? idx : -1))
       .filter((idx) => idx >= 0);
     const wantsDashboardTab = Boolean(route.query.tab && route.query.view !== 'scorer');
-    if ((parsed.isScorerVisible || route.query.view === 'scorer') && !isEventLiveMonitor.value && !wantsDashboardTab) {
+    if ((parsed.isScorerVisible || route.query.view === 'scorer') && !isEventLiveMonitor.value && !isSeatEditPreview.value && !wantsDashboardTab) {
       isEventScorerVisible.value = true;
       syncEventScorerUrlQuery(match.key, match.round);
       if (records.time.length > 0 && records.time[records.time.length - 1] === '결과') {
@@ -5181,6 +5185,7 @@ const addBackupGameToCurrent = (game: any) => {
     <div class="oauth-redirect-spinner"></div>
     <p class="oauth-redirect-text">구글 계정 인증 처리 중...</p>
   </div>
+  <SeatEditPreviewView v-else-if="isSeatEditPreview" />
   <EventLiveMonitorView
     v-else-if="isEventMode && isEventLiveMonitor && !isEventScorerVisible"
     :is-sandbox="isEventSandbox"

@@ -18,6 +18,16 @@ const routes = [
     redirect: '/dashboard',
   },
   {
+    path: '/preview/seat-edit',
+    name: 'preview-seat-edit',
+    component: App,
+  },
+  {
+    path: '/knu-npm-2026/preview/seat-edit',
+    name: 'knu-npm-preview-seat-edit',
+    component: App,
+  },
+  {
     path: '/knu-npm-2026/test/live',
     name: 'knu-npm-event-test-live',
     component: App,
