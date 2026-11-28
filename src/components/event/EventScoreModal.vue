@@ -51,13 +51,14 @@ const emit = defineEmits<{
 
 interface EditableRow {
   playerId: number;
-  scoreInput: number | null;
-  penalty: number;
+  scoreText: string;
+  penaltyText: string;
   seatIndex: number;
 }
 
 const shortInputMode = ref(false); // true => ×100 mode (e.g. 324 -> 32400)
 const rows = ref<EditableRow[]>([]);
+const scoreInputEls = ref<(HTMLInputElement | null)[]>([]);
 const riichiSticks = ref<number>(0);
 const submittedBy = ref('');
 const note = ref('');
@@ -66,16 +67,79 @@ const validationError = ref('');
 
 const winds = ['東', '南', '西', '北'];
 
+const setScoreInputEl = (idx: number, el: unknown) => {
+  scoreInputEls.value[idx] = (el as HTMLInputElement) || null;
+};
+
+const normalizeSignedIntText = (raw: string): string => {
+  const normalized = String(raw ?? '')
+    .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/[−–—ー－]/g, '-');
+
+  const trimmed = normalized.replace(/[^0-9-]/g, '');
+  if (!trimmed) return '';
+
+  // '-'가 맨 앞이 아닌 위치(숫자 뒤 등)에 추가 입력된 경우 부호 토글로 처리
+  const minusCount = (trimmed.match(/-/g) || []).length;
+  const digits = trimmed.replace(/-/g, '');
+  const isNeg = minusCount % 2 === 1;
+  if (!digits) return isNeg ? '-' : '';
+  return isNeg ? `-${digits}` : digits;
+};
+
+const parseSignedInt = (text: string): number | null => {
+  const clean = normalizeSignedIntText(text);
+  if (!clean || clean === '-') return null;
+  const num = parseInt(clean, 10);
+  return Number.isNaN(num) ? null : num;
+};
+
+const handleScoreTextInput = (idx: number, e: Event) => {
+  const target = e.target as HTMLInputElement;
+  const next = normalizeSignedIntText(target.value);
+  rows.value[idx].scoreText = next;
+  if (target.value !== next) {
+    target.value = next;
+  }
+};
+
+const toggleScoreSign = (idx: number) => {
+  const cur = normalizeSignedIntText(rows.value[idx].scoreText);
+  if (cur.startsWith('-')) {
+    rows.value[idx].scoreText = cur.slice(1);
+  } else {
+    rows.value[idx].scoreText = `-${cur}`;
+  }
+  scoreInputEls.value[idx]?.focus();
+};
+
+const handlePenaltyTextInput = (idx: number, e: Event) => {
+  const target = e.target as HTMLInputElement;
+  const next = normalizeSignedIntText(target.value);
+  rows.value[idx].penaltyText = next;
+  if (target.value !== next) {
+    target.value = next;
+  }
+};
+
+const getRowPenaltyNumber = (row: EditableRow): number => {
+  const parsed = parseSignedInt(row.penaltyText);
+  if (parsed === null || parsed === 0) return 0;
+  return parsed > 0 ? -parsed : parsed;
+};
+
 const initForm = () => {
   validationError.value = '';
   allowSumMismatch.value = false;
   if (props.preset) {
     rows.value = props.slot.playerIds.map((pid, idx) => ({
       playerId: pid,
-      scoreInput: shortInputMode.value
-        ? Math.round(props.preset!.scores[idx] / 100)
-        : props.preset!.scores[idx],
-      penalty: 0,
+      scoreText: String(
+        shortInputMode.value
+          ? Math.round(props.preset!.scores[idx] / 100)
+          : props.preset!.scores[idx]
+      ),
+      penaltyText: '0',
       seatIndex: idx,
     }));
     riichiSticks.value = Math.max(0, Math.floor(Number(props.preset.riichiSticks || 0)));
@@ -87,8 +151,8 @@ const initForm = () => {
     );
     rows.value = ordered.map((e, idx) => ({
       playerId: e.playerId,
-      scoreInput: shortInputMode.value ? Math.round(e.rawScore / 100) : e.rawScore,
-      penalty: Number(e.penalty || 0),
+      scoreText: String(shortInputMode.value ? Math.round(e.rawScore / 100) : e.rawScore),
+      penaltyText: String(Number(e.penalty || 0)),
       seatIndex: e.seatIndex !== undefined ? e.seatIndex : idx,
     }));
     riichiSticks.value = Math.max(0, Math.floor(Number(props.existingResult.riichiSticks || 0)));
@@ -97,8 +161,8 @@ const initForm = () => {
   } else {
     rows.value = props.slot.playerIds.map((pid, idx) => ({
       playerId: pid,
-      scoreInput: null,
-      penalty: 0,
+      scoreText: '',
+      penaltyText: '0',
       seatIndex: idx,
     }));
     riichiSticks.value = 0;
@@ -116,25 +180,25 @@ watch(
 const toggleInputMode = (toShort: boolean) => {
   if (shortInputMode.value === toShort) return;
   rows.value.forEach((r) => {
-    if (r.scoreInput !== null && !Number.isNaN(Number(r.scoreInput))) {
-      r.scoreInput = toShort
-        ? Math.round(Number(r.scoreInput) / 100)
-        : Math.round(Number(r.scoreInput) * 100);
+    const num = parseSignedInt(r.scoreText);
+    if (num !== null) {
+      r.scoreText = String(toShort ? Math.round(num / 100) : Math.round(num * 100));
     }
   });
   shortInputMode.value = toShort;
 };
 
-const toRawScore = (val: number | null): number => {
-  if (val === null || val === undefined || Number.isNaN(Number(val))) return 0;
-  return shortInputMode.value ? Math.round(Number(val) * 100) : Math.round(Number(val));
+const toRawScore = (text: string): number => {
+  const num = parseSignedInt(text);
+  if (num === null) return 0;
+  return shortInputMode.value ? Math.round(num * 100) : Math.round(num);
 };
 
 const previewEntries = computed<TableScoreEntryInput[]>(() =>
   rows.value.map((r, idx) => ({
     playerId: r.playerId,
-    rawScore: toRawScore(r.scoreInput),
-    penalty: Number(r.penalty || 0),
+    rawScore: toRawScore(r.scoreText),
+    penalty: getRowPenaltyNumber(r),
     seatIndex: idx,
   }))
 );
@@ -167,23 +231,21 @@ const applySuggestedRiichi = () => {
 };
 
 const filledCount = computed(
-  () => rows.value.filter((r) => r.scoreInput !== null && r.scoreInput !== ('' as any) && !Number.isNaN(Number(r.scoreInput))).length
+  () => rows.value.filter((r) => parseSignedInt(r.scoreText) !== null).length
 );
 
 const canAutoFill = computed(() => filledCount.value === 3);
 
 const autoFillFourth = () => {
-  const emptyIdx = rows.value.findIndex(
-    (r) => r.scoreInput === null || r.scoreInput === ('' as any) || Number.isNaN(Number(r.scoreInput))
-  );
+  const emptyIdx = rows.value.findIndex((r) => parseSignedInt(r.scoreText) === null);
   if (emptyIdx === -1) return;
   const expected = props.config.startingScore * 4 - normalizedRiichiSticks.value * 1000;
   let othersSum = 0;
   rows.value.forEach((r, idx) => {
-    if (idx !== emptyIdx) othersSum += toRawScore(r.scoreInput);
+    if (idx !== emptyIdx) othersSum += toRawScore(r.scoreText);
   });
   const rem = expected - othersSum;
-  rows.value[emptyIdx].scoreInput = shortInputMode.value ? Math.round(rem / 100) : rem;
+  rows.value[emptyIdx].scoreText = String(shortInputMode.value ? Math.round(rem / 100) : rem);
 };
 
 const moveRow = (idx: number, delta: number) => {
@@ -199,7 +261,8 @@ const moveRow = (idx: number, delta: number) => {
 
 const toggleChombo = (idx: number) => {
   const pen = Math.abs(props.config.chomboPenalty || 20);
-  rows.value[idx].penalty = rows.value[idx].penalty === 0 ? -pen : 0;
+  const cur = getRowPenaltyNumber(rows.value[idx]);
+  rows.value[idx].penaltyText = cur === 0 ? String(-pen) : '0';
 };
 
 const handleSubmit = () => {
@@ -322,13 +385,26 @@ const handleDelete = () => {
                 </td>
                 <td class="col-input">
                   <div class="score-input-wrap">
+                    <button
+                      type="button"
+                      class="btn-sign-toggle"
+                      :class="{ active: row.scoreText.startsWith('-') }"
+                      title="부호 전환 (+ / -)"
+                      @click="toggleScoreSign(idx)"
+                    >
+                      ±
+                    </button>
                     <input
-                      type="number"
+                      :ref="(el) => setScoreInputEl(idx, el)"
+                      type="text"
                       inputmode="numeric"
-                      v-model.number="row.scoreInput"
-                      :step="shortInputMode ? 1 : 100"
+                      autocomplete="off"
+                      spellcheck="false"
+                      :value="row.scoreText"
                       :placeholder="shortInputMode ? '250' : '25000'"
                       class="score-num-input"
+                      :class="{ 'is-neg': row.scoreText.startsWith('-') }"
+                      @input="handleScoreTextInput(idx, $event)"
                     />
                     <span v-if="shortInputMode" class="unit-suffix">00</span>
                   </div>
@@ -342,18 +418,20 @@ const handleDelete = () => {
                     <button
                       type="button"
                       class="btn-chombo-chip"
-                      :class="{ active: row.penalty !== 0 }"
+                      :class="{ active: getRowPenaltyNumber(row) !== 0 }"
                       @click="toggleChombo(idx)"
                       :title="`-${config.chomboPenalty} pt`"
                     >
                       -{{ config.chomboPenalty }}
                     </button>
                     <input
-                      type="number"
-                      v-model.number="row.penalty"
-                      step="1"
-                      max="0"
+                      type="text"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      spellcheck="false"
+                      :value="row.penaltyText"
                       class="penalty-input"
+                      @input="handlePenaltyTextInput(idx, $event)"
                     />
                   </div>
                 </td>
@@ -719,7 +797,29 @@ const handleDelete = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
+}
+.btn-sign-toggle {
+  flex-shrink: 0;
+  width: 30px;
+  height: 34px;
+  border-radius: 7px;
+  border: 1px solid var(--input-border-color);
+  background: var(--bg-card);
+  color: var(--text-dimmed);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.btn-sign-toggle.active {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #ef4444;
 }
 .score-num-input {
   width: 112px !important;
@@ -732,6 +832,10 @@ const handleDelete = () => {
   background: var(--input-bg-color) !important;
   color: var(--text-color) !important;
   text-align: right !important;
+}
+.score-num-input.is-neg {
+  color: var(--color-negative) !important;
+  border-color: rgba(239, 68, 68, 0.55) !important;
 }
 .unit-suffix {
   font-size: 12px;
@@ -1117,7 +1221,12 @@ const handleDelete = () => {
   .score-input-wrap {
     justify-content: stretch;
     width: 100%;
-    gap: 4px;
+    gap: 5px;
+  }
+  .btn-sign-toggle {
+    width: 38px;
+    height: 40px;
+    font-size: 17px;
   }
   .score-num-input {
     width: 100% !important;
