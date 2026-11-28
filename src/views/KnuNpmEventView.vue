@@ -1596,14 +1596,6 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <th>{{ tr('team') }}</th>
                   <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'trackedGames' }" @click="toggleStatsSort('trackedGames')">{{ tr('statGames') }}{{ statsSortIndicator('trackedGames') }}</th>
                   <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'totalPoints' }" @click="toggleStatsSort('totalPoints')">{{ tr('statTotalPt') }}{{ statsSortIndicator('totalPoints') }}</th>
-                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'avgPoint' }" @click="toggleStatsSort('avgPoint')">{{ tr('statAvgPt') }}{{ statsSortIndicator('avgPoint') }}</th>
-                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'avgRank' }" @click="toggleStatsSort('avgRank')">{{ tr('statAvgRank') }}{{ statsSortIndicator('avgRank') }}</th>
-                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'topRate' }" @click="toggleStatsSort('topRate')">{{ tr('topRate') }}{{ statsSortIndicator('topRate') }}</th>
-                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'top2Rate' }" @click="toggleStatsSort('top2Rate')">{{ tr('statTop2Rate') }}{{ statsSortIndicator('top2Rate') }}</th>
-                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'lastAvoidRate' }" @click="toggleStatsSort('lastAvoidRate')">{{ tr('lastAvoidRate') }}{{ statsSortIndicator('lastAvoidRate') }}</th>
-                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'bestScore' }" @click="toggleStatsSort('bestScore')">{{ tr('bestScore') }}{{ statsSortIndicator('bestScore') }}</th>
-                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'tobiRate' }" @click="toggleStatsSort('tobiRate')">{{ tr('statTobiRate') }}{{ statsSortIndicator('tobiRate') }}</th>
-                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'trackedRounds' }" @click="toggleStatsSort('trackedRounds')">{{ tr('statTrackedRounds') }}{{ statsSortIndicator('trackedRounds') }}</th>
                   <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'winRate' }" @click="toggleStatsSort('winRate')">{{ tr('statWinRate') }}{{ statsSortIndicator('winRate') }}</th>
                   <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'dealInRate' }" @click="toggleStatsSort('dealInRate')">{{ tr('statDealInRate') }}{{ statsSortIndicator('dealInRate') }}</th>
                   <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'tsumoRate' }" @click="toggleStatsSort('tsumoRate')">{{ tr('statTsumoRate') }}{{ statsSortIndicator('tsumoRate') }}</th>
@@ -1630,6 +1622,14 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'winEfficiency' }" @click="toggleStatsSort('winEfficiency')">{{ tr('statWinEfficiency') }}{{ statsSortIndicator('winEfficiency') }}</th>
                   <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'dealInLoss' }" @click="toggleStatsSort('dealInLoss')">{{ tr('statDealInLoss') }}{{ statsSortIndicator('dealInLoss') }}</th>
                   <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'netWinEfficiency' }" @click="toggleStatsSort('netWinEfficiency')">{{ tr('statNetWinEfficiency') }}{{ statsSortIndicator('netWinEfficiency') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'avgPoint' }" @click="toggleStatsSort('avgPoint')">{{ tr('statAvgPt') }}{{ statsSortIndicator('avgPoint') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'avgRank' }" @click="toggleStatsSort('avgRank')">{{ tr('statAvgRank') }}{{ statsSortIndicator('avgRank') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'topRate' }" @click="toggleStatsSort('topRate')">{{ tr('topRate') }}{{ statsSortIndicator('topRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'top2Rate' }" @click="toggleStatsSort('top2Rate')">{{ tr('statTop2Rate') }}{{ statsSortIndicator('top2Rate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'lastAvoidRate' }" @click="toggleStatsSort('lastAvoidRate')">{{ tr('lastAvoidRate') }}{{ statsSortIndicator('lastAvoidRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'bestScore' }" @click="toggleStatsSort('bestScore')">{{ tr('bestScore') }}{{ statsSortIndicator('bestScore') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'tobiRate' }" @click="toggleStatsSort('tobiRate')">{{ tr('statTobiRate') }}{{ statsSortIndicator('tobiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'trackedRounds' }" @click="toggleStatsSort('trackedRounds')">{{ tr('statTrackedRounds') }}{{ statsSortIndicator('trackedRounds') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1679,6 +1679,47 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                       )
                     }}
                   </td>
+                  <td class="num bold">{{ fmtPct(ps.detailed.winRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.dealInRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.tsumoRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.drawRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.drawTenpaiRate) }}</td>
+                  <td class="num pos">{{ ps.detailed.avgWinScore !== null ? ps.detailed.avgWinScore.toLocaleString() : '-' }}</td>
+                  <td class="num neg">{{ ps.detailed.avgDealInScore !== null ? ps.detailed.avgDealInScore.toLocaleString() : '-' }}</td>
+                  <td
+                    class="num"
+                    :class="(ps.detailed.roundSuji ?? 0) > 0 ? 'pos' : (ps.detailed.roundSuji ?? 0) < 0 ? 'neg' : ''"
+                  >
+                    {{ fmtSignedInt(ps.detailed.roundSuji) }}
+                  </td>
+                  <td class="num">{{ fmtPct(ps.detailed.riichiRate) }}</td>
+                  <td class="num pos">{{ fmtPct(ps.detailed.riichiWinRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.riichiDealInRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.riichiDrawRate) }}</td>
+                  <td
+                    class="num"
+                    :class="(ps.detailed.riichiSuji ?? 0) > 0 ? 'pos' : (ps.detailed.riichiSuji ?? 0) < 0 ? 'neg' : ''"
+                  >
+                    {{ fmtSignedInt(ps.detailed.riichiSuji) }}
+                  </td>
+                  <td class="num pos">{{ ps.detailed.riichiIncome !== null ? ps.detailed.riichiIncome.toLocaleString() : '-' }}</td>
+                  <td class="num neg">{{ ps.detailed.riichiExpense !== null ? ps.detailed.riichiExpense.toLocaleString() : '-' }}</td>
+                  <td class="num pos">{{ fmtPct(ps.detailed.firstRiichiRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.chaseRiichiRate) }}</td>
+                  <td class="num pos">{{ fmtPct(ps.detailed.chaseRiichiWinRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.chasedRiichiRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.oyaKaburiRate) }}</td>
+                  <td class="num neg">{{ ps.detailed.oyaKaburiAvg !== null ? ps.detailed.oyaKaburiAvg.toLocaleString() : '-' }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.dealInRiichiRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.yakitoriRate) }}</td>
+                  <td class="num pos">{{ ps.detailed.winEfficiency !== null ? `+${ps.detailed.winEfficiency.toLocaleString()}` : '-' }}</td>
+                  <td class="num neg">{{ ps.detailed.dealInLoss !== null ? `-${ps.detailed.dealInLoss.toLocaleString()}` : '-' }}</td>
+                  <td
+                    class="num"
+                    :class="(ps.detailed.netWinEfficiency ?? 0) > 0 ? 'pos' : (ps.detailed.netWinEfficiency ?? 0) < 0 ? 'neg' : ''"
+                  >
+                    {{ fmtSignedInt(ps.detailed.netWinEfficiency) }}
+                  </td>
                   <td class="num" :class="ps.avgPoint > 0 ? 'pos' : ps.avgPoint < 0 ? 'neg' : ''">
                     {{
                       ps.gamesPlayed > 0
@@ -1723,47 +1764,6 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   <td class="num">{{ ps.bestScore !== null ? ps.bestScore.toLocaleString() : '-' }}</td>
                   <td class="num neg">{{ ps.gamesPlayed > 0 ? `${ps.tobiRate.toFixed(2)}%` : '-' }}</td>
                   <td class="num">{{ ps.detailed.trackedRounds || '-' }}</td>
-                  <td class="num bold">{{ fmtPct(ps.detailed.winRate) }}</td>
-                  <td class="num neg">{{ fmtPct(ps.detailed.dealInRate) }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.tsumoRate) }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.drawRate) }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.drawTenpaiRate) }}</td>
-                  <td class="num pos">{{ ps.detailed.avgWinScore !== null ? ps.detailed.avgWinScore.toLocaleString() : '-' }}</td>
-                  <td class="num neg">{{ ps.detailed.avgDealInScore !== null ? ps.detailed.avgDealInScore.toLocaleString() : '-' }}</td>
-                  <td
-                    class="num"
-                    :class="(ps.detailed.roundSuji ?? 0) > 0 ? 'pos' : (ps.detailed.roundSuji ?? 0) < 0 ? 'neg' : ''"
-                  >
-                    {{ fmtSignedInt(ps.detailed.roundSuji) }}
-                  </td>
-                  <td class="num">{{ fmtPct(ps.detailed.riichiRate) }}</td>
-                  <td class="num pos">{{ fmtPct(ps.detailed.riichiWinRate) }}</td>
-                  <td class="num neg">{{ fmtPct(ps.detailed.riichiDealInRate) }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.riichiDrawRate) }}</td>
-                  <td
-                    class="num"
-                    :class="(ps.detailed.riichiSuji ?? 0) > 0 ? 'pos' : (ps.detailed.riichiSuji ?? 0) < 0 ? 'neg' : ''"
-                  >
-                    {{ fmtSignedInt(ps.detailed.riichiSuji) }}
-                  </td>
-                  <td class="num pos">{{ ps.detailed.riichiIncome !== null ? ps.detailed.riichiIncome.toLocaleString() : '-' }}</td>
-                  <td class="num neg">{{ ps.detailed.riichiExpense !== null ? ps.detailed.riichiExpense.toLocaleString() : '-' }}</td>
-                  <td class="num pos">{{ fmtPct(ps.detailed.firstRiichiRate) }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.chaseRiichiRate) }}</td>
-                  <td class="num pos">{{ fmtPct(ps.detailed.chaseRiichiWinRate) }}</td>
-                  <td class="num neg">{{ fmtPct(ps.detailed.chasedRiichiRate) }}</td>
-                  <td class="num neg">{{ fmtPct(ps.detailed.oyaKaburiRate) }}</td>
-                  <td class="num neg">{{ ps.detailed.oyaKaburiAvg !== null ? ps.detailed.oyaKaburiAvg.toLocaleString() : '-' }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.dealInRiichiRate) }}</td>
-                  <td class="num neg">{{ fmtPct(ps.detailed.yakitoriRate) }}</td>
-                  <td class="num pos">{{ ps.detailed.winEfficiency !== null ? `+${ps.detailed.winEfficiency.toLocaleString()}` : '-' }}</td>
-                  <td class="num neg">{{ ps.detailed.dealInLoss !== null ? `-${ps.detailed.dealInLoss.toLocaleString()}` : '-' }}</td>
-                  <td
-                    class="num"
-                    :class="(ps.detailed.netWinEfficiency ?? 0) > 0 ? 'pos' : (ps.detailed.netWinEfficiency ?? 0) < 0 ? 'neg' : ''"
-                  >
-                    {{ fmtSignedInt(ps.detailed.netWinEfficiency) }}
-                  </td>
                 </tr>
               </tbody>
             </table>
