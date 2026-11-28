@@ -42,27 +42,8 @@ export function isKnuNpmEventMode(path?: string): boolean {
   return false;
 }
 
-export function isKnuNpmSandboxMode(path?: string): boolean {
-  const targetPath =
-    path !== undefined
-      ? path
-      : typeof window !== 'undefined'
-        ? window.location.pathname
-        : '';
-  if (
-    targetPath === '/test' ||
-    targetPath.startsWith('/test/') ||
-    targetPath === `${KNU_NPM_EVENT_PATH_PREFIX}/test` ||
-    targetPath.startsWith(`${KNU_NPM_EVENT_PATH_PREFIX}/test/`)
-  ) {
-    return true;
-  }
-  if (typeof window !== 'undefined') {
-    const params = new URLSearchParams(window.location.search || '');
-    if (params.get('sandbox') === '1' || params.get('test') === '1') {
-      return true;
-    }
-  }
+export function isKnuNpmSandboxMode(_path?: string): boolean {
+  // 실제 대회 운영 중 /test 경로도 실제 라이브 페이지와 100% 동일하게 동작하도록 통합
   return false;
 }
 

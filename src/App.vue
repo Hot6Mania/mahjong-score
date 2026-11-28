@@ -3193,8 +3193,10 @@ const restoreEventScorerSessionFromLocal = () => {
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (!parsed || !parsed.match || !Array.isArray(parsed.players) || parsed.players.length !== 4) return;
-    const match: ActiveEventMatch = parsed.match;
-    if (Boolean(match.sandbox) !== Boolean(isEventSandbox.value)) return;
+    const match: ActiveEventMatch = {
+      ...parsed.match,
+      sandbox: Boolean(isEventSandbox.value),
+    };
 
     option.startingScore = match.config.startingScore;
     option.returnScore = match.config.returnScore;

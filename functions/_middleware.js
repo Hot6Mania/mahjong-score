@@ -37,16 +37,9 @@ function isKnuNpmRequest(url) {
   return false;
 }
 
-function isSandboxRequest(url) {
-  const path = url.pathname || '';
-  return (
-    path === '/test' ||
-    path.startsWith('/test/') ||
-    path === '/knu-npm-2026/test' ||
-    path.startsWith('/knu-npm-2026/test/') ||
-    url.searchParams.get('sandbox') === '1' ||
-    url.searchParams.get('test') === '1'
-  );
+function isSandboxRequest(_url) {
+  // 실제 대회 운영 중 /test 경로도 공식 라이브 메타/OG로 통일
+  return false;
 }
 
 function escapeHtmlAttr(str) {
