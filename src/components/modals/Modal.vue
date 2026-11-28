@@ -550,6 +550,7 @@ const getSignColor = (sign: number, x: boolean) => {
       :players
       :scoringState
       :modalInfo
+      :isEventMode="Boolean(eventMatchLabel)"
       actionType="fanbu"
       @show-modal="(type, status?) => emit('show-modal', type, status)"
       @set-toggle-button="(status) => emit('set-toggle-button', status)"

@@ -1687,7 +1687,8 @@ const calculateScore = (who: number) => {
   let arrFan=[1, 2, 3, 4, 5, 6, 8, 11, 13, 13, 14, 15, 16, 17, 18];
   let arrBu=[20, 25, 30, 40, 50, 60, 70, 80, 90, 100, 110];
   let arrMangan=[2000,3000,3000,4000,4000,4000,6000,6000,8000,16000,24000,32000,40000,48000]; // 만관 이상 인당 점수
-  let fan=arrFan[scoringState.inputFan], bu=arrBu[scoringState.inputBu];
+  const effectiveFanIdx = (isEventMode.value && scoringState.inputFan === 8) ? 7 : scoringState.inputFan;
+  let fan=arrFan[effectiveFanIdx], bu=arrBu[scoringState.inputBu];
   let baseScore=0;
   if ((fan===3 && bu>=70) || (fan===4 && bu>=40)) // 3판 70부, 4판 40부 이상이면 만관
     fan=5;
@@ -1917,11 +1918,12 @@ const setToggleButton = (status: string) => {
 /**판/부 버튼 동작 설정*/
 const setFanBuButton = (status: string, idx: number) => {
   if (status==='fan'){ // 판 체크
-    if (idx>=9 && scoringState.inputFan===idx) // 역만일경우 처리
+    const safeIdx = (isEventMode.value && idx === 8) ? 7 : idx;
+    if (safeIdx>=9 && scoringState.inputFan===safeIdx) // 역만일경우 처리
       scoringState.inputFan<14 ? scoringState.inputFan++ : scoringState.inputFan=9;
     else{
       scoringState.isFao=false; // 책임지불 초기화
-      scoringState.inputFan=idx;
+      scoringState.inputFan=safeIdx;
     }
     scoringState.inputBu=2; // 30부로 초기화
   }

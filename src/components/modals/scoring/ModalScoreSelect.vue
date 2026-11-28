@@ -10,7 +10,8 @@ interface Props {
   players: Player[],
   scoringState: ScoringState,
   modalInfo: ModalInfo,
-  actionType: 'fanbu' | 'fao'
+  actionType: 'fanbu' | 'fao',
+  isEventMode?: boolean
 }
 const props = defineProps<Props>()
 
@@ -80,7 +81,7 @@ const checkFao = () => {
       {{ t('score.fan') }}:
     </div>
     <div class="fan_check">
-      <span v-for="(_, i) in fan.slice(0, 9)"
+      <span v-for="(_, i) in fan.slice(0, isEventMode ? 8 : 9)"
       :key="i"
       :style="fanBuButtonStyle('fan', i)"
       @click.stop="emit('set-fanbu-button', 'fan', i)"
