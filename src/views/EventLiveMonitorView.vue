@@ -478,24 +478,43 @@ const prevScoreSnapshot: Record<string, number> = {};
 const prevRiichiSnapshot: Record<string, boolean> = {};
 const scoreAnimHandles: Record<string, number> = {};
 
+const scoreAnimFallbackTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
 const animateScoreValue = (cellKey: string, from: number, to: number) => {
   if (scoreAnimHandles[cellKey]) {
     cancelAnimationFrame(scoreAnimHandles[cellKey]);
+    delete scoreAnimHandles[cellKey];
+  }
+  if (scoreAnimFallbackTimers[cellKey]) {
+    clearTimeout(scoreAnimFallbackTimers[cellKey]);
+    delete scoreAnimFallbackTimers[cellKey];
   }
   const start = performance.now();
   const duration = 650;
+  const finish = () => {
+    if (scoreAnimHandles[cellKey]) {
+      cancelAnimationFrame(scoreAnimHandles[cellKey]);
+      delete scoreAnimHandles[cellKey];
+    }
+    if (scoreAnimFallbackTimers[cellKey]) {
+      clearTimeout(scoreAnimFallbackTimers[cellKey]);
+      delete scoreAnimFallbackTimers[cellKey];
+    }
+    animatedScores.value = { ...animatedScores.value, [cellKey]: to };
+  };
   const step = (now: number) => {
     const p = Math.min(1, (now - start) / duration);
     const eased = 1 - Math.pow(1 - p, 3);
     const cur = Math.round((from + (to - from) * eased) / 100) * 100;
-    animatedScores.value = { ...animatedScores.value, [cellKey]: p >= 1 ? to : cur };
     if (p < 1) {
+      animatedScores.value = { ...animatedScores.value, [cellKey]: cur };
       scoreAnimHandles[cellKey] = requestAnimationFrame(step);
     } else {
-      delete scoreAnimHandles[cellKey];
+      finish();
     }
   };
   scoreAnimHandles[cellKey] = requestAnimationFrame(step);
+  scoreAnimFallbackTimers[cellKey] = setTimeout(finish, duration + 250);
 };
 
 watch(
@@ -516,8 +535,12 @@ watch(
           const diff = p.score - prevScore;
           nextDeltas[ck] = { delta: diff, ts: now };
           deltaChanged = true;
-          animateScoreValue(ck, prevScore, p.score);
-        } else if (animatedScores.value[ck] === undefined) {
+          if (typeof document !== 'undefined' && document.hidden) {
+            animatedScores.value = { ...animatedScores.value, [ck]: p.score };
+          } else {
+            animateScoreValue(ck, prevScore, p.score);
+          }
+        } else if (animatedScores.value[ck] === undefined || (!scoreAnimHandles[ck] && animatedScores.value[ck] !== p.score)) {
           animatedScores.value = { ...animatedScores.value, [ck]: p.score };
         }
         prevScoreSnapshot[ck] = p.score;
