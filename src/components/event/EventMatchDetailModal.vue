@@ -20,7 +20,6 @@ import {
   type EventScoringConfig,
 } from '@/data/knuNpm2026';
 import {
-  formatWinTierLabel,
   parseGameRoundMovements,
   type StoredTableResult,
 } from '@/utils/knuNpmScoring';
@@ -128,7 +127,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
               <div class="urm-title-group">
                 <span class="urm-title">{{ mv.label }}</span>
                 <span v-if="mv.maxWinTier !== 'normal'" class="urm-bigwin-badge">
-                  🔥 {{ formatWinTierLabel(mv.maxWinTier, eventLocale) }}
+                  🔥 +{{ mv.maxWinGain.toLocaleString() }}
                 </span>
               </div>
               <span class="urm-status-badge">{{ formatStatusLabel(mv.status) }}</span>

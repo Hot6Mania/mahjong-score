@@ -23,7 +23,6 @@ import {
 } from '@/data/knuNpm2026';
 import {
   formatSignedPoint,
-  formatWinTierLabel,
   parseGameRoundMovements,
   type EventMvpReport,
   type LeagueStandingsSummary,
@@ -315,8 +314,7 @@ const formatHandOptionSummary = (mv: ParsedRoundMovement): string => {
     const names = mv.winnerIds
       .map((id) => formatEventPlayerName(EVENT_PLAYER_MAP[id] ?? id, props.eventLocale, 'compact'))
       .join(', ');
-    const tier = mv.maxWinTier !== 'normal' ? ` [${formatWinTierLabel(mv.maxWinTier, props.eventLocale)}]` : '';
-    return ` — ${st} (${names} +${mv.maxWinGain.toLocaleString()})${tier}`;
+    return ` — ${st} (${names} +${mv.maxWinGain.toLocaleString()})`;
   }
   return ` — ${st}`;
 };
@@ -410,7 +408,7 @@ const pName = (pid: number, style: 'full' | 'compact' = 'compact') =>
                   class="gl-badge bigwin"
                   :class="g.summary.maxTier"
                 >
-                  🔥 {{ formatWinTierLabel(g.summary.maxTier, eventLocale) }}
+                  🔥 +{{ g.summary.maxWinGain.toLocaleString() }}
                 </span>
                 <span v-if="g.summary?.hasComeback" class="gl-badge comeback">
                   ⚡ {{ tLoc('역전', 'CB', '逆転') }}
@@ -444,7 +442,7 @@ const pName = (pid: number, style: 'full' | 'compact' = 'compact') =>
             </h3>
             <div class="gl-detail-sub-tags" v-if="activeGame.summary">
               <span v-if="activeGame.summary.maxTier !== 'normal'" class="gl-badge bigwin" :class="activeGame.summary.maxTier">
-                🔥 {{ formatWinTierLabel(activeGame.summary.maxTier, eventLocale) }} ({{ activeGame.summary.maxWinValue.toLocaleString() }})
+                🔥 +{{ activeGame.summary.maxWinGain.toLocaleString() }}
               </span>
               <span v-if="activeGame.summary.hasComeback" class="gl-badge comeback">
                 ⚡ {{ tLoc('대역전 스윙', 'Comeback Swing', '大逆転') }} +{{ activeGame.summary.bestComebackSwing.toLocaleString() }}
@@ -519,7 +517,7 @@ const pName = (pid: number, style: 'full' | 'compact' = 'compact') =>
                       class="urm-bigwin-badge"
                       :class="mv.maxWinTier"
                     >
-                      🔥 {{ formatWinTierLabel(mv.maxWinTier, eventLocale) }}
+                      🔥 +{{ mv.maxWinGain.toLocaleString() }}
                     </span>
                   </div>
                   <span class="urm-status-badge" :class="mv.status">

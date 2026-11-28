@@ -2192,6 +2192,7 @@ export interface OverallMvpCandidate {
 
 export interface MatchHighlightSummary {
   maxTier: WinTier;
+  maxWinGain: number;
   maxWinValue: number;
   bigWinCount: number;
   hasComeback: boolean;
@@ -2454,6 +2455,7 @@ export function computeEventMvpCandidates(
     const matchDealInsByPlayer: Record<number, number> = {};
 
     let matchMaxTier: WinTier = 'normal';
+    let matchMaxWinGain = 0;
     let matchMaxWinValue = 0;
     let matchBigWinCount = 0;
     let matchBestComebackSwing = 0;
@@ -2540,6 +2542,7 @@ export function computeEventMvpCandidates(
               if (!playerBigWinsMap[pid]) playerBigWinsMap[pid] = [];
               playerBigWinsMap[pid].push(bw);
               matchBigWinCount += 1;
+              if (pm.delta > matchMaxWinGain) matchMaxWinGain = pm.delta;
               if (pm.winValue > matchMaxWinValue) matchMaxWinValue = pm.winValue;
               if (WIN_TIER_ORDER[pm.winTier] > WIN_TIER_ORDER[matchMaxTier]) matchMaxTier = pm.winTier;
             }
@@ -2604,6 +2607,7 @@ export function computeEventMvpCandidates(
 
     matchSummaries[slot.key] = {
       maxTier: matchMaxTier,
+      maxWinGain: matchMaxWinGain,
       maxWinValue: matchMaxWinValue,
       bigWinCount: matchBigWinCount,
       hasComeback: matchBestComebackSwing > 0,
@@ -2664,9 +2668,9 @@ export function computeEventMvpCandidates(
         const extraJa = pBigWins.length > 1 ? ` 他${pBigWins.length - 1}回` : '';
         reasons.push({
           kind: 'bigwin',
-          ko: `🔥 ${formatWinTierLabel(topBw.tier, 'ko')} ${topBw.isTsumo ? '쯔모' : '론'} (+${topBw.gain.toLocaleString()})${extra}`,
-          en: `🔥 ${formatWinTierLabel(topBw.tier, 'en')} ${topBw.isTsumo ? 'Tsumo' : 'Ron'} (+${topBw.gain.toLocaleString()})${extraEn}`,
-          ja: `🔥 ${formatWinTierLabel(topBw.tier, 'ja')} ${topBw.isTsumo ? 'ツモ' : 'ロン'} (+${topBw.gain.toLocaleString()})${extraJa}`,
+          ko: `🔥 +${topBw.gain.toLocaleString()} ${topBw.isTsumo ? '쯔모' : '론'}${extra}`,
+          en: `🔥 +${topBw.gain.toLocaleString()} ${topBw.isTsumo ? 'Tsumo' : 'Ron'}${extraEn}`,
+          ja: `🔥 +${topBw.gain.toLocaleString()} ${topBw.isTsumo ? 'ツモ' : 'ロン'}${extraJa}`,
         });
       }
 
@@ -2746,9 +2750,9 @@ export function computeEventMvpCandidates(
         const top = bws[0];
         reasons.push({
           kind: 'bigwin',
-          ko: `🔥 큰 화료 ${bws.length}회 (최대 ${formatWinTierLabel(top.tier, 'ko')} +${top.gain.toLocaleString()})`,
-          en: `🔥 ${bws.length} Big Win(s) (Best ${formatWinTierLabel(top.tier, 'en')} +${top.gain.toLocaleString()})`,
-          ja: `🔥 高打点 ${bws.length}回 (最大 ${formatWinTierLabel(top.tier, 'ja')} +${top.gain.toLocaleString()})`,
+          ko: `🔥 큰 화료 ${bws.length}회 (최대 +${top.gain.toLocaleString()})`,
+          en: `🔥 ${bws.length} Big Win(s) (Best +${top.gain.toLocaleString()})`,
+          ja: `🔥 高打点 ${bws.length}回 (最大 +${top.gain.toLocaleString()})`,
         });
       }
       if (cbs.length > 0) {

@@ -8,7 +8,6 @@ import {
 } from '@/data/knuNpm2026';
 import {
   formatSignedPoint,
-  formatWinTierLabel,
   type EventMvpReport,
   type MvpReasonBadge,
 } from '@/utils/knuNpmScoring';
@@ -90,9 +89,9 @@ const medalFor = (idx: number) => (idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx
           <p class="mvp-sub">
             {{
               tLoc(
-                '최종 성적(포인트·1위), 만관~역만급 큰 화료, 하위권/남장 대역전극, 무방총 완승을 종합해 MVP 후보를 자동 선정합니다.',
-                'Auto-ranks MVP candidates combining match points, Mangan–Yakuman big wins, dramatic comebacks, and clean wins.',
-                '最終ポイント・トップに加え、満貫〜役満級の高打点和了・大逆転劇・無放銃トップを総合評価してMVP候補を自動選出します。'
+                '최종 성적(포인트·1위), 큰 화료(+8,000 이상), 하위권/남장 대역전극, 무방총 완승을 종합해 MVP 후보를 자동 선정합니다.',
+                'Auto-ranks MVP candidates combining match points, big wins (+8,000+), dramatic comebacks, and clean wins.',
+                '最終ポイント・トップに加え、高打点和了（+8,000以上）・大逆転劇・無放銃トップを総合評価してMVP候補を自動選出します。'
               )
             }}
           </p>
@@ -163,7 +162,6 @@ const medalFor = (idx: number) => (idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx
             <strong class="sp-name">{{ pName(mvpReport.overall.biggestWin.winnerId, 'full') }}</strong>
             <div class="sp-metric fire-txt">
               +{{ mvpReport.overall.biggestWin.gain.toLocaleString() }}
-              ({{ formatWinTierLabel(mvpReport.overall.biggestWin.tier, eventLocale) }})
             </div>
             <span class="sp-sub">
               {{ mvpReport.overall.biggestWin.matchKey }} · {{ mvpReport.overall.biggestWin.handLabel }}
@@ -286,10 +284,10 @@ const medalFor = (idx: number) => (idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx
       <div class="hl-two-col">
         <section class="card-panel">
           <div class="sec-head">
-            <h3>🔥 {{ tLoc('전체 큰 화료 하이라이트 (만관~역만)', 'Tournament Big Wins (Mangan–Yakuman)', '大会 高打点ハイライト（満貫〜役満）') }}</h3>
+            <h3>🔥 {{ tLoc('전체 큰 화료 하이라이트', 'Tournament Big Wins', '大会 高打点ハイライト') }}</h3>
           </div>
           <div v-if="filteredOverallBigWins.length === 0" class="empty-box">
-            {{ tLoc('아직 만관 이상 화료 기록이 없습니다.', 'No Mangan+ wins recorded yet.', 'まだ満貫以上の和了記録がありません。') }}
+            {{ tLoc('아직 큰 화료 기록이 없습니다.', 'No big wins recorded yet.', 'まだ高打点の和了記録がありません。') }}
           </div>
           <div v-else class="hl-list">
             <button
@@ -301,9 +299,9 @@ const medalFor = (idx: number) => (idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx
             >
               <div class="hl-row-top">
                 <span class="hl-idx">#{{ idx + 1 }}</span>
-                <span class="hl-tier-pill" :class="bw.tier">{{ formatWinTierLabel(bw.tier, eventLocale) }}</span>
+                <span class="hl-tier-pill" :class="bw.tier">+{{ bw.gain.toLocaleString() }}</span>
                 <strong>{{ pName(bw.winnerId, 'compact') }}</strong>
-                <span class="hl-gain pos">+{{ bw.gain.toLocaleString() }}</span>
+                <span class="hl-gain pos">{{ bw.isTsumo ? tLoc('쯔모', 'Tsumo', 'ツモ') : tLoc('론', 'Ron', 'ロン') }}</span>
               </div>
               <div class="hl-row-sub">
                 <span>{{ bw.matchKey }} · {{ bw.handLabel }}</span>
@@ -418,7 +416,7 @@ const medalFor = (idx: number) => (idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx
             <h3>🔥 R{{ mvpScope }} {{ tLoc('큰 화료 목록', 'Big Wins', '高打点和了') }}</h3>
           </div>
           <div v-if="filteredRoundBigWins.length === 0" class="empty-box">
-            {{ tLoc('이 라운드의 만관 이상 화료 기록이 없습니다.', 'No Mangan+ wins in this round.', 'この回戦の満貫以上和了はありません。') }}
+            {{ tLoc('이 라운드의 큰 화료 기록이 없습니다.', 'No big wins in this round.', 'この回戦の高打点和了はありません。') }}
           </div>
           <div v-else class="hl-list">
             <button
@@ -430,9 +428,9 @@ const medalFor = (idx: number) => (idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx
             >
               <div class="hl-row-top">
                 <span class="hl-idx">#{{ idx + 1 }}</span>
-                <span class="hl-tier-pill" :class="bw.tier">{{ formatWinTierLabel(bw.tier, eventLocale) }}</span>
+                <span class="hl-tier-pill" :class="bw.tier">+{{ bw.gain.toLocaleString() }}</span>
                 <strong>{{ pName(bw.winnerId, 'compact') }}</strong>
-                <span class="hl-gain pos">+{{ bw.gain.toLocaleString() }}</span>
+                <span class="hl-gain pos">{{ bw.isTsumo ? tLoc('쯔모', 'Tsumo', 'ツモ') : tLoc('론', 'Ron', 'ロン') }}</span>
               </div>
               <div class="hl-row-sub">
                 <span>{{ bw.matchKey }} · {{ bw.handLabel }}</span>
