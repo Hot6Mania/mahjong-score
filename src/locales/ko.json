@@ -48,7 +48,18 @@
         "submittedEvent" : "제출 완료 ✓",
         "backToLeague" : "대회 페이지",
         "cloudSave" : "서버 임시저장",
-        "cloudSaving" : "저장 중..."
+        "cloudSaving" : "저장 중...",
+        "changeSeats" : "자리/이름 변경"
+    },
+    "seatEdit" : {
+        "title" : "동남서북 자리/이름 변경",
+        "hint" : "점수와 기록은 각 자리에 유지되며 선수 이름만 변경됩니다.",
+        "shiftDown" : "↓ 1칸 순환",
+        "shiftUp" : "↑ 1칸 순환",
+        "reset" : "원래대로",
+        "cancel" : "취소",
+        "apply" : "적용",
+        "currentWind" : "현재 {wind}"
     },
     "resultSheet" : {
         "wind" : "자리",

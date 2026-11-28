@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n"
-import { ref, onMounted } from "vue"
+import { ref, computed, onMounted } from "vue"
 
 /**i18n 속성 가져오기*/
 const { t } = useI18n()
@@ -16,9 +16,24 @@ type Props = {
   isSessionClosed?: boolean,
   eventMatchLabel?: string,
   eventLocale?: 'en' | 'ja' | 'ko',
-  isCloudSaving?: boolean
+  isCloudSaving?: boolean,
+  liveSyncStatus?: 'idle' | 'syncing' | 'synced' | 'error',
+  liveLastSyncedAt?: number
 }
 const props = defineProps<Props>()
+
+const formattedSyncTime = computed(() => {
+  const ts = Number(props.liveLastSyncedAt || 0)
+  if (!ts) return ''
+  try {
+    const d = new Date(ts)
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    return `${hh}:${mm}`
+  } catch {
+    return ''
+  }
+})
 
 /**emits 정의*/
 type Emits = {
@@ -60,8 +75,10 @@ const handleSyncClick = () => {
 <div v-if="eventMatchLabel" class="menu_wrapper event_menu_wrapper">
   <div class="session_status_bar event_status_bar">
     <div class="session_badge_left">
-      <span class="session_dot online"></span>
+      <span class="session_dot" :class="{ online: liveSyncStatus !== 'error', error: liveSyncStatus === 'error' }"></span>
       <span class="session_name">{{ eventMatchLabel }}</span>
+      <span v-if="liveSyncStatus === 'error'" class="event_sync_pill is-error">⚠️ SYNC</span>
+      <span v-else-if="formattedSyncTime" class="event_sync_pill">☁️ {{ formattedSyncTime }}</span>
     </div>
     <div class="event_hdr_controls">
       <button
@@ -113,14 +130,24 @@ const handleSyncClick = () => {
       {{ t('menu.backToLeague') }}
     </div>
   </div>
-  <button
-    type="button"
-    class="btn_cloud_save_event"
-    :disabled="isCloudSaving"
-    @click.stop="emit('cloud-save-event')"
-  >
-    ☁️ {{ isCloudSaving ? t('menu.cloudSaving') : t('menu.cloudSave') }}
-  </button>
+  <div class="event_menu_footer_actions">
+    <button
+      type="button"
+      class="btn_change_seats_event"
+      @click.stop="emit('show-modal', 'edit_event_seats')"
+    >
+      🔄 {{ t('menu.changeSeats') }}
+    </button>
+    <button
+      type="button"
+      class="btn_cloud_save_event"
+      :class="{ 'is-error': liveSyncStatus === 'error' }"
+      :disabled="isCloudSaving"
+      @click.stop="emit('cloud-save-event')"
+    >
+      {{ liveSyncStatus === 'error' ? '⚠️' : '☁️' }} {{ isCloudSaving ? t('menu.cloudSaving') : t('menu.cloudSave') }}
+    </button>
+  </div>
 </div>
 
 <div v-else class="menu_wrapper">
@@ -229,6 +256,23 @@ const handleSyncClick = () => {
 .session_dot.online {
   background-color: var(--color-positive, #4caf50);
   box-shadow: 0 0 5px var(--color-positive, #4caf50);
+}
+.session_dot.error {
+  background-color: var(--color-negative, #ef4444);
+  box-shadow: 0 0 5px var(--color-negative, #ef4444);
+}
+.event_sync_pill {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dimmed, #64748b);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(125, 125, 125, 0.12);
+  white-space: nowrap;
+}
+.event_sync_pill.is-error {
+  color: var(--color-negative, #ef4444);
+  background: rgba(239, 68, 68, 0.16);
 }
 .session_title {
   color: var(--text-color-muted, #777);
@@ -397,23 +441,52 @@ const handleSyncClick = () => {
   overflow-wrap: break-word;
   line-height: 1.25;
 }
+.event_menu_footer_actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+  margin-top: 2px;
+}
+.btn_change_seats_event {
+  width: 100%;
+  padding: 12px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--color-toggle-on, #2563eb);
+  font-size: 15.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: normal;
+  word-break: keep-all;
+  line-height: 1.25;
+}
+.btn_change_seats_event:hover {
+  background: rgba(59, 130, 246, 0.22);
+}
 .btn_cloud_save_event {
   width: 100%;
-  padding: 12px 14px;
-  margin-top: 2px;
+  padding: 12px 10px;
   border-radius: 9px;
   border: 1px solid rgba(16, 185, 129, 0.45);
   background: rgba(16, 185, 129, 0.14);
   color: var(--color-positive, #16a34a);
-  font-size: 16px;
+  font-size: 15.5px;
   font-weight: 800;
   cursor: pointer;
   white-space: normal;
+  word-break: keep-all;
   line-height: 1.25;
 }
 .btn_cloud_save_event:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+.btn_cloud_save_event.is-error {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.16);
+  color: var(--color-negative, #dc2626);
 }
 @media (orientation: portrait) {
   .event_menu_wrapper {

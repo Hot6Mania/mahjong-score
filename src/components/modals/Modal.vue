@@ -7,6 +7,7 @@ import type { Player, ScoringState, PanelInfo, Dice, SeatTile, Records, Option, 
 import { compareSessionDesc, getSpreadsheetMetadataCached } from "@/utils/googleSheets"
 import { calculateMatchRatings, getRatingColor, type PlayerRating, type MatchDeltaResult } from "@/utils/ratingEngine"
 import { distributeLeftoverRiichi, splitPointTenths } from "@/utils/knuNpmScoring"
+import { EVENT_PLAYER_MAP, EVENT_TEAM_MAP, formatEventPlayerName } from "@/data/knuNpm2026"
 import { computed, ref, watch, onMounted, onUnmounted } from "vue"
 import { useI18n } from "vue-i18n"
 import { Line as LineChart } from "vue-chartjs"
@@ -71,8 +72,11 @@ interface Props {
   isEventSubmitting?: boolean,
   isEventSubmitted?: boolean,
   isEventCloudSaving?: boolean,
+  eventLiveSyncStatus?: 'idle' | 'syncing' | 'synced' | 'error',
+  eventLiveLastSyncedAt?: number,
   eventPriorPoints?: number[],
   eventChomboPenalty?: number,
+  eventSeatPlayerIds?: [number, number, number, number],
   showEventTimer?: boolean
 }
 const props = defineProps<Props>()
@@ -120,6 +124,7 @@ type Emits = {
   (e: 'change-event-locale', loc: 'en' | 'ja' | 'ko'): void,
   (e: 'cloud-save-event'): void,
   (e: 'finish-event-early'): void,
+  (e: 'update-event-seats', nextSeatPlayerIds: [number, number, number, number], returnToModal?: string): void,
 }
 const emit = defineEmits<Emits>()
 
@@ -205,8 +210,100 @@ const onSpreadsheetInput = (e: Event) => {
 /**data 정의*/
 const arr_wind = ['東', '南', '西', '北']
 const arr_seat = ['option.east', 'option.south', 'option.west', 'option.north',]
+const arr_seat_dir = ['▼', '▶', '▲', '◀']
 const arr_resultsheet = ['resultSheet.wind', 'resultSheet.name', 'resultSheet.score', 'resultSheet.rating', 'resultSheet.riichi', 'resultSheet.ron', 'resultSheet.tsumo', 'resultSheet.lose']
 const DEFAULT_PLACEHOLDER_NAMES = new Set(['▼', '▶', '▲', '◀'])
+
+/**이벤트 모드 동남서북 자리/이름 변경 드래프트 상태*/
+const draftEventSeatIds = ref<number[]>([])
+
+watch(
+  () => [props.modalInfo.type, props.eventSeatPlayerIds] as const,
+  ([type, ids]) => {
+    if (type === 'edit_event_seats' && Array.isArray(ids) && ids.length === 4) {
+      draftEventSeatIds.value = [...ids]
+    }
+  },
+  { immediate: true, deep: true }
+)
+
+const formatEventSeatOption = (pid: number): string => {
+  const ep = EVENT_PLAYER_MAP[pid]
+  const loc = props.eventLocale || 'en'
+  const name = formatEventPlayerName(ep ?? pid, loc, 'compact')
+  if (!ep) return name
+  return `[${ep.teamId}] ${name}`
+}
+
+const getEventSeatTeamColor = (pid: number): string => {
+  const ep = EVENT_PLAYER_MAP[pid]
+  return ep ? EVENT_TEAM_MAP[ep.teamId].color : 'var(--text-dimmed)'
+}
+
+const swapDraftEventSeat = (seatIdx: number, rawVal: string) => {
+  if (draftEventSeatIds.value.length !== 4) return
+  const targetPid = Number(rawVal)
+  const next = [...draftEventSeatIds.value]
+  const otherIdx = next.indexOf(targetPid)
+  if (otherIdx < 0 || otherIdx === seatIdx) return
+  const tmp = next[seatIdx]
+  next[seatIdx] = next[otherIdx]
+  next[otherIdx] = tmp
+  draftEventSeatIds.value = next
+}
+
+const moveDraftEventSeat = (seatIdx: number, delta: -1 | 1) => {
+  const targetIdx = seatIdx + delta
+  if (targetIdx < 0 || targetIdx > 3 || draftEventSeatIds.value.length !== 4) return
+  const next = [...draftEventSeatIds.value]
+  const tmp = next[seatIdx]
+  next[seatIdx] = next[targetIdx]
+  next[targetIdx] = tmp
+  draftEventSeatIds.value = next
+}
+
+const shiftDraftEventSeats = (dir: 'down' | 'up') => {
+  if (draftEventSeatIds.value.length !== 4) return
+  const [a, b, c, d] = draftEventSeatIds.value
+  draftEventSeatIds.value = dir === 'down' ? [d, a, b, c] : [b, c, d, a]
+}
+
+const resetDraftEventSeats = () => {
+  if (props.eventSeatPlayerIds?.length === 4) {
+    draftEventSeatIds.value = [...props.eventSeatPlayerIds]
+  }
+}
+
+const hasDraftEventSeatChanges = computed(() => {
+  if (!props.eventSeatPlayerIds || draftEventSeatIds.value.length !== 4) return false
+  return draftEventSeatIds.value.some((pid, i) => pid !== props.eventSeatPlayerIds![i])
+})
+
+const cancelEditEventSeats = () => {
+  if (props.modalInfo.status === 'result_sheet') {
+    emit('show-modal', 'result_sheet')
+  } else {
+    emit('hide-modal')
+  }
+}
+
+const confirmEditEventSeats = () => {
+  if (draftEventSeatIds.value.length !== 4) return
+  const returnTo = props.modalInfo.status === 'result_sheet' ? 'result_sheet' : undefined
+  emit('update-event-seats', [...draftEventSeatIds.value] as [number, number, number, number], returnTo)
+}
+
+const onDirectOptionSeatChange = (seatIdx: number, rawVal: string) => {
+  if (!props.eventSeatPlayerIds || props.eventSeatPlayerIds.length !== 4) return
+  const targetPid = Number(rawVal)
+  const next = [...props.eventSeatPlayerIds] as [number, number, number, number]
+  const otherIdx = next.indexOf(targetPid)
+  if (otherIdx < 0 || otherIdx === seatIdx) return
+  const tmp = next[seatIdx]
+  next[seatIdx] = next[otherIdx]
+  next[otherIdx] = tmp
+  emit('update-event-seats', next, 'stay')
+}
 
 /**순위표 정보 계산 (M리그 공식 동점 끝수·공탁금 기가 우선 분배 일치)*/
 const scoreSheetInfo = computed(() => {
@@ -680,6 +777,8 @@ const getSignColor = (sign: number, x: boolean) => {
       :eventMatchLabel="eventMatchLabel"
       :eventLocale="eventLocale"
       :isCloudSaving="isEventCloudSaving"
+      :liveSyncStatus="eventLiveSyncStatus"
+      :liveLastSyncedAt="eventLiveLastSyncedAt"
       @show-modal="(type, status) => emit('show-modal', type, status)"
       @start-new-game="emit('start-new-game')"
       @sync-local-to-google="emit('sync-local-to-google')"
@@ -689,9 +788,91 @@ const getSignColor = (sign: number, x: boolean) => {
       @finish-event-early="emit('finish-event-early')"
     />
   </div>
+  <!-- 이벤트 동남서북 자리/이름 변경창 -->
+  <div v-else-if="modalInfo.type==='edit_event_seats' && eventSeatPlayerIds?.length === 4" class="modal_content event_seat_edit_modal" @click.stop>
+    <div class="ese-wrap">
+      <div class="ese-head">
+        <div class="ese-title-row">
+          <span class="ese-title">🔄 {{ t('seatEdit.title') }}</span>
+          <span v-if="eventMatchLabel" class="ese-badge">{{ eventMatchLabel }}</span>
+        </div>
+        <p class="ese-hint">{{ t('seatEdit.hint') }}</p>
+      </div>
+
+      <div class="ese-quick-row">
+        <button type="button" class="ese-quick-btn" @click.stop="shiftDraftEventSeats('down')">
+          {{ t('seatEdit.shiftDown') }}
+        </button>
+        <button type="button" class="ese-quick-btn" @click.stop="shiftDraftEventSeats('up')">
+          {{ t('seatEdit.shiftUp') }}
+        </button>
+        <button type="button" class="ese-quick-btn" :disabled="!hasDraftEventSeatChanges" @click.stop="resetDraftEventSeats">
+          {{ t('seatEdit.reset') }}
+        </button>
+      </div>
+
+      <div class="ese-rows">
+        <div
+          v-for="(pid, idx) in draftEventSeatIds"
+          :key="idx"
+          class="ese-row"
+          :class="{ 'is-changed': eventSeatPlayerIds && pid !== eventSeatPlayerIds[idx] }"
+        >
+          <div class="ese-seat-info">
+            <span class="ese-wind-pill" :class="{ 'is-east': idx === 0 }">
+              {{ arr_wind[idx] }} {{ arr_seat_dir[idx] }}
+            </span>
+            <div class="ese-seat-meta">
+              <span class="ese-score">{{ players[idx]?.displayScore?.toLocaleString?.() ?? players[idx]?.displayScore }}</span>
+              <span v-if="players[idx]?.wind && players[idx].wind !== arr_wind[idx]" class="ese-cur-wind">
+                {{ t('seatEdit.currentWind', { wind: players[idx].wind }) }}
+              </span>
+            </div>
+          </div>
+
+          <div class="ese-select-wrap">
+            <span class="ese-team-dot" :style="{ backgroundColor: getEventSeatTeamColor(pid) }"></span>
+            <select
+              class="ese-select"
+              :value="pid"
+              @change="swapDraftEventSeat(idx, ($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="candPid in eventSeatPlayerIds" :key="candPid" :value="candPid">
+                {{ formatEventSeatOption(candPid) }}
+              </option>
+            </select>
+          </div>
+
+          <div class="ese-move-btns">
+            <button type="button" class="ese-move-btn" :disabled="idx === 0" @click.stop="moveDraftEventSeat(idx, -1)" aria-label="Move up">▲</button>
+            <button type="button" class="ese-move-btn" :disabled="idx === 3" @click.stop="moveDraftEventSeat(idx, 1)" aria-label="Move down">▼</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ese-footer">
+        <button type="button" class="ese-btn ese-btn-cancel" @click.stop="cancelEditEventSeats">
+          {{ t('seatEdit.cancel') }}
+        </button>
+        <button type="button" class="ese-btn ese-btn-apply" @click.stop="confirmEditEventSeats">
+          {{ t('seatEdit.apply') }}
+        </button>
+      </div>
+    </div>
+  </div>
   <!-- 게임 결과창(표) -->
   <div v-else-if="modalInfo.type==='result_sheet'" class="modal_content result_sheet_modal" @click.stop>
     <div class="result_sheet_wrapper">
+      <div v-if="eventMatchLabel && eventSeatPlayerIds?.length === 4" class="result_sheet_event_bar">
+        <span class="rs-event-match-tag">{{ eventMatchLabel }}</span>
+        <button
+          type="button"
+          class="rs-event-swap-btn"
+          @click.stop="emit('show-modal', 'edit_event_seats', 'result_sheet')"
+        >
+          🔄 {{ t('menu.changeSeats') }}
+        </button>
+      </div>
       <div class="result_sheet_table_wrap" @click.stop="emit('show-modal', 'result_chart')">
         <table class="resultsheet_table">
           <thead>
@@ -915,11 +1096,22 @@ const getSignColor = (sign: number, x: boolean) => {
           :style="`grid-area: input_name${i};`"
         >
           {{ arr_wind[i] }}({{ t(arr_seat[i]) }})<br>
+          <select
+            v-if="eventMatchLabel && eventSeatPlayerIds?.length === 4"
+            class="event_option_seat_select"
+            :value="eventSeatPlayerIds[i]"
+            @change="onDirectOptionSeatChange(i, ($event.target as HTMLSelectElement).value)"
+            :name="`name${i+1}`"
+          >
+            <option v-for="candPid in eventSeatPlayerIds" :key="candPid" :value="candPid">
+              {{ formatEventSeatOption(candPid) }}
+            </option>
+          </select>
           <input
+            v-else
             type="text"
             v-model="players[i].name"
             autocomplete="off"
-            :readonly="Boolean(eventMatchLabel)"
             :placeholder="t('option.name', {idx:i+1})"
             :name="`name${i+1}`"
           >
@@ -1354,12 +1546,254 @@ const getSignColor = (sign: number, x: boolean) => {
   display: none;
 }
 .container_option.event_option input[type="text"],
-.container_option.event_option input[type="number"] {
+.container_option.event_option input[type="number"],
+.container_option.event_option .event_option_seat_select {
   width: 100%;
-  max-width: 132px;
+  max-width: 142px;
   box-sizing: border-box;
-  font-size: 16px;
-  padding: 5px 7px;
+  font-size: 15px;
+  padding: 5px 6px;
+}
+.event_option_seat_select {
+  background-color: var(--input-bg-color, var(--bg-card));
+  color: var(--text-color);
+  border: 1.5px solid rgba(59, 130, 246, 0.55);
+  border-radius: 6px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* 이벤트 동남서북 자리/이름 변경 모달 */
+.event_seat_edit_modal {
+  padding: 14px 16px !important;
+  white-space: normal !important;
+  width: min(500px, 92%) !important;
+  max-width: 94% !important;
+  max-height: 92% !important;
+  border-radius: 14px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+}
+.ese-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+}
+.ese-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ese-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ese-title {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text-color);
+}
+.ese-badge {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.16);
+  color: var(--color-toggle-on, #2563eb);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  white-space: nowrap;
+}
+.ese-hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-dimmed);
+  line-height: 1.35;
+}
+.ese-quick-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+}
+.ese-quick-btn {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card, rgba(125, 125, 125, 0.08));
+  color: var(--text-color);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ese-quick-btn:hover:not(:disabled) {
+  border-color: var(--color-toggle-on, #2563eb);
+}
+.ese-quick-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.ese-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ese-row {
+  display: grid;
+  grid-template-columns: minmax(112px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card, rgba(125, 125, 125, 0.06));
+}
+.ese-row.is-changed {
+  border-color: rgba(59, 130, 246, 0.65);
+  background: rgba(59, 130, 246, 0.1);
+}
+.ese-seat-info {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.ese-wind-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 4px 6px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 900;
+  background: rgba(125, 125, 125, 0.14);
+  color: var(--text-color);
+  white-space: nowrap;
+}
+.ese-wind-pill.is-east {
+  background: rgba(239, 68, 68, 0.16);
+  color: var(--color-east, #ef4444);
+}
+.ese-seat-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+.ese-score {
+  font-size: 13.5px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-color);
+}
+.ese-cur-wind {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dimmed);
+}
+.ese-select-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ese-team-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ese-select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: var(--input-bg-color, var(--modal-bg-color));
+  color: var(--text-color);
+  font-size: 14.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ese-move-btns {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.ese-move-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--modal-bg-color);
+  color: var(--text-color);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ese-move-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.ese-footer {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: 8px;
+  margin-top: 2px;
+}
+.ese-btn {
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 15px;
+  font-weight: 800;
+  border: none;
+  cursor: pointer;
+}
+.ese-btn-cancel {
+  background: rgba(125, 125, 125, 0.18);
+  color: var(--text-color);
+}
+.ese-btn-apply {
+  background: #2563eb;
+  color: #ffffff;
+}
+.ese-btn-apply:hover {
+  background: #1d4ed8;
+}
+
+/* 결과창 이벤트 헤더 바 (자리/이름 변경 진입) */
+.result_sheet_event_bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+.rs-event-match-tag {
+  font-size: clamp(13px, 2vmin, 16px);
+  font-weight: 800;
+  color: var(--text-dimmed);
+}
+.rs-event-swap-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--color-toggle-on, #2563eb);
+  font-size: clamp(12.5px, 1.9vmin, 15px);
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rs-event-swap-btn:hover {
+  background: rgba(59, 130, 246, 0.24);
 }
 .uma_inputs_row {
   display: inline-flex;
@@ -1380,6 +1814,19 @@ const getSignColor = (sign: number, x: boolean) => {
   .container_option.event_option {
     max-height: 70vw !important;
     font-size: 16px !important;
+  }
+  .event_seat_edit_modal {
+    width: min(500px, 92vh) !important;
+    width: min(500px, 92dvh) !important;
+    max-height: 92vw !important;
+    max-height: 92dvw !important;
+    padding: 10px 12px !important;
+  }
+  .ese-wrap {
+    gap: 7px;
+  }
+  .ese-row {
+    padding: 6px 8px;
   }
 }
 .event_option_footer {

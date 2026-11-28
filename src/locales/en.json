@@ -48,7 +48,18 @@
         "submittedEvent" : "Submitted ✓",
         "backToLeague" : "Back to League",
         "cloudSave" : "Cloud Backup",
-        "cloudSaving" : "Backing up..."
+        "cloudSaving" : "Backing up...",
+        "changeSeats" : "Swap Seats"
+    },
+    "seatEdit" : {
+        "title" : "Change East / South / West / North Seats",
+        "hint" : "Scores and logs stay on each seat; only player assignments change.",
+        "shiftDown" : "↓ Shift All",
+        "shiftUp" : "↑ Shift All",
+        "reset" : "Reset",
+        "cancel" : "Cancel",
+        "apply" : "Apply",
+        "currentWind" : "Now {wind}"
     },
     "resultSheet" : {
         "wind" : "Seat",

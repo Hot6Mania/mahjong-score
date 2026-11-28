@@ -48,7 +48,18 @@
         "submittedEvent" : "送信完了 ✓",
         "backToLeague" : "リーグへ戻る",
         "cloudSave" : "サーバー保存",
-        "cloudSaving" : "保存中..."
+        "cloudSaving" : "保存中...",
+        "changeSeats" : "席順・名前変更"
+    },
+    "seatEdit" : {
+        "title" : "東南西北 席順・名前変更",
+        "hint" : "点数と記録は各席に維持され、選手の名前のみ変更されます。",
+        "shiftDown" : "↓ 1席ずらす",
+        "shiftUp" : "↑ 1席戻す",
+        "reset" : "元に戻す",
+        "cancel" : "キャンセル",
+        "apply" : "適用",
+        "currentWind" : "現在 {wind}"
     },
     "resultSheet" : {
         "wind" : "席",

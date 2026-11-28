@@ -45,6 +45,12 @@ const isEventMode = computed(() => isKnuNpmEventMode(route.path));
 const isEventSandbox = computed(() => isKnuNpmSandboxMode(route.path));
 const isEventLiveMonitor = computed(() => isKnuNpmLiveMonitorPath(route.path));
 const isEventCloudSaving = ref(false);
+const eventLiveSyncStatus = ref<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+const eventLiveLastSyncedAt = ref<number>(0);
+const eventLiveSyncDirty = ref(false);
+let eventLiveRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let eventLiveRetryAttempt = 0;
+const EVENT_LIVE_RETRY_DELAYS_MS = [3000, 8000, 15000, 30000, 45000];
 const EVENT_ACTIVE_SESSION_KEY = 'knu_npm_2026_active_session_v1';
 
 const resolveInitialEventLocale = (): EventLocale => {
@@ -330,6 +336,16 @@ const handleEventScorerWakeSync = () => {
   if (typeof document !== 'undefined' && document.hidden) return;
   if (!isEventMode.value || !isEventScorerVisible.value || !activeEventMatch.value) return;
   syncEventTimerFromServer();
+  if (!isEventSubmitted.value && (eventLiveSyncDirty.value || eventLiveLastSyncedAt.value === 0)) {
+    syncEventLiveCheckpoint(false);
+  }
+};
+
+const handleEventScorerOnlineSync = () => {
+  if (!isEventMode.value || !activeEventMatch.value || isEventSubmitted.value) return;
+  if (eventLiveSyncDirty.value || eventLiveSyncStatus.value === 'error' || eventLiveLastSyncedAt.value === 0) {
+    syncEventLiveCheckpoint(false);
+  }
 };
 
 const syncEventScorerUrlQuery = async (matchKey: string | null, fallbackRound = 1) => {
@@ -386,6 +402,7 @@ watch(
     }
     if (typeof window !== 'undefined') {
       window.removeEventListener('focus', handleEventScorerWakeSync);
+      window.removeEventListener('online', handleEventScorerOnlineSync);
     }
     if (evMode && visible && activeEventMatch.value) {
       eventTimerStateUpdatedAt.value = 0;
@@ -402,6 +419,7 @@ watch(
       }
       if (typeof window !== 'undefined') {
         window.addEventListener('focus', handleEventScorerWakeSync);
+        window.addEventListener('online', handleEventScorerOnlineSync);
       }
       eventTimerTickInterval = setInterval(() => {
         eventTimerNowTick.value = Date.now();
@@ -462,12 +480,17 @@ watch(
 onUnmounted(() => {
   if (eventTimerTickInterval) clearInterval(eventTimerTickInterval);
   clearEventTimerSyncSchedule();
+  if (eventLiveRetryTimer) {
+    clearTimeout(eventLiveRetryTimer);
+    eventLiveRetryTimer = null;
+  }
   if (unsubscribeEventTimerBroadcast) unsubscribeEventTimerBroadcast();
   if (typeof document !== 'undefined') {
     document.removeEventListener('visibilitychange', handleEventScorerWakeSync);
   }
   if (typeof window !== 'undefined') {
     window.removeEventListener('focus', handleEventScorerWakeSync);
+    window.removeEventListener('online', handleEventScorerOnlineSync);
   }
 });
 
@@ -3261,15 +3284,43 @@ const restoreEventScorerSessionFromLocal = () => {
             ? `중단된 대국을 자동 복구했습니다 (${match.key} · ${panelInfo.wind}${panelInfo.round}국 ${panelInfo.renchan}본장)`
             : `Auto-recovered interrupted game (${match.key} · ${panelInfo.wind}${panelInfo.round}, ${panelInfo.renchan}H)`
       );
+      syncEventLiveCheckpoint(false);
     }
   } catch (e) {
     console.warn('Failed to restore event scorer session:', e);
   }
 };
 
-const syncEventLiveCheckpoint = async (showFeedback = false) => {
+const clearEventLiveRetryTimer = () => {
+  if (eventLiveRetryTimer) {
+    clearTimeout(eventLiveRetryTimer);
+    eventLiveRetryTimer = null;
+  }
+};
+
+const scheduleEventLiveRetry = () => {
+  clearEventLiveRetryTimer();
+  if (!activeEventMatch.value || isEventSubmitted.value) return;
+  if (eventLiveRetryAttempt >= EVENT_LIVE_RETRY_DELAYS_MS.length) return;
+  const delay = EVENT_LIVE_RETRY_DELAYS_MS[eventLiveRetryAttempt];
+  eventLiveRetryAttempt += 1;
+  eventLiveRetryTimer = setTimeout(() => {
+    eventLiveRetryTimer = null;
+    if (activeEventMatch.value && !isEventSubmitted.value && eventLiveSyncDirty.value) {
+      syncEventLiveCheckpoint(false, true);
+    }
+  }, delay);
+};
+
+const syncEventLiveCheckpoint = async (showFeedback = false, isRetry = false) => {
   const match = activeEventMatch.value;
   if (!match) return;
+  if (!isRetry) {
+    eventLiveRetryAttempt = 0;
+    clearEventLiveRetryTimer();
+  }
+  eventLiveSyncDirty.value = true;
+  eventLiveSyncStatus.value = 'syncing';
   if (showFeedback) isEventCloudSaving.value = true;
   try {
     await upsertLiveTableState(
@@ -3290,6 +3341,11 @@ const syncEventLiveCheckpoint = async (showFeedback = false) => {
       },
       match.sandbox
     );
+    eventLiveSyncDirty.value = false;
+    eventLiveRetryAttempt = 0;
+    clearEventLiveRetryTimer();
+    eventLiveSyncStatus.value = 'synced';
+    eventLiveLastSyncedAt.value = Date.now();
     if (showFeedback) {
       triggerToast(
         eventLocale.value === 'ja'
@@ -3300,9 +3356,20 @@ const syncEventLiveCheckpoint = async (showFeedback = false) => {
       );
     }
   } catch (err: any) {
+    eventLiveSyncStatus.value = 'error';
     if (showFeedback) {
       triggerToast(err?.message || 'Cloud backup failed', 'error');
+    } else if (eventLiveRetryAttempt >= EVENT_LIVE_RETRY_DELAYS_MS.length) {
+      triggerToast(
+        eventLocale.value === 'ja'
+          ? `ライブ同期に失敗しました。ネットワーク確認後「サーバー保存」を押してください。`
+          : eventLocale.value === 'ko'
+            ? `라이브 서버 동기화 지연 중 — 네트워크 확인 후 메뉴에서 [서버 임시저장]을 눌러주세요.`
+            : `Live sync delayed — check network and tap Cloud Backup in menu.`,
+        'error'
+      );
     }
+    scheduleEventLiveRetry();
   } finally {
     if (showFeedback) isEventCloudSaving.value = false;
   }
@@ -3494,6 +3561,9 @@ const submitEventScorerResult = async () => {
 
     isEventSubmitted.value = true;
     isGameSaved.value = true;
+    clearEventLiveRetryTimer();
+    eventLiveSyncDirty.value = false;
+    eventLiveSyncStatus.value = 'synced';
     clearEventScorerLocalSession();
     clearLiveTableState(match.round, match.table, match.sandbox).catch(() => {});
     triggerToast(
@@ -3515,6 +3585,59 @@ const resumeEventScorer = () => {
   isEventScorerVisible.value = true;
   persistEventScorerSessionToLocal();
   syncEventScorerUrlQuery(activeEventMatch.value.key, activeEventMatch.value.round);
+};
+
+const updateEventSeatOrder = (
+  nextSeatPlayerIds: [number, number, number, number],
+  returnToModal?: string
+) => {
+  const match = activeEventMatch.value;
+  if (!isEventMode.value || !match) return;
+  if (!Array.isArray(nextSeatPlayerIds) || nextSeatPlayerIds.length !== 4) return;
+
+  const oldIds = match.seatPlayerIds;
+  const sortedOld = [...oldIds].sort((a, b) => a - b);
+  const sortedNew = [...nextSeatPlayerIds].sort((a, b) => a - b);
+  if (sortedOld.some((id, idx) => id !== sortedNew[idx])) return;
+
+  const changed = nextSeatPlayerIds.some((pid, idx) => pid !== oldIds[idx]);
+  if (changed) {
+    const nextPriorPoints = nextSeatPlayerIds.map((pid) => {
+      const oldIdx = oldIds.indexOf(pid);
+      return oldIdx >= 0 ? Number(match.priorPoints[oldIdx] ?? 0) : 0;
+    }) as [number, number, number, number];
+
+    activeEventMatch.value = {
+      ...match,
+      seatPlayerIds: [...nextSeatPlayerIds] as [number, number, number, number],
+      priorPoints: nextPriorPoints,
+    };
+
+    nextSeatPlayerIds.forEach((pid, idx) => {
+      players[idx].name = formatEventPlayerName(EVENT_PLAYER_MAP[pid] ?? pid, eventLocale.value, 'compact');
+    });
+
+    if (isEventSubmitted.value) {
+      isEventSubmitted.value = false;
+    }
+
+    persistEventScorerSessionToLocal();
+    syncEventLiveCheckpoint(false);
+    triggerToast(
+      eventLocale.value === 'ja'
+        ? `東南西北の席順・名前を変更しました（${match.key}）`
+        : eventLocale.value === 'ko'
+          ? `동남서북 자리/이름을 변경했습니다 (${match.key})`
+          : `Updated East/South/West/North seat names (${match.key})`
+    );
+  }
+
+  if (returnToModal === 'stay') return;
+  if (returnToModal) {
+    showModal(returnToModal);
+  } else {
+    hideModal();
+  }
 };
 
 const isSandboxQaMenuOpen = ref(false);
@@ -5181,8 +5304,11 @@ const addBackupGameToCurrent = (game: any) => {
       :isEventSubmitting="isEventSubmitting"
       :isEventSubmitted="isEventSubmitted"
       :isEventCloudSaving="isEventCloudSaving"
+      :eventLiveSyncStatus="eventLiveSyncStatus"
+      :eventLiveLastSyncedAt="eventLiveLastSyncedAt"
       :eventPriorPoints="isEventMode && activeEventMatch ? activeEventMatch.priorPoints : undefined"
       :eventChomboPenalty="isEventMode && activeEventMatch ? activeEventMatch.config.chomboPenalty : 20"
+      :eventSeatPlayerIds="isEventMode && activeEventMatch ? activeEventMatch.seatPlayerIds : undefined"
       :showEventTimer="showEventTimer"
       @toggle-close-session="toggleCloseCurrentSession"
       @show-modal="showModal"
@@ -5224,6 +5350,7 @@ const addBackupGameToCurrent = (game: any) => {
       @change-event-locale="setEventLocale"
       @cloud-save-event="syncEventLiveCheckpoint(true)"
       @finish-event-early="handleFinishEventEarly"
+      @update-event-seats="updateEventSeatOrder"
     />
   </Transition>
 
