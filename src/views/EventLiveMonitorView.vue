@@ -946,14 +946,16 @@ const lastSyncText = computed(() => {
               >
                 {{ (getActiveDelta(card.slot.key, p.playerId) ?? 0) > 0 ? '+' : '' }}{{ getActiveDelta(card.slot.key, p.playerId)?.toLocaleString() }}
               </span>
-              <span class="lmc-score">{{ getDisplayScore(card.slot.key, p.playerId, p.score).toLocaleString() }}</span>
-              <span
-                v-if="card.status !== 'waiting'"
-                class="lmc-pt"
-                :class="p.projectedPt > 0 ? 'pos' : p.projectedPt < 0 ? 'neg' : ''"
-              >
-                {{ formatSignedPoint(p.projectedPt) }}
-              </span>
+              <div class="lmc-score-stack">
+                <span class="lmc-score">{{ getDisplayScore(card.slot.key, p.playerId, p.score).toLocaleString() }}</span>
+                <span
+                  v-if="card.status !== 'waiting'"
+                  class="lmc-pt"
+                  :class="p.projectedPt > 0 ? 'pos' : p.projectedPt < 0 ? 'neg' : ''"
+                >
+                  {{ formatSignedPoint(p.projectedPt) }}
+                </span>
+              </div>
             </div>
           </div>
         </TransitionGroup>
@@ -997,13 +999,15 @@ const lastSyncText = computed(() => {
   justify-content: center;
   gap: 8px;
   min-width: 220px;
-  padding: 5px 14px;
+  height: 36px;
+  padding: 0 14px;
   box-sizing: border-box;
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.9);
   border: 1.5px solid rgba(16, 185, 129, 0.55);
   color: #ecfdf5;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .lm-timer-pill.sev-warn {
   background: rgba(180, 83, 9, 0.35);
@@ -1140,38 +1144,52 @@ const lastSyncText = computed(() => {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
+  flex-shrink: 0;
 }
 .lm-team-box {
   background: #111827;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-left: 5px solid #3b82f6;
   border-radius: 10px;
-  padding: 10px 14px;
+  height: 60px;
+  padding: 8px 14px;
+  box-sizing: border-box;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  overflow: hidden;
 }
-.lmt-left { display: flex; align-items: center; gap: 8px; }
+.lmt-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .lmt-rank {
   font-size: 13px;
   font-weight: 900;
   padding: 2px 7px;
   border-radius: 6px;
   background: rgba(148, 163, 184, 0.15);
+  flex-shrink: 0;
 }
 .lmt-rank.r-1 { background: rgba(245, 158, 11, 0.25); color: #fbbf24; }
-.lmt-name { font-size: 17px; font-weight: 900; }
-.lmt-right { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
-.lmt-total { font-size: 22px; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.lmt-name { font-size: 17px; font-weight: 900; white-space: nowrap; }
+.lmt-right {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  height: 42px;
+  flex-shrink: 0;
+}
+.lmt-total { font-size: 22px; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1.05; white-space: nowrap; }
 .lmt-total small { font-size: 12px; color: #94a3b8; }
-.lmt-delta { font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.lmt-delta { font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.25; white-space: nowrap; }
 
 /* 7-Table Broadcast Grid */
 .lm-grid {
   flex: 1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 292px;
   gap: 12px;
   align-content: start;
 }
@@ -1180,10 +1198,13 @@ const lastSyncText = computed(() => {
   background: #111827;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 12px;
+  height: 292px;
   padding: 12px 13px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: hidden;
 }
 .lm-table-card.st-live {
   border-color: rgba(59, 130, 246, 0.6);
@@ -1194,16 +1215,20 @@ const lastSyncText = computed(() => {
   background: linear-gradient(180deg, rgba(16, 185, 129, 0.08), #111827 45%);
 }
 .lm-table-card.is-jpc {
-  border-top: 3px solid #a855f7;
+  box-shadow: inset 0 3px 0 0 #a855f7;
 }
 
 .lmc-head {
+  height: 32px;
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 6px;
   padding-bottom: 7px;
+  box-sizing: border-box;
   border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  overflow: hidden;
 }
 .lmc-h-left { display: flex; align-items: center; gap: 6px; }
 .lmc-tnum { font-size: 16px; font-weight: 900; letter-spacing: 0.02em; }
@@ -1264,6 +1289,8 @@ const lastSyncText = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  height: 226px;
+  flex-shrink: 0;
   position: relative;
 }
 .lm-row-move-move {
@@ -1278,13 +1305,17 @@ const lastSyncText = computed(() => {
   color: #fecaca;
 }
 .lmc-row {
+  height: 52px;
+  flex-shrink: 0;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 8px;
+  padding: 6px 8px;
   border-radius: 8px;
   background: rgba(30, 41, 59, 0.55);
   transition: background-color 0.45s ease, box-shadow 0.45s ease;
+  overflow: hidden;
 }
 .lmc-row.is-first {
   background: rgba(245, 158, 11, 0.1);
@@ -1305,10 +1336,13 @@ const lastSyncText = computed(() => {
   animation: lmRiichiFlash 0.85s ease-in-out 3;
 }
 .lmc-delta-pop {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 900;
-  padding: 1px 6px;
+  padding: 2px 6px;
   border-radius: 6px;
+  line-height: 1.15;
+  white-space: nowrap;
+  flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   animation: lmDeltaPop 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -1410,19 +1444,31 @@ const lastSyncText = computed(() => {
 
 .lmc-score-wrap {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
+}
+.lmc-score-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 60px;
 }
 .lmc-score {
   font-size: 18px;
   font-weight: 900;
   line-height: 1.05;
+  white-space: nowrap;
 }
 .lmc-pt {
   font-size: 11.5px;
   font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .pos { color: #4ade80; }
