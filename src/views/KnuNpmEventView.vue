@@ -134,7 +134,62 @@ const teamFilter = ref<'ALL' | TeamId>('ALL');
 const roleFilter = ref<'ALL' | 'PRO' | 'PLAYER'>('ALL');
 const standingsSortKey = ref<'rank' | 'totalPoints' | 'avgRank' | 'bestScore' | 'topRate'>('rank');
 const standingsSortAsc = ref<boolean>(true);
-const statsSortKey = ref<'trackedGames' | 'winRate' | 'dealInRate' | 'riichiRate' | 'avgWinScore' | 'roundSuji'>('winRate');
+type DetailedStatsSortKey =
+  | 'trackedGames'
+  | 'totalPoints'
+  | 'avgPoint'
+  | 'avgRank'
+  | 'topRate'
+  | 'top2Rate'
+  | 'lastAvoidRate'
+  | 'bestScore'
+  | 'tobiRate'
+  | 'trackedRounds'
+  | 'winRate'
+  | 'dealInRate'
+  | 'tsumoRate'
+  | 'drawRate'
+  | 'drawTenpaiRate'
+  | 'avgWinScore'
+  | 'avgDealInScore'
+  | 'roundSuji'
+  | 'riichiRate'
+  | 'riichiWinRate'
+  | 'riichiDealInRate'
+  | 'riichiDrawRate'
+  | 'riichiSuji'
+  | 'riichiIncome'
+  | 'riichiExpense'
+  | 'firstRiichiRate'
+  | 'chaseRiichiRate'
+  | 'chaseRiichiWinRate'
+  | 'chasedRiichiRate'
+  | 'oyaKaburiRate'
+  | 'oyaKaburiAvg'
+  | 'dealInRiichiRate'
+  | 'yakitoriRate'
+  | 'winEfficiency'
+  | 'dealInLoss'
+  | 'netWinEfficiency';
+
+const DETAILED_STAT_ASC_DEFAULT = new Set<DetailedStatsSortKey>([
+  'avgRank',
+  'tobiRate',
+  'dealInRate',
+  'drawRate',
+  'avgDealInScore',
+  'riichiDealInRate',
+  'riichiDrawRate',
+  'riichiExpense',
+  'chasedRiichiRate',
+  'oyaKaburiRate',
+  'oyaKaburiAvg',
+  'dealInRiichiRate',
+  'yakitoriRate',
+  'dealInLoss',
+]);
+
+const statsSortKey = ref<DetailedStatsSortKey>('winRate');
 const statsSortAsc = ref<boolean>(false);
 
 // State
@@ -490,37 +545,114 @@ const toggleStandingsSort = (key: typeof standingsSortKey.value) => {
   }
 };
 
+const getDetailedStatSortVal = (p: PlayerStanding, key: DetailedStatsSortKey): number | null => {
+  const d = p.detailed;
+  switch (key) {
+    case 'trackedGames':
+      return d.trackedGames;
+    case 'totalPoints':
+      return p.gamesPlayed > 0 ? p.totalPoints : null;
+    case 'avgPoint':
+      return p.gamesPlayed > 0 ? p.avgPoint : null;
+    case 'avgRank':
+      return p.gamesPlayed > 0 ? p.avgRank : null;
+    case 'topRate':
+      return p.gamesPlayed > 0 ? p.topRate : null;
+    case 'top2Rate':
+      return p.gamesPlayed > 0 ? p.top2Rate : null;
+    case 'lastAvoidRate':
+      return p.gamesPlayed > 0 ? p.lastAvoidRate : null;
+    case 'bestScore':
+      return p.bestScore;
+    case 'tobiRate':
+      return p.gamesPlayed > 0 ? p.tobiRate : null;
+    case 'trackedRounds':
+      return d.trackedRounds > 0 ? d.trackedRounds : null;
+    case 'winRate':
+      return d.winRate;
+    case 'dealInRate':
+      return d.dealInRate;
+    case 'tsumoRate':
+      return d.tsumoRate;
+    case 'drawRate':
+      return d.drawRate;
+    case 'drawTenpaiRate':
+      return d.drawTenpaiRate;
+    case 'avgWinScore':
+      return d.avgWinScore;
+    case 'avgDealInScore':
+      return d.avgDealInScore;
+    case 'roundSuji':
+      return d.roundSuji;
+    case 'riichiRate':
+      return d.riichiRate;
+    case 'riichiWinRate':
+      return d.riichiWinRate;
+    case 'riichiDealInRate':
+      return d.riichiDealInRate;
+    case 'riichiDrawRate':
+      return d.riichiDrawRate;
+    case 'riichiSuji':
+      return d.riichiSuji;
+    case 'riichiIncome':
+      return d.riichiIncome;
+    case 'riichiExpense':
+      return d.riichiExpense;
+    case 'firstRiichiRate':
+      return d.firstRiichiRate;
+    case 'chaseRiichiRate':
+      return d.chaseRiichiRate;
+    case 'chaseRiichiWinRate':
+      return d.chaseRiichiWinRate;
+    case 'chasedRiichiRate':
+      return d.chasedRiichiRate;
+    case 'oyaKaburiRate':
+      return d.oyaKaburiRate;
+    case 'oyaKaburiAvg':
+      return d.oyaKaburiAvg;
+    case 'dealInRiichiRate':
+      return d.dealInRiichiRate;
+    case 'yakitoriRate':
+      return d.yakitoriRate;
+    case 'winEfficiency':
+      return d.winEfficiency;
+    case 'dealInLoss':
+      return d.dealInLoss;
+    case 'netWinEfficiency':
+      return d.netWinEfficiency;
+  }
+};
+
 const filteredDetailedPlayers = computed(() => {
   const dir = statsSortAsc.value ? 1 : -1;
   return [...filteredPlayers.value].sort((a, b) => {
-    const getVal = (p: PlayerStanding): number => {
-      const d = p.detailed;
-      switch (statsSortKey.value) {
-        case 'trackedGames':
-          return d.trackedGames;
-        case 'winRate':
-          return d.winRate ?? -999;
-        case 'dealInRate':
-          return d.dealInRate ?? 999;
-        case 'riichiRate':
-          return d.riichiRate ?? -999;
-        case 'avgWinScore':
-          return d.avgWinScore ?? -999;
-        case 'roundSuji':
-          return d.roundSuji ?? -999999;
-      }
-    };
-    return (getVal(a) - getVal(b)) * dir;
+    const va = getDetailedStatSortVal(a, statsSortKey.value);
+    const vb = getDetailedStatSortVal(b, statsSortKey.value);
+    if (va === null && vb === null) return a.rank - b.rank;
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    if (va === vb) return a.rank - b.rank;
+    return (va - vb) * dir;
   });
 });
 
-const toggleStatsSort = (key: typeof statsSortKey.value) => {
+const toggleStatsSort = (key: DetailedStatsSortKey) => {
   if (statsSortKey.value === key) {
     statsSortAsc.value = !statsSortAsc.value;
   } else {
     statsSortKey.value = key;
-    statsSortAsc.value = key === 'dealInRate';
+    statsSortAsc.value = DETAILED_STAT_ASC_DEFAULT.has(key);
   }
+};
+
+const statsSortIndicator = (key: DetailedStatsSortKey): string => {
+  if (statsSortKey.value !== key) return '';
+  return statsSortAsc.value ? ' ▲' : ' ▼';
+};
+
+const fmtSignedInt = (v: number | null): string => {
+  if (v === null) return '-';
+  return `${v > 0 ? '+' : ''}${v.toLocaleString()}`;
 };
 
 const selectedPlayerStanding = computed(() => {
@@ -1427,30 +1559,77 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   {{ tf === 'ALL' ? tr('filterAll') : `Team ${tf}` }}
                 </button>
               </div>
+              <div class="chip-group">
+                <button
+                  type="button"
+                  class="filter-chip"
+                  :class="{ active: roleFilter === 'ALL' }"
+                  @click="roleFilter = 'ALL'"
+                >
+                  {{ tr('filterAll') }}
+                </button>
+                <button
+                  type="button"
+                  class="filter-chip"
+                  :class="{ active: roleFilter === 'PRO' }"
+                  @click="roleFilter = 'PRO'"
+                >
+                  {{ tr('filterPros') }}
+                </button>
+                <button
+                  type="button"
+                  class="filter-chip"
+                  :class="{ active: roleFilter === 'PLAYER' }"
+                  @click="roleFilter = 'PLAYER'"
+                >
+                  {{ tr('filterPlayers') }}
+                </button>
+              </div>
             </div>
           </div>
 
           <div class="table-scroll">
-            <table class="data-table">
+            <table class="data-table detailed-stats-table">
               <thead>
                 <tr>
-                  <th class="left">{{ tr('player') }}</th>
+                  <th class="left sticky-col">{{ tr('player') }}</th>
                   <th>{{ tr('team') }}</th>
-                  <th class="sortable" @click="toggleStatsSort('trackedGames')">{{ tr('statGames') }}</th>
-                  <th>{{ tr('statTotalPt') }}</th>
-                  <th>{{ tr('statTrackedRounds') }}</th>
-                  <th class="sortable" @click="toggleStatsSort('winRate')">{{ tr('statWinRate') }}</th>
-                  <th class="sortable" @click="toggleStatsSort('dealInRate')">{{ tr('statDealInRate') }}</th>
-                  <th class="sortable" @click="toggleStatsSort('riichiRate')">{{ tr('statRiichiRate') }}</th>
-                  <th class="sortable" @click="toggleStatsSort('avgWinScore')">{{ tr('statAvgWinScore') }}</th>
-                  <th>{{ tr('statAvgDealInScore') }}</th>
-                  <th>{{ tr('statTsumoRate') }}</th>
-                  <th>{{ tr('statDrawTenpaiRate') }}</th>
-                  <th>{{ tr('statYakitoriRate') }}</th>
-                  <th>{{ tr('statWinEfficiency') }}</th>
-                  <th>{{ tr('statDealInLoss') }}</th>
-                  <th>{{ tr('statNetWinEfficiency') }}</th>
-                  <th class="sortable" @click="toggleStatsSort('roundSuji')">{{ tr('statRoundSuji') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'trackedGames' }" @click="toggleStatsSort('trackedGames')">{{ tr('statGames') }}{{ statsSortIndicator('trackedGames') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'totalPoints' }" @click="toggleStatsSort('totalPoints')">{{ tr('statTotalPt') }}{{ statsSortIndicator('totalPoints') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'avgPoint' }" @click="toggleStatsSort('avgPoint')">{{ tr('statAvgPt') }}{{ statsSortIndicator('avgPoint') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'avgRank' }" @click="toggleStatsSort('avgRank')">{{ tr('statAvgRank') }}{{ statsSortIndicator('avgRank') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'topRate' }" @click="toggleStatsSort('topRate')">{{ tr('topRate') }}{{ statsSortIndicator('topRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'top2Rate' }" @click="toggleStatsSort('top2Rate')">{{ tr('statTop2Rate') }}{{ statsSortIndicator('top2Rate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'lastAvoidRate' }" @click="toggleStatsSort('lastAvoidRate')">{{ tr('lastAvoidRate') }}{{ statsSortIndicator('lastAvoidRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'bestScore' }" @click="toggleStatsSort('bestScore')">{{ tr('bestScore') }}{{ statsSortIndicator('bestScore') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'tobiRate' }" @click="toggleStatsSort('tobiRate')">{{ tr('statTobiRate') }}{{ statsSortIndicator('tobiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'trackedRounds' }" @click="toggleStatsSort('trackedRounds')">{{ tr('statTrackedRounds') }}{{ statsSortIndicator('trackedRounds') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'winRate' }" @click="toggleStatsSort('winRate')">{{ tr('statWinRate') }}{{ statsSortIndicator('winRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'dealInRate' }" @click="toggleStatsSort('dealInRate')">{{ tr('statDealInRate') }}{{ statsSortIndicator('dealInRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'tsumoRate' }" @click="toggleStatsSort('tsumoRate')">{{ tr('statTsumoRate') }}{{ statsSortIndicator('tsumoRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'drawRate' }" @click="toggleStatsSort('drawRate')">{{ tr('statDrawRate') }}{{ statsSortIndicator('drawRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'drawTenpaiRate' }" @click="toggleStatsSort('drawTenpaiRate')">{{ tr('statDrawTenpaiRate') }}{{ statsSortIndicator('drawTenpaiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'avgWinScore' }" @click="toggleStatsSort('avgWinScore')">{{ tr('statAvgWinScore') }}{{ statsSortIndicator('avgWinScore') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'avgDealInScore' }" @click="toggleStatsSort('avgDealInScore')">{{ tr('statAvgDealInScore') }}{{ statsSortIndicator('avgDealInScore') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'roundSuji' }" @click="toggleStatsSort('roundSuji')">{{ tr('statRoundSuji') }}{{ statsSortIndicator('roundSuji') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'riichiRate' }" @click="toggleStatsSort('riichiRate')">{{ tr('statRiichiRate') }}{{ statsSortIndicator('riichiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'riichiWinRate' }" @click="toggleStatsSort('riichiWinRate')">{{ tr('statRiichiWinRate') }}{{ statsSortIndicator('riichiWinRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'riichiDealInRate' }" @click="toggleStatsSort('riichiDealInRate')">{{ tr('statRiichiDealInRate') }}{{ statsSortIndicator('riichiDealInRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'riichiDrawRate' }" @click="toggleStatsSort('riichiDrawRate')">{{ tr('statRiichiDrawRate') }}{{ statsSortIndicator('riichiDrawRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'riichiSuji' }" @click="toggleStatsSort('riichiSuji')">{{ tr('statRiichiSuji') }}{{ statsSortIndicator('riichiSuji') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'riichiIncome' }" @click="toggleStatsSort('riichiIncome')">{{ tr('statRiichiIncome') }}{{ statsSortIndicator('riichiIncome') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'riichiExpense' }" @click="toggleStatsSort('riichiExpense')">{{ tr('statRiichiExpense') }}{{ statsSortIndicator('riichiExpense') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'firstRiichiRate' }" @click="toggleStatsSort('firstRiichiRate')">{{ tr('statFirstRiichiRate') }}{{ statsSortIndicator('firstRiichiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'chaseRiichiRate' }" @click="toggleStatsSort('chaseRiichiRate')">{{ tr('statChaseRiichiRate') }}{{ statsSortIndicator('chaseRiichiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'chaseRiichiWinRate' }" @click="toggleStatsSort('chaseRiichiWinRate')">{{ tr('statChaseRiichiWinRate') }}{{ statsSortIndicator('chaseRiichiWinRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'chasedRiichiRate' }" @click="toggleStatsSort('chasedRiichiRate')">{{ tr('statChasedRiichiRate') }}{{ statsSortIndicator('chasedRiichiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'oyaKaburiRate' }" @click="toggleStatsSort('oyaKaburiRate')">{{ tr('statOyaKaburiRate') }}{{ statsSortIndicator('oyaKaburiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'oyaKaburiAvg' }" @click="toggleStatsSort('oyaKaburiAvg')">{{ tr('statOyaKaburiAvg') }}{{ statsSortIndicator('oyaKaburiAvg') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'dealInRiichiRate' }" @click="toggleStatsSort('dealInRiichiRate')">{{ tr('statDealInRiichiRate') }}{{ statsSortIndicator('dealInRiichiRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'yakitoriRate' }" @click="toggleStatsSort('yakitoriRate')">{{ tr('statYakitoriRate') }}{{ statsSortIndicator('yakitoriRate') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'winEfficiency' }" @click="toggleStatsSort('winEfficiency')">{{ tr('statWinEfficiency') }}{{ statsSortIndicator('winEfficiency') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'dealInLoss' }" @click="toggleStatsSort('dealInLoss')">{{ tr('statDealInLoss') }}{{ statsSortIndicator('dealInLoss') }}</th>
+                  <th class="sortable" :class="{ 'is-sorted': statsSortKey === 'netWinEfficiency' }" @click="toggleStatsSort('netWinEfficiency')">{{ tr('statNetWinEfficiency') }}{{ statsSortIndicator('netWinEfficiency') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1460,7 +1639,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                   class="clickable-row"
                   @click="selectedPlayerId = ps.player.id"
                 >
-                  <td class="left">
+                  <td class="left sticky-col">
                     <div class="tbl-player">
                       <span class="tbl-id">#{{ ps.player.id }}</span>
                       <span class="tbl-name">{{ formatEventPlayerName(ps.player, eventLocale, 'full', showNameParens) }}</span>
@@ -1489,7 +1668,7 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                       )
                     }}
                   </td>
-                  <td class="num" :class="ps.totalPoints > 0 ? 'pos' : ps.totalPoints < 0 ? 'neg' : ''">
+                  <td class="num bold" :class="ps.totalPoints > 0 ? 'pos' : ps.totalPoints < 0 ? 'neg' : ''">
                     {{
                       formatDualMetric(
                         ps.totalPoints,
@@ -1500,36 +1679,90 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
                       )
                     }}
                   </td>
+                  <td class="num" :class="ps.avgPoint > 0 ? 'pos' : ps.avgPoint < 0 ? 'neg' : ''">
+                    {{
+                      ps.gamesPlayed > 0
+                        ? formatDualMetric(
+                            ps.avgPoint,
+                            ps.detailed.trackedAvgPoint,
+                            ps.detailed.trackedGames > 0 && ps.detailed.trackedGames !== ps.gamesPlayed,
+                            1,
+                            true
+                          )
+                        : '-'
+                    }}
+                  </td>
+                  <td class="num">
+                    {{
+                      ps.gamesPlayed > 0
+                        ? formatDualMetric(
+                            ps.avgRank,
+                            ps.detailed.trackedAvgRank,
+                            ps.detailed.trackedGames > 0 && ps.detailed.trackedGames !== ps.gamesPlayed,
+                            3,
+                            false
+                          )
+                        : '-'
+                    }}
+                  </td>
+                  <td class="num">{{ ps.gamesPlayed > 0 ? `${ps.topRate.toFixed(1)}%` : '-' }}</td>
+                  <td class="num">
+                    {{
+                      ps.gamesPlayed > 0
+                        ? `${formatDualMetric(
+                            ps.top2Rate,
+                            ps.detailed.trackedTop2Rate,
+                            ps.detailed.trackedGames > 0 && ps.detailed.trackedGames !== ps.gamesPlayed,
+                            1,
+                            false
+                          )}%`
+                        : '-'
+                    }}
+                  </td>
+                  <td class="num">{{ ps.gamesPlayed > 0 ? `${ps.lastAvoidRate.toFixed(1)}%` : '-' }}</td>
+                  <td class="num">{{ ps.bestScore !== null ? ps.bestScore.toLocaleString() : '-' }}</td>
+                  <td class="num neg">{{ ps.gamesPlayed > 0 ? `${ps.tobiRate.toFixed(2)}%` : '-' }}</td>
                   <td class="num">{{ ps.detailed.trackedRounds || '-' }}</td>
                   <td class="num bold">{{ fmtPct(ps.detailed.winRate) }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.dealInRate) }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.riichiRate) }}</td>
-                  <td class="num">{{ ps.detailed.avgWinScore !== null ? ps.detailed.avgWinScore.toLocaleString() : '-' }}</td>
-                  <td class="num">{{ ps.detailed.avgDealInScore !== null ? ps.detailed.avgDealInScore.toLocaleString() : '-' }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.dealInRate) }}</td>
                   <td class="num">{{ fmtPct(ps.detailed.tsumoRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.drawRate) }}</td>
                   <td class="num">{{ fmtPct(ps.detailed.drawTenpaiRate) }}</td>
-                  <td class="num">{{ fmtPct(ps.detailed.yakitoriRate) }}</td>
+                  <td class="num pos">{{ ps.detailed.avgWinScore !== null ? ps.detailed.avgWinScore.toLocaleString() : '-' }}</td>
+                  <td class="num neg">{{ ps.detailed.avgDealInScore !== null ? ps.detailed.avgDealInScore.toLocaleString() : '-' }}</td>
+                  <td
+                    class="num"
+                    :class="(ps.detailed.roundSuji ?? 0) > 0 ? 'pos' : (ps.detailed.roundSuji ?? 0) < 0 ? 'neg' : ''"
+                  >
+                    {{ fmtSignedInt(ps.detailed.roundSuji) }}
+                  </td>
+                  <td class="num">{{ fmtPct(ps.detailed.riichiRate) }}</td>
+                  <td class="num pos">{{ fmtPct(ps.detailed.riichiWinRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.riichiDealInRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.riichiDrawRate) }}</td>
+                  <td
+                    class="num"
+                    :class="(ps.detailed.riichiSuji ?? 0) > 0 ? 'pos' : (ps.detailed.riichiSuji ?? 0) < 0 ? 'neg' : ''"
+                  >
+                    {{ fmtSignedInt(ps.detailed.riichiSuji) }}
+                  </td>
+                  <td class="num pos">{{ ps.detailed.riichiIncome !== null ? ps.detailed.riichiIncome.toLocaleString() : '-' }}</td>
+                  <td class="num neg">{{ ps.detailed.riichiExpense !== null ? ps.detailed.riichiExpense.toLocaleString() : '-' }}</td>
+                  <td class="num pos">{{ fmtPct(ps.detailed.firstRiichiRate) }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.chaseRiichiRate) }}</td>
+                  <td class="num pos">{{ fmtPct(ps.detailed.chaseRiichiWinRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.chasedRiichiRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.oyaKaburiRate) }}</td>
+                  <td class="num neg">{{ ps.detailed.oyaKaburiAvg !== null ? ps.detailed.oyaKaburiAvg.toLocaleString() : '-' }}</td>
+                  <td class="num">{{ fmtPct(ps.detailed.dealInRiichiRate) }}</td>
+                  <td class="num neg">{{ fmtPct(ps.detailed.yakitoriRate) }}</td>
                   <td class="num pos">{{ ps.detailed.winEfficiency !== null ? `+${ps.detailed.winEfficiency.toLocaleString()}` : '-' }}</td>
                   <td class="num neg">{{ ps.detailed.dealInLoss !== null ? `-${ps.detailed.dealInLoss.toLocaleString()}` : '-' }}</td>
                   <td
                     class="num"
                     :class="(ps.detailed.netWinEfficiency ?? 0) > 0 ? 'pos' : (ps.detailed.netWinEfficiency ?? 0) < 0 ? 'neg' : ''"
                   >
-                    {{
-                      ps.detailed.netWinEfficiency !== null
-                        ? `${ps.detailed.netWinEfficiency > 0 ? '+' : ''}${ps.detailed.netWinEfficiency.toLocaleString()}`
-                        : '-'
-                    }}
-                  </td>
-                  <td
-                    class="num"
-                    :class="(ps.detailed.roundSuji ?? 0) > 0 ? 'pos' : (ps.detailed.roundSuji ?? 0) < 0 ? 'neg' : ''"
-                  >
-                    {{
-                      ps.detailed.roundSuji !== null
-                        ? `${ps.detailed.roundSuji > 0 ? '+' : ''}${ps.detailed.roundSuji.toLocaleString()}`
-                        : '-'
-                    }}
+                    {{ fmtSignedInt(ps.detailed.netWinEfficiency) }}
                   </td>
                 </tr>
               </tbody>
@@ -2537,9 +2770,28 @@ const fmtPct = (v: number | null) => (v !== null ? `${v.toFixed(1)}%` : '-');
 }
 .data-table th.sortable {
   cursor: pointer;
+  user-select: none;
 }
-.data-table th.sortable:hover {
+.data-table th.sortable:hover,
+.data-table th.sortable.is-sorted {
   color: var(--text-color);
+}
+.data-table th.sortable.is-sorted {
+  color: #3b82f6;
+}
+.detailed-stats-table th.sticky-col,
+.detailed-stats-table td.sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--bg-card);
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.08);
+}
+.detailed-stats-table thead th.sticky-col {
+  z-index: 3;
+}
+.detailed-stats-table tbody tr.clickable-row:hover td.sticky-col {
+  background: var(--bg-hover-color);
 }
 .data-table td {
   padding: 9px 8px;
